@@ -53,8 +53,9 @@ public class RothIraParser implements AccountParser {
             Map<String, Integer> colIndex = buildColumnIndex(sheet.getRow(HEADER_ROW_INDEX));
 
             List<Holding> holdings = new ArrayList<>();
-            BigDecimal cashCostBasis = BigDecimal.ZERO;
-            BigDecimal cashQuantity  = BigDecimal.ZERO;
+            BigDecimal cashCostBasis  = BigDecimal.ZERO;
+            BigDecimal cashQuantity   = BigDecimal.ZERO;
+            BigDecimal cashMarketValue = BigDecimal.ZERO;
             boolean hasCash = false;
 
             for (int r = HEADER_ROW_INDEX + 1; r <= sheet.getLastRowNum(); r++) {
@@ -67,12 +68,13 @@ public class RothIraParser implements AccountParser {
                 BigDecimal quantity = getDecimal(row, colIndex, COL_QUANTITY);
                 if (quantity == null) continue;
 
-                String id          = normaliseSecurityId(rawId);
-                BigDecimal mktVal  = getDecimal(row, colIndex, COL_MARKET_VALUE);
+                String id           = normaliseSecurityId(rawId);
+                BigDecimal mktVal   = getDecimal(row, colIndex, COL_MARKET_VALUE);
                 BigDecimal gainLoss = getDecimal(row, colIndex, COL_GAIN_LOSS);
 
                 if (CASH_ID.equals(id)) {
                     cashQuantity = cashQuantity.add(quantity);
+                    if (mktVal != null) cashMarketValue = cashMarketValue.add(mktVal);
                     if (mktVal != null && gainLoss != null) {
                         cashCostBasis = cashCostBasis.add(mktVal.subtract(gainLoss));
                     }
@@ -88,6 +90,7 @@ public class RothIraParser implements AccountParser {
             if (hasCash) {
                 holdings.add(Holding.builder(CASH_ID, cashQuantity, CURRENCY, ACCOUNT_SOURCE)
                         .avgPricePaid(computeAvgPricePaid(cashCostBasis, BigDecimal.ZERO, cashQuantity))
+                        .currentMarketValue(cashMarketValue)
                         .build());
             }
 

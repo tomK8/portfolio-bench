@@ -9,23 +9,26 @@ public class Holding {
     private final String securityId;
     private final BigDecimal quantity;
     private final BigDecimal avgPricePaid;       // cost basis / quantity; null when not computable
-    private final BigDecimal currentMarketValue; // as reported by source file; null when not available
+    private final BigDecimal currentMarketValue;    // in the holding's native currency
+    private final BigDecimal currentMarketValueGbp; // pre-converted GBP from source; if null, convert via FX
     private final Currency currency;
     private final String source;                 // e.g. "Roth IRA"
 
     private Holding(Builder builder) {
         this.securityId          = Objects.requireNonNull(builder.securityId,  "securityId");
         this.quantity            = Objects.requireNonNull(builder.quantity,     "quantity");
-        this.avgPricePaid        = builder.avgPricePaid;
-        this.currentMarketValue  = builder.currentMarketValue;
-        this.currency            = Objects.requireNonNull(builder.currency,     "currency");
+        this.avgPricePaid           = builder.avgPricePaid;
+        this.currentMarketValue     = builder.currentMarketValue;
+        this.currentMarketValueGbp  = builder.currentMarketValueGbp;
+        this.currency               = Objects.requireNonNull(builder.currency,     "currency");
         this.source              = Objects.requireNonNull(builder.source,       "source");
     }
 
     public String getSecurityId()              { return securityId; }
     public BigDecimal getQuantity()            { return quantity; }
     public BigDecimal getAvgPricePaid()        { return avgPricePaid; }
-    public BigDecimal getCurrentMarketValue()  { return currentMarketValue; }
+    public BigDecimal getCurrentMarketValue()    { return currentMarketValue; }
+    public BigDecimal getCurrentMarketValueGbp() { return currentMarketValueGbp; }
     public Currency getCurrency()              { return currency; }
     public String getSource()                  { return source; }
 
@@ -46,6 +49,7 @@ public class Holding {
         private final String source;
         private BigDecimal avgPricePaid;
         private BigDecimal currentMarketValue;
+        private BigDecimal currentMarketValueGbp;
 
         private Builder(String securityId, BigDecimal quantity, Currency currency, String source) {
             this.securityId = securityId;
@@ -54,8 +58,9 @@ public class Holding {
             this.source     = source;
         }
 
-        public Builder avgPricePaid(BigDecimal v)       { this.avgPricePaid       = v; return this; }
-        public Builder currentMarketValue(BigDecimal v) { this.currentMarketValue = v; return this; }
+        public Builder avgPricePaid(BigDecimal v)          { this.avgPricePaid          = v; return this; }
+        public Builder currentMarketValue(BigDecimal v)    { this.currentMarketValue    = v; return this; }
+        public Builder currentMarketValueGbp(BigDecimal v) { this.currentMarketValueGbp = v; return this; }
 
         public Holding build() { return new Holding(this); }
     }

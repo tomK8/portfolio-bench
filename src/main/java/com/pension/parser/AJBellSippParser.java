@@ -30,12 +30,13 @@ public class AJBellSippParser implements AccountParser {
 
     private static final String ACCOUNT_SOURCE = "AJ Bell SIPP";
 
-    private static final String COL_INVESTMENT   = "Investment";
-    private static final String COL_QUANTITY     = "Quantity";
-    private static final String COL_COST         = "Cost (£)";
-    private static final String COL_MARKET_VALUE = "Value (£)";
-    private static final String COL_CURRENCY     = "Valuation currency";
-    private static final String COL_TICKER       = "Ticker";
+    private static final String COL_INVESTMENT    = "Investment";
+    private static final String COL_QUANTITY      = "Quantity";
+    private static final String COL_COST          = "Cost (£)";
+    private static final String COL_VALUE_GBP     = "Value (£)";   // always GBP
+    private static final String COL_EXCHANGE_RATE = "Exchange rate"; // units of Valuation currency per 1 GBP
+    private static final String COL_CURRENCY      = "Valuation currency";
+    private static final String COL_TICKER        = "Ticker";
 
     private static final Pattern COUPON = Pattern.compile("(\\d+(?:\\.\\d+)?)%");
     private static final Pattern DATE   = Pattern.compile("\\d{1,2}/\\d{1,2}/(\\d{2,4})");
@@ -75,12 +76,18 @@ public class AJBellSippParser implements AccountParser {
                     throw new ParseException("Unrecognised currency '" + ccyCode + "' in: " + investment);
                 }
 
-                BigDecimal marketValue = parseDecimal(record.get(COL_MARKET_VALUE));
+                // Value (£) is always the GBP amount; multiply by exchange rate to get native currency
+                BigDecimal valueGbp      = parseDecimal(record.get(COL_VALUE_GBP));
+                BigDecimal exchangeRate  = parseDecimal(record.get(COL_EXCHANGE_RATE));
+                BigDecimal nativeValue   = (valueGbp != null && exchangeRate != null)
+                        ? valueGbp.multiply(exchangeRate)
+                        : valueGbp;
 
                 if (isCash) {
                     holdings.add(Holding.builder("CASH", quantity, currency, ACCOUNT_SOURCE)
                             .avgPricePaid(BigDecimal.ONE)
-                            .currentMarketValue(marketValue)
+                            .currentMarketValue(nativeValue)
+                            .currentMarketValueGbp(valueGbp)
                             .build());
                     continue;
                 }
@@ -100,7 +107,8 @@ public class AJBellSippParser implements AccountParser {
 
                 holdings.add(Holding.builder(id, quantity, currency, ACCOUNT_SOURCE)
                         .avgPricePaid(avgPricePaid)
-                        .currentMarketValue(marketValue)
+                        .currentMarketValue(nativeValue)
+                        .currentMarketValueGbp(valueGbp)
                         .build());
             }
         }

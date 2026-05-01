@@ -37,6 +37,9 @@ public class IISippParser implements AccountParser {
     private static final String COL_BOOK_COST    = "Book Cost";
 
     @Override
+    public String sourceName() { return "II SIPP"; }
+
+    @Override
     public boolean supports(Path file) {
         return UUID_FILENAME.matcher(file.getFileName().toString()).matches();
     }

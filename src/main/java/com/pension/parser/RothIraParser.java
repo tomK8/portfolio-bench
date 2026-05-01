@@ -37,6 +37,9 @@ public class RothIraParser implements AccountParser {
     private static final int HEADER_ROW_INDEX = 11;
 
     @Override
+    public String sourceName() { return "Roth IRA"; }
+
+    @Override
     public boolean supports(Path file) {
         String name = file.getFileName().toString();
         return name.startsWith("Holdings") && name.endsWith(".xlsx");

@@ -5,8 +5,10 @@ import com.pension.parser.AccountParser;
 import com.pension.parser.AJBellSippParser;
 import com.pension.parser.IISippParser;
 import com.pension.parser.RothIraParser;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
 import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.IOException;
@@ -17,12 +19,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 public class Main {
 
@@ -35,15 +39,17 @@ public class Main {
     private static final String FX_URL =
             "https://api.frankfurter.dev/v1/latest?from=GBP&to=USD,EUR";
 
-    // Column indices
-    private static final int COL_SECURITY_ID    = 0;
-    private static final int COL_QUANTITY        = 1;
-    private static final int COL_AVG_PRICE       = 2;
-    private static final int COL_MKT_VALUE       = 3;
-    private static final int COL_MKT_VALUE_GBP   = 4;
-    private static final int COL_CURRENCY        = 5;
-    private static final int COL_SOURCE          = 6;
-    private static final int NUM_COLS            = 7;
+    // Portfolio sheet column indices (A–G)
+    private static final int COL_SECURITY_ID   = 0;
+    private static final int COL_QUANTITY       = 1;
+    private static final int COL_AVG_PRICE      = 2;
+    private static final int COL_MKT_VALUE      = 3;   // D – native currency in data rows; USD in total rows
+    private static final int COL_MKT_VALUE_GBP  = 4;   // E – GBP throughout
+    private static final int COL_CURRENCY       = 5;
+    private static final int COL_SOURCE         = 6;
+    private static final int NUM_COLS           = 7;
+
+    private static final String II_SIPP = "II SIPP";
 
     private static final List<AccountParser> PARSERS = List.of(
             new RothIraParser(),
@@ -51,19 +57,25 @@ public class Main {
             new IISippParser()
     );
 
+    private record SourceFile(AccountParser parser, Path file) {}
+
+    // -------------------------------------------------------------------------
+
     public static void main(String[] args) throws Exception {
         if (!Files.isDirectory(INPUT_DIR)) {
             System.err.println("Input directory not found: " + INPUT_DIR);
             return;
         }
 
-        List<Holding> holdings = new ArrayList<>();
+        List<SourceFile> sources = new ArrayList<>();
+        List<Holding> holdings   = new ArrayList<>();
 
         for (AccountParser parser : PARSERS) {
             Optional<Path> file = findMostRecent(INPUT_DIR, parser);
             if (file.isPresent()) {
                 System.out.println("Parsing: " + file.get().getFileName());
                 holdings.addAll(parser.parse(file.get()));
+                sources.add(new SourceFile(parser, file.get()));
             }
         }
 
@@ -79,7 +91,7 @@ public class Main {
         String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);
         Path output = OUTPUT_DIR.resolve("portfolio" + timestamp + ".xlsx");
 
-        writeExcel(holdings, gbpRates, output);
+        writeExcel(holdings, gbpRates, sources, output);
         System.out.println("Written " + holdings.size() + " holdings to: " + output);
     }
 
@@ -100,10 +112,6 @@ public class Main {
     // FX rates
     // -------------------------------------------------------------------------
 
-    /**
-     * Returns units of each currency per 1 GBP, e.g. {"GBP":1, "USD":1.3473, "EUR":1.1536}.
-     * To convert amount in currency X to GBP: amount / rates.get(X).
-     */
     private static Map<String, BigDecimal> fetchGbpRates() throws Exception {
         HttpClient client = HttpClient.newHttpClient();
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(FX_URL)).build();
@@ -121,107 +129,201 @@ public class Main {
     // -------------------------------------------------------------------------
 
     private static void writeExcel(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
-                                   Path output) throws IOException {
+                                   List<SourceFile> sources, Path output) throws IOException {
         try (Workbook wb = new XSSFWorkbook()) {
-            Sheet sheet = wb.createSheet("Portfolio");
-
-            CellStyle dataTextStyle    = wb.createCellStyle();
-            CellStyle dataNumStyle     = numericStyle(wb, false);
-            CellStyle subtotalTextStyle = boldTextStyle(wb);
-            CellStyle subtotalNumStyle  = numericStyle(wb, true);
-            CellStyle totalTextStyle    = boldTextStyle(wb);
-            CellStyle totalNumStyle     = numericStyle(wb, true);
-
-            // ---- Header row ----
-            String[] headers = {
-                "Security ID", "Quantity", "Avg Price Paid",
-                "Market Value", "Market Value GBP", "Currency", "Source"
-            };
-            Row headerRow = sheet.createRow(0);
-            CellStyle headerStyle = boldTextStyle(wb);
-            for (int i = 0; i < headers.length; i++) {
-                Cell cell = headerRow.createCell(i);
-                cell.setCellValue(headers[i]);
-                cell.setCellStyle(headerStyle);
+            writePortfolioSheet(wb.createSheet("Portfolio"), holdings, gbpRates, wb);
+            for (SourceFile sf : sources) {
+                writeRawSheet(sf.file(), wb.createSheet(sf.parser().sourceName()));
             }
-
-            // ---- Data rows + accumulate per-source totals ----
-            // gbpBySource  : sum of Market Value GBP per source (all sources)
-            // nativeBySource: sum of Market Value in native currency (Roth IRA only — all USD)
-            Map<String, BigDecimal> gbpBySource    = new LinkedHashMap<>();
-            Map<String, BigDecimal> nativeBySource = new LinkedHashMap<>();
-
-            int rowNum = 1;
-            for (Holding h : holdings) {
-                Row row = sheet.createRow(rowNum++);
-
-                Cell idCell = row.createCell(COL_SECURITY_ID);
-                idCell.setCellValue(h.getSecurityId());
-                idCell.setCellStyle(dataTextStyle);
-
-                setNumeric(row, COL_QUANTITY,      h.getQuantity(),           dataNumStyle);
-                setNumeric(row, COL_AVG_PRICE,     h.getAvgPricePaid(),       dataNumStyle);
-                setNumeric(row, COL_MKT_VALUE,     h.getCurrentMarketValue(), dataNumStyle);
-
-                BigDecimal gbp = toGbp(h, gbpRates);
-                setNumeric(row, COL_MKT_VALUE_GBP, gbp, dataNumStyle);
-
-                Cell ccyCell = row.createCell(COL_CURRENCY);
-                ccyCell.setCellValue(h.getCurrency().getCurrencyCode());
-                ccyCell.setCellStyle(dataTextStyle);
-
-                Cell srcCell = row.createCell(COL_SOURCE);
-                srcCell.setCellValue(h.getSource());
-                srcCell.setCellStyle(dataTextStyle);
-
-                String src = h.getSource();
-                gbpBySource.merge(src, gbp != null ? gbp : BigDecimal.ZERO, BigDecimal::add);
-
-                // Roth IRA is entirely USD — track native total separately
-                if ("Roth IRA".equals(src) && h.getCurrentMarketValue() != null) {
-                    nativeBySource.merge(src, h.getCurrentMarketValue(), BigDecimal::add);
-                }
-            }
-
-            // ---- Blank separator row ----
-            rowNum++;
-
-            // ---- Per-source subtotal rows ----
-            for (Map.Entry<String, BigDecimal> entry : gbpBySource.entrySet()) {
-                String src = entry.getKey();
-                BigDecimal gbpTotal = entry.getValue();
-
-                Row row = sheet.createRow(rowNum++);
-                Cell label = row.createCell(COL_SECURITY_ID);
-                label.setCellValue(src + " — Total");
-                label.setCellStyle(subtotalTextStyle);
-
-                if ("Roth IRA".equals(src) && nativeBySource.containsKey(src)) {
-                    // Show USD total in the Market Value column
-                    setNumeric(row, COL_MKT_VALUE, nativeBySource.get(src), subtotalNumStyle);
-                    Cell ccyCell = row.createCell(COL_CURRENCY);
-                    ccyCell.setCellValue("USD");
-                    ccyCell.setCellStyle(subtotalTextStyle);
-                }
-                setNumeric(row, COL_MKT_VALUE_GBP, gbpTotal, subtotalNumStyle);
-            }
-
-            // ---- Grand total row ----
-            BigDecimal grandTotal = gbpBySource.values().stream()
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            rowNum++; // blank gap before grand total
-            Row totalRow = sheet.createRow(rowNum);
-            Cell totalLabel = totalRow.createCell(COL_SECURITY_ID);
-            totalLabel.setCellValue("PORTFOLIO TOTAL");
-            totalLabel.setCellStyle(totalTextStyle);
-            setNumeric(totalRow, COL_MKT_VALUE_GBP, grandTotal, totalNumStyle);
-
-            // ---- Auto-size ----
-            for (int i = 0; i < NUM_COLS; i++) sheet.autoSizeColumn(i);
-
             try (OutputStream os = Files.newOutputStream(output)) {
                 wb.write(os);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Portfolio sheet
+    // -------------------------------------------------------------------------
+
+    private static void writePortfolioSheet(Sheet sheet, List<Holding> holdings,
+                                            Map<String, BigDecimal> gbpRates, Workbook wb) {
+        CellStyle dataText  = wb.createCellStyle();
+        CellStyle dataNum   = numericStyle(wb, false);
+        CellStyle boldText  = boldTextStyle(wb);
+        CellStyle boldNum   = numericStyle(wb, true);
+        CellStyle inputCell = inputCellStyle(wb);
+
+        // ---- Header row (row 0) ----
+        String[] headers = { "Security ID", "Quantity", "Avg Price Paid",
+                              "Market Value", "Market Value GBP", "Currency", "Source" };
+        Row headerRow = sheet.createRow(0);
+        for (int i = 0; i < headers.length; i++) styledCell(headerRow, i, headers[i], boldText);
+
+        // ---- Group holdings by source ----
+        Map<String, List<Holding>> bySource = new LinkedHashMap<>();
+        for (Holding h : holdings) bySource.computeIfAbsent(h.getSource(), k -> new ArrayList<>()).add(h);
+
+        int numSources  = bySource.size();
+        boolean hasII   = bySource.containsKey(II_SIPP);
+        // Total rows consumed by data section: holdings + (numSources-1) blank separators + II placeholder
+        int numDataRows = holdings.size() + (numSources - 1) + (hasII ? 1 : 0);
+
+        // Pre-calculate every key row offset (0-based POI).
+        // Data occupies POI rows 1 .. numDataRows.
+        // After data: 2 blank rows, then currency-label row, then subtotals, then 1 blank, grand total,
+        // then 2 blank rows, then FX rates block.
+        int dataAfter          = 1 + numDataRows;          // first row after data
+        int currHdrPoi         = dataAfter + 2;            // "USD  |  GBP" label row
+        int firstSubPoi        = currHdrPoi + 1;           // first per-source subtotal
+        int grandTotalPoi      = firstSubPoi + numSources + 1;  // +1 blank before grand total
+        int ratesLabelPoi      = grandTotalPoi + 2;
+        int gbpusdPoi          = ratesLabelPoi + 1;
+        int gbpeurPoi          = ratesLabelPoi + 2;
+
+        // Excel (1-based) absolute reference to the GBPUSD rate value cell (col B = index 1)
+        String gbpusdRef = "$B$" + (gbpusdPoi + 1);
+
+        // ---- Write FX-rate block (needed before writing subtotal formulas) ----
+        styledCell(sheet.createRow(ratesLabelPoi), COL_SECURITY_ID, "FX Rates (1 GBP =)", boldText);
+        Row rusd = sheet.createRow(gbpusdPoi);
+        styledCell(rusd, COL_SECURITY_ID, "USD", dataText);
+        setNumeric(rusd, 1, gbpRates.getOrDefault("USD", BigDecimal.ONE), dataNum);
+        Row reur = sheet.createRow(gbpeurPoi);
+        styledCell(reur, COL_SECURITY_ID, "EUR", dataText);
+        setNumeric(reur, 1, gbpRates.getOrDefault("EUR", BigDecimal.ONE), dataNum);
+
+        // ---- Write data rows, tracking per-source ranges ----
+        Map<String, int[]> ranges = new LinkedHashMap<>();
+        int rowNum = 1;
+        boolean firstSource = true;
+
+        for (Map.Entry<String, List<Holding>> entry : bySource.entrySet()) {
+            if (!firstSource) rowNum++;
+            firstSource = false;
+
+            String src   = entry.getKey();
+            int firstRow = rowNum;
+
+            for (Holding h : entry.getValue()) {
+                writeHoldingRow(sheet.createRow(rowNum++), h, gbpRates, dataText, dataNum);
+            }
+
+            // II SIPP cash placeholder – yellow E cell for user input
+            if (II_SIPP.equals(src)) {
+                Row ph    = sheet.createRow(rowNum);
+                String eRef = "E" + (rowNum + 1);          // E of this row (1-based Excel)
+                styledCell(ph, COL_SECURITY_ID, "CASH", dataText);
+                formulaCell(ph, COL_QUANTITY,    eRef, dataNum);
+                setNumeric(ph, COL_AVG_PRICE, BigDecimal.ONE, dataNum);
+                formulaCell(ph, COL_MKT_VALUE,   eRef, dataNum);
+                ph.createCell(COL_MKT_VALUE_GBP).setCellStyle(inputCell); // blank – user fills
+                styledCell(ph, COL_CURRENCY, "GBP", dataText);
+                styledCell(ph, COL_SOURCE,   II_SIPP, dataText);
+                rowNum++;
+            }
+
+            ranges.put(src, new int[]{ firstRow, rowNum - 1 });
+        }
+
+        // ---- Currency label row above subtotals ----
+        Row currHdrRow = sheet.createRow(currHdrPoi);
+        styledCell(currHdrRow, COL_MKT_VALUE,     "USD", boldText);
+        styledCell(currHdrRow, COL_MKT_VALUE_GBP, "GBP", boldText);
+
+        // ---- Per-source subtotal rows ----
+        List<Integer> subPoiRows = new ArrayList<>();
+        int subPoi = firstSubPoi;
+
+        for (Map.Entry<String, int[]> re : ranges.entrySet()) {
+            String src       = re.getKey();
+            int firstExcel   = re.getValue()[0] + 1;
+            int lastExcel    = re.getValue()[1] + 1;
+            int thisExcelRow = subPoi + 1;
+
+            Row row = sheet.createRow(subPoi);
+            subPoiRows.add(subPoi);
+
+            styledCell(row, COL_SECURITY_ID, src + " — Total", boldText);
+
+            // USD: for Roth IRA sum the native D column; for others convert the GBP subtotal via rate
+            Cell usd = row.createCell(COL_MKT_VALUE);
+            usd.setCellFormula("Roth IRA".equals(src)
+                    ? "SUM(D" + firstExcel + ":D" + lastExcel + ")"
+                    : "E" + thisExcelRow + "*" + gbpusdRef);
+            usd.setCellStyle(boldNum);
+
+            Cell gbp = row.createCell(COL_MKT_VALUE_GBP);
+            gbp.setCellFormula("SUM(E" + firstExcel + ":E" + lastExcel + ")");
+            gbp.setCellStyle(boldNum);
+
+            subPoi++;
+        }
+
+        // ---- Grand total ----
+        Row totalRow = sheet.createRow(grandTotalPoi);
+        styledCell(totalRow, COL_SECURITY_ID, "PORTFOLIO TOTAL", boldText);
+
+        Cell grandUsd = totalRow.createCell(COL_MKT_VALUE);
+        grandUsd.setCellFormula(subPoiRows.stream().map(r -> "D" + (r + 1)).collect(Collectors.joining("+")));
+        grandUsd.setCellStyle(boldNum);
+
+        Cell grandGbp = totalRow.createCell(COL_MKT_VALUE_GBP);
+        grandGbp.setCellFormula(subPoiRows.stream().map(r -> "E" + (r + 1)).collect(Collectors.joining("+")));
+        grandGbp.setCellStyle(boldNum);
+
+        for (int i = 0; i < NUM_COLS; i++) sheet.autoSizeColumn(i);
+    }
+
+    private static void writeHoldingRow(Row row, Holding h, Map<String, BigDecimal> gbpRates,
+                                        CellStyle textStyle, CellStyle numStyle) {
+        styledCell(row, COL_SECURITY_ID,  h.getSecurityId(),           textStyle);
+        setNumeric(row, COL_QUANTITY,     h.getQuantity(),             numStyle);
+        setNumeric(row, COL_AVG_PRICE,    h.getAvgPricePaid(),         numStyle);
+        setNumeric(row, COL_MKT_VALUE,    h.getCurrentMarketValue(),   numStyle);
+        setNumeric(row, COL_MKT_VALUE_GBP, toGbp(h, gbpRates),        numStyle);
+        styledCell(row, COL_CURRENCY,     h.getCurrency().getCurrencyCode(), textStyle);
+        styledCell(row, COL_SOURCE,       h.getSource(),               textStyle);
+    }
+
+    // -------------------------------------------------------------------------
+    // Raw input sheets
+    // -------------------------------------------------------------------------
+
+    private static void writeRawSheet(Path file, Sheet sheet) throws IOException {
+        if (file.getFileName().toString().endsWith(".xlsx")) {
+            copyXlsxToSheet(file, sheet);
+        } else {
+            copyCsvToSheet(file, sheet);
+        }
+    }
+
+    private static void copyXlsxToSheet(Path file, Sheet target) throws IOException {
+        try (Workbook src = new XSSFWorkbook(Files.newInputStream(file))) {
+            Sheet srcSheet = src.getSheet("Holdings");
+            if (srcSheet == null) srcSheet = src.getSheetAt(0);
+            for (Row srcRow : srcSheet) {
+                Row dest = target.createRow(srcRow.getRowNum());
+                for (Cell srcCell : srcRow) {
+                    Cell dc = dest.createCell(srcCell.getColumnIndex());
+                    switch (srcCell.getCellType()) {
+                        case STRING  -> dc.setCellValue(srcCell.getStringCellValue());
+                        case NUMERIC -> dc.setCellValue(srcCell.getNumericCellValue());
+                        case BOOLEAN -> dc.setCellValue(srcCell.getBooleanCellValue());
+                        default      -> dc.setCellValue(srcCell.toString());
+                    }
+                }
+            }
+        }
+    }
+
+    private static void copyCsvToSheet(Path file, Sheet sheet) throws IOException {
+        String content = Files.readString(file, StandardCharsets.UTF_8);
+        while (!content.isEmpty() && content.charAt(0) == '﻿') content = content.substring(1);
+        try (CSVParser csv = CSVParser.parse(content, CSVFormat.DEFAULT)) {
+            int rn = 0;
+            for (CSVRecord record : csv) {
+                Row row = sheet.createRow(rn++);
+                for (int i = 0; i < record.size(); i++) row.createCell(i).setCellValue(record.get(i));
             }
         }
     }
@@ -231,9 +333,7 @@ public class Main {
     // -------------------------------------------------------------------------
 
     private static BigDecimal toGbp(Holding h, Map<String, BigDecimal> gbpRates) {
-        // If the source file already provides a GBP value, use it directly
         if (h.getCurrentMarketValueGbp() != null) return h.getCurrentMarketValueGbp();
-
         BigDecimal mktVal = h.getCurrentMarketValue();
         if (mktVal == null) return null;
         BigDecimal rate = gbpRates.get(h.getCurrency().getCurrencyCode());
@@ -248,22 +348,38 @@ public class Main {
         cell.setCellStyle(style);
     }
 
+    private static void styledCell(Row row, int col, String value, CellStyle style) {
+        Cell cell = row.createCell(col);
+        cell.setCellValue(value);
+        if (style != null) cell.setCellStyle(style);
+    }
+
+    private static void formulaCell(Row row, int col, String formula, CellStyle style) {
+        Cell cell = row.createCell(col);
+        cell.setCellFormula(formula);
+        cell.setCellStyle(style);
+    }
+
     private static CellStyle boldTextStyle(Workbook wb) {
-        CellStyle style = wb.createCellStyle();
-        Font font = wb.createFont();
-        font.setBold(true);
-        style.setFont(font);
-        return style;
+        CellStyle s = wb.createCellStyle();
+        Font f = wb.createFont();
+        f.setBold(true);
+        s.setFont(f);
+        return s;
     }
 
     private static CellStyle numericStyle(Workbook wb, boolean bold) {
-        CellStyle style = wb.createCellStyle();
-        style.setDataFormat(wb.createDataFormat().getFormat("#,##0.00"));
-        if (bold) {
-            Font font = wb.createFont();
-            font.setBold(true);
-            style.setFont(font);
-        }
-        return style;
+        CellStyle s = wb.createCellStyle();
+        s.setDataFormat(wb.createDataFormat().getFormat("#,##0.00"));
+        if (bold) { Font f = wb.createFont(); f.setBold(true); s.setFont(f); }
+        return s;
+    }
+
+    private static CellStyle inputCellStyle(Workbook wb) {
+        CellStyle s = wb.createCellStyle();
+        s.setFillForegroundColor(IndexedColors.LIGHT_YELLOW.getIndex());
+        s.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        s.setDataFormat(wb.createDataFormat().getFormat("#,##0.00"));
+        return s;
     }
 }

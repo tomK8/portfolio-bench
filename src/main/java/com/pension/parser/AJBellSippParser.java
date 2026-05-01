@@ -42,6 +42,9 @@ public class AJBellSippParser implements AccountParser {
     private static final Pattern DATE   = Pattern.compile("\\d{1,2}/\\d{1,2}/(\\d{2,4})");
 
     @Override
+    public String sourceName() { return "AJ Bell SIPP"; }
+
+    @Override
     public boolean supports(Path file) {
         String name = file.getFileName().toString();
         return name.startsWith("portfolio") && name.endsWith(".csv");

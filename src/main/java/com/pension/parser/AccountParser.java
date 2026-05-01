@@ -27,4 +27,7 @@ public interface AccountParser {
      * (used for auto-detection when multiple parsers are registered).
      */
     boolean supports(Path file);
+
+    /** Human-readable account name, used as the tab label in the output workbook. */
+    String sourceName();
 }

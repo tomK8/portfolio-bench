@@ -13,24 +13,32 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Currency;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * Parses portfolio*.csv exports for the SIPP account.
+ * Parses portfolio*.csv exports from AJ Bell for the SIPP account.
  *
  * All portfolio values (Cost, Value) are expressed in GBP.
  * Each row carries its own Valuation currency (GBP/USD/EUR) for downstream
  * FX conversion and live-price fetching.
  * Average price paid = Cost (£) / Quantity.
+ * Bond rows identified by (SEDOL:...) in the Investment description are
+ * given a human-readable ID of the form "GILT {coupon}% {year}".
  */
 public class AJBellSippParser implements AccountParser {
+
+    private static final String ACCOUNT_SOURCE = "AJ Bell SIPP";
 
     private static final String COL_INVESTMENT   = "Investment";
     private static final String COL_QUANTITY     = "Quantity";
     private static final String COL_COST         = "Cost (£)";
     private static final String COL_MARKET_VALUE = "Value (£)";
     private static final String COL_CURRENCY     = "Valuation currency";
-    private static final String COL_PORTFOLIO    = "Portfolio";
     private static final String COL_TICKER       = "Ticker";
+
+    private static final Pattern COUPON = Pattern.compile("(\\d+(?:\\.\\d+)?)%");
+    private static final Pattern DATE   = Pattern.compile("\\d{1,2}/\\d{1,2}/(\\d{2,4})");
 
     @Override
     public boolean supports(Path file) {
@@ -67,12 +75,10 @@ public class AJBellSippParser implements AccountParser {
                     throw new ParseException("Unrecognised currency '" + ccyCode + "' in: " + investment);
                 }
 
-                String source = record.get(COL_PORTFOLIO).trim();
-
                 BigDecimal marketValue = parseDecimal(record.get(COL_MARKET_VALUE));
 
                 if (isCash) {
-                    holdings.add(Holding.builder("CASH", quantity, currency, source)
+                    holdings.add(Holding.builder("CASH", quantity, currency, ACCOUNT_SOURCE)
                             .avgPricePaid(BigDecimal.ONE)
                             .currentMarketValue(marketValue)
                             .build());
@@ -84,12 +90,15 @@ public class AJBellSippParser implements AccountParser {
                 String ticker = record.get(COL_TICKER).trim();
                 if (ticker.isEmpty()) continue;
 
+                boolean isBond = investment.contains("(SEDOL:");
+                String id = isBond ? extractBondId(investment) : normaliseSecurityId(ticker);
+
                 BigDecimal cost = parseDecimal(record.get(COL_COST));
                 BigDecimal avgPricePaid = (cost != null && quantity.compareTo(BigDecimal.ZERO) != 0)
                         ? cost.divide(quantity, 10, RoundingMode.HALF_UP)
                         : null;
 
-                holdings.add(Holding.builder(normaliseSecurityId(ticker), quantity, currency, source)
+                holdings.add(Holding.builder(id, quantity, currency, ACCOUNT_SOURCE)
                         .avgPricePaid(avgPricePaid)
                         .currentMarketValue(marketValue)
                         .build());
@@ -108,6 +117,19 @@ public class AJBellSippParser implements AccountParser {
             case "GOOG", "GOOGL" -> "GOOG/GOOGL";
             default              -> id;
         };
+    }
+
+    static String extractBondId(String investment) {
+        Matcher cm = COUPON.matcher(investment);
+        Matcher dm = DATE.matcher(investment);
+        if (cm.find() && dm.find()) {
+            String coupon = cm.group(1);
+            String yr = dm.group(1);
+            int year = Integer.parseInt(yr);
+            if (yr.length() == 2) year += 2000;
+            return "GILT " + coupon + "% " + year;
+        }
+        return investment.replaceAll("\\s*\\(SEDOL:[^)]+\\)", "").trim();
     }
 
     private BigDecimal parseDecimal(String value) {

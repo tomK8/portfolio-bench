@@ -35,6 +35,18 @@ class AJBellSippParserTest {
         assertFalse(parser.supports(Paths.get("statement.csv")));
     }
 
+    // --- extractBondId() ---
+
+    @Test
+    void extractBondId_hmTreasuryGilt() {
+        assertEquals("GILT 0.875% 2033",
+                AJBellSippParser.extractBondId("HM TREASURY GILT 0.875% (31/07/33) (SEDOL:BM8Z2S2)"));
+        assertEquals("GILT 3.25% 2044",
+                AJBellSippParser.extractBondId("HM TREASURY GILT 3.25% (22/01/44) (SEDOL:B84Z9V0)"));
+        assertEquals("GILT 4.75% 2038",
+                AJBellSippParser.extractBondId("UK(GOVT OF) 4.75% SNR 07/12/38 GBP0.01 (SEDOL:B00NY17)"));
+    }
+
     // --- normaliseSecurityId() ---
 
     @Test
@@ -61,9 +73,9 @@ class AJBellSippParserTest {
 
         assertFalse(holdings.isEmpty(), "Expected at least one holding");
 
-        // All holdings should be tagged SIPP
+        // All holdings should be tagged AJ Bell SIPP
         holdings.forEach(h ->
-                assertEquals("SIPP", h.getSource(), "Unexpected source for: " + h.getSecurityId()));
+                assertEquals("AJ Bell SIPP", h.getSource(), "Unexpected source for: " + h.getSecurityId()));
 
         // Mixed currencies present
         assertTrue(holdings.stream().anyMatch(h -> h.getCurrency().equals(Currency.getInstance("GBP"))));
@@ -80,11 +92,18 @@ class AJBellSippParserTest {
         long cashCount = holdings.stream().filter(h -> h.getSecurityId().equals("CASH")).count();
         assertEquals(1, cashCount, "Expected exactly one CASH entry");
 
+        // Bonds use human-readable IDs derived from description, not SEDOL
+        holdings.stream()
+                .filter(h -> h.getSecurityId().equals("GILT 0.875% 2033"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Expected GILT 0.875% 2033 holding"));
+        assertTrue(holdings.stream().noneMatch(h -> h.getSecurityId().equals("BM8Z2S2")),
+                "Raw SEDOL ticker should not appear");
+
         // Comma-formatted large quantity parsed correctly (HM TREASURY GILT has 299,802 shares)
         Holding gilt = holdings.stream()
-                .filter(h -> h.getSecurityId().equals("BM8Z2S2"))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError("Expected BM8Z2S2 holding"));
+                .filter(h -> h.getSecurityId().equals("GILT 0.875% 2033"))
+                .findFirst().orElseThrow();
         assertEquals(new BigDecimal("299802"), gilt.getQuantity());
 
         // All equity holdings have a positive avgPricePaid and currentMarketValue

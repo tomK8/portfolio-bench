@@ -87,7 +87,7 @@ class AJBellSippParserTest {
                 .orElseThrow(() -> new AssertionError("Expected BM8Z2S2 holding"));
         assertEquals(new BigDecimal("299802"), gilt.getQuantity());
 
-        // All equity holdings have a positive avgPricePaid
+        // All equity holdings have a positive avgPricePaid and currentMarketValue
         holdings.stream()
                 .filter(h -> !h.getSecurityId().equals("CASH"))
                 .forEach(h -> {
@@ -95,6 +95,10 @@ class AJBellSippParserTest {
                             "avgPricePaid should not be null for: " + h.getSecurityId());
                     assertTrue(h.getAvgPricePaid().compareTo(BigDecimal.ZERO) > 0,
                             "avgPricePaid should be positive for: " + h.getSecurityId());
+                    assertNotNull(h.getCurrentMarketValue(),
+                            "currentMarketValue should not be null for: " + h.getSecurityId());
+                    assertTrue(h.getCurrentMarketValue().compareTo(BigDecimal.ZERO) > 0,
+                            "currentMarketValue should be positive for: " + h.getSecurityId());
                 });
     }
 

@@ -80,6 +80,7 @@ public class RothIraParser implements AccountParser {
                 } else {
                     holdings.add(Holding.builder(id, quantity, CURRENCY, ACCOUNT_SOURCE)
                             .avgPricePaid(computeAvgPricePaid(mktVal, gainLoss, quantity))
+                            .currentMarketValue(mktVal)
                             .build());
                 }
             }

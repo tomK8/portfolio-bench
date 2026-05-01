@@ -116,7 +116,7 @@ class RothIraParserTest {
             assertNotEquals("USD999997", h.getSecurityId());
         });
 
-        // Non-cash holdings should have a positive quantity and a computable avgPricePaid
+        // Non-cash holdings should have positive quantity, avgPricePaid, and currentMarketValue
         holdings.stream()
                 .filter(h -> !h.getSecurityId().equals("CASH"))
                 .forEach(h -> {
@@ -126,6 +126,10 @@ class RothIraParserTest {
                             "avgPricePaid should not be null for: " + h.getSecurityId());
                     assertTrue(h.getAvgPricePaid().compareTo(BigDecimal.ZERO) > 0,
                             "avgPricePaid should be positive for: " + h.getSecurityId());
+                    assertNotNull(h.getCurrentMarketValue(),
+                            "currentMarketValue should not be null for: " + h.getSecurityId());
+                    assertTrue(h.getCurrentMarketValue().compareTo(BigDecimal.ZERO) > 0,
+                            "currentMarketValue should be positive for: " + h.getSecurityId());
                 });
     }
 

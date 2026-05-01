@@ -24,12 +24,13 @@ import java.util.List;
  */
 public class AJBellSippParser implements AccountParser {
 
-    private static final String COL_INVESTMENT = "Investment";
-    private static final String COL_QUANTITY   = "Quantity";
-    private static final String COL_COST       = "Cost (£)";
-    private static final String COL_CURRENCY   = "Valuation currency";
-    private static final String COL_PORTFOLIO  = "Portfolio";
-    private static final String COL_TICKER     = "Ticker";
+    private static final String COL_INVESTMENT   = "Investment";
+    private static final String COL_QUANTITY     = "Quantity";
+    private static final String COL_COST         = "Cost (£)";
+    private static final String COL_MARKET_VALUE = "Value (£)";
+    private static final String COL_CURRENCY     = "Valuation currency";
+    private static final String COL_PORTFOLIO    = "Portfolio";
+    private static final String COL_TICKER       = "Ticker";
 
     @Override
     public boolean supports(Path file) {
@@ -68,9 +69,12 @@ public class AJBellSippParser implements AccountParser {
 
                 String source = record.get(COL_PORTFOLIO).trim();
 
+                BigDecimal marketValue = parseDecimal(record.get(COL_MARKET_VALUE));
+
                 if (isCash) {
                     holdings.add(Holding.builder("CASH", quantity, currency, source)
                             .avgPricePaid(BigDecimal.ONE)
+                            .currentMarketValue(marketValue)
                             .build());
                     continue;
                 }
@@ -87,6 +91,7 @@ public class AJBellSippParser implements AccountParser {
 
                 holdings.add(Holding.builder(normaliseSecurityId(ticker), quantity, currency, source)
                         .avgPricePaid(avgPricePaid)
+                        .currentMarketValue(marketValue)
                         .build());
             }
         }

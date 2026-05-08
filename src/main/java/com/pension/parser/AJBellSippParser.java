@@ -91,6 +91,7 @@ public class AJBellSippParser implements AccountParser {
                             .avgPricePaid(BigDecimal.ONE)
                             .currentMarketValue(nativeValue)
                             .currentMarketValueGbp(valueGbp)
+                            .costBasisGbp(valueGbp)   // cash cost = face value
                             .build());
                     continue;
                 }
@@ -112,6 +113,7 @@ public class AJBellSippParser implements AccountParser {
                         .avgPricePaid(avgPricePaid)
                         .currentMarketValue(nativeValue)
                         .currentMarketValueGbp(valueGbp)
+                        .costBasisGbp(cost)   // Cost (£) is always in GBP regardless of Valuation currency
                         .build());
             }
         }

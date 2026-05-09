@@ -15,8 +15,17 @@ import org.apache.poi.xssf.usermodel.XSSFColor;
 import org.apache.poi.xssf.usermodel.XSSFFont;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
+import java.awt.HeadlessException;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
@@ -68,12 +77,6 @@ public class Main {
 
     private static final String II_SIPP = "II SIPP";
 
-    private static final List<AccountParser> PARSERS = List.of(
-            new RothIraParser(),
-            new AJBellSippParser(),
-            new IISippParser()
-    );
-
     private record SourceFile(AccountParser parser, Path file) {}
 
     private record AggHolding(
@@ -95,10 +98,20 @@ public class Main {
             return;
         }
 
-        List<SourceFile> sources = new ArrayList<>();
+        // Fetch live rates first so AJBellSippParser can use them during parsing
+        Map<String, BigDecimal> gbpRates = fetchGbpRates();
+        System.out.println("FX rates (per 1 GBP): " + gbpRates);
+
+        List<AccountParser> parsers = List.of(
+                new RothIraParser(),
+                new AJBellSippParser(gbpRates),
+                new IISippParser()
+        );
+
+        List<SourceFile> sources  = new ArrayList<>();
         List<Holding>    holdings = new ArrayList<>();
 
-        for (AccountParser parser : PARSERS) {
+        for (AccountParser parser : parsers) {
             Optional<Path> file = findMostRecent(INPUT_DIR, parser);
             if (file.isPresent()) {
                 System.out.println("Parsing: " + file.get().getFileName());
@@ -112,9 +125,7 @@ public class Main {
             return;
         }
 
-        Map<String, BigDecimal> gbpRates = fetchGbpRates();
-        System.out.println("FX rates (per 1 GBP): " + gbpRates);
-
+        BigDecimal iiSippCash = promptForIISippCash();
         List<AggHolding> aggregated = aggregate(holdings, gbpRates);
 
         Files.createDirectories(OUTPUT_DIR);
@@ -124,7 +135,7 @@ public class Main {
         Path mainOutput = OUTPUT_DIR.resolve("portfolio" + timestamp + ".xlsx");
         try (Workbook wb = new XSSFWorkbook()) {
             String portfolioInputRef =
-                    writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, wb);
+                    writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
             writePortfolioSheet(wb.createSheet("Portfolio Raw"), holdings, gbpRates,
                                 portfolioInputRef, wb);
             for (SourceFile sf : sources)
@@ -136,10 +147,146 @@ public class Main {
         // Portfolio Summary — standalone file, fixed name
         Path summaryOutput = OUTPUT_DIR.resolve("Portfolio Summary.xlsx");
         try (Workbook wb = new XSSFWorkbook()) {
-            writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, wb);
+            writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
             try (OutputStream os = Files.newOutputStream(summaryOutput)) { wb.write(os); }
         }
         System.out.println("Portfolio summary written to: " + summaryOutput);
+
+        BigDecimal totalGbp = aggregated.stream()
+                .map(AggHolding::marketValueGbp)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .add(iiSippCash);
+
+        BigDecimal totalGainGbp = aggregated.stream()
+                .filter(h -> h.gainGbp() != null)
+                .map(AggHolding::gainGbp)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal totalCashGbp = aggregated.stream()
+                .filter(h -> "CASH".equals(h.securityId()))
+                .map(AggHolding::marketValueGbp)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .add(iiSippCash);
+
+        BigDecimal invested    = totalGbp.subtract(totalCashGbp);
+        BigDecimal returnPct   = invested.compareTo(BigDecimal.ZERO) != 0
+                ? totalGainGbp.divide(invested, 10, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+        BigDecimal totalReturn = totalGbp.compareTo(BigDecimal.ZERO) != 0
+                ? totalGainGbp.divide(totalGbp, 10, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        saveSnapshot(totalGbp, totalGainGbp, totalCashGbp, returnPct, totalReturn, gbpRates);
+    }
+
+    // -------------------------------------------------------------------------
+    // Database snapshot
+    // -------------------------------------------------------------------------
+
+    private static final Path DB_DIR  = Path.of(System.getProperty("user.home"), "Documents", "Investing");
+    private static final Path DB_PATH = DB_DIR.resolve("portfolio.db");
+
+    private static final String CREATE_TABLE = """
+            CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+                snapshot_date      INTEGER PRIMARY KEY,
+                snapshot_date_text TEXT    NOT NULL,
+                total_value_gbp    REAL    NOT NULL,
+                total_gain_gbp     REAL,
+                total_cash_gbp     REAL,
+                return_pct         REAL,
+                total_return       REAL,
+                gbpusd             REAL,
+                gbpeur             REAL
+            )""";
+
+    private static void saveSnapshot(BigDecimal totalGbp, BigDecimal totalGainGbp,
+                                     BigDecimal totalCashGbp, BigDecimal returnPct,
+                                     BigDecimal totalReturn, Map<String, BigDecimal> gbpRates) {
+        long   snapshotDate     = Instant.now().getEpochSecond();
+        String snapshotDateText = LocalDate.now().toString();   // "2026-05-08"
+
+        double gbpusd = gbpRates.getOrDefault("USD", BigDecimal.ZERO).doubleValue();
+        double gbpeur = gbpRates.getOrDefault("EUR", BigDecimal.ZERO).doubleValue();
+
+        try {
+            Files.createDirectories(DB_DIR);
+
+            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH);
+                 Statement ddl = conn.createStatement()) {
+
+                ddl.execute(CREATE_TABLE);
+
+                // Migrate existing databases that pre-date newer columns
+                for (String col : List.of(
+                        "gbpusd REAL", "gbpeur REAL", "total_gain_gbp REAL",
+                        "total_cash_gbp REAL", "return_pct REAL", "total_return REAL")) {
+                    try { ddl.execute("ALTER TABLE portfolio_snapshots ADD COLUMN " + col); }
+                    catch (SQLException ignored) {}
+                }
+
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO portfolio_snapshots " +
+                        "(snapshot_date, snapshot_date_text, total_value_gbp, " +
+                        " total_gain_gbp, total_cash_gbp, return_pct, total_return, gbpusd, gbpeur) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    ps.setLong(1,   snapshotDate);
+                    ps.setString(2, snapshotDateText);
+                    ps.setDouble(3, totalGbp.setScale(2, RoundingMode.HALF_UP).doubleValue());
+                    ps.setDouble(4, totalGainGbp.setScale(2, RoundingMode.HALF_UP).doubleValue());
+                    ps.setDouble(5, totalCashGbp.setScale(2, RoundingMode.HALF_UP).doubleValue());
+                    ps.setDouble(6, returnPct.setScale(6, RoundingMode.HALF_UP).doubleValue());
+                    ps.setDouble(7, totalReturn.setScale(6, RoundingMode.HALF_UP).doubleValue());
+                    ps.setDouble(8, gbpusd);
+                    ps.setDouble(9, gbpeur);
+                    ps.executeUpdate();
+                }
+            }
+            System.out.printf("Snapshot saved to DB: %s → £%,.2f  gain £%,.2f  return %.2f%%%n",
+                    snapshotDateText, totalGbp.doubleValue(),
+                    totalGainGbp.doubleValue(), returnPct.multiply(BigDecimal.valueOf(100)).doubleValue());
+
+        } catch (IOException | SQLException e) {
+            System.err.println("Warning: could not save DB snapshot — " + e.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // User input
+    // -------------------------------------------------------------------------
+
+    private static BigDecimal promptForIISippCash() {
+        try {
+            javax.swing.UIManager.setLookAndFeel(javax.swing.UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception ignored) {}
+
+        while (true) {
+            try {
+                String raw = javax.swing.JOptionPane.showInputDialog(
+                        null,
+                        "Enter II SIPP Cash balance (GBP):",
+                        "II SIPP Cash",
+                        javax.swing.JOptionPane.QUESTION_MESSAGE);
+
+                if (raw == null) {
+                    System.out.println("II SIPP cash input cancelled — using 0");
+                    return BigDecimal.ZERO;
+                }
+                raw = raw.replace(",", "").replace("£", "").trim();
+                if (raw.isEmpty()) return BigDecimal.ZERO;
+
+                return new BigDecimal(raw);
+
+            } catch (NumberFormatException e) {
+                javax.swing.JOptionPane.showMessageDialog(
+                        null,
+                        "Please enter a valid number, e.g. 1234.56",
+                        "Invalid input",
+                        javax.swing.JOptionPane.ERROR_MESSAGE);
+            } catch (HeadlessException e) {
+                System.out.println("No display available — II SIPP cash set to 0");
+                return BigDecimal.ZERO;
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -250,7 +397,8 @@ public class Main {
     // -------------------------------------------------------------------------
 
     private static String writeAggregatedSheet(Sheet sheet, List<AggHolding> rows,
-                                               Map<String, BigDecimal> gbpRates, Workbook wb) {
+                                               Map<String, BigDecimal> gbpRates,
+                                               BigDecimal iiSippCash, Workbook wb) {
         CellStyle dataText  = wb.createCellStyle();
         CellStyle dataNum   = numericStyle(wb, false);
         CellStyle boldText  = boldTextStyle(wb);
@@ -264,12 +412,15 @@ public class Main {
         int nEquity = equities.size();
         int nCash   = cashList.size() + (hasCashGbp ? 0 : 1);
 
-        int firstCashPoi  = nEquity + 3;
-        int lastCashPoi   = nEquity + 2 + nCash;
-        int totalPoiRow   = nEquity + 4 + nCash;
-        int inputLabelPoi = nEquity + 7 + nCash;
-        int inputValuePoi = nEquity + 8 + nCash;
-        String inputCellRef = "E" + (inputValuePoi + 1);
+        int firstCashPoi    = nEquity + 3;
+        int lastCashPoi     = nEquity + 2 + nCash;
+        int totalCashPoiRow    = nEquity + 3 + nCash;
+        int totalPoiRow        = nEquity + 5 + nCash;
+        int returnPctPoiRow    = nEquity + 6 + nCash;
+        int totalReturnPoiRow  = nEquity + 7 + nCash;
+        int inputLabelPoi      = nEquity + 10 + nCash;
+        int inputValuePoi      = nEquity + 11 + nCash;
+        String inputCellRef    = "E" + (inputValuePoi + 1);
 
         int firstEquityExcel = 2;
         int lastEquityExcel  = nEquity + 1;
@@ -325,6 +476,18 @@ public class Main {
             styledCell(row, AGG_SOURCES, II_SIPP,      dataText);
         }
 
+        // Total Cash row (below cash data, above TOTAL)
+        double gbpusd = gbpRates.getOrDefault("USD", BigDecimal.ONE).doubleValue();
+        int totalCashExcelRow = totalCashPoiRow + 1;
+        Row cashTotalRow = sheet.createRow(totalCashPoiRow);
+        styledCell(cashTotalRow, AGG_ID, "Total Cash", boldText);
+        // GBP: sum all cash E cells (picks up II SIPP via formula chain)
+        formulaCell(cashTotalRow, AGG_MKTGBP,
+                "SUM(E" + (firstCashPoi + 1) + ":E" + (lastCashPoi + 1) + ")", boldNum);
+        // USD equivalent in col D (Exchange Currency repurposed for this summary row)
+        formulaCell(cashTotalRow, AGG_CCY,
+                "E" + totalCashExcelRow + "*" + gbpusd, boldNum);
+
         // TOTAL
         Row total = sheet.createRow(totalPoiRow);
         styledCell(total, AGG_ID, "TOTAL", boldText);
@@ -335,11 +498,26 @@ public class Main {
                 "SUBTOTAL(9,F" + firstEquityExcel + ":F" + lastEquityExcel + ")"
                 + "+SUM(F" + firstCashExcel + ":F" + lastCashExcel + ")", boldNum);
 
-        // II SIPP cash input
+        // Return % row: Gain / (Total Value − Cash)
+        int tExcel  = totalPoiRow     + 1;
+        int tcExcel = totalCashPoiRow + 1;
+        Row returnRow = sheet.createRow(returnPctPoiRow);
+        styledCell(returnRow, AGG_ID, "Return %", boldText);
+        Cell returnCell = returnRow.createCell(AGG_GAINPCT);
+        returnCell.setCellFormula("F" + tExcel + "/(E" + tExcel + "-E" + tcExcel + ")");
+        returnCell.setCellStyle(pctStyle(wb, true));
+
+        // Total Return row: Gain / Total Value
+        Row totalReturnRow = sheet.createRow(totalReturnPoiRow);
+        styledCell(totalReturnRow, AGG_ID, "Total Return", boldText);
+        Cell totalReturnCell = totalReturnRow.createCell(AGG_GAINPCT);
+        totalReturnCell.setCellFormula("F" + tExcel + "/E" + tExcel);
+        totalReturnCell.setCellStyle(pctStyle(wb, true));
+
+        // II SIPP cash — pre-filled from the popup; yellow cell is still editable in Excel
         styledCell(sheet.createRow(inputLabelPoi), AGG_ID, "II SIPP Cash (GBP)", boldText);
         Row inputRow = sheet.createRow(inputValuePoi);
-        styledCell(inputRow, AGG_ID, "Enter amount:", dataText);
-        inputRow.createCell(AGG_MKTGBP).setCellStyle(inputCell);
+        setNumeric(inputRow, AGG_MKTGBP, iiSippCash, inputCell);
 
         autoSizeColumns(sheet, AGG_COLS);
 
@@ -401,7 +579,10 @@ public class Main {
         int currHdrPoi    = dataAfter + 2;
         int firstSubPoi   = currHdrPoi + 1;
         int grandTotalPoi = firstSubPoi + numSources + 1;
-        int ratesLabelPoi = grandTotalPoi + 2;
+        int totalCashPoi   = grandTotalPoi + 1;
+        int returnPctPoi   = totalCashPoi  + 1;
+        int totalReturnPoi = returnPctPoi  + 1;
+        int ratesLabelPoi  = totalReturnPoi + 2;
         int gbpusdPoi     = ratesLabelPoi + 1;
         int gbpeurPoi     = ratesLabelPoi + 2;
         String gbpusdRef  = "$B$" + (gbpusdPoi + 1);
@@ -484,6 +665,33 @@ public class Main {
                 subPoiRows.stream().map(r -> "E" + (r+1)).collect(Collectors.joining("+")), boldNum);
         formulaCell(totalRow, COL_GAIN,
                 subPoiRows.stream().map(r -> "F" + (r+1)).collect(Collectors.joining("+")), boldNum);
+
+        // Total Cash row — SUMIF picks up all CASH rows including the II SIPP linked cell
+        int lastDataExcel  = numDataRows + 1;
+        int totalCashExcel = totalCashPoi + 1;
+        Row cashRow = sheet.createRow(totalCashPoi);
+        styledCell(cashRow, COL_SECURITY_ID, "Total Cash", boldText);
+        formulaCell(cashRow, COL_MKT_VALUE_GBP,
+                "SUMIF($A$2:$A$" + lastDataExcel + ",\"CASH\",$E$2:$E$" + lastDataExcel + ")",
+                boldNum);
+        formulaCell(cashRow, COL_MKT_VALUE,
+                "E" + totalCashExcel + "*" + gbpusdRef, boldNum);
+
+        // Return % row: Gain / (Total Value GBP − Total Cash GBP)
+        int gtExcel = grandTotalPoi + 1;
+        Row rawReturnRow = sheet.createRow(returnPctPoi);
+        styledCell(rawReturnRow, COL_SECURITY_ID, "Return %", boldText);
+        Cell rawReturnCell = rawReturnRow.createCell(COL_GAIN_PCT);
+        rawReturnCell.setCellFormula(
+                "F" + gtExcel + "/(E" + gtExcel + "-E" + totalCashExcel + ")");
+        rawReturnCell.setCellStyle(pctStyle(wb, true));
+
+        // Total Return row: Gain / Total Value
+        Row rawTotalReturnRow = sheet.createRow(totalReturnPoi);
+        styledCell(rawTotalReturnRow, COL_SECURITY_ID, "Total Return", boldText);
+        Cell rawTotalReturnCell = rawTotalReturnRow.createCell(COL_GAIN_PCT);
+        rawTotalReturnCell.setCellFormula("F" + gtExcel + "/E" + gtExcel);
+        rawTotalReturnCell.setCellStyle(pctStyle(wb, true));
 
         autoSizeColumns(sheet, NUM_COLS);
     }
@@ -617,6 +825,13 @@ public class Main {
     private static CellStyle numericStyle(Workbook wb, boolean bold) {
         CellStyle s = wb.createCellStyle();
         s.setDataFormat(wb.createDataFormat().getFormat("#,##0.00"));
+        if (bold) { Font f = wb.createFont(); f.setBold(true); s.setFont(f); }
+        return s;
+    }
+
+    private static CellStyle pctStyle(Workbook wb, boolean bold) {
+        CellStyle s = wb.createCellStyle();
+        s.setDataFormat(wb.createDataFormat().getFormat("0.00%"));
         if (bold) { Font f = wb.createFont(); f.setBold(true); s.setFont(f); }
         return s;
     }

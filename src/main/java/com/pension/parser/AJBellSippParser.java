@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Currency;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -27,6 +28,17 @@ import java.util.regex.Pattern;
  * given a human-readable ID of the form "GILT {coupon}% {year}".
  */
 public class AJBellSippParser implements AccountParser {
+
+    /**
+     * Live GBP-based FX rates (e.g. {"USD": 1.3621, "EUR": 1.1573}).
+     * When present, these are preferred over the snapshot rate in the CSV file
+     * so that avgPricePaid and currentMarketValue use a consistent, current rate.
+     * Falls back to the file rate when a currency is not found here.
+     */
+    private final Map<String, BigDecimal> liveRates;
+
+    public AJBellSippParser() { this.liveRates = Map.of(); }
+    public AJBellSippParser(Map<String, BigDecimal> liveRates) { this.liveRates = liveRates; }
 
     private static final String ACCOUNT_SOURCE = "AJ Bell SIPP";
 
@@ -79,11 +91,13 @@ public class AJBellSippParser implements AccountParser {
                     throw new ParseException("Unrecognised currency '" + ccyCode + "' in: " + investment);
                 }
 
-                // Value (£) is always the GBP amount; multiply by exchange rate to get native currency
+                // Value (£) is always the GBP amount; multiply by rate to get native currency.
+                // Prefer the live rate injected at construction; fall back to the CSV snapshot rate.
                 BigDecimal valueGbp      = parseDecimal(record.get(COL_VALUE_GBP));
-                BigDecimal exchangeRate  = parseDecimal(record.get(COL_EXCHANGE_RATE));
-                BigDecimal nativeValue   = (valueGbp != null && exchangeRate != null)
-                        ? valueGbp.multiply(exchangeRate)
+                BigDecimal fileRate      = parseDecimal(record.get(COL_EXCHANGE_RATE));
+                BigDecimal effectiveRate = liveRates.getOrDefault(ccyCode, fileRate);
+                BigDecimal nativeValue   = (valueGbp != null && effectiveRate != null)
+                        ? valueGbp.multiply(effectiveRate)
                         : valueGbp;
 
                 if (isCash) {
@@ -105,8 +119,11 @@ public class AJBellSippParser implements AccountParser {
                 String id = isBond ? extractBondId(investment) : normaliseSecurityId(ticker);
 
                 BigDecimal cost = parseDecimal(record.get(COL_COST));
-                BigDecimal avgPricePaid = (cost != null && quantity.compareTo(BigDecimal.ZERO) != 0)
-                        ? cost.divide(quantity, 10, RoundingMode.HALF_UP)
+                // cost is in GBP; multiply by effectiveRate to express avg price in Valuation currency
+                // (for GBP stocks effectiveRate = 1, so no change)
+                BigDecimal avgPricePaid = (cost != null && quantity.compareTo(BigDecimal.ZERO) != 0
+                                           && effectiveRate != null)
+                        ? cost.divide(quantity, 10, RoundingMode.HALF_UP).multiply(effectiveRate)
                         : null;
 
                 holdings.add(Holding.builder(id, quantity, currency, ACCOUNT_SOURCE)

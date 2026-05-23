@@ -224,6 +224,13 @@ public class Main {
                     catch (SQLException ignored) {}
                 }
 
+                // Remove any earlier run from today so there is at most one row per day
+                try (PreparedStatement del = conn.prepareStatement(
+                        "DELETE FROM portfolio_snapshots WHERE snapshot_date_text = ?")) {
+                    del.setString(1, snapshotDateText);
+                    del.executeUpdate();
+                }
+
                 try (PreparedStatement ps = conn.prepareStatement(
                         "INSERT INTO portfolio_snapshots " +
                         "(snapshot_date, snapshot_date_text, total_value_gbp, " +

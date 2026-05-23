@@ -41,7 +41,19 @@ public class IISippParser implements AccountParser {
 
     @Override
     public boolean supports(Path file) {
-        return UUID_FILENAME.matcher(file.getFileName().toString()).matches();
+        if (!UUID_FILENAME.matcher(file.getFileName().toString()).matches()) return false;
+        // II also exports orders/activity as UUID CSVs — verify this is a holdings file
+        // by checking the header contains the expected "Market Value" column.
+        // If the file can't be read, fall back to accepting it (e.g. in tests with synthetic paths).
+        if (!Files.exists(file)) return true;
+        try {
+            String firstLine = Files.lines(file, StandardCharsets.UTF_8)
+                    .filter(l -> !l.isBlank() && !l.chars().allMatch(c -> c == '﻿'))
+                    .findFirst().orElse("");
+            return firstLine.contains("Market Value") && firstLine.contains("Book Cost");
+        } catch (IOException e) {
+            return true;
+        }
     }
 
     @Override

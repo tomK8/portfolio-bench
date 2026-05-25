@@ -541,6 +541,11 @@ public class Main {
             CashTransactionParser parser = new AJBellCashStatementParser();
             List<CashTransaction> txns = parser.parse(AJ_BELL_CASH_PATH);
             saveCashTransactions(txns);
+
+            String dated = "cashstatements_" + LocalDate.now() + ".csv";
+            Path dest = DB_DIR.resolve(dated);
+            Files.move(AJ_BELL_CASH_PATH, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            System.out.println("Cash statement archived to " + dest);
         } catch (IOException | ParseException e) {
             System.err.println("Warning: could not parse cash statement — " + e.getMessage());
         }

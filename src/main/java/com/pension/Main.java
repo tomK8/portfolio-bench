@@ -540,19 +540,24 @@ public class Main {
         try {
             CashTransactionParser parser = new AJBellCashStatementParser();
             List<CashTransaction> txns = parser.parse(AJ_BELL_CASH_PATH);
-            saveCashTransactions(txns);
+            int inserted = saveCashTransactions(txns);
 
-            String dated = "cashstatements_" + LocalDate.now() + ".csv";
-            Path dest = DB_DIR.resolve(dated);
-            Files.move(AJ_BELL_CASH_PATH, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            System.out.println("Cash statement archived to " + dest);
+            if (inserted > 0) {
+                String dated = "cashstatements_" + LocalDate.now() + ".csv";
+                Path dest = DB_DIR.resolve(dated);
+                Files.move(AJ_BELL_CASH_PATH, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                System.out.println("Cash statement archived to " + dest);
+            } else {
+                Files.delete(AJ_BELL_CASH_PATH);
+                System.out.println("Cash statement contained no new data — deleted");
+            }
         } catch (IOException | ParseException e) {
             System.err.println("Warning: could not parse cash statement — " + e.getMessage());
         }
     }
 
-    private static void saveCashTransactions(List<CashTransaction> transactions) {
-        if (transactions.isEmpty()) return;
+    private static int saveCashTransactions(List<CashTransaction> transactions) {
+        if (transactions.isEmpty()) return 0;
         try {
             Files.createDirectories(DB_DIR);
             try (var conn = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH);
@@ -591,7 +596,7 @@ public class Main {
                                     "%n!!! DATA INTEGRITY ERROR: %s balance %.2f on %s already exists in DB " +
                                     "but appears after new rows — possible gap or corrupt input file. Aborting import.%n",
                                     account, bal, tx.transactionDate());
-                                return;
+                                return 0;
                             }
                             skipped++;
                         } else {
@@ -615,10 +620,12 @@ public class Main {
                 }
                 System.out.printf("Cash transactions [%s]: %d inserted, %d already present (skipped)%n",
                         account, inserted, skipped);
+                return inserted;
             }
         } catch (IOException | SQLException e) {
             System.err.println("Warning: could not save cash transactions — " + e.getMessage());
         }
+        return 0;
     }
 
     // -------------------------------------------------------------------------

@@ -54,8 +54,6 @@ public class Main {
     private static final Path INPUT_DIR  = Path.of(System.getProperty("user.home"), "Downloads");
     private static final Path OUTPUT_DIR = Path.of(System.getProperty("user.home"), "Documents");
 
-    private static final DateTimeFormatter TIMESTAMP_FMT =
-            DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("yyyyMMdd");
 
@@ -138,11 +136,9 @@ public class Main {
         Map<String, BigDecimal> dividendsBySymbol = loadDividendsBySymbol();
 
         Files.createDirectories(OUTPUT_DIR);
-        String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);
         String date = LocalDateTime.now().format(DATE_FMT);
 
-        // Main timestamped workbook
-        Path mainOutput = OUTPUT_DIR.resolve("portfolio" + timestamp + ".xlsx");
+        Path mainOutput = OUTPUT_DIR.resolve("portfolio" + date + ".xlsx");
         try (Workbook wb = new XSSFWorkbook()) {
             String portfolioInputRef =
                     writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, dividendsBySymbol, wb);
@@ -150,7 +146,8 @@ public class Main {
                                 portfolioInputRef, dividendsBySymbol, wb);
             for (SourceFile sf : sources)
                 writeRawSheet(sf.file(), wb.createSheet(sf.parser().sourceName()));
-            try (OutputStream os = Files.newOutputStream(mainOutput)) { wb.write(os); }
+            try (OutputStream os = Files.newOutputStream(mainOutput,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) { wb.write(os); }
         }
         System.out.println("Written " + holdings.size() + " holdings to: " + mainOutput);
 
@@ -158,7 +155,8 @@ public class Main {
         Path summaryOutput = OUTPUT_DIR.resolve("Portfolio Summary-" + date + ".xlsx");
         try (Workbook wb = new XSSFWorkbook()) {
             writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, dividendsBySymbol, wb);
-            try (OutputStream os = Files.newOutputStream(summaryOutput)) { wb.write(os); }
+            try (OutputStream os = Files.newOutputStream(summaryOutput,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) { wb.write(os); }
         }
         System.out.println("Portfolio summary written to: " + summaryOutput);
 

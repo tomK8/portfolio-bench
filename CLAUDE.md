@@ -51,3 +51,22 @@ II SIPP's CSV export does not include a cash balance. `Main` prompts for it via 
 ## Bond identification
 
 Bonds in AJ Bell exports carry `(SEDOL:...)` in the Investment description. `AJBellSippParser.extractBondId` converts these to `"GILT {coupon}% {year}"` format. The `isBond` check in `Main.aggSection` uses `%` presence or `GILT` prefix to sort bonds into their own section at the bottom of the Portfolio sheet.
+
+## Cash transaction ingestion
+
+`CashTransactionParser` is a separate interface from `AccountParser` — cash flows and holdings are different concerns. `AJBellCashStatementParser` implements it for `~/Downloads/cashstatements.csv`.
+
+**Ingestion flow in `Main.importCashTransactions()`:**
+1. If `cashstatements.csv` is absent from `~/Downloads`, skip entirely
+2. Parse → classify rows → resolve symbols → save to `cash_transactions` table in `portfolio.db`
+3. If new rows were written: archive the file to `~/Documents/Investing/cashstatements_<date>.csv`
+4. If no new rows (file is a duplicate): delete it
+
+**Incremental dedup:** before inserting, `saveCashTransactions` loads all existing `(transaction_date, cash_balance_gbp)` pairs for the account into a `Set<String>`. Rows whose key is already present are skipped. If a known key reappears *after* a new row has been inserted, the import aborts with a data integrity error (gap detected in input file).
+
+**Symbol resolution in `AJBellCashStatementParser`** (three tiers, in order):
+1. GILT detection — standard `coupon% ... dd/mm/yyyy` format, or compressed names like `TREASURY2.75L24` / `HM TREA0.2525`; unresolvable redemptions (e.g. `TSY STK25`) borrow the symbol from a same-date DIVIDEND row in a second pass
+2. `SYMBOL_RULES` list — ~25 equity/ETF patterns mapped to tickers (longest/most-specific first)
+3. `cleanName` fallback — strips share-class suffixes and currency codes
+
+**Row classification:** `TRANSACTION` (purchase/sale/redemption), `DIVIDEND`, `INTEREST`, `CHARGE`, `CONTRIBUTION`. Reversed-format redemption descriptions (`NAME Redemption`) are handled by `PAT_REVERSED_REDEMPTION` before the fallback path.

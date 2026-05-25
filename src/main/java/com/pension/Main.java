@@ -2,6 +2,7 @@ package com.pension;
 
 import com.pension.model.AggHolding;
 import com.pension.model.CashTransaction;
+import com.pension.model.DividendEntry;
 import com.pension.model.Holding;
 import com.pension.parser.AccountParser;
 import com.pension.parser.AJBellCashStatementParser;
@@ -26,20 +27,13 @@ import java.awt.FlowLayout;
 import java.awt.HeadlessException;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.time.Instant;
+
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.LocalDateTime;
@@ -86,15 +80,7 @@ public class Main {
 
     private record SourceFile(AccountParser parser, Path file) {}
 
-    private record DividendEntry(
-            String paymentDate,
-            String account,
-            String symbol,
-            String currency,
-            double amount,
-            double fxToGbp,
-            double amountGbp
-    ) {}
+
 
     // -------------------------------------------------------------------------
 
@@ -193,126 +179,19 @@ public class Main {
     // Database snapshot
     // -------------------------------------------------------------------------
 
-    private static final Path AJ_BELL_CASH_PATH = Path.of(System.getProperty("user.home"), "Downloads", "cashstatements.csv");
+    private static final Path AJ_BELL_CASH_PATH =
+            Path.of(System.getProperty("user.home"), "Downloads", "cashstatements.csv");
 
-    private static final Path DB_DIR            = Path.of(System.getProperty("user.home"), "Documents", "Investing");
-    private static final Path DB_PATH           = DB_DIR.resolve("portfolio.db");
-    private static final Path LAST_II_CASH_FILE = DB_DIR.resolve("ii_sipp_cash_last.txt");
-
-    private static final String CREATE_CASH_TABLE = """
-            CREATE TABLE IF NOT EXISTS cash_transactions (
-                transaction_date TEXT NOT NULL,
-                account          TEXT NOT NULL CHECK (account IN ('RothIRA', 'AJBell', 'II')),
-                type             TEXT NOT NULL CHECK (type IN ('TRANSACTION', 'DIVIDEND', 'INTEREST', 'CHARGE', 'CONTRIBUTION')),
-                symbol           TEXT NOT NULL,
-                quantity         REAL NOT NULL,
-                amount           REAL NOT NULL,
-                currency         TEXT NOT NULL,
-                fx_to_gbp        REAL NOT NULL,
-                amount_gbp       REAL NOT NULL,
-                cash_balance_gbp REAL,
-                description      TEXT,
-                PRIMARY KEY (transaction_date, account, type, symbol, amount_gbp, cash_balance_gbp)
-            )""";
-
-    private static final String CREATE_DIVIDEND_TABLE = """
-            CREATE TABLE IF NOT EXISTS dividend_events (
-                payment_date     TEXT NOT NULL,
-                account          TEXT NOT NULL CHECK (account IN ('AJBELL', 'II', 'ROTH_IRA')),
-                symbol           TEXT NOT NULL,
-                currency         TEXT NOT NULL CHECK (currency IN ('GBP', 'USD', 'EUR')),
-                dividend_amount  REAL NOT NULL,
-                fx_to_gbp        REAL NOT NULL,
-                dividend_gbp     REAL NOT NULL,
-                PRIMARY KEY (payment_date, account, symbol, currency)
-            )""";
-
-    private static final String CREATE_TABLE = """
-            CREATE TABLE IF NOT EXISTS portfolio_snapshots (
-                snapshot_date      INTEGER PRIMARY KEY,
-                snapshot_date_text TEXT    NOT NULL,
-                total_value_gbp    REAL    NOT NULL,
-                total_gain_gbp     REAL,
-                total_cash_gbp     REAL,
-                return_pct         REAL,
-                total_return       REAL,
-                gbpusd             REAL,
-                gbpeur             REAL
-            )""";
+    private static final PortfolioDatabase DB = new PortfolioDatabase();
 
     private static void saveSnapshot(BigDecimal totalGbp, BigDecimal totalGainGbp,
                                      BigDecimal totalCashGbp, BigDecimal returnPct,
                                      BigDecimal totalReturn, Map<String, BigDecimal> gbpRates) {
-        long   snapshotDate     = Instant.now().getEpochSecond();
-        String snapshotDateText = LocalDate.now().toString();   // "2026-05-08"
-
-        double gbpusd = gbpRates.getOrDefault("USD", BigDecimal.ZERO).doubleValue();
-        double gbpeur = gbpRates.getOrDefault("EUR", BigDecimal.ZERO).doubleValue();
-
-        try {
-            Files.createDirectories(DB_DIR);
-
-            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH);
-                 Statement ddl = conn.createStatement()) {
-
-                ddl.execute(CREATE_TABLE);
-
-                // Migrate existing databases that pre-date newer columns
-                for (String col : List.of(
-                        "gbpusd REAL", "gbpeur REAL", "total_gain_gbp REAL",
-                        "total_cash_gbp REAL", "return_pct REAL", "total_return REAL")) {
-                    try { ddl.execute("ALTER TABLE portfolio_snapshots ADD COLUMN " + col); }
-                    catch (SQLException ignored) {}
-                }
-
-                // Remove any earlier run from today so there is at most one row per day
-                try (PreparedStatement del = conn.prepareStatement(
-                        "DELETE FROM portfolio_snapshots WHERE snapshot_date_text = ?")) {
-                    del.setString(1, snapshotDateText);
-                    del.executeUpdate();
-                }
-
-                try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO portfolio_snapshots " +
-                        "(snapshot_date, snapshot_date_text, total_value_gbp, " +
-                        " total_gain_gbp, total_cash_gbp, return_pct, total_return, gbpusd, gbpeur) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
-                    ps.setLong(1,   snapshotDate);
-                    ps.setString(2, snapshotDateText);
-                    ps.setDouble(3, totalGbp.setScale(2, RoundingMode.HALF_UP).doubleValue());
-                    ps.setDouble(4, totalGainGbp.setScale(2, RoundingMode.HALF_UP).doubleValue());
-                    ps.setDouble(5, totalCashGbp.setScale(2, RoundingMode.HALF_UP).doubleValue());
-                    ps.setDouble(6, returnPct.setScale(6, RoundingMode.HALF_UP).doubleValue());
-                    ps.setDouble(7, totalReturn.setScale(6, RoundingMode.HALF_UP).doubleValue());
-                    ps.setDouble(8, gbpusd);
-                    ps.setDouble(9, gbpeur);
-                    ps.executeUpdate();
-                }
-            }
-            System.out.printf("Snapshot saved to DB: %s → £%,.2f  gain £%,.2f  return %.2f%%%n",
-                    snapshotDateText, totalGbp.doubleValue(),
-                    totalGainGbp.doubleValue(), returnPct.multiply(BigDecimal.valueOf(100)).doubleValue());
-
-        } catch (IOException | SQLException e) {
-            System.err.println("Warning: could not save DB snapshot — " + e.getMessage());
-        }
+        DB.saveSnapshot(totalGbp, totalGainGbp, totalCashGbp, returnPct, totalReturn, gbpRates);
     }
 
     private static Map<String, BigDecimal> loadDividendsBySymbol() {
-        Map<String, BigDecimal> result = new HashMap<>();
-        if (!Files.exists(DB_PATH)) return result;
-        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH);
-             Statement st = conn.createStatement()) {
-            st.execute(CREATE_DIVIDEND_TABLE);
-            try (var rs = st.executeQuery(
-                    "SELECT symbol, SUM(dividend_gbp) FROM dividend_events GROUP BY symbol")) {
-                while (rs.next())
-                    result.put(rs.getString(1).toUpperCase(), BigDecimal.valueOf(rs.getDouble(2)));
-            }
-        } catch (SQLException e) {
-            System.err.println("Warning: could not load dividends — " + e.getMessage());
-        }
-        return result;
+        return DB.loadDividendsBySymbol();
     }
 
     // -------------------------------------------------------------------------
@@ -326,8 +205,8 @@ public class Main {
 
         String lastSaved = "";
         try {
-            if (Files.exists(LAST_II_CASH_FILE))
-                lastSaved = Files.readString(LAST_II_CASH_FILE).trim();
+            if (Files.exists(DB.lastIiCashFile))
+                lastSaved = Files.readString(DB.lastIiCashFile).trim();
         } catch (IOException ignored) {}
 
         while (true) {
@@ -350,8 +229,8 @@ public class Main {
                 BigDecimal value = new BigDecimal(raw);
 
                 try {
-                    Files.createDirectories(DB_DIR);
-                    Files.writeString(LAST_II_CASH_FILE, value.toPlainString());
+                    Files.createDirectories(DB.dbDir);
+                    Files.writeString(DB.lastIiCashFile, value.toPlainString());
                 } catch (IOException ignored) {}
 
                 return value;
@@ -486,35 +365,7 @@ public class Main {
     }
 
     private static void saveDividends(List<DividendEntry> entries) {
-        try {
-            Files.createDirectories(DB_DIR);
-            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH);
-                 Statement ddl = conn.createStatement()) {
-
-                ddl.execute(CREATE_DIVIDEND_TABLE);
-
-                int saved = 0, skipped = 0;
-                try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT OR REPLACE INTO dividend_events " +
-                        "(payment_date, account, symbol, currency, dividend_amount, fx_to_gbp, dividend_gbp) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
-                    for (DividendEntry d : entries) {
-                        ps.setString(1, d.paymentDate());
-                        ps.setString(2, d.account());
-                        ps.setString(3, d.symbol());
-                        ps.setString(4, d.currency());
-                        ps.setDouble(5, d.amount());
-                        ps.setDouble(6, d.fxToGbp());
-                        ps.setDouble(7, d.amountGbp());
-                        ps.executeUpdate();
-                        saved++;
-                    }
-                }
-                System.out.printf("Dividends saved: %d entr%s%n", saved, saved == 1 ? "y" : "ies");
-            }
-        } catch (IOException | SQLException e) {
-            System.err.println("Warning: could not save dividends — " + e.getMessage());
-        }
+        DB.saveDividends(entries);
     }
 
     private static void importCashTransactions() {
@@ -529,7 +380,7 @@ public class Main {
 
             if (inserted > 0) {
                 String dated = "cashstatements_" + LocalDate.now() + ".csv";
-                Path dest = DB_DIR.resolve(dated);
+                Path dest = DB.dbDir.resolve(dated);
                 Files.move(AJ_BELL_CASH_PATH, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 System.out.println("Cash statement archived to " + dest);
             } else {
@@ -542,75 +393,7 @@ public class Main {
     }
 
     private static int saveCashTransactions(List<CashTransaction> transactions) {
-        if (transactions.isEmpty()) return 0;
-        try {
-            Files.createDirectories(DB_DIR);
-            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH);
-                 Statement ddl = conn.createStatement()) {
-                ddl.execute(CREATE_CASH_TABLE);
-
-                String account = transactions.get(0).account();
-
-                // Load (date, balance) keys already in DB for this account for dedup
-                Set<String> existingKeys = new HashSet<>();
-                try (PreparedStatement q = conn.prepareStatement(
-                        "SELECT transaction_date, cash_balance_gbp FROM cash_transactions WHERE account = ?")) {
-                    q.setString(1, account);
-                    try (var rs = q.executeQuery()) {
-                        while (rs.next())
-                            existingKeys.add(rs.getString(1) + "|" + rs.getDouble(2));
-                    }
-                }
-
-                int inserted = 0, skipped = 0;
-                boolean seenNewRow = false;
-
-                try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT INTO cash_transactions " +
-                        "(transaction_date, account, type, symbol, quantity, amount, currency, " +
-                        " fx_to_gbp, amount_gbp, cash_balance_gbp, description) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
-                    for (CashTransaction tx : transactions) {
-                        Double bal = tx.cashBalanceGbp();
-                        boolean known = bal != null &&
-                                existingKeys.contains(tx.transactionDate() + "|" + bal);
-
-                        if (known) {
-                            if (seenNewRow) {
-                                System.err.printf(
-                                    "%n!!! DATA INTEGRITY ERROR: %s balance %.2f on %s already exists in DB " +
-                                    "but appears after new rows — possible gap or corrupt input file. Aborting import.%n",
-                                    account, bal, tx.transactionDate());
-                                return 0;
-                            }
-                            skipped++;
-                        } else {
-                            seenNewRow = true;
-                            ps.setString(1, tx.transactionDate());
-                            ps.setString(2, tx.account());
-                            ps.setString(3, tx.type());
-                            ps.setString(4, tx.symbol());
-                            ps.setDouble(5, tx.quantity());
-                            ps.setDouble(6, tx.amount());
-                            ps.setString(7, tx.currency());
-                            ps.setDouble(8, tx.fxToGbp());
-                            ps.setDouble(9, tx.amountGbp());
-                            if (bal != null) ps.setDouble(10, bal);
-                            else             ps.setNull(10, java.sql.Types.REAL);
-                            ps.setString(11, tx.description());
-                            ps.executeUpdate();
-                            inserted++;
-                        }
-                    }
-                }
-                System.out.printf("Cash transactions [%s]: %d inserted, %d already present (skipped)%n",
-                        account, inserted, skipped);
-                return inserted;
-            }
-        } catch (IOException | SQLException e) {
-            System.err.println("Warning: could not save cash transactions — " + e.getMessage());
-        }
-        return 0;
+        return DB.saveCashTransactions(transactions);
     }
 
     // -------------------------------------------------------------------------

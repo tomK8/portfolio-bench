@@ -1,5 +1,6 @@
 package com.pension;
 
+import com.pension.model.AggHolding;
 import com.pension.model.CashTransaction;
 import com.pension.model.Holding;
 import com.pension.parser.AccountParser;
@@ -58,9 +59,6 @@ public class Main {
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("yyyyMMdd");
 
-    private static final String FX_URL =
-            "https://api.frankfurter.dev/v1/latest?from=GBP&to=USD,EUR";
-
     // ---- Portfolio Raw sheet columns ----
     private static final int COL_SECURITY_ID      = 0;  // A
     private static final int COL_QUANTITY          = 1;  // B
@@ -100,17 +98,6 @@ public class Main {
             double amountGbp
     ) {}
 
-    private record AggHolding(
-            String securityId,
-            BigDecimal quantity,
-            BigDecimal avgPricePaid,
-            BigDecimal marketValueGbp,
-            BigDecimal gainGbp,
-            BigDecimal gainPct,      // decimal fraction: 0.125 = 12.5%
-            Currency currency,
-            String sources
-    ) {}
-
     // -------------------------------------------------------------------------
 
     public static void main(String[] args) throws Exception {
@@ -120,7 +107,7 @@ public class Main {
         }
 
         // Fetch live rates first so AJBellSippParser can use them during parsing
-        Map<String, BigDecimal> gbpRates = fetchGbpRates();
+        Map<String, BigDecimal> gbpRates = new FxRateClient().fetchRates();
         System.out.println("FX rates (per 1 GBP): " + gbpRates);
 
         List<AccountParser> parsers = List.of(
@@ -147,7 +134,7 @@ public class Main {
         }
 
         BigDecimal iiSippCash = promptForIISippCash();
-        List<AggHolding> aggregated = aggregate(holdings, gbpRates);
+        List<AggHolding> aggregated = new PortfolioAggregator().aggregate(holdings, gbpRates);
         Map<String, BigDecimal> dividendsBySymbol = loadDividendsBySymbol();
 
         Files.createDirectories(OUTPUT_DIR);
@@ -642,96 +629,6 @@ public class Main {
     }
 
     // -------------------------------------------------------------------------
-    // FX rates
-    // -------------------------------------------------------------------------
-
-    private static Map<String, BigDecimal> fetchGbpRates() throws Exception {
-        HttpClient client = HttpClient.newHttpClient();
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(FX_URL)).build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-        Map<String, BigDecimal> rates = new HashMap<>();
-        rates.put("GBP", BigDecimal.ONE);
-        Matcher m = Pattern.compile("\"([A-Z]{3})\":(\\d+\\.\\d+)").matcher(response.body());
-        while (m.find()) rates.put(m.group(1), new BigDecimal(m.group(2)));
-        return rates;
-    }
-
-    // -------------------------------------------------------------------------
-    // Aggregation
-    // -------------------------------------------------------------------------
-
-    private static List<AggHolding> aggregate(List<Holding> holdings,
-                                              Map<String, BigDecimal> gbpRates) {
-        record Key(String id, String ccy) {}
-
-        class Acc {
-            String securityId;
-            BigDecimal qty          = BigDecimal.ZERO;
-            BigDecimal nativeCost   = BigDecimal.ZERO;
-            boolean hasCost         = false;
-            BigDecimal mktValGbp    = BigDecimal.ZERO;
-            BigDecimal totalCostGbp = BigDecimal.ZERO;
-            boolean hasCostGbp      = false;
-            final Set<String> srcs  = new LinkedHashSet<>();
-            Currency currency;
-        }
-
-        Map<Key, Acc> map = new LinkedHashMap<>();
-
-        for (Holding h : holdings) {
-            Key key = new Key(h.getSecurityId(), h.getCurrency().getCurrencyCode());
-            Acc acc = map.computeIfAbsent(key, k -> {
-                Acc a = new Acc();
-                a.securityId = h.getSecurityId();
-                a.currency   = h.getCurrency();
-                return a;
-            });
-            acc.qty = acc.qty.add(h.getQuantity());
-            acc.srcs.add(h.getSource());
-
-            if (h.getAvgPricePaid() != null) {
-                acc.nativeCost = acc.nativeCost.add(h.getQuantity().multiply(h.getAvgPricePaid()));
-                acc.hasCost = true;
-            }
-            BigDecimal gbp = toGbp(h, gbpRates);
-            if (gbp != null) acc.mktValGbp = acc.mktValGbp.add(gbp);
-
-            BigDecimal costGbp = costInGbp(h, gbpRates);
-            if (costGbp != null) { acc.totalCostGbp = acc.totalCostGbp.add(costGbp); acc.hasCostGbp = true; }
-        }
-
-        return map.values().stream().map(acc -> {
-            BigDecimal avg = acc.hasCost && acc.qty.compareTo(BigDecimal.ZERO) > 0
-                    ? acc.nativeCost.divide(acc.qty, 10, RoundingMode.HALF_UP) : null;
-            BigDecimal gain = acc.hasCostGbp ? acc.mktValGbp.subtract(acc.totalCostGbp) : null;
-            BigDecimal pct  = (acc.hasCostGbp && acc.totalCostGbp.compareTo(BigDecimal.ZERO) != 0)
-                    ? gain.divide(acc.totalCostGbp, 10, RoundingMode.HALF_UP) : null;
-            return new AggHolding(acc.securityId, acc.qty, avg, acc.mktValGbp, gain, pct,
-                                  acc.currency, String.join(", ", acc.srcs));
-        }).sorted(Comparator.comparingInt(Main::aggSection).thenComparing(Main::aggSortKey))
-          .collect(Collectors.toList());
-    }
-
-    private static BigDecimal costInGbp(Holding h, Map<String, BigDecimal> gbpRates) {
-        if (h.getCostBasisGbp() != null) return h.getCostBasisGbp();
-        if (h.getAvgPricePaid() == null) return null;
-        BigDecimal native_ = h.getQuantity().multiply(h.getAvgPricePaid());
-        BigDecimal rate    = gbpRates.getOrDefault(h.getCurrency().getCurrencyCode(), BigDecimal.ONE);
-        return rate.compareTo(BigDecimal.ZERO) == 0 ? null
-                : native_.divide(rate, 10, RoundingMode.HALF_UP);
-    }
-
-    private static int aggSection(AggHolding h) {
-        if (isBond(h.securityId())) return 4;
-        return switch (h.currency().getCurrencyCode()) {
-            case "USD" -> 0; case "GBP" -> 1; case "EUR" -> 2; default -> 3;
-        };
-    }
-    private static String aggSortKey(AggHolding h) { return h.securityId().equals("CASH") ? "~" : h.securityId(); }
-    private static boolean isBond(String id) { return id.contains("%") || id.toUpperCase().startsWith("GILT"); }
-
-    // -------------------------------------------------------------------------
     // Aggregated Portfolio sheet — returns cross-sheet ref to the II SIPP input cell
     // -------------------------------------------------------------------------
 
@@ -751,7 +648,7 @@ public class Main {
         boolean hasCashGbp = cashList.stream().anyMatch(h -> "GBP".equals(h.currency().getCurrencyCode()));
 
         int nEquity  = equities.size();
-        int nBond    = (int) equities.stream().filter(h -> isBond(h.securityId())).count();
+        int nBond    = (int) equities.stream().filter(h -> PortfolioAggregator.isBond(h.securityId())).count();
         int nNonBond = nEquity - nBond;
         int nCash    = cashList.size() + (hasCashGbp ? 0 : 1);
 
@@ -1102,10 +999,10 @@ public class Main {
         setNumeric(row, COL_QUANTITY,       h.getQuantity(),                   numStyle);
         setNumeric(row, COL_AVG_PRICE,      h.getAvgPricePaid(),               numStyle);
         setNumeric(row, COL_MKT_VALUE,      h.getCurrentMarketValue(),         numStyle);
-        BigDecimal gbpVal = toGbp(h, gbpRates);
+        BigDecimal gbpVal = PortfolioAggregator.toGbp(h, gbpRates);
         setNumeric(row, COL_MKT_VALUE_GBP,  gbpVal,                            numStyle);
 
-        BigDecimal costGbp = costInGbp(h, gbpRates);
+        BigDecimal costGbp = PortfolioAggregator.costInGbp(h, gbpRates);
         if (costGbp != null && gbpVal != null) {
             BigDecimal g = gbpVal.subtract(costGbp);
             boolean pos  = g.compareTo(BigDecimal.ZERO) >= 0;
@@ -1173,15 +1070,6 @@ public class Main {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
-
-    private static BigDecimal toGbp(Holding h, Map<String, BigDecimal> gbpRates) {
-        if (h.getCurrentMarketValueGbp() != null) return h.getCurrentMarketValueGbp();
-        BigDecimal mktVal = h.getCurrentMarketValue();
-        if (mktVal == null) return null;
-        BigDecimal rate = gbpRates.get(h.getCurrency().getCurrencyCode());
-        if (rate == null || rate.compareTo(BigDecimal.ZERO) == 0) return null;
-        return mktVal.divide(rate, 10, RoundingMode.HALF_UP);
-    }
 
     private static void setNumeric(Row row, int col, BigDecimal value, CellStyle style) {
         if (value == null) return;

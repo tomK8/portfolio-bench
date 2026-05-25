@@ -1,9 +1,13 @@
 package com.pension;
 
+import com.pension.model.CashTransaction;
 import com.pension.model.Holding;
 import com.pension.parser.AccountParser;
+import com.pension.parser.AJBellCashStatementParser;
 import com.pension.parser.AJBellSippParser;
+import com.pension.parser.CashTransactionParser;
 import com.pension.parser.IISippParser;
+import com.pension.parser.ParseException;
 import com.pension.parser.RothIraParser;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -197,15 +201,34 @@ public class Main {
 
         saveSnapshot(totalGbp, totalGainGbp, totalCashGbp, returnPct, totalReturn, gbpRates);
         promptAndSaveDividends(gbpRates);
+        importCashTransactions();
     }
 
     // -------------------------------------------------------------------------
     // Database snapshot
     // -------------------------------------------------------------------------
 
+    private static final Path AJ_BELL_CASH_PATH = Path.of(System.getProperty("user.home"), "Downloads", "cashstatements.csv");
+
     private static final Path DB_DIR            = Path.of(System.getProperty("user.home"), "Documents", "Investing");
     private static final Path DB_PATH           = DB_DIR.resolve("portfolio.db");
     private static final Path LAST_II_CASH_FILE = DB_DIR.resolve("ii_sipp_cash_last.txt");
+
+    private static final String CREATE_CASH_TABLE = """
+            CREATE TABLE IF NOT EXISTS cash_transactions (
+                transaction_date TEXT NOT NULL,
+                account          TEXT NOT NULL CHECK (account IN ('RothIRA', 'AJBell', 'II')),
+                type             TEXT NOT NULL CHECK (type IN ('TRANSACTION', 'DIVIDEND', 'INTEREST', 'CHARGE', 'CONTRIBUTION')),
+                symbol           TEXT NOT NULL,
+                quantity         REAL NOT NULL,
+                amount           REAL NOT NULL,
+                currency         TEXT NOT NULL,
+                fx_to_gbp        REAL NOT NULL,
+                amount_gbp       REAL NOT NULL,
+                cash_balance_gbp REAL,
+                description      TEXT,
+                PRIMARY KEY (transaction_date, account, type, symbol, amount_gbp, cash_balance_gbp)
+            )""";
 
     private static final String CREATE_DIVIDEND_TABLE = """
             CREATE TABLE IF NOT EXISTS dividend_events (
@@ -367,13 +390,15 @@ public class Main {
         } catch (Exception ignored) {}
 
         try {
-            int choice = javax.swing.JOptionPane.showConfirmDialog(
+            Object[] opts = {"Yes", "No"};
+            int choice = javax.swing.JOptionPane.showOptionDialog(
                     null,
                     "Do you have dividends to record?",
                     "Dividend Entry",
                     javax.swing.JOptionPane.YES_NO_OPTION,
-                    javax.swing.JOptionPane.QUESTION_MESSAGE);
-            if (choice != javax.swing.JOptionPane.YES_OPTION) return;
+                    javax.swing.JOptionPane.QUESTION_MESSAGE,
+                    null, opts, opts[1]);
+            if (choice != 0) return; // 0 = Yes
 
             String today = LocalDate.now().toString();
             String[] colNames = {"Date (YYYY-MM-DD)", "Account", "Symbol", "Currency", "Amount"};
@@ -504,6 +529,90 @@ public class Main {
             }
         } catch (IOException | SQLException e) {
             System.err.println("Warning: could not save dividends — " + e.getMessage());
+        }
+    }
+
+    private static void importCashTransactions() {
+        if (!Files.exists(AJ_BELL_CASH_PATH)) {
+            System.out.println("Cash statement not found at " + AJ_BELL_CASH_PATH + " — skipping");
+            return;
+        }
+        try {
+            CashTransactionParser parser = new AJBellCashStatementParser();
+            List<CashTransaction> txns = parser.parse(AJ_BELL_CASH_PATH);
+            saveCashTransactions(txns);
+        } catch (IOException | ParseException e) {
+            System.err.println("Warning: could not parse cash statement — " + e.getMessage());
+        }
+    }
+
+    private static void saveCashTransactions(List<CashTransaction> transactions) {
+        if (transactions.isEmpty()) return;
+        try {
+            Files.createDirectories(DB_DIR);
+            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH);
+                 Statement ddl = conn.createStatement()) {
+                ddl.execute(CREATE_CASH_TABLE);
+
+                String account = transactions.get(0).account();
+
+                // Load (date, balance) keys already in DB for this account for dedup
+                Set<String> existingKeys = new HashSet<>();
+                try (PreparedStatement q = conn.prepareStatement(
+                        "SELECT transaction_date, cash_balance_gbp FROM cash_transactions WHERE account = ?")) {
+                    q.setString(1, account);
+                    try (var rs = q.executeQuery()) {
+                        while (rs.next())
+                            existingKeys.add(rs.getString(1) + "|" + rs.getDouble(2));
+                    }
+                }
+
+                int inserted = 0, skipped = 0;
+                boolean seenNewRow = false;
+
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO cash_transactions " +
+                        "(transaction_date, account, type, symbol, quantity, amount, currency, " +
+                        " fx_to_gbp, amount_gbp, cash_balance_gbp, description) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    for (CashTransaction tx : transactions) {
+                        Double bal = tx.cashBalanceGbp();
+                        boolean known = bal != null &&
+                                existingKeys.contains(tx.transactionDate() + "|" + bal);
+
+                        if (known) {
+                            if (seenNewRow) {
+                                System.err.printf(
+                                    "%n!!! DATA INTEGRITY ERROR: %s balance %.2f on %s already exists in DB " +
+                                    "but appears after new rows — possible gap or corrupt input file. Aborting import.%n",
+                                    account, bal, tx.transactionDate());
+                                return;
+                            }
+                            skipped++;
+                        } else {
+                            seenNewRow = true;
+                            ps.setString(1, tx.transactionDate());
+                            ps.setString(2, tx.account());
+                            ps.setString(3, tx.type());
+                            ps.setString(4, tx.symbol());
+                            ps.setDouble(5, tx.quantity());
+                            ps.setDouble(6, tx.amount());
+                            ps.setString(7, tx.currency());
+                            ps.setDouble(8, tx.fxToGbp());
+                            ps.setDouble(9, tx.amountGbp());
+                            if (bal != null) ps.setDouble(10, bal);
+                            else             ps.setNull(10, java.sql.Types.REAL);
+                            ps.setString(11, tx.description());
+                            ps.executeUpdate();
+                            inserted++;
+                        }
+                    }
+                }
+                System.out.printf("Cash transactions [%s]: %d inserted, %d already present (skipped)%n",
+                        account, inserted, skipped);
+            }
+        } catch (IOException | SQLException e) {
+            System.err.println("Warning: could not save cash transactions — " + e.getMessage());
         }
     }
 

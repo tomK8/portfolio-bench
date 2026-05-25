@@ -15,16 +15,26 @@ mvn exec:java -Dexec.mainClass=com.pension.Main  # run (requires input files in 
 ## Architecture
 
 The app reads the most recently modified matching file from `~/Downloads` for each registered parser, aggregates all holdings, and writes two Excel files to `~/Documents`:
-- `portfolio<timestamp>.xlsx` — full workbook with Portfolio, Portfolio Raw, and one raw-input tab per source
-- `Portfolio Summary.xlsx` — fixed-name file with only the aggregated Portfolio tab (for easy re-opening)
+- `portfolio<yyyyMMdd>.xlsx` — full workbook with Portfolio, Portfolio Raw, and one raw-input tab per source (overwritten on re-run same day)
+- `Portfolio Summary-<yyyyMMdd>.xlsx` — aggregated Portfolio tab only (for easy re-opening)
 
 It also appends a row to `~/Documents/Investing/portfolio.db` (SQLite) on every run.
 
+**Key classes (SRP split from original monolithic Main):**
+- `FxRateClient` — fetches live GBP FX rates from `api.frankfurter.dev`
+- `PortfolioAggregator` — aggregates raw `Holding` objects; also owns `toGbp`, `costInGbp`, `isBond`
+- `ExcelReportWriter` — all Apache POI logic; `writeFullReport` and `writeSummaryReport`
+- `UserInputDialogs` — Swing prompts (II SIPP cash input, dividend entry table)
+- `PortfolioDatabase` — SQLite persistence (snapshots, dividends, cash transactions)
+- `Main` — orchestrates the run (~180 lines)
+
 **Data flow:**
-1. `Main` fetches live GBP FX rates from `api.frankfurter.dev`
+1. `FxRateClient` fetches live GBP rates
 2. Each `AccountParser` is asked `supports(file)` against files in `~/Downloads`; the most recently modified match is parsed
-3. All `Holding` objects are aggregated by `(securityId, currency)` key
-4. Two sheets are written: "Portfolio" (aggregated, one row per security) and "Portfolio Raw" (all source rows grouped by account)
+3. `UserInputDialogs.promptForIISippCash()` prompts for the II SIPP cash balance
+4. `PortfolioAggregator` aggregates all `Holding` objects by `(securityId, currency)` key
+5. `ExcelReportWriter` writes both Excel files
+6. `PortfolioDatabase.saveSnapshot()` records totals to SQLite
 
 **`Holding` fields:**
 - `currentMarketValue` — native currency amount
@@ -37,7 +47,7 @@ It also appends a row to `~/Documents/Investing/portfolio.db` (SQLite) on every 
 
 1. Implement `AccountParser` (`parse`, `supports`, `sourceName`)
 2. Register it in `Main.main()` alongside the existing parsers
-3. If the source provides GBP values directly, set `currentMarketValueGbp` and `costBasisGbp` on the `Holding`; otherwise leave them null and `Main` will convert via FX
+3. If the source provides GBP values directly, set `currentMarketValueGbp` and `costBasisGbp` on the `Holding`; otherwise leave them null and `PortfolioAggregator` will convert via FX
 
 **Parser file-detection conventions:**
 - `RothIraParser` — `Holdings*.xlsx`
@@ -46,11 +56,11 @@ It also appends a row to `~/Documents/Investing/portfolio.db` (SQLite) on every 
 
 ## II SIPP cash handling
 
-II SIPP's CSV export does not include a cash balance. `Main` prompts for it via a Swing dialog at runtime. The value is written into a yellow input cell (`E` column) on the Portfolio sheet; a formula chain links the Portfolio Raw sheet's II SIPP CASH row back to that cell so editing the Excel file directly also works.
+II SIPP's CSV export does not include a cash balance. `UserInputDialogs.promptForIISippCash()` prompts for it at runtime and persists the last value to `~/Documents/Investing/ii_sipp_cash_last.txt`. The value is written into a yellow input cell (`E` column) on the Portfolio sheet; a formula chain links the Portfolio Raw sheet's II SIPP CASH row back to that cell so editing the Excel file directly also works.
 
 ## Bond identification
 
-Bonds in AJ Bell exports carry `(SEDOL:...)` in the Investment description. `AJBellSippParser.extractBondId` converts these to `"GILT {coupon}% {year}"` format. The `isBond` check in `Main.aggSection` uses `%` presence or `GILT` prefix to sort bonds into their own section at the bottom of the Portfolio sheet.
+Bonds in AJ Bell exports carry `(SEDOL:...)` in the Investment description. `AJBellSippParser.extractBondId` converts these to `"GILT {coupon}% {year}"` format. `PortfolioAggregator.isBond` checks for `%` presence or `GILT` prefix to sort bonds into their own section at the bottom of the Portfolio sheet.
 
 ## Cash transaction ingestion
 

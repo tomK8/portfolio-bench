@@ -15,6 +15,9 @@ import org.apache.poi.xssf.usermodel.XSSFColor;
 import org.apache.poi.xssf.usermodel.XSSFFont;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
+import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.HeadlessException;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -48,36 +51,50 @@ public class Main {
 
     private static final DateTimeFormatter TIMESTAMP_FMT =
             DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    private static final DateTimeFormatter DATE_FMT =
+            DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private static final String FX_URL =
             "https://api.frankfurter.dev/v1/latest?from=GBP&to=USD,EUR";
 
     // ---- Portfolio Raw sheet columns ----
-    private static final int COL_SECURITY_ID   = 0;  // A
-    private static final int COL_QUANTITY       = 1;  // B
-    private static final int COL_AVG_PRICE      = 2;  // C
-    private static final int COL_MKT_VALUE      = 3;  // D  (native currency)
-    private static final int COL_MKT_VALUE_GBP  = 4;  // E
-    private static final int COL_GAIN           = 5;  // F  Gain (£)
-    private static final int COL_GAIN_PCT       = 6;  // G  Gain/Loss %
-    private static final int COL_CURRENCY       = 7;  // H
-    private static final int COL_SOURCE         = 8;  // I
-    private static final int NUM_COLS           = 9;
+    private static final int COL_SECURITY_ID      = 0;  // A
+    private static final int COL_QUANTITY          = 1;  // B
+    private static final int COL_AVG_PRICE         = 2;  // C
+    private static final int COL_MKT_VALUE         = 3;  // D  (native currency)
+    private static final int COL_MKT_VALUE_GBP     = 4;  // E
+    private static final int COL_GAIN              = 5;  // F  Gain (£)
+    private static final int COL_GAIN_PCT          = 6;  // G  Gain/Loss %
+    private static final int COL_TOTAL_GAIN_PCT    = 7;  // H  Total Gain/Loss % (incl. dividends)
+    private static final int COL_CURRENCY          = 8;  // I
+    private static final int COL_SOURCE            = 9;  // J
+    private static final int NUM_COLS              = 10;
 
     // ---- Aggregated Portfolio sheet columns ----
-    private static final int AGG_ID      = 0;  // A
-    private static final int AGG_QTY     = 1;  // B
-    private static final int AGG_AVG     = 2;  // C
-    private static final int AGG_CCY     = 3;  // D  Exchange Currency
-    private static final int AGG_MKTGBP  = 4;  // E  Market Value GBP
-    private static final int AGG_GAIN    = 5;  // F  Gain (£)
-    private static final int AGG_GAINPCT = 6;  // G  Gain/Loss %
-    private static final int AGG_SOURCES = 7;  // H
-    private static final int AGG_COLS    = 8;
+    private static final int AGG_ID             = 0;  // A
+    private static final int AGG_QTY            = 1;  // B
+    private static final int AGG_AVG            = 2;  // C
+    private static final int AGG_CCY            = 3;  // D  Exchange Currency
+    private static final int AGG_MKTGBP         = 4;  // E  Market Value GBP
+    private static final int AGG_GAIN           = 5;  // F  Gain (£)
+    private static final int AGG_GAINPCT        = 6;  // G  Gain/Loss %
+    private static final int AGG_TOTAL_GAIN_PCT = 7;  // H  Total Gain/Loss % (incl. dividends)
+    private static final int AGG_SOURCES        = 8;  // I
+    private static final int AGG_COLS           = 9;
 
     private static final String II_SIPP = "II SIPP";
 
     private record SourceFile(AccountParser parser, Path file) {}
+
+    private record DividendEntry(
+            String paymentDate,
+            String account,
+            String symbol,
+            String currency,
+            double amount,
+            double fxToGbp,
+            double amountGbp
+    ) {}
 
     private record AggHolding(
             String securityId,
@@ -127,17 +144,19 @@ public class Main {
 
         BigDecimal iiSippCash = promptForIISippCash();
         List<AggHolding> aggregated = aggregate(holdings, gbpRates);
+        Map<String, BigDecimal> dividendsBySymbol = loadDividendsBySymbol();
 
         Files.createDirectories(OUTPUT_DIR);
         String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);
+        String date = LocalDateTime.now().format(DATE_FMT);
 
         // Main timestamped workbook
         Path mainOutput = OUTPUT_DIR.resolve("portfolio" + timestamp + ".xlsx");
         try (Workbook wb = new XSSFWorkbook()) {
             String portfolioInputRef =
-                    writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
+                    writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, dividendsBySymbol, wb);
             writePortfolioSheet(wb.createSheet("Portfolio Raw"), holdings, gbpRates,
-                                portfolioInputRef, wb);
+                                portfolioInputRef, dividendsBySymbol, wb);
             for (SourceFile sf : sources)
                 writeRawSheet(sf.file(), wb.createSheet(sf.parser().sourceName()));
             try (OutputStream os = Files.newOutputStream(mainOutput)) { wb.write(os); }
@@ -145,9 +164,9 @@ public class Main {
         System.out.println("Written " + holdings.size() + " holdings to: " + mainOutput);
 
         // Portfolio Summary — standalone file, fixed name
-        Path summaryOutput = OUTPUT_DIR.resolve("Portfolio Summary.xlsx");
+        Path summaryOutput = OUTPUT_DIR.resolve("Portfolio Summary-" + date + ".xlsx");
         try (Workbook wb = new XSSFWorkbook()) {
-            writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
+            writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, dividendsBySymbol, wb);
             try (OutputStream os = Files.newOutputStream(summaryOutput)) { wb.write(os); }
         }
         System.out.println("Portfolio summary written to: " + summaryOutput);
@@ -177,14 +196,28 @@ public class Main {
                 : BigDecimal.ZERO;
 
         saveSnapshot(totalGbp, totalGainGbp, totalCashGbp, returnPct, totalReturn, gbpRates);
+        promptAndSaveDividends(gbpRates);
     }
 
     // -------------------------------------------------------------------------
     // Database snapshot
     // -------------------------------------------------------------------------
 
-    private static final Path DB_DIR  = Path.of(System.getProperty("user.home"), "Documents", "Investing");
-    private static final Path DB_PATH = DB_DIR.resolve("portfolio.db");
+    private static final Path DB_DIR            = Path.of(System.getProperty("user.home"), "Documents", "Investing");
+    private static final Path DB_PATH           = DB_DIR.resolve("portfolio.db");
+    private static final Path LAST_II_CASH_FILE = DB_DIR.resolve("ii_sipp_cash_last.txt");
+
+    private static final String CREATE_DIVIDEND_TABLE = """
+            CREATE TABLE IF NOT EXISTS dividend_events (
+                payment_date     TEXT NOT NULL,
+                account          TEXT NOT NULL CHECK (account IN ('AJBELL', 'II', 'ROTH_IRA')),
+                symbol           TEXT NOT NULL,
+                currency         TEXT NOT NULL CHECK (currency IN ('GBP', 'USD', 'EUR')),
+                dividend_amount  REAL NOT NULL,
+                fx_to_gbp        REAL NOT NULL,
+                dividend_gbp     REAL NOT NULL,
+                PRIMARY KEY (payment_date, account, symbol, currency)
+            )""";
 
     private static final String CREATE_TABLE = """
             CREATE TABLE IF NOT EXISTS portfolio_snapshots (
@@ -257,6 +290,23 @@ public class Main {
         }
     }
 
+    private static Map<String, BigDecimal> loadDividendsBySymbol() {
+        Map<String, BigDecimal> result = new HashMap<>();
+        if (!Files.exists(DB_PATH)) return result;
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH);
+             Statement st = conn.createStatement()) {
+            st.execute(CREATE_DIVIDEND_TABLE);
+            try (var rs = st.executeQuery(
+                    "SELECT symbol, SUM(dividend_gbp) FROM dividend_events GROUP BY symbol")) {
+                while (rs.next())
+                    result.put(rs.getString(1).toUpperCase(), BigDecimal.valueOf(rs.getDouble(2)));
+            }
+        } catch (SQLException e) {
+            System.err.println("Warning: could not load dividends — " + e.getMessage());
+        }
+        return result;
+    }
+
     // -------------------------------------------------------------------------
     // User input
     // -------------------------------------------------------------------------
@@ -266,22 +316,37 @@ public class Main {
             javax.swing.UIManager.setLookAndFeel(javax.swing.UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ignored) {}
 
+        String lastSaved = "";
+        try {
+            if (Files.exists(LAST_II_CASH_FILE))
+                lastSaved = Files.readString(LAST_II_CASH_FILE).trim();
+        } catch (IOException ignored) {}
+
         while (true) {
             try {
-                String raw = javax.swing.JOptionPane.showInputDialog(
+                Object result = javax.swing.JOptionPane.showInputDialog(
                         null,
                         "Enter II SIPP Cash balance (GBP):",
                         "II SIPP Cash",
-                        javax.swing.JOptionPane.QUESTION_MESSAGE);
+                        javax.swing.JOptionPane.QUESTION_MESSAGE,
+                        null, null,
+                        lastSaved);
 
-                if (raw == null) {
+                if (result == null) {
                     System.out.println("II SIPP cash input cancelled — using 0");
                     return BigDecimal.ZERO;
                 }
-                raw = raw.replace(",", "").replace("£", "").trim();
+                String raw = result.toString().replace(",", "").replace("£", "").trim();
                 if (raw.isEmpty()) return BigDecimal.ZERO;
 
-                return new BigDecimal(raw);
+                BigDecimal value = new BigDecimal(raw);
+
+                try {
+                    Files.createDirectories(DB_DIR);
+                    Files.writeString(LAST_II_CASH_FILE, value.toPlainString());
+                } catch (IOException ignored) {}
+
+                return value;
 
             } catch (NumberFormatException e) {
                 javax.swing.JOptionPane.showMessageDialog(
@@ -293,6 +358,152 @@ public class Main {
                 System.out.println("No display available — II SIPP cash set to 0");
                 return BigDecimal.ZERO;
             }
+        }
+    }
+
+    private static void promptAndSaveDividends(Map<String, BigDecimal> gbpRates) {
+        try {
+            javax.swing.UIManager.setLookAndFeel(javax.swing.UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception ignored) {}
+
+        try {
+            int choice = javax.swing.JOptionPane.showConfirmDialog(
+                    null,
+                    "Do you have dividends to record?",
+                    "Dividend Entry",
+                    javax.swing.JOptionPane.YES_NO_OPTION,
+                    javax.swing.JOptionPane.QUESTION_MESSAGE);
+            if (choice != javax.swing.JOptionPane.YES_OPTION) return;
+
+            String today = LocalDate.now().toString();
+            String[] colNames = {"Date (YYYY-MM-DD)", "Account", "Symbol", "Currency", "Amount"};
+            javax.swing.table.DefaultTableModel model = new javax.swing.table.DefaultTableModel(colNames, 0) {
+                @Override public boolean isCellEditable(int r, int c) { return true; }
+            };
+            model.addRow(new Object[]{today, "AJBELL", "", "GBP", ""});
+
+            javax.swing.JTable table = new javax.swing.JTable(model);
+            table.setRowHeight(24);
+            table.getColumnModel().getColumn(0).setPreferredWidth(120);
+            table.getColumnModel().getColumn(4).setPreferredWidth(90);
+
+            javax.swing.JComboBox<String> accountCombo =
+                    new javax.swing.JComboBox<>(new String[]{"AJBELL", "II", "ROTH_IRA"});
+            table.getColumnModel().getColumn(1).setCellEditor(
+                    new javax.swing.DefaultCellEditor(accountCombo));
+
+            javax.swing.JComboBox<String> ccyCombo =
+                    new javax.swing.JComboBox<>(new String[]{"GBP", "USD", "EUR"});
+            table.getColumnModel().getColumn(3).setCellEditor(
+                    new javax.swing.DefaultCellEditor(ccyCombo));
+
+            javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(table);
+            scroll.setPreferredSize(new Dimension(700, 140));
+
+            javax.swing.JButton addBtn = new javax.swing.JButton("+ Add Row");
+            addBtn.addActionListener(e -> model.addRow(new Object[]{today, "AJBELL", "", "GBP", ""}));
+            javax.swing.JButton removeBtn = new javax.swing.JButton("Remove Selected");
+            removeBtn.addActionListener(e -> {
+                int row = table.getSelectedRow();
+                if (row >= 0) model.removeRow(row);
+            });
+
+            javax.swing.JPanel btnPanel = new javax.swing.JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            btnPanel.add(addBtn);
+            btnPanel.add(removeBtn);
+
+            javax.swing.JPanel panel = new javax.swing.JPanel(new BorderLayout(0, 8));
+            panel.add(new javax.swing.JLabel(
+                    "<html>Enter dividend payments. Amount is in the selected currency — FX rates used: " +
+                    "1 GBP = " + String.format("%.4f", gbpRates.getOrDefault("USD", BigDecimal.ONE)) + " USD, " +
+                    String.format("%.4f", gbpRates.getOrDefault("EUR", BigDecimal.ONE)) + " EUR</html>"),
+                    BorderLayout.NORTH);
+            panel.add(scroll, BorderLayout.CENTER);
+            panel.add(btnPanel, BorderLayout.SOUTH);
+
+            int result = javax.swing.JOptionPane.showConfirmDialog(
+                    null, panel, "Record Dividends",
+                    javax.swing.JOptionPane.OK_CANCEL_OPTION,
+                    javax.swing.JOptionPane.PLAIN_MESSAGE);
+            if (result != javax.swing.JOptionPane.OK_OPTION) return;
+
+            if (table.isEditing()) table.getCellEditor().stopCellEditing();
+
+            List<DividendEntry> entries  = new ArrayList<>();
+            List<String>        errors   = new ArrayList<>();
+            for (int r = 0; r < model.getRowCount(); r++) {
+                String date   = String.valueOf(model.getValueAt(r, 0)).trim();
+                String acct   = String.valueOf(model.getValueAt(r, 1)).trim();
+                String symbol = String.valueOf(model.getValueAt(r, 2)).trim().toUpperCase();
+                String ccy    = String.valueOf(model.getValueAt(r, 3)).trim().toUpperCase();
+                String amtStr = String.valueOf(model.getValueAt(r, 4))
+                                      .replace(",", "").replace("$", "").replace("£", "")
+                                      .replace("€", "").trim();
+
+                if (symbol.isEmpty() && amtStr.isEmpty()) continue;
+
+                if (date.isEmpty() || symbol.isEmpty() || amtStr.isEmpty()) {
+                    errors.add("Row " + (r + 1) + ": date, symbol and amount are required");
+                    continue;
+                }
+                double amount;
+                try {
+                    amount = Double.parseDouble(amtStr);
+                } catch (NumberFormatException e) {
+                    errors.add("Row " + (r + 1) + ": invalid amount '" + amtStr + "'");
+                    continue;
+                }
+                double fxToGbp = switch (ccy) {
+                    case "USD" -> gbpRates.getOrDefault("USD", BigDecimal.ONE).doubleValue();
+                    case "EUR" -> gbpRates.getOrDefault("EUR", BigDecimal.ONE).doubleValue();
+                    default    -> 1.0;
+                };
+                double amountGbp = "GBP".equals(ccy) ? amount : amount / fxToGbp;
+                entries.add(new DividendEntry(date, acct, symbol, ccy, amount, fxToGbp, amountGbp));
+            }
+
+            if (!errors.isEmpty()) {
+                javax.swing.JOptionPane.showMessageDialog(null,
+                        String.join("\n", errors), "Validation Errors",
+                        javax.swing.JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            if (!entries.isEmpty()) saveDividends(entries);
+
+        } catch (HeadlessException e) {
+            System.out.println("No display available — skipping dividend entry");
+        }
+    }
+
+    private static void saveDividends(List<DividendEntry> entries) {
+        try {
+            Files.createDirectories(DB_DIR);
+            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + DB_PATH);
+                 Statement ddl = conn.createStatement()) {
+
+                ddl.execute(CREATE_DIVIDEND_TABLE);
+
+                int saved = 0, skipped = 0;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT OR REPLACE INTO dividend_events " +
+                        "(payment_date, account, symbol, currency, dividend_amount, fx_to_gbp, dividend_gbp) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                    for (DividendEntry d : entries) {
+                        ps.setString(1, d.paymentDate());
+                        ps.setString(2, d.account());
+                        ps.setString(3, d.symbol());
+                        ps.setString(4, d.currency());
+                        ps.setDouble(5, d.amount());
+                        ps.setDouble(6, d.fxToGbp());
+                        ps.setDouble(7, d.amountGbp());
+                        ps.executeUpdate();
+                        saved++;
+                    }
+                }
+                System.out.printf("Dividends saved: %d entr%s%n", saved, saved == 1 ? "y" : "ies");
+            }
+        } catch (IOException | SQLException e) {
+            System.err.println("Warning: could not save dividends — " + e.getMessage());
         }
     }
 
@@ -405,7 +616,9 @@ public class Main {
 
     private static String writeAggregatedSheet(Sheet sheet, List<AggHolding> rows,
                                                Map<String, BigDecimal> gbpRates,
-                                               BigDecimal iiSippCash, Workbook wb) {
+                                               BigDecimal iiSippCash,
+                                               Map<String, BigDecimal> dividendsBySymbol,
+                                               Workbook wb) {
         CellStyle dataText  = wb.createCellStyle();
         CellStyle dataNum   = numericStyle(wb, false);
         CellStyle boldText  = boldTextStyle(wb);
@@ -416,18 +629,22 @@ public class Main {
         List<AggHolding> cashList = rows.stream().filter(h ->  "CASH".equals(h.securityId())).collect(Collectors.toList());
         boolean hasCashGbp = cashList.stream().anyMatch(h -> "GBP".equals(h.currency().getCurrencyCode()));
 
-        int nEquity = equities.size();
-        int nCash   = cashList.size() + (hasCashGbp ? 0 : 1);
+        int nEquity  = equities.size();
+        int nBond    = (int) equities.stream().filter(h -> isBond(h.securityId())).count();
+        int nNonBond = nEquity - nBond;
+        int nCash    = cashList.size() + (hasCashGbp ? 0 : 1);
 
-        int firstCashPoi    = nEquity + 3;
-        int lastCashPoi     = nEquity + 2 + nCash;
-        int totalCashPoiRow    = nEquity + 3 + nCash;
-        int totalPoiRow        = nEquity + 5 + nCash;
-        int returnPctPoiRow    = nEquity + 6 + nCash;
-        int totalReturnPoiRow  = nEquity + 7 + nCash;
-        int inputLabelPoi      = nEquity + 10 + nCash;
-        int inputValuePoi      = nEquity + 11 + nCash;
-        String inputCellRef    = "E" + (inputValuePoi + 1);
+        int firstCashPoi         = nEquity + 3;
+        int lastCashPoi          = nEquity + 2 + nCash;
+        int totalCashPoiRow      = nEquity + 3 + nCash;
+        int totalPoiRow          = nEquity + 5 + nCash;
+        int returnPctPoiRow      = nEquity + 6 + nCash;
+        int returnEquitiesPoiRow = nEquity + 7 + nCash;
+        int returnBondsPoiRow    = nEquity + 8 + nCash;
+        int totalReturnPoiRow    = nEquity + 9 + nCash;
+        int inputLabelPoi        = nEquity + 12 + nCash;
+        int inputValuePoi        = nEquity + 13 + nCash;
+        String inputCellRef      = "E" + (inputValuePoi + 1);
 
         int firstEquityExcel = 2;
         int lastEquityExcel  = nEquity + 1;
@@ -436,15 +653,17 @@ public class Main {
 
         // Header
         String[] headers = { "Security ID", "Quantity", "Avg Price Paid", "Exchange Currency",
-                              "Market Value GBP", "Gain (£)", "Gain/Loss %", "Sources" };
+                              "Market Value GBP", "Gain (£)", "Gain/Loss %", "Total Gain/Loss %", "Sources" };
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
         sheet.setAutoFilter(new CellRangeAddress(0, nEquity, 0, AGG_COLS - 1));
 
         // Equity rows
         int rowNum = 1;
-        for (AggHolding h : equities)
-            writeAggRow(sheet.createRow(rowNum++), h, dataText, dataNum, wb);
+        for (AggHolding h : equities) {
+            BigDecimal div = dividendsBySymbol.getOrDefault(h.securityId().toUpperCase(), BigDecimal.ZERO);
+            writeAggRow(sheet.createRow(rowNum++), h, div, dataText, dataNum, wb);
+        }
 
         // Cash section header
         styledCell(sheet.createRow(nEquity + 2), AGG_ID, "Cash", boldText);
@@ -505,18 +724,37 @@ public class Main {
                 "SUBTOTAL(9,F" + firstEquityExcel + ":F" + lastEquityExcel + ")"
                 + "+SUM(F" + firstCashExcel + ":F" + lastCashExcel + ")", boldNum);
 
-        // Return % row: Gain / (Total Value − Cash)
+        // Return All Investments row: Gain / (Total Value − Cash)
         int tExcel  = totalPoiRow     + 1;
         int tcExcel = totalCashPoiRow + 1;
         Row returnRow = sheet.createRow(returnPctPoiRow);
-        styledCell(returnRow, AGG_ID, "Return %", boldText);
+        styledCell(returnRow, AGG_ID, "Return All Investments", boldText);
         Cell returnCell = returnRow.createCell(AGG_GAINPCT);
         returnCell.setCellFormula("F" + tExcel + "/(E" + tExcel + "-E" + tcExcel + ")");
         returnCell.setCellStyle(pctStyle(wb, true));
 
-        // Total Return row: Gain / Total Value
+        // Return Equities row: non-bond equity gain / non-bond equity value
+        int lastNonBondExcel = nNonBond + 1;  // rows 2..(nNonBond+1)
+        int firstBondExcel   = nNonBond + 2;
+        int lastBondExcel    = nEquity  + 1;  // rows (nNonBond+2)..(nEquity+1)
+        Row returnEquitiesRow = sheet.createRow(returnEquitiesPoiRow);
+        styledCell(returnEquitiesRow, AGG_ID, "Return Equities", boldText);
+        Cell returnEquitiesCell = returnEquitiesRow.createCell(AGG_GAINPCT);
+        returnEquitiesCell.setCellFormula(
+                "IFERROR(SUM(F2:F" + lastNonBondExcel + ")/SUM(E2:E" + lastNonBondExcel + "),\"\")");
+        returnEquitiesCell.setCellStyle(pctStyle(wb, true));
+
+        // Return Fixed Income row: bond gain / bond value
+        Row returnBondsRow = sheet.createRow(returnBondsPoiRow);
+        styledCell(returnBondsRow, AGG_ID, "Return Fixed Income", boldText);
+        Cell returnBondsCell = returnBondsRow.createCell(AGG_GAINPCT);
+        returnBondsCell.setCellFormula(
+                "IFERROR(SUM(F" + firstBondExcel + ":F" + lastBondExcel + ")/SUM(E" + firstBondExcel + ":E" + lastBondExcel + "),\"\")");
+        returnBondsCell.setCellStyle(pctStyle(wb, true));
+
+        // Total Return (including cash) row: Gain / Total Value
         Row totalReturnRow = sheet.createRow(totalReturnPoiRow);
-        styledCell(totalReturnRow, AGG_ID, "Total Return", boldText);
+        styledCell(totalReturnRow, AGG_ID, "Total Return (including cash)", boldText);
         Cell totalReturnCell = totalReturnRow.createCell(AGG_GAINPCT);
         totalReturnCell.setCellFormula("F" + tExcel + "/E" + tExcel);
         totalReturnCell.setCellStyle(pctStyle(wb, true));
@@ -532,7 +770,7 @@ public class Main {
         return sheet.getSheetName() + "!E" + (inputValuePoi + 1);
     }
 
-    private static void writeAggRow(Row row, AggHolding h,
+    private static void writeAggRow(Row row, AggHolding h, BigDecimal dividendGbp,
                                     CellStyle textStyle, CellStyle numStyle, Workbook wb) {
         styledCell(row, AGG_ID,      h.securityId(),                  textStyle);
         setNumeric(row, AGG_QTY,     h.quantity(),                    numStyle);
@@ -549,6 +787,13 @@ public class Main {
             c.setCellValue(h.gainPct().setScale(4, RoundingMode.HALF_UP).doubleValue());
             c.setCellStyle(gainLossPctStyle(wb, g));
         }
+        // Total Gain/Loss % = (gain + dividends) / cost, where cost = market_value - gain
+        int r = row.getRowNum() + 1;
+        String divStr = (dividendGbp != null ? dividendGbp : BigDecimal.ZERO)
+                            .setScale(2, RoundingMode.HALF_UP).toPlainString();
+        Cell tc = row.createCell(AGG_TOTAL_GAIN_PCT);
+        tc.setCellFormula("IFERROR((F" + r + "+" + divStr + ")/(E" + r + "-F" + r + "),\"\")");
+        tc.setCellStyle(pctStyle(wb, false));
         styledCell(row, AGG_SOURCES, h.sources(), textStyle);
     }
 
@@ -558,7 +803,9 @@ public class Main {
 
     private static void writePortfolioSheet(Sheet sheet, List<Holding> holdings,
                                             Map<String, BigDecimal> gbpRates,
-                                            String portfolioInputRef, Workbook wb) {
+                                            String portfolioInputRef,
+                                            Map<String, BigDecimal> dividendsBySymbol,
+                                            Workbook wb) {
         CellStyle dataText    = wb.createCellStyle();
         CellStyle dataNum     = numericStyle(wb, false);
         CellStyle boldText    = boldTextStyle(wb);
@@ -571,7 +818,7 @@ public class Main {
 
         String[] headers = { "Security ID", "Quantity", "Avg Price Paid",
                               "Market Value", "Market Value GBP", "Gain (£)", "Gain/Loss %",
-                              "Currency", "Source" };
+                              "Total Gain/Loss %", "Currency", "Source" };
         Row headerRow = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(headerRow, i, headers[i], boldText);
 
@@ -586,10 +833,12 @@ public class Main {
         int currHdrPoi    = dataAfter + 2;
         int firstSubPoi   = currHdrPoi + 1;
         int grandTotalPoi = firstSubPoi + numSources + 1;
-        int totalCashPoi   = grandTotalPoi + 1;
-        int returnPctPoi   = totalCashPoi  + 1;
-        int totalReturnPoi = returnPctPoi  + 1;
-        int ratesLabelPoi  = totalReturnPoi + 2;
+        int totalCashPoi      = grandTotalPoi + 1;
+        int returnPctPoi      = totalCashPoi  + 1;
+        int returnEquitiesPoi = returnPctPoi  + 1;
+        int returnBondsPoi    = returnEquitiesPoi + 1;
+        int totalReturnPoi    = returnBondsPoi    + 1;
+        int ratesLabelPoi     = totalReturnPoi    + 2;
         int gbpusdPoi     = ratesLabelPoi + 1;
         int gbpeurPoi     = ratesLabelPoi + 2;
         String gbpusdRef  = "$B$" + (gbpusdPoi + 1);
@@ -613,9 +862,11 @@ public class Main {
             String src   = entry.getKey();
             int firstRow = rowNum;
 
-            for (Holding h : entry.getValue())
-                writeHoldingRow(sheet.createRow(rowNum++), h, gbpRates,
+            for (Holding h : entry.getValue()) {
+                BigDecimal div = dividendsBySymbol.getOrDefault(h.getSecurityId().toUpperCase(), BigDecimal.ZERO);
+                writeHoldingRow(sheet.createRow(rowNum++), h, gbpRates, div,
                                 dataText, dataNum, gainNum, lossNum, gainPct, lossPct);
+            }
 
             if (II_SIPP.equals(src)) {
                 Row ph    = sheet.createRow(rowNum);
@@ -635,9 +886,9 @@ public class Main {
 
         // Currency label row above subtotals
         Row currHdrRow = sheet.createRow(currHdrPoi);
-        styledCell(currHdrRow, COL_MKT_VALUE,     "USD", boldText);
-        styledCell(currHdrRow, COL_MKT_VALUE_GBP, "GBP", boldText);
-        styledCell(currHdrRow, COL_GAIN,           "GBP", boldText);
+        styledCell(currHdrRow, COL_MKT_VALUE,     "USD - Value", boldText);
+        styledCell(currHdrRow, COL_MKT_VALUE_GBP, "GBP - Value", boldText);
+        styledCell(currHdrRow, COL_GAIN,           "GBP - Gain",  boldText);
 
         // Per-source subtotal rows
         List<Integer> subPoiRows = new ArrayList<>();
@@ -684,18 +935,36 @@ public class Main {
         formulaCell(cashRow, COL_MKT_VALUE,
                 "E" + totalCashExcel + "*" + gbpusdRef, boldNum);
 
-        // Return % row: Gain / (Total Value GBP − Total Cash GBP)
+        // Return All Investments row: Gain / (Total Value GBP − Total Cash GBP)
         int gtExcel = grandTotalPoi + 1;
         Row rawReturnRow = sheet.createRow(returnPctPoi);
-        styledCell(rawReturnRow, COL_SECURITY_ID, "Return %", boldText);
+        styledCell(rawReturnRow, COL_SECURITY_ID, "Return All Investmentsƒ", boldText);
         Cell rawReturnCell = rawReturnRow.createCell(COL_GAIN_PCT);
         rawReturnCell.setCellFormula(
                 "F" + gtExcel + "/(E" + gtExcel + "-E" + totalCashExcel + ")");
         rawReturnCell.setCellStyle(pctStyle(wb, true));
 
-        // Total Return row: Gain / Total Value
+        // Return Equities row: non-bond gain / non-bond invested value
+        String bondGainFormula  = "SUMIF($A$2:$A$" + lastDataExcel + ",\"*%*\",$F$2:$F$" + lastDataExcel + ")";
+        String bondValueFormula = "SUMIF($A$2:$A$" + lastDataExcel + ",\"*%*\",$E$2:$E$" + lastDataExcel + ")";
+        Row rawReturnEquitiesRow = sheet.createRow(returnEquitiesPoi);
+        styledCell(rawReturnEquitiesRow, COL_SECURITY_ID, "Return Equities", boldText);
+        Cell rawReturnEquitiesCell = rawReturnEquitiesRow.createCell(COL_GAIN_PCT);
+        rawReturnEquitiesCell.setCellFormula(
+                "IFERROR((F" + gtExcel + "-" + bondGainFormula + ")/(E" + gtExcel + "-E" + totalCashExcel + "-" + bondValueFormula + "),\"\")");
+        rawReturnEquitiesCell.setCellStyle(pctStyle(wb, true));
+
+        // Return Fixed Income row: bond gain / bond value
+        Row rawReturnBondsRow = sheet.createRow(returnBondsPoi);
+        styledCell(rawReturnBondsRow, COL_SECURITY_ID, "Return Fixed Income", boldText);
+        Cell rawReturnBondsCell = rawReturnBondsRow.createCell(COL_GAIN_PCT);
+        rawReturnBondsCell.setCellFormula(
+                "IFERROR(" + bondGainFormula + "/" + bondValueFormula + ",\"\")");
+        rawReturnBondsCell.setCellStyle(pctStyle(wb, true));
+
+        // Total Return (including cash) row: Gain / Total Value
         Row rawTotalReturnRow = sheet.createRow(totalReturnPoi);
-        styledCell(rawTotalReturnRow, COL_SECURITY_ID, "Total Return", boldText);
+        styledCell(rawTotalReturnRow, COL_SECURITY_ID, "Total Return (including cash)", boldText);
         Cell rawTotalReturnCell = rawTotalReturnRow.createCell(COL_GAIN_PCT);
         rawTotalReturnCell.setCellFormula("F" + gtExcel + "/E" + gtExcel);
         rawTotalReturnCell.setCellStyle(pctStyle(wb, true));
@@ -704,6 +973,7 @@ public class Main {
     }
 
     private static void writeHoldingRow(Row row, Holding h, Map<String, BigDecimal> gbpRates,
+                                        BigDecimal dividendGbp,
                                         CellStyle textStyle, CellStyle numStyle,
                                         CellStyle gainNum, CellStyle lossNum,
                                         CellStyle gainPct, CellStyle lossPct) {
@@ -724,6 +994,14 @@ public class Main {
                 Cell c = row.createCell(COL_GAIN_PCT);
                 c.setCellValue(pct.setScale(4, RoundingMode.HALF_UP).doubleValue());
                 c.setCellStyle(pos ? gainPct : lossPct);
+
+                // Total Gain/Loss % = (gain + dividends) / cost
+                int r = row.getRowNum() + 1;
+                String divStr = (dividendGbp != null ? dividendGbp : BigDecimal.ZERO)
+                                    .setScale(2, RoundingMode.HALF_UP).toPlainString();
+                Cell tc = row.createCell(COL_TOTAL_GAIN_PCT);
+                tc.setCellFormula("IFERROR((F" + r + "+" + divStr + ")/(E" + r + "-F" + r + "),\"\")");
+                tc.setCellStyle(pos ? gainPct : lossPct);
             }
         }
 

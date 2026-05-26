@@ -19,7 +19,7 @@ import java.util.List;
  * delete it if it was a duplicate. The dedup/integrity logic stays in
  * {@link PortfolioDatabase} (it needs the existing-keys query and inserts in the
  * same connection), and the parsed rows are passed through in file order so the
- * statement's gap detection still holds. Ports {@code Main.importCashTransactions}.
+ * statement's gap detection still holds.
  */
 public class ImportCashService {
 

@@ -31,12 +31,13 @@
     <h1 th:text="${appName}">Pension Aggregator</h1>
     <p class="sub">Local portfolio dashboard &middot; <a href="/dividends">Record dividends</a></p>
 
-    <form class="actions" hx-post="/sync" hx-target="#result" hx-indicator="#spinner">
+    <form class="actions" hx-target="#result" hx-indicator="#spinner">
         <label>II SIPP cash (GBP):
             <input type="text" name="iiSippCash" value="0"/>
         </label>
-        <button type="submit">Sync portfolio</button>
-        <span id="spinner" class="htmx-indicator">Syncing…</span>
+        <button type="submit" hx-post="/sync">Sync portfolio</button>
+        <button type="submit" hx-post="/export">Export Excel</button>
+        <span id="spinner" class="htmx-indicator">Working…</span>
     </form>
 
     <div id="result"></div>

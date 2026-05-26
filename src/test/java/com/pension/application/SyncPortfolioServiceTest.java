@@ -26,7 +26,8 @@ class SyncPortfolioServiceTest {
     @TempDir Path dbDir;
 
     private SyncPortfolioService service() {
-        return new SyncPortfolioService(FX, new PortfolioDatabase(dbDir), new HoldingFileLocator(inputDir));
+        PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
+        return new SyncPortfolioService(gatherer, new PortfolioDatabase(dbDir));
     }
 
     @Test

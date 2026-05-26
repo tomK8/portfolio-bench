@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<div th:fragment="result">
+    <div th:if="${export.empty}" class="note">
+        Nothing to export — no input files found in <code>~/Downloads</code>.
+    </div>
+    <div th:unless="${export.empty}" class="note">
+        Wrote Excel reports:
+        <ul>
+            <li th:each="f : ${export.files}" th:text="${f}">path</li>
+        </ul>
+    </div>
+</div>
+
+</body>
+</html>

@@ -1,5 +1,7 @@
 package com.pension.web;
 
+import com.pension.application.ExportExcelService;
+import com.pension.application.ExportResult;
 import com.pension.application.SyncPortfolioService;
 import com.pension.application.SyncResult;
 import org.springframework.stereotype.Controller;
@@ -14,9 +16,11 @@ import java.math.BigDecimal;
 public class DashboardController {
 
     private final SyncPortfolioService syncService;
+    private final ExportExcelService exportService;
 
-    public DashboardController(SyncPortfolioService syncService) {
+    public DashboardController(SyncPortfolioService syncService, ExportExcelService exportService) {
         this.syncService = syncService;
+        this.exportService = exportService;
     }
 
     @GetMapping("/")
@@ -31,6 +35,14 @@ public class DashboardController {
         SyncResult result = syncService.sync(parseCash(iiSippCash));
         model.addAttribute("result", result);
         return "fragments/portfolio :: result";
+    }
+
+    @PostMapping("/export")
+    public String export(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
+                         Model model) {
+        ExportResult result = exportService.export(parseCash(iiSippCash));
+        model.addAttribute("export", result);
+        return "fragments/export :: result";
     }
 
     private static BigDecimal parseCash(String raw) {

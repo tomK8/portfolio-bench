@@ -29,7 +29,7 @@
 </head>
 <body>
     <h1 th:text="${appName}">Pension Aggregator</h1>
-    <p class="sub">Local portfolio dashboard</p>
+    <p class="sub">Local portfolio dashboard &middot; <a href="/dividends">Record dividends</a></p>
 
     <form class="actions" hx-post="/sync" hx-target="#result" hx-indicator="#spinner">
         <label>II SIPP cash (GBP):

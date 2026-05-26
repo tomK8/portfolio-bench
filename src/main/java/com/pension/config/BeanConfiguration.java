@@ -3,6 +3,7 @@ package com.pension.config;
 import com.pension.PortfolioDatabase;
 import com.pension.adapter.FrankfurterFxClient;
 import com.pension.adapter.HoldingFileLocator;
+import com.pension.application.RecordDividendsService;
 import com.pension.application.SyncPortfolioService;
 import com.pension.port.FxRateProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,5 +44,11 @@ public class BeanConfiguration {
                                                      PortfolioDatabase portfolioDatabase,
                                                      HoldingFileLocator holdingFileLocator) {
         return new SyncPortfolioService(fxRateProvider, portfolioDatabase, holdingFileLocator);
+    }
+
+    @Bean
+    public RecordDividendsService recordDividendsService(FxRateProvider fxRateProvider,
+                                                         PortfolioDatabase portfolioDatabase) {
+        return new RecordDividendsService(fxRateProvider, portfolioDatabase);
     }
 }

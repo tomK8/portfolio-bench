@@ -94,7 +94,6 @@ public class Main {
 
         saveSnapshot(totals.totalGbp(), totals.totalGainGbp(), totals.totalCashGbp(),
                      totals.returnPct(), totals.totalReturn(), gbpRates);
-        dialogs.promptAndSaveDividends(gbpRates);
         importCashTransactions();
     }
 

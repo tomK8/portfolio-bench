@@ -33,10 +33,15 @@
 
     <form class="actions" hx-target="#result" hx-indicator="#spinner">
         <label>II SIPP cash (GBP):
-            <input type="text" name="iiSippCash" value="0"/>
+            <input type="text" name="iiSippCash" th:value="${iiSippCash}" value="0"/>
         </label>
         <button type="submit" hx-post="/sync">Sync portfolio</button>
         <button type="submit" hx-post="/export">Export Excel</button>
+    </form>
+
+    <form class="actions" hx-post="/import-cash" hx-target="#result" hx-indicator="#spinner">
+        <button type="submit">Import cash statement</button>
+        <span class="muted">reads <code>~/Downloads/cashstatements.csv</code></span>
         <span id="spinner" class="htmx-indicator">Working…</span>
     </form>
 

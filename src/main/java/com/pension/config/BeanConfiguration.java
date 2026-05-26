@@ -5,6 +5,7 @@ import com.pension.PortfolioDatabase;
 import com.pension.adapter.FrankfurterFxClient;
 import com.pension.adapter.HoldingFileLocator;
 import com.pension.application.ExportExcelService;
+import com.pension.application.ImportCashService;
 import com.pension.application.PortfolioGatherer;
 import com.pension.application.RecordDividendsService;
 import com.pension.application.SyncPortfolioService;
@@ -39,7 +40,7 @@ public class BeanConfiguration {
 
     @Bean
     public HoldingFileLocator holdingFileLocator(@Value("${pension.input-dir:}") String inputDir) {
-        return inputDir.isBlank() ? new HoldingFileLocator() : new HoldingFileLocator(Path.of(inputDir));
+        return new HoldingFileLocator(inputDir(inputDir));
     }
 
     @Bean
@@ -74,5 +75,17 @@ public class BeanConfiguration {
                 ? Path.of(System.getProperty("user.home"), "Documents")
                 : Path.of(outputDir);
         return new ExportExcelService(portfolioGatherer, portfolioDatabase, excelReportWriter, dir);
+    }
+
+    @Bean
+    public ImportCashService importCashService(@Value("${pension.input-dir:}") String inputDir,
+                                               PortfolioDatabase portfolioDatabase) {
+        return new ImportCashService(inputDir(inputDir), portfolioDatabase);
+    }
+
+    private static Path inputDir(String configured) {
+        return configured.isBlank()
+                ? Path.of(System.getProperty("user.home"), "Downloads")
+                : Path.of(configured);
     }
 }

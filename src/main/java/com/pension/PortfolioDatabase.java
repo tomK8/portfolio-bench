@@ -75,6 +75,24 @@ public class PortfolioDatabase {
 
     // ---- Public API ---------------------------------------------------------
 
+    /** Last II SIPP cash balance entered by the user, or zero if none saved yet. */
+    public BigDecimal loadLastIiSippCash() {
+        try {
+            if (Files.exists(lastIiCashFile)) {
+                String saved = Files.readString(lastIiCashFile).trim();
+                if (!saved.isEmpty()) return new BigDecimal(saved);
+            }
+        } catch (IOException | NumberFormatException ignored) {}
+        return BigDecimal.ZERO;
+    }
+
+    public void saveLastIiSippCash(BigDecimal value) {
+        try {
+            Files.createDirectories(dbDir);
+            Files.writeString(lastIiCashFile, value.toPlainString());
+        } catch (IOException ignored) {}
+    }
+
     public void saveSnapshot(BigDecimal totalGbp, BigDecimal totalGainGbp,
                              BigDecimal totalCashGbp, BigDecimal returnPct,
                              BigDecimal totalReturn, Map<String, BigDecimal> gbpRates) {

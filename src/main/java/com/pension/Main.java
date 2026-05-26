@@ -69,8 +69,7 @@ public class Main {
             return;
         }
 
-        UserInputDialogs dialogs = new UserInputDialogs(DB);
-        BigDecimal iiSippCash = dialogs.promptForIISippCash();
+        BigDecimal iiSippCash = DB.loadLastIiSippCash();
         List<AggHolding> aggregated = new PortfolioAggregator().aggregate(holdings, gbpRates);
         Map<String, BigDecimal> dividendsBySymbol = loadDividendsBySymbol();
 

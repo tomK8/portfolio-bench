@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<div th:fragment="result" class="note">
+    <span th:if="${cashImport.status.name() == 'NOT_FOUND'}">
+        No <code>cashstatements.csv</code> found in <code>~/Downloads</code>.
+    </span>
+    <span th:if="${cashImport.status.name() == 'NO_NEW_DATA'}">
+        Cash statement contained no new data — file removed.
+    </span>
+    <span th:if="${cashImport.status.name() == 'IMPORTED'}"
+          th:text="'Imported ' + ${cashImport.inserted} + ' cash transaction(s); archived to ' + ${cashImport.detail}">
+        Imported.
+    </span>
+</div>
+
+</body>
+</html>

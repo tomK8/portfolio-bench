@@ -2,4 +2,6 @@
 .claude
 .idea/
 target/
-resources/
+
+# Real brokerage/holdings exports used as test fixtures — keep personal financial data out of git.
+/src/test/resources/

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <title th:text="${appName}">Pension Aggregator</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 3rem auto; max-width: 720px; color: #1a1a1a; }
+        h1 { margin-bottom: 0.25rem; }
+        p.sub { color: #666; margin-top: 0; }
+        .placeholder { margin-top: 2rem; padding: 1.5rem; border: 1px dashed #bbb; border-radius: 8px; color: #555; }
+    </style>
+</head>
+<body>
+    <h1 th:text="${appName}">Pension Aggregator</h1>
+    <p class="sub">Local portfolio dashboard</p>
+
+    <div class="placeholder">
+        Server is running. Actions (Sync portfolio, dividends, cash import, export) will appear here in later phases.
+    </div>
+</body>
+</html>

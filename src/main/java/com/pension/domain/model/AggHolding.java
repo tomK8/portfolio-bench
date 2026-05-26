@@ -12,4 +12,9 @@ public record AggHolding(
         BigDecimal gainPct,      // decimal fraction: 0.125 = 12.5%
         Currency currency,
         String sources
-) {}
+) {
+    /** ISO code (e.g. "USD") — lets views read the currency without navigating java.util.Currency. */
+    public String currencyCode() {
+        return currency.getCurrencyCode();
+    }
+}

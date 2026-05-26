@@ -1,6 +1,6 @@
 package com.pension.parser;
 
-import com.pension.model.CashTransaction;
+import com.pension.domain.model.CashTransaction;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

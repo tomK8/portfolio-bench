@@ -1,4 +1,4 @@
-package com.pension.model;
+package com.pension.domain.model;
 
 import java.math.BigDecimal;
 import java.util.Currency;

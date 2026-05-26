@@ -1,6 +1,6 @@
 package com.pension.parser;
 
-import com.pension.model.Holding;
+import com.pension.domain.model.Holding;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

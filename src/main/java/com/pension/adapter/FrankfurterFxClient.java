@@ -1,4 +1,6 @@
-package com.pension;
+package com.pension.adapter;
+
+import com.pension.port.FxRateProvider;
 
 import java.math.BigDecimal;
 import java.net.URI;
@@ -10,11 +12,12 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class FxRateClient {
+public class FrankfurterFxClient implements FxRateProvider {
 
     private static final String FX_URL =
             "https://api.frankfurter.dev/v1/latest?from=GBP&to=USD,EUR";
 
+    @Override
     public Map<String, BigDecimal> fetchRates() throws Exception {
         HttpClient client = HttpClient.newHttpClient();
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(FX_URL)).build();

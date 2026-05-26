@@ -1,6 +1,6 @@
 package com.pension.parser;
 
-import com.pension.model.Holding;
+import com.pension.domain.model.Holding;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 

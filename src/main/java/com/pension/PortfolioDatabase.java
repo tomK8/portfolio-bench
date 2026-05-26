@@ -1,7 +1,7 @@
 package com.pension;
 
-import com.pension.model.CashTransaction;
-import com.pension.model.DividendEntry;
+import com.pension.domain.model.CashTransaction;
+import com.pension.domain.model.DividendEntry;
 
 import java.io.IOException;
 import java.math.BigDecimal;

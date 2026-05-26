@@ -1,8 +1,11 @@
 package com.pension;
 
-import com.pension.model.AggHolding;
-import com.pension.model.CashTransaction;
-import com.pension.model.Holding;
+import com.pension.adapter.FrankfurterFxClient;
+import com.pension.domain.PortfolioAggregator;
+import com.pension.domain.PortfolioMetrics;
+import com.pension.domain.model.AggHolding;
+import com.pension.domain.model.CashTransaction;
+import com.pension.domain.model.Holding;
 import com.pension.parser.AccountParser;
 import com.pension.parser.AJBellCashStatementParser;
 import com.pension.parser.AJBellSippParser;
@@ -13,13 +16,11 @@ import com.pension.parser.RothIraParser;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.nio.file.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class Main {
 
@@ -42,7 +43,7 @@ public class Main {
         }
 
         // Fetch live rates first so AJBellSippParser can use them during parsing
-        Map<String, BigDecimal> gbpRates = new FxRateClient().fetchRates();
+        Map<String, BigDecimal> gbpRates = new FrankfurterFxClient().fetchRates();
         System.out.println("FX rates (per 1 GBP): " + gbpRates);
 
         List<AccountParser> parsers = List.of(
@@ -89,31 +90,10 @@ public class Main {
         writer.writeSummaryReport(summaryOutput, aggregated, gbpRates, iiSippCash, dividendsBySymbol);
         System.out.println("Portfolio summary written to: " + summaryOutput);
 
-        BigDecimal totalGbp = aggregated.stream()
-                .map(AggHolding::marketValueGbp)
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .add(iiSippCash);
+        PortfolioMetrics.Totals totals = new PortfolioMetrics().compute(aggregated, iiSippCash);
 
-        BigDecimal totalGainGbp = aggregated.stream()
-                .filter(h -> h.gainGbp() != null)
-                .map(AggHolding::gainGbp)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        BigDecimal totalCashGbp = aggregated.stream()
-                .filter(h -> "CASH".equals(h.securityId()))
-                .map(AggHolding::marketValueGbp)
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .add(iiSippCash);
-
-        BigDecimal invested    = totalGbp.subtract(totalCashGbp);
-        BigDecimal returnPct   = invested.compareTo(BigDecimal.ZERO) != 0
-                ? totalGainGbp.divide(invested, 10, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
-        BigDecimal totalReturn = totalGbp.compareTo(BigDecimal.ZERO) != 0
-                ? totalGainGbp.divide(totalGbp, 10, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
-
-        saveSnapshot(totalGbp, totalGainGbp, totalCashGbp, returnPct, totalReturn, gbpRates);
+        saveSnapshot(totals.totalGbp(), totals.totalGainGbp(), totals.totalCashGbp(),
+                     totals.returnPct(), totals.totalReturn(), gbpRates);
         dialogs.promptAndSaveDividends(gbpRates);
         importCashTransactions();
     }

@@ -1,7 +1,8 @@
 package com.pension;
 
-import com.pension.model.AggHolding;
-import com.pension.model.Holding;
+import com.pension.domain.PortfolioAggregator;
+import com.pension.domain.model.AggHolding;
+import com.pension.domain.model.Holding;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;

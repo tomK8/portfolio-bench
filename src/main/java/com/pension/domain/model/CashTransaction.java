@@ -1,4 +1,4 @@
-package com.pension.model;
+package com.pension.domain.model;
 
 public record CashTransaction(
         String transactionDate,   // YYYY-MM-DD

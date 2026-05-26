@@ -1,6 +1,6 @@
 package com.pension.parser;
 
-import com.pension.model.CashTransaction;
+import com.pension.domain.model.CashTransaction;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;

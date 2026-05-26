@@ -1,6 +1,6 @@
 package com.pension;
 
-import com.pension.model.DividendEntry;
+import com.pension.domain.model.DividendEntry;
 
 import java.awt.BorderLayout;
 import java.awt.Dimension;

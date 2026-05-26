@@ -1,6 +1,6 @@
 package com.pension.parser;
 
-import com.pension.model.CashTransaction;
+import com.pension.domain.model.CashTransaction;
 
 import java.io.IOException;
 import java.nio.file.Path;

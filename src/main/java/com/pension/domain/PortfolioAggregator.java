@@ -1,7 +1,7 @@
-package com.pension;
+package com.pension.domain;
 
-import com.pension.model.AggHolding;
-import com.pension.model.Holding;
+import com.pension.domain.model.AggHolding;
+import com.pension.domain.model.Holding;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;

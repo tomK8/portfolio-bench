@@ -47,7 +47,8 @@ Layered, ports-and-adapters style. **Spring is confined to the `web` and `config
 - `com.pension.parser` — `AccountParser` / `CashTransactionParser` interfaces + impls.
 - `com.pension.application` — the operations (plain classes, wired as beans):
   `PortfolioGatherer` (shared fetch-rates + parse step → `GatheredPortfolio`),
-  `SyncPortfolioService`, `ExportExcelService`, `ImportCashService`.
+  `SyncPortfolioService`, `ExportExcelService`, `ImportCashService`,
+  `DividendService` (FIFO attribution + share-count reconciliation).
 - `com.pension.web` — `DashboardController` (thin; HTTP ↔ service only),
   Thymeleaf templates + htmx fragments.
 - `com.pension.config` — `BeanConfiguration` wires the adapters/services as `@Bean`s.
@@ -120,11 +121,25 @@ bonds into their own section at the bottom of the Portfolio sheet.
 ## Dividends
 
 Dividend data comes **exclusively** from `cash_transactions WHERE type = 'DIVIDEND'` — there is no
-separate dividend table or manual-entry screen (both were removed). `PortfolioDatabase.loadDividendsBySymbol()`
-sums `amount_gbp` per symbol (keyed upper-cased). `PortfolioAggregator.aggregate(holdings, rates, dividendsBySymbol)`
-takes that map and, per holding, sets:
+separate dividend table or manual-entry screen (both were removed).
 
-- `dividendGbp` — total dividends for the symbol (£; ZERO when none)
+`DividendService.dividendsBySymbol(holdings)` drives the pipeline:
+
+1. `PortfolioDatabase.loadDividendTransactions()` returns all `TRANSACTION` + `DIVIDEND` rows oldest-first
+   (buys/sells are needed to reconstruct the share timeline).
+2. `DividendAttributor.attributeBySymbol(rows)` replays per `(account, symbol)` with FIFO lot tracking:
+   - **Buy** (`amount < 0`): opens a lot at the current cumulative-per-share baseline.
+   - **Dividend**: raises cumulative-per-share by `amountGbp / sharesHeld`.
+   - **Sell** (`amount > 0`): removes shares oldest-first (FIFO); accrued dividends leave with them.
+   - **Split** (`amount == 0`): scales lot quantities up and per-share figures down by the split ratio,
+     keeping each lot's total attributed dividend invariant.
+   - Dividends on shares that were subsequently sold drop out — only currently-held shares count.
+3. `DividendService` reconciles the reconstructed share count against the holdings file and warns to
+   stderr if they disagree by more than 0.01 shares (incomplete transaction history).
+
+`PortfolioAggregator.aggregate(holdings, rates, dividendsBySymbol)` then sets per holding:
+
+- `dividendGbp` — FIFO-attributed dividends for the symbol (£; ZERO when none)
 - `totalGainGbp` — price-appreciation `gainGbp` + `dividendGbp` (null when cost basis is unknown)
 - `totalGainPct` — `totalGainGbp / cost` (null when cost is unknown/zero)
 

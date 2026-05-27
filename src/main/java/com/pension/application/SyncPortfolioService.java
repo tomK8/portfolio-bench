@@ -21,10 +21,13 @@ public class SyncPortfolioService {
 
     private final PortfolioGatherer gatherer;
     private final PortfolioDatabase db;
+    private final DividendService dividendService;
 
-    public SyncPortfolioService(PortfolioGatherer gatherer, PortfolioDatabase db) {
+    public SyncPortfolioService(PortfolioGatherer gatherer, PortfolioDatabase db,
+                                DividendService dividendService) {
         this.gatherer = gatherer;
         this.db = db;
+        this.dividendService = dividendService;
     }
 
     public SyncResult sync(BigDecimal iiSippCash) {
@@ -34,8 +37,8 @@ public class SyncPortfolioService {
             return SyncResult.empty(gathered.rates());
         }
 
-        List<AggHolding> aggregated = new PortfolioAggregator()
-                .aggregate(gathered.holdings(), gathered.rates(), db.loadDividendsBySymbol());
+        List<AggHolding> aggregated = new PortfolioAggregator().aggregate(
+                gathered.holdings(), gathered.rates(), dividendService.dividendsBySymbol(gathered.holdings()));
         PortfolioMetrics.Totals totals = new PortfolioMetrics().compute(aggregated, iiSippCash);
 
         db.saveSnapshot(totals.totalGbp(), totals.totalGainGbp(), totals.totalCashGbp(),

@@ -63,20 +63,26 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public DividendService dividendService(PortfolioDatabase portfolioDatabase) {
+        return new DividendService(portfolioDatabase);
+    }
+
+    @Bean
     public SyncPortfolioService syncPortfolioService(PortfolioGatherer portfolioGatherer,
-                                                     PortfolioDatabase portfolioDatabase) {
-        return new SyncPortfolioService(portfolioGatherer, portfolioDatabase);
+                                                     PortfolioDatabase portfolioDatabase,
+                                                     DividendService dividendService) {
+        return new SyncPortfolioService(portfolioGatherer, portfolioDatabase, dividendService);
     }
 
     @Bean
     public ExportExcelService exportExcelService(PortfolioGatherer portfolioGatherer,
-                                                 PortfolioDatabase portfolioDatabase,
+                                                 DividendService dividendService,
                                                  ExcelReportWriter excelReportWriter,
                                                  @Value("${pension.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
                 : Path.of(outputDir);
-        return new ExportExcelService(portfolioGatherer, portfolioDatabase, excelReportWriter, dir);
+        return new ExportExcelService(portfolioGatherer, dividendService, excelReportWriter, dir);
     }
 
     @Bean

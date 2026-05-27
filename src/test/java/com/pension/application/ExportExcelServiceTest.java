@@ -29,8 +29,9 @@ class ExportExcelServiceTest {
     Path outputDir;
 
     private ExportExcelService service() {
+        PortfolioDatabase db = new PortfolioDatabase(dbDir);
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
-        return new ExportExcelService(gatherer, new PortfolioDatabase(dbDir), new ExcelReportWriter(), outputDir);
+        return new ExportExcelService(gatherer, new DividendService(db), new ExcelReportWriter(), outputDir);
     }
 
     @Test

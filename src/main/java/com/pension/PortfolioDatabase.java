@@ -190,26 +190,39 @@ public class PortfolioDatabase {
     }
 
     /**
-     * Total dividends received per security, in GBP, summed from the {@code DIVIDEND}
-     * rows of {@code cash_transactions} (the single source of dividend data). Keyed by
-     * upper-cased symbol so callers can match against holdings case-insensitively.
+     * The {@code TRANSACTION} and {@code DIVIDEND} rows of {@code cash_transactions}, oldest
+     * first — the raw material for {@link com.pension.domain.DividendAttributor}, which works
+     * out how much of each symbol's dividends belongs to the shares still held. Buys/sells are
+     * needed alongside dividends so the share timeline can be reconstructed.
      */
-    public Map<String, BigDecimal> loadDividendsBySymbol() {
-        Map<String, BigDecimal> result = new HashMap<>();
-        if (!Files.exists(dbPath)) return result;
+    public List<CashTransaction> loadDividendTransactions() {
+        List<CashTransaction> rows = new ArrayList<>();
+        if (!Files.exists(dbPath)) return rows;
         try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
              Statement st = conn.createStatement()) {
             st.execute(CREATE_CASH_TABLE);
             try (var rs = st.executeQuery(
-                    "SELECT symbol, SUM(amount_gbp) FROM cash_transactions " +
-                            "WHERE type = 'DIVIDEND' GROUP BY symbol")) {
-                while (rs.next())
-                    result.put(rs.getString(1).toUpperCase(), BigDecimal.valueOf(rs.getDouble(2)));
+                    "SELECT transaction_date, account, type, symbol, quantity, amount, currency, " +
+                            "fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description " +
+                            "FROM cash_transactions WHERE type IN ('TRANSACTION', 'DIVIDEND') " +
+                            "ORDER BY transaction_date, rowid")) {
+                while (rs.next()) {
+                    rows.add(new CashTransaction(
+                            rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),
+                            rs.getDouble(5), rs.getDouble(6), rs.getString(7), rs.getDouble(8),
+                            rs.getDouble(9), getNullableDouble(rs, 10), getNullableDouble(rs, 11),
+                            rs.getString(12)));
+                }
             }
         } catch (SQLException e) {
-            System.err.println("Warning: could not load dividends — " + e.getMessage());
+            System.err.println("Warning: could not load dividend transactions — " + e.getMessage());
         }
-        return result;
+        return rows;
+    }
+
+    private static Double getNullableDouble(ResultSet rs, int col) throws SQLException {
+        double v = rs.getDouble(col);
+        return rs.wasNull() ? null : v;
     }
 
     // ---- Shared cash-table helpers ------------------------------------------

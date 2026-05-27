@@ -28,8 +28,9 @@ class SyncPortfolioServiceTest {
     Path dbDir;
 
     private SyncPortfolioService service() {
+        PortfolioDatabase db = new PortfolioDatabase(dbDir);
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
-        return new SyncPortfolioService(gatherer, new PortfolioDatabase(dbDir));
+        return new SyncPortfolioService(gatherer, db, new DividendService(db));
     }
 
     @Test

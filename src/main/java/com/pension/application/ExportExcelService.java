@@ -1,7 +1,6 @@
 package com.pension.application;
 
 import com.pension.ExcelReportWriter;
-import com.pension.PortfolioDatabase;
 import com.pension.domain.PortfolioAggregator;
 import com.pension.domain.model.AggHolding;
 
@@ -24,14 +23,14 @@ public class ExportExcelService {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private final PortfolioGatherer gatherer;
-    private final PortfolioDatabase db;
+    private final DividendService dividendService;
     private final ExcelReportWriter writer;
     private final Path outputDir;
 
-    public ExportExcelService(PortfolioGatherer gatherer, PortfolioDatabase db,
+    public ExportExcelService(PortfolioGatherer gatherer, DividendService dividendService,
                               ExcelReportWriter writer, Path outputDir) {
         this.gatherer = gatherer;
-        this.db = db;
+        this.dividendService = dividendService;
         this.writer = writer;
         this.outputDir = outputDir;
     }
@@ -42,7 +41,7 @@ public class ExportExcelService {
             return ExportResult.nothing();
         }
 
-        Map<String, BigDecimal> dividendsBySymbol = db.loadDividendsBySymbol();
+        Map<String, BigDecimal> dividendsBySymbol = dividendService.dividendsBySymbol(gathered.holdings());
         List<AggHolding> aggregated = new PortfolioAggregator()
                 .aggregate(gathered.holdings(), gathered.rates(), dividendsBySymbol);
         String date = LocalDateTime.now().format(DATE_FMT);

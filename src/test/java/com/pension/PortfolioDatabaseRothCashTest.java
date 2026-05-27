@@ -10,13 +10,17 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PortfolioDatabaseRothCashTest {
 
-    @TempDir Path dbDir;
+    @TempDir
+    Path dbDir;
 
-    /** Parser-shaped row: native USD amount, fx resolved, balances still null. */
+    /**
+     * Parser-shaped row: native USD amount, fx resolved, balances still null.
+     */
     private static CashTransaction row(String date, String symbol, String type,
                                        double qty, double amount, double fx) {
         return new CashTransaction(date, "RothIRA", type, symbol, qty, amount,
@@ -28,7 +32,7 @@ class PortfolioDatabaseRothCashTest {
              var st = conn.createStatement();
              var rs = st.executeQuery(
                      "SELECT cash_balance FROM cash_transactions WHERE account='RothIRA' " +
-                     "ORDER BY transaction_date DESC, rowid DESC LIMIT 1")) {
+                             "ORDER BY transaction_date DESC, rowid DESC LIMIT 1")) {
             assertTrue(rs.next());
             return rs.getDouble(1);
         }
@@ -87,11 +91,11 @@ class PortfolioDatabaseRothCashTest {
         try (var conn = DriverManager.getConnection("jdbc:sqlite:" + db.dbPath);
              var st = conn.createStatement()) {
             st.execute("""
-                CREATE TABLE cash_transactions (
-                    transaction_date TEXT NOT NULL, account TEXT NOT NULL, type TEXT NOT NULL,
-                    symbol TEXT NOT NULL, quantity REAL NOT NULL, amount REAL NOT NULL,
-                    currency TEXT NOT NULL, fx_to_gbp REAL NOT NULL, amount_gbp REAL NOT NULL,
-                    cash_balance_gbp REAL, description TEXT)""");
+                    CREATE TABLE cash_transactions (
+                        transaction_date TEXT NOT NULL, account TEXT NOT NULL, type TEXT NOT NULL,
+                        symbol TEXT NOT NULL, quantity REAL NOT NULL, amount REAL NOT NULL,
+                        currency TEXT NOT NULL, fx_to_gbp REAL NOT NULL, amount_gbp REAL NOT NULL,
+                        cash_balance_gbp REAL, description TEXT)""");
             st.execute("INSERT INTO cash_transactions VALUES " +
                     "('2026-01-01','AJBell','INTEREST','GBP',0,5,'GBP',1.0,5,105.0,'interest')");
         }

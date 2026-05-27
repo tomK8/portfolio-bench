@@ -2,7 +2,7 @@
 <html lang="en" xmlns:th="http://www.thymeleaf.org">
 <body>
 
-<div th:fragment="result" class="note">
+<div class="note" th:fragment="result">
     <div th:each="imp : ${cashImports}">
         <span th:if="${imp.status.name() == 'NOT_FOUND'}"
               th:text="'[' + ${imp.source} + '] No statement file found in ~/Downloads.'">

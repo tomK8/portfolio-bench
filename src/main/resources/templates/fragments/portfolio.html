@@ -4,7 +4,7 @@
 
 <div th:fragment="result">
 
-    <div th:if="${result.empty}" class="note">
+    <div class="note" th:if="${result.empty}">
         No input files found in <code>~/Downloads</code>. Add your broker exports (Roth IRA
         <code>Holdings*.xlsx</code>, AJ Bell <code>portfolio*.csv</code>, II SIPP UUID
         <code>.csv</code>) and sync again.
@@ -12,11 +12,16 @@
 
     <div th:unless="${result.empty}">
         <div class="totals">
-            <span>Total value<br/><b th:text="'£' + ${#numbers.formatDecimal(result.totals.totalGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
-            <span>Total gain<br/><b th:text="'£' + ${#numbers.formatDecimal(result.totals.totalGainGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
-            <span>Cash<br/><b th:text="'£' + ${#numbers.formatDecimal(result.totals.totalCashGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
-            <span>Return on invested<br/><b th:text="${#numbers.formatPercent(result.totals.returnPct, 1, 2)}">0%</b></span>
-            <span>Return on total<br/><b th:text="${#numbers.formatPercent(result.totals.totalReturn, 1, 2)}">0%</b></span>
+            <span>Total value<br/><b
+                    th:text="'£' + ${#numbers.formatDecimal(result.totals.totalGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
+            <span>Total gain<br/><b
+                    th:text="'£' + ${#numbers.formatDecimal(result.totals.totalGainGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
+            <span>Cash<br/><b
+                    th:text="'£' + ${#numbers.formatDecimal(result.totals.totalCashGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
+            <span>Return on invested<br/><b
+                    th:text="${#numbers.formatPercent(result.totals.returnPct, 1, 2)}">0%</b></span>
+            <span>Return on total<br/><b
+                    th:text="${#numbers.formatPercent(result.totals.totalReturn, 1, 2)}">0%</b></span>
         </div>
 
         <p class="muted" th:text="'Sources: ' + ${#strings.listJoin(result.sources, ', ')}">Sources</p>
@@ -40,11 +45,13 @@
                 <td class="txt" th:text="${h.currencyCode}">USD</td>
                 <td th:text="${#numbers.formatDecimal(h.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>
                 <td th:text="${#numbers.formatDecimal(h.marketValueGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                <td th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
+                </td>
                 <td th:text="${h.gainPct != null ? #numbers.formatPercent(h.gainPct, 1, 2) : '—'}">—</td>
                 <td th:text="${result.dividendsBySymbol[h.securityId] != null
                                 ? #numbers.formatDecimal(result.dividendsBySymbol[h.securityId], 1, 'COMMA', 2, 'POINT')
-                                : '—'}">—</td>
+                                : '—'}">—
+                </td>
                 <td class="txt" th:text="${h.sources}">src</td>
             </tr>
             </tbody>

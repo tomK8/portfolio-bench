@@ -34,9 +34,11 @@ import java.util.List;
 public class ImportCashService {
 
     private static final String AJBELL_FILE = "cashstatements.csv";
-    private static final String ROTH_FILE   = "History.xlsx";
+    private static final String ROTH_FILE = "History.xlsx";
 
-    /** RothIRA opening balance before the earliest transaction; only used to seed an empty account. */
+    /**
+     * RothIRA opening balance before the earliest transaction; only used to seed an empty account.
+     */
     private static final BigDecimal ROTH_BALANCE_BROUGHT_FORWARD = new BigDecimal("0");
 
     private final Path inputDir;
@@ -45,12 +47,20 @@ public class ImportCashService {
     private final RothIraCashStatementParser rothParser;
 
     public ImportCashService(Path inputDir, PortfolioDatabase db, HistoricalFxRateProvider fxProvider) {
-        this.inputDir   = inputDir;
-        this.db         = db;
+        this.inputDir = inputDir;
+        this.db = db;
         this.rothParser = new RothIraCashStatementParser(fxProvider);
     }
 
-    /** One result per source, in a stable order. */
+    private static String extension(Path file) {
+        String name = file.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        return dot >= 0 ? name.substring(dot) : "";
+    }
+
+    /**
+     * One result per source, in a stable order.
+     */
     public List<ImportCashResult> importCash() {
         List<ImportCashResult> results = new ArrayList<>();
         results.add(importAjBell());
@@ -94,11 +104,5 @@ public class ImportCashService {
         } catch (IOException e) {
             throw new IllegalStateException("Imported rows but could not archive/remove " + file, e);
         }
-    }
-
-    private static String extension(Path file) {
-        String name = file.getFileName().toString();
-        int dot = name.lastIndexOf('.');
-        return dot >= 0 ? name.substring(dot) : "";
     }
 }

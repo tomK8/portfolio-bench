@@ -13,7 +13,9 @@ public record AggHolding(
         Currency currency,
         String sources
 ) {
-    /** ISO code (e.g. "USD") — lets views read the currency without navigating java.util.Currency. */
+    /**
+     * ISO code (e.g. "USD") — lets views read the currency without navigating java.util.Currency.
+     */
     public String currencyCode() {
         return currency.getCurrencyCode();
     }

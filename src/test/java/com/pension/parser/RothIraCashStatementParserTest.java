@@ -33,30 +33,8 @@ class RothIraCashStatementParserTest {
         return s;
     };
 
-    @TempDir Path dir;
-
-    private Path writeHistory() throws IOException {
-        Path file = dir.resolve("History.xlsx");
-        try (Workbook wb = new XSSFWorkbook(); OutputStream out = Files.newOutputStream(file)) {
-            Sheet sheet = wb.createSheet("history");
-            CellStyle dateStyle = wb.createCellStyle();
-            dateStyle.setDataFormat(wb.getCreationHelper().createDataFormat().getFormat("yyyy-mm-dd"));
-
-            // a preamble row, then the header — parser locates the header by name, not position
-            sheet.createRow(0).createCell(0).setCellValue("History");
-            String[] headers = {"Date", "Type", "Security ID", "Activity Description", "Net Amount", "Quantity"};
-            Row h = sheet.createRow(2);
-            for (int i = 0; i < headers.length; i++) h.createCell(i).setCellValue(headers[i]);
-
-            dataRow(sheet, 3, "2026-05-14", "AAPL", "Cash Dividend Received",          6.21,      0, dateStyle);
-            dataRow(sheet, 4, "2026-05-13", "BIDU", "Sell -30.0 Share(s) Of Bidu At 142", 4260,   -30, dateStyle);
-            dataRow(sheet, 5, "2026-05-12", "NVDA", "Buy 70.0 Share(s) Of Nvda At 218",  -15260,   70, dateStyle);
-            dataRow(sheet, 6, "2026-05-05", "ASML", "Foreign Tax Withheld At The Source", -2.38,    0, dateStyle);
-            dataRow(sheet, 7, "2025-12-19", "NOW",  "Stock Split Received",                0,       8, dateStyle);
-            wb.write(out);
-        }
-        return file;
-    }
+    @TempDir
+    Path dir;
 
     private static void dataRow(Sheet sheet, int r, String date, String sym, String desc,
                                 double net, double qty, CellStyle dateStyle) {
@@ -71,6 +49,29 @@ class RothIraCashStatementParserTest {
         row.createCell(5).setCellValue(qty);
     }
 
+    private Path writeHistory() throws IOException {
+        Path file = dir.resolve("History.xlsx");
+        try (Workbook wb = new XSSFWorkbook(); OutputStream out = Files.newOutputStream(file)) {
+            Sheet sheet = wb.createSheet("history");
+            CellStyle dateStyle = wb.createCellStyle();
+            dateStyle.setDataFormat(wb.getCreationHelper().createDataFormat().getFormat("yyyy-mm-dd"));
+
+            // a preamble row, then the header — parser locates the header by name, not position
+            sheet.createRow(0).createCell(0).setCellValue("History");
+            String[] headers = {"Date", "Type", "Security ID", "Activity Description", "Net Amount", "Quantity"};
+            Row h = sheet.createRow(2);
+            for (int i = 0; i < headers.length; i++) h.createCell(i).setCellValue(headers[i]);
+
+            dataRow(sheet, 3, "2026-05-14", "AAPL", "Cash Dividend Received", 6.21, 0, dateStyle);
+            dataRow(sheet, 4, "2026-05-13", "BIDU", "Sell -30.0 Share(s) Of Bidu At 142", 4260, -30, dateStyle);
+            dataRow(sheet, 5, "2026-05-12", "NVDA", "Buy 70.0 Share(s) Of Nvda At 218", -15260, 70, dateStyle);
+            dataRow(sheet, 6, "2026-05-05", "ASML", "Foreign Tax Withheld At The Source", -2.38, 0, dateStyle);
+            dataRow(sheet, 7, "2025-12-19", "NOW", "Stock Split Received", 0, 8, dateStyle);
+            wb.write(out);
+        }
+        return file;
+    }
+
     @Test
     void classifiesAndSignsRows() throws Exception {
         List<CashTransaction> rows = new RothIraCashStatementParser(FX).parse(writeHistory());
@@ -78,7 +79,7 @@ class RothIraCashStatementParserTest {
                 .collect(Collectors.toMap(CashTransaction::symbol, Function.identity()));
 
         assertEquals("DIVIDEND", bySymbol.get("AAPL").type());
-        assertEquals("CHARGE",   bySymbol.get("ASML").type());
+        assertEquals("CHARGE", bySymbol.get("ASML").type());
 
         CashTransaction sell = bySymbol.get("BIDU");
         assertEquals("TRANSACTION", sell.type());

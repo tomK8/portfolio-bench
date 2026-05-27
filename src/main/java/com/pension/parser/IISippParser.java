@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
 
 /**
  * Parses UUID-named CSV exports (e.g. 1f072c5f-a547-4589-9003-4ee13cba7ddd.csv) for the II SIPP account.
- *
+ * <p>
  * Currency per row is inferred from the Market Value column prefix ($ → USD, £ → GBP).
  * GBP-priced securities may show price in pence; Market Value and Book Cost are always in pounds.
  * Average price paid = Book Cost / Qty.
@@ -31,13 +31,24 @@ public class IISippParser implements AccountParser {
             "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.csv",
             Pattern.CASE_INSENSITIVE);
 
-    private static final String COL_SYMBOL       = "Symbol";
-    private static final String COL_QTY          = "Qty";
+    private static final String COL_SYMBOL = "Symbol";
+    private static final String COL_QTY = "Qty";
     private static final String COL_MARKET_VALUE = "Market Value";
-    private static final String COL_BOOK_COST    = "Book Cost";
+    private static final String COL_BOOK_COST = "Book Cost";
+
+    static String normaliseSecurityId(String rawId) {
+        if (rawId == null) return null;
+        String id = rawId.trim().toUpperCase();
+        return switch (id) {
+            case "GOOG", "GOOGL" -> "GOOG/GOOGL";
+            default -> id;
+        };
+    }
 
     @Override
-    public String sourceName() { return "II SIPP"; }
+    public String sourceName() {
+        return "II SIPP";
+    }
 
     @Override
     public boolean supports(Path file) {
@@ -55,6 +66,8 @@ public class IISippParser implements AccountParser {
             return true;
         }
     }
+
+    // -------------------------------------------------------------------------
 
     @Override
     public List<Holding> parse(Path file) throws IOException, ParseException {
@@ -77,11 +90,11 @@ public class IISippParser implements AccountParser {
                 if (qty == null) continue;
 
                 String mktValRaw = record.get(COL_MARKET_VALUE).trim();
-                Currency currency    = parseCurrency(mktValRaw);
-                BigDecimal mktVal    = parseCurrencyAmount(mktValRaw);
+                Currency currency = parseCurrency(mktValRaw);
+                BigDecimal mktVal = parseCurrencyAmount(mktValRaw);
 
-                BigDecimal bookCost  = parseCurrencyAmount(record.get(COL_BOOK_COST).trim());
-                BigDecimal avgPrice  = (bookCost != null && qty.compareTo(BigDecimal.ZERO) != 0)
+                BigDecimal bookCost = parseCurrencyAmount(record.get(COL_BOOK_COST).trim());
+                BigDecimal avgPrice = (bookCost != null && qty.compareTo(BigDecimal.ZERO) != 0)
                         ? bookCost.divide(qty, 10, RoundingMode.HALF_UP)
                         : null;
 
@@ -93,17 +106,6 @@ public class IISippParser implements AccountParser {
         }
 
         return holdings;
-    }
-
-    // -------------------------------------------------------------------------
-
-    static String normaliseSecurityId(String rawId) {
-        if (rawId == null) return null;
-        String id = rawId.trim().toUpperCase();
-        return switch (id) {
-            case "GOOG", "GOOGL" -> "GOOG/GOOGL";
-            default              -> id;
-        };
     }
 
     private Currency parseCurrency(String value) {

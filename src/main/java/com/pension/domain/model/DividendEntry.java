@@ -8,4 +8,5 @@ public record DividendEntry(
         double amount,
         double fxToGbp,
         double amountGbp
-) {}
+) {
+}

@@ -22,13 +22,19 @@ public class DividendsController {
         this.recordService = recordService;
     }
 
+    private static String at(List<String> list, int i) {
+        return list != null && i < list.size() && list.get(i) != null ? list.get(i) : "";
+    }
+
     @GetMapping("/dividends")
     public String page(Model model) {
         model.addAttribute("today", LocalDate.now().toString());
         return "dividends";
     }
 
-    /** Returns a single blank row, appended client-side by htmx. */
+    /**
+     * Returns a single blank row, appended client-side by htmx.
+     */
     @GetMapping("/dividends/row")
     public String row(Model model) {
         model.addAttribute("today", LocalDate.now().toString());
@@ -51,9 +57,5 @@ public class DividendsController {
         RecordResult result = recordService.record(rows);
         model.addAttribute("result", result);
         return "fragments/dividends :: result";
-    }
-
-    private static String at(List<String> list, int i) {
-        return list != null && i < list.size() && list.get(i) != null ? list.get(i) : "";
     }
 }

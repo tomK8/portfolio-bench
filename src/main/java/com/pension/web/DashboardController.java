@@ -2,10 +2,8 @@ package com.pension.web;
 
 import com.pension.PortfolioDatabase;
 import com.pension.application.ExportExcelService;
-import com.pension.application.ExportResult;
 import com.pension.application.ImportCashService;
 import com.pension.application.SyncPortfolioService;
-import com.pension.application.SyncResult;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,6 +28,16 @@ public class DashboardController {
         this.exportService = exportService;
         this.importCashService = importCashService;
         this.db = db;
+    }
+
+    private static BigDecimal parseCash(String raw) {
+        String clean = raw.replace(",", "").replace("£", "").trim();
+        if (clean.isEmpty()) return BigDecimal.ZERO;
+        try {
+            return new BigDecimal(clean);
+        } catch (NumberFormatException e) {
+            return BigDecimal.ZERO;
+        }
     }
 
     @GetMapping("/")
@@ -61,15 +69,5 @@ public class DashboardController {
     public String importCash(Model model) {
         model.addAttribute("cashImports", importCashService.importCash());
         return "fragments/import :: result";
-    }
-
-    private static BigDecimal parseCash(String raw) {
-        String clean = raw.replace(",", "").replace("£", "").trim();
-        if (clean.isEmpty()) return BigDecimal.ZERO;
-        try {
-            return new BigDecimal(clean);
-        } catch (NumberFormatException e) {
-            return BigDecimal.ZERO;
-        }
     }
 }

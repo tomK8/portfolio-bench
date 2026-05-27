@@ -10,16 +10,15 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class RecordDividendsServiceTest {
 
     private static final FxRateProvider FX =
             () -> Map.of("GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"));
 
-    @TempDir Path dbDir;
+    @TempDir
+    Path dbDir;
 
     private RecordDividendsService service(PortfolioDatabase db) {
         return new RecordDividendsService(FX, db);

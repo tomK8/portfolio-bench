@@ -12,18 +12,20 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class SyncPortfolioServiceTest {
 
-    /** Fake FX provider — the reason FxRateProvider is a port: no network in tests. */
+    /**
+     * Fake FX provider — the reason FxRateProvider is a port: no network in tests.
+     */
     private static final FxRateProvider FX =
             () -> Map.of("GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"));
 
-    @TempDir Path inputDir;
-    @TempDir Path dbDir;
+    @TempDir
+    Path inputDir;
+    @TempDir
+    Path dbDir;
 
     private SyncPortfolioService service() {
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));

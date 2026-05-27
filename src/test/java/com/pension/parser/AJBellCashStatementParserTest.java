@@ -12,17 +12,23 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class AJBellCashStatementParserTest {
 
+    private static final Path REAL_FILE =
+            Path.of(System.getProperty("user.home"), "Downloads", "cashstatements.csv");
     private AJBellCashStatementParser parser;
 
-    @BeforeEach
-    void setUp() { parser = new AJBellCashStatementParser(); }
-
     // --- supports() ---
+
+    @BeforeEach
+    void setUp() {
+        parser = new AJBellCashStatementParser();
+    }
 
     @Test
     void supports_exactFilename() {
         assertTrue(parser.supports(Paths.get("cashstatements.csv")));
     }
+
+    // --- parse() against the real file ---
 
     @Test
     void supports_rejectsOtherFilenames() {
@@ -30,11 +36,6 @@ class AJBellCashStatementParserTest {
         assertFalse(parser.supports(Paths.get("cashstatements_combined.csv")));
         assertFalse(parser.supports(Paths.get("portfolio.csv")));
     }
-
-    // --- parse() against the real file ---
-
-    private static final Path REAL_FILE =
-            Path.of(System.getProperty("user.home"), "Downloads", "cashstatements.csv");
 
     @Test
     void parse_realFile_rowCount() throws Exception {
@@ -78,7 +79,7 @@ class AJBellCashStatementParserTest {
         if (!REAL_FILE.toFile().exists()) return;
         List<CashTransaction> txns = parser.parse(REAL_FILE);
         assertTrue(txns.stream().anyMatch(
-                t -> "GILT 0.875% 2033".equals(t.symbol()) && "DIVIDEND".equals(t.type())),
+                        t -> "GILT 0.875% 2033".equals(t.symbol()) && "DIVIDEND".equals(t.type())),
                 "Expected GILT 0.875% 2033 dividend row");
     }
 
@@ -98,7 +99,7 @@ class AJBellCashStatementParserTest {
         if (!REAL_FILE.toFile().exists()) return;
         List<CashTransaction> txns = parser.parse(REAL_FILE);
         assertTrue(txns.stream().anyMatch(
-                t -> "GILT 0.875% 2033".equals(t.symbol()) && "TRANSACTION".equals(t.type()) && t.amount() > 0),
+                        t -> "GILT 0.875% 2033".equals(t.symbol()) && "TRANSACTION".equals(t.type()) && t.amount() > 0),
                 "Expected at least one positive GILT 0.875% 2033 sale transaction");
     }
 

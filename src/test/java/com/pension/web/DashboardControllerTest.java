@@ -28,18 +28,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class DashboardControllerTest {
 
-    /** Override the live FX adapter so the test never hits the network. */
-    @TestConfiguration
-    static class FakeFxConfig {
-        @Bean
-        @Primary
-        FxRateProvider fakeFxRateProvider() {
-            return () -> Map.of("GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"));
-        }
-    }
-
     static Path inputDir;
     static Path dbDir;
+    @Autowired
+    MockMvc mvc;
 
     @DynamicPropertySource
     static void temporaryDirs(DynamicPropertyRegistry registry) throws IOException {
@@ -50,9 +42,6 @@ class DashboardControllerTest {
         registry.add("pension.input-dir", inputDir::toString);
         registry.add("pension.db-dir", dbDir::toString);
     }
-
-    @Autowired
-    MockMvc mvc;
 
     @Test
     void dashboardShowsSyncForm() throws Exception {
@@ -67,5 +56,17 @@ class DashboardControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("AAPL")))
                 .andExpect(content().string(containsString("Total value")));
+    }
+
+    /**
+     * Override the live FX adapter so the test never hits the network.
+     */
+    @TestConfiguration
+    static class FakeFxConfig {
+        @Bean
+        @Primary
+        FxRateProvider fakeFxRateProvider() {
+            return () -> Map.of("GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"));
+        }
     }
 }

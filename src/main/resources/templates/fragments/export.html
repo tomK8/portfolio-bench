@@ -3,10 +3,10 @@
 <body>
 
 <div th:fragment="result">
-    <div th:if="${export.empty}" class="note">
+    <div class="note" th:if="${export.empty}">
         Nothing to export — no input files found in <code>~/Downloads</code>.
     </div>
-    <div th:unless="${export.empty}" class="note">
+    <div class="note" th:unless="${export.empty}">
         Wrote Excel reports:
         <ul>
             <li th:each="f : ${export.files}" th:text="${f}">path</li>

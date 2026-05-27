@@ -17,23 +17,6 @@ public class PortfolioDatabase {
 
     private static final Path DEFAULT_DIR =
             Path.of(System.getProperty("user.home"), "Documents", "Investing");
-
-    public final Path dbDir;
-    public final Path dbPath;
-    public final Path lastIiCashFile;
-    public final Path rothBroughtForwardFile;
-
-    public PortfolioDatabase() { this(DEFAULT_DIR); }
-
-    public PortfolioDatabase(Path dbDir) {
-        this.dbDir                  = dbDir;
-        this.dbPath                 = dbDir.resolve("portfolio.db");
-        this.lastIiCashFile         = dbDir.resolve("ii_sipp_cash_last.txt");
-        this.rothBroughtForwardFile = dbDir.resolve("roth_balance_brought_forward.txt");
-    }
-
-    // ---- DDL ----------------------------------------------------------------
-
     private static final String CREATE_SNAPSHOTS_TABLE = """
             CREATE TABLE IF NOT EXISTS portfolio_snapshots (
                 snapshot_date      INTEGER PRIMARY KEY,
@@ -46,7 +29,6 @@ public class PortfolioDatabase {
                 gbpusd             REAL,
                 gbpeur             REAL
             )""";
-
     private static final String CREATE_DIVIDEND_TABLE = """
             CREATE TABLE IF NOT EXISTS dividend_events (
                 payment_date     TEXT NOT NULL,
@@ -58,7 +40,6 @@ public class PortfolioDatabase {
                 dividend_gbp     REAL NOT NULL,
                 PRIMARY KEY (payment_date, account, symbol, currency)
             )""";
-
     private static final String CREATE_CASH_TABLE = """
             CREATE TABLE IF NOT EXISTS cash_transactions (
                 transaction_date TEXT NOT NULL,
@@ -75,17 +56,83 @@ public class PortfolioDatabase {
                 description      TEXT,
                 PRIMARY KEY (transaction_date, account, type, symbol, amount_gbp, cash_balance_gbp)
             )""";
+    private static final String INSERT_CASH_SQL =
+            "INSERT INTO cash_transactions " +
+                    "(transaction_date, account, type, symbol, quantity, amount, currency, " +
+                    " fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    public final Path dbDir;
+    public final Path dbPath;
+
+    // ---- DDL ----------------------------------------------------------------
+    public final Path lastIiCashFile;
+    public final Path rothBroughtForwardFile;
+
+    public PortfolioDatabase() {
+        this(DEFAULT_DIR);
+    }
 
     // ---- Public API ---------------------------------------------------------
 
-    /** Last II SIPP cash balance entered by the user, or zero if none saved yet. */
+    public PortfolioDatabase(Path dbDir) {
+        this.dbDir = dbDir;
+        this.dbPath = dbDir.resolve("portfolio.db");
+        this.lastIiCashFile = dbDir.resolve("ii_sipp_cash_last.txt");
+        this.rothBroughtForwardFile = dbDir.resolve("roth_balance_brought_forward.txt");
+    }
+
+    private static String rothKey(String date, String symbol, double qty, String type, double amount) {
+        return date + "|" + symbol + "|" + qty + "|" + type + "|" + amount;
+    }
+
+    private static void bindCashRow(PreparedStatement ps, CashTransaction tx) throws SQLException {
+        ps.setString(1, tx.transactionDate());
+        ps.setString(2, tx.account());
+        ps.setString(3, tx.type());
+        ps.setString(4, tx.symbol());
+        ps.setDouble(5, tx.quantity());
+        ps.setDouble(6, tx.amount());
+        ps.setString(7, tx.currency());
+        ps.setDouble(8, tx.fxToGbp());
+        ps.setDouble(9, tx.amountGbp());
+        setNullableDouble(ps, 10, tx.cashBalance());
+        setNullableDouble(ps, 11, tx.cashBalanceGbp());
+        ps.setString(12, tx.description());
+    }
+
+    private static void setNullableDouble(PreparedStatement ps, int idx, Double v) throws SQLException {
+        if (v != null) ps.setDouble(idx, v);
+        else ps.setNull(idx, Types.REAL);
+    }
+
+    /**
+     * Creates the cash table if absent and migrates pre-existing tables by adding the
+     * native-currency {@code cash_balance} column, backfilling it from the GBP balance
+     * for rows already stored in GBP (AJBell). The ALTER fails harmlessly once the
+     * column exists, which is also when the one-time backfill has already run.
+     */
+    private static void ensureCashTable(Statement ddl) throws SQLException {
+        ddl.execute(CREATE_CASH_TABLE);
+        try {
+            ddl.execute("ALTER TABLE cash_transactions ADD COLUMN cash_balance REAL");
+            ddl.execute("UPDATE cash_transactions SET cash_balance = cash_balance_gbp " +
+                    "WHERE cash_balance IS NULL AND currency = 'GBP'");
+        } catch (SQLException alreadyMigrated) {
+            // cash_balance column already present — nothing to do
+        }
+    }
+
+    /**
+     * Last II SIPP cash balance entered by the user, or zero if none saved yet.
+     */
     public BigDecimal loadLastIiSippCash() {
         try {
             if (Files.exists(lastIiCashFile)) {
                 String saved = Files.readString(lastIiCashFile).trim();
                 if (!saved.isEmpty()) return new BigDecimal(saved);
             }
-        } catch (IOException | NumberFormatException ignored) {}
+        } catch (IOException | NumberFormatException ignored) {
+        }
         return BigDecimal.ZERO;
     }
 
@@ -93,13 +140,14 @@ public class PortfolioDatabase {
         try {
             Files.createDirectories(dbDir);
             Files.writeString(lastIiCashFile, value.toPlainString());
-        } catch (IOException ignored) {}
+        } catch (IOException ignored) {
+        }
     }
 
     public void saveSnapshot(BigDecimal totalGbp, BigDecimal totalGainGbp,
                              BigDecimal totalCashGbp, BigDecimal returnPct,
                              BigDecimal totalReturn, Map<String, BigDecimal> gbpRates) {
-        long   snapshotDate     = Instant.now().getEpochSecond();
+        long snapshotDate = Instant.now().getEpochSecond();
         String snapshotDateText = LocalDate.now().toString();
 
         double gbpusd = gbpRates.getOrDefault("USD", BigDecimal.ZERO).doubleValue();
@@ -115,8 +163,10 @@ public class PortfolioDatabase {
                 for (String col : List.of(
                         "gbpusd REAL", "gbpeur REAL", "total_gain_gbp REAL",
                         "total_cash_gbp REAL", "return_pct REAL", "total_return REAL")) {
-                    try { ddl.execute("ALTER TABLE portfolio_snapshots ADD COLUMN " + col); }
-                    catch (SQLException ignored) {}
+                    try {
+                        ddl.execute("ALTER TABLE portfolio_snapshots ADD COLUMN " + col);
+                    } catch (SQLException ignored) {
+                    }
                 }
 
                 try (PreparedStatement del = conn.prepareStatement(
@@ -127,10 +177,10 @@ public class PortfolioDatabase {
 
                 try (PreparedStatement ps = conn.prepareStatement(
                         "INSERT INTO portfolio_snapshots " +
-                        "(snapshot_date, snapshot_date_text, total_value_gbp, " +
-                        " total_gain_gbp, total_cash_gbp, return_pct, total_return, gbpusd, gbpeur) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
-                    ps.setLong(1,   snapshotDate);
+                                "(snapshot_date, snapshot_date_text, total_value_gbp, " +
+                                " total_gain_gbp, total_cash_gbp, return_pct, total_return, gbpusd, gbpeur) " +
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    ps.setLong(1, snapshotDate);
                     ps.setString(2, snapshotDateText);
                     ps.setDouble(3, totalGbp.setScale(2, RoundingMode.HALF_UP).doubleValue());
                     ps.setDouble(4, totalGainGbp.setScale(2, RoundingMode.HALF_UP).doubleValue());
@@ -179,8 +229,8 @@ public class PortfolioDatabase {
                 int saved = 0;
                 try (PreparedStatement ps = conn.prepareStatement(
                         "INSERT OR REPLACE INTO dividend_events " +
-                        "(payment_date, account, symbol, currency, dividend_amount, fx_to_gbp, dividend_gbp) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                                "(payment_date, account, symbol, currency, dividend_amount, fx_to_gbp, dividend_gbp) " +
+                                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
                     for (DividendEntry d : entries) {
                         ps.setString(1, d.paymentDate());
                         ps.setString(2, d.account());
@@ -199,6 +249,8 @@ public class PortfolioDatabase {
             System.err.println("Warning: could not save dividends — " + e.getMessage());
         }
     }
+
+    // ---- Shared cash-table helpers ------------------------------------------
 
     public int saveCashTransactions(List<CashTransaction> transactions) {
         if (transactions.isEmpty()) return 0;
@@ -232,9 +284,9 @@ public class PortfolioDatabase {
                         if (known) {
                             if (seenNewRow) {
                                 System.err.printf(
-                                    "%n!!! DATA INTEGRITY ERROR: %s balance %.2f on %s already exists in DB " +
-                                    "but appears after new rows — possible gap or corrupt input file. Aborting import.%n",
-                                    account, bal, tx.transactionDate());
+                                        "%n!!! DATA INTEGRITY ERROR: %s balance %.2f on %s already exists in DB " +
+                                                "but appears after new rows — possible gap or corrupt input file. Aborting import.%n",
+                                        account, bal, tx.transactionDate());
                                 return 0;
                             }
                             skipped++;
@@ -256,14 +308,17 @@ public class PortfolioDatabase {
         return 0;
     }
 
-    /** RothIRA opening balance (before the earliest transaction), or zero if none saved. */
+    /**
+     * RothIRA opening balance (before the earliest transaction), or zero if none saved.
+     */
     public BigDecimal loadRothBroughtForward() {
         try {
             if (Files.exists(rothBroughtForwardFile)) {
                 String saved = Files.readString(rothBroughtForwardFile).trim();
                 if (!saved.isEmpty()) return new BigDecimal(saved);
             }
-        } catch (IOException | NumberFormatException ignored) {}
+        } catch (IOException | NumberFormatException ignored) {
+        }
         return BigDecimal.ZERO;
     }
 
@@ -271,7 +326,8 @@ public class PortfolioDatabase {
         try {
             Files.createDirectories(dbDir);
             Files.writeString(rothBroughtForwardFile, value.toPlainString());
-        } catch (IOException ignored) {}
+        } catch (IOException ignored) {
+        }
     }
 
     /**
@@ -295,7 +351,7 @@ public class PortfolioDatabase {
                 Double lastBalance = null;
                 try (PreparedStatement q = conn.prepareStatement(
                         "SELECT transaction_date, symbol, quantity, type, amount, cash_balance " +
-                        "FROM cash_transactions WHERE account = ? ORDER BY transaction_date, rowid")) {
+                                "FROM cash_transactions WHERE account = ? ORDER BY transaction_date, rowid")) {
                     q.setString(1, account);
                     try (var rs = q.executeQuery()) {
                         while (rs.next()) {
@@ -308,7 +364,7 @@ public class PortfolioDatabase {
                 }
 
                 boolean fromSeed = (lastBalance == null);
-                double running   = fromSeed ? seed.doubleValue() : lastBalance;
+                double running = fromSeed ? seed.doubleValue() : lastBalance;
 
                 List<CashTransaction> newRows = new ArrayList<>(rows.stream()
                         .filter(t -> !existingKeys.contains(rothKey(
@@ -340,54 +396,5 @@ public class PortfolioDatabase {
             System.err.println("Warning: could not save RothIRA cash transactions — " + e.getMessage());
         }
         return 0;
-    }
-
-    private static String rothKey(String date, String symbol, double qty, String type, double amount) {
-        return date + "|" + symbol + "|" + qty + "|" + type + "|" + amount;
-    }
-
-    // ---- Shared cash-table helpers ------------------------------------------
-
-    private static final String INSERT_CASH_SQL =
-            "INSERT INTO cash_transactions " +
-            "(transaction_date, account, type, symbol, quantity, amount, currency, " +
-            " fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-    private static void bindCashRow(PreparedStatement ps, CashTransaction tx) throws SQLException {
-        ps.setString(1, tx.transactionDate());
-        ps.setString(2, tx.account());
-        ps.setString(3, tx.type());
-        ps.setString(4, tx.symbol());
-        ps.setDouble(5, tx.quantity());
-        ps.setDouble(6, tx.amount());
-        ps.setString(7, tx.currency());
-        ps.setDouble(8, tx.fxToGbp());
-        ps.setDouble(9, tx.amountGbp());
-        setNullableDouble(ps, 10, tx.cashBalance());
-        setNullableDouble(ps, 11, tx.cashBalanceGbp());
-        ps.setString(12, tx.description());
-    }
-
-    private static void setNullableDouble(PreparedStatement ps, int idx, Double v) throws SQLException {
-        if (v != null) ps.setDouble(idx, v);
-        else           ps.setNull(idx, Types.REAL);
-    }
-
-    /**
-     * Creates the cash table if absent and migrates pre-existing tables by adding the
-     * native-currency {@code cash_balance} column, backfilling it from the GBP balance
-     * for rows already stored in GBP (AJBell). The ALTER fails harmlessly once the
-     * column exists, which is also when the one-time backfill has already run.
-     */
-    private static void ensureCashTable(Statement ddl) throws SQLException {
-        ddl.execute(CREATE_CASH_TABLE);
-        try {
-            ddl.execute("ALTER TABLE cash_transactions ADD COLUMN cash_balance REAL");
-            ddl.execute("UPDATE cash_transactions SET cash_balance = cash_balance_gbp " +
-                        "WHERE cash_balance IS NULL AND currency = 'GBP'");
-        } catch (SQLException alreadyMigrated) {
-            // cash_balance column already present — nothing to do
-        }
     }
 }

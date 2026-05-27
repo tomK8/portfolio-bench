@@ -2,21 +2,13 @@ package com.pension.application;
 
 import com.pension.adapter.HoldingFileLocator;
 import com.pension.domain.model.Holding;
-import com.pension.parser.AJBellSippParser;
-import com.pension.parser.AccountParser;
-import com.pension.parser.IISippParser;
-import com.pension.parser.ParseException;
-import com.pension.parser.RothIraParser;
+import com.pension.parser.*;
 import com.pension.port.FxRateProvider;
 
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 /**
  * Reads everything an operation needs from disk: live FX rates plus the most

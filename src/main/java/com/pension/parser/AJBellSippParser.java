@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
 
 /**
  * Parses portfolio*.csv exports from AJ Bell for the SIPP account.
- *
+ * <p>
  * All portfolio values (Cost, Value) are expressed in GBP.
  * Each row carries its own Valuation currency (GBP/USD/EUR) for downstream
  * FX conversion and live-price fetching.
@@ -29,6 +29,16 @@ import java.util.regex.Pattern;
  */
 public class AJBellSippParser implements AccountParser {
 
+    private static final String ACCOUNT_SOURCE = "AJ Bell SIPP";
+    private static final String COL_INVESTMENT = "Investment";
+    private static final String COL_QUANTITY = "Quantity";
+    private static final String COL_COST = "Cost (£)";
+    private static final String COL_VALUE_GBP = "Value (£)";   // always GBP
+    private static final String COL_EXCHANGE_RATE = "Exchange rate"; // units of Valuation currency per 1 GBP
+    private static final String COL_CURRENCY = "Valuation currency";
+    private static final String COL_TICKER = "Ticker";
+    private static final Pattern COUPON = Pattern.compile("(\\d+(?:\\.\\d+)?)%");
+    private static final Pattern DATE = Pattern.compile("\\d{1,2}/\\d{1,2}/(\\d{2,4})");
     /**
      * Live GBP-based FX rates (e.g. {"USD": 1.3621, "EUR": 1.1573}).
      * When present, these are preferred over the snapshot rate in the CSV file
@@ -37,24 +47,41 @@ public class AJBellSippParser implements AccountParser {
      */
     private final Map<String, BigDecimal> liveRates;
 
-    public AJBellSippParser() { this.liveRates = Map.of(); }
-    public AJBellSippParser(Map<String, BigDecimal> liveRates) { this.liveRates = liveRates; }
+    public AJBellSippParser() {
+        this.liveRates = Map.of();
+    }
+    public AJBellSippParser(Map<String, BigDecimal> liveRates) {
+        this.liveRates = liveRates;
+    }
 
-    private static final String ACCOUNT_SOURCE = "AJ Bell SIPP";
+    static String normaliseSecurityId(String rawId) {
+        if (rawId == null) return null;
+        String id = rawId.trim().toUpperCase();
+        return switch (id) {
+            case "GOOG", "GOOGL" -> "GOOG/GOOGL";
+            default -> id;
+        };
+    }
 
-    private static final String COL_INVESTMENT    = "Investment";
-    private static final String COL_QUANTITY      = "Quantity";
-    private static final String COL_COST          = "Cost (£)";
-    private static final String COL_VALUE_GBP     = "Value (£)";   // always GBP
-    private static final String COL_EXCHANGE_RATE = "Exchange rate"; // units of Valuation currency per 1 GBP
-    private static final String COL_CURRENCY      = "Valuation currency";
-    private static final String COL_TICKER        = "Ticker";
-
-    private static final Pattern COUPON = Pattern.compile("(\\d+(?:\\.\\d+)?)%");
-    private static final Pattern DATE   = Pattern.compile("\\d{1,2}/\\d{1,2}/(\\d{2,4})");
+    static String extractBondId(String investment) {
+        Matcher cm = COUPON.matcher(investment);
+        Matcher dm = DATE.matcher(investment);
+        if (cm.find() && dm.find()) {
+            String coupon = cm.group(1);
+            String yr = dm.group(1);
+            int year = Integer.parseInt(yr);
+            if (yr.length() == 2) year += 2000;
+            return "GILT " + coupon + "% " + year;
+        }
+        return investment.replaceAll("\\s*\\(SEDOL:[^)]+\\)", "").trim();
+    }
 
     @Override
-    public String sourceName() { return "AJ Bell SIPP"; }
+    public String sourceName() {
+        return "AJ Bell SIPP";
+    }
+
+    // -------------------------------------------------------------------------
 
     @Override
     public boolean supports(Path file) {
@@ -93,10 +120,10 @@ public class AJBellSippParser implements AccountParser {
 
                 // Value (£) is always the GBP amount; multiply by rate to get native currency.
                 // Prefer the live rate injected at construction; fall back to the CSV snapshot rate.
-                BigDecimal valueGbp      = parseDecimal(record.get(COL_VALUE_GBP));
-                BigDecimal fileRate      = parseDecimal(record.get(COL_EXCHANGE_RATE));
+                BigDecimal valueGbp = parseDecimal(record.get(COL_VALUE_GBP));
+                BigDecimal fileRate = parseDecimal(record.get(COL_EXCHANGE_RATE));
                 BigDecimal effectiveRate = liveRates.getOrDefault(ccyCode, fileRate);
-                BigDecimal nativeValue   = (valueGbp != null && effectiveRate != null)
+                BigDecimal nativeValue = (valueGbp != null && effectiveRate != null)
                         ? valueGbp.multiply(effectiveRate)
                         : valueGbp;
 
@@ -122,7 +149,7 @@ public class AJBellSippParser implements AccountParser {
                 // cost is in GBP; multiply by effectiveRate to express avg price in Valuation currency
                 // (for GBP stocks effectiveRate = 1, so no change)
                 BigDecimal avgPricePaid = (cost != null && quantity.compareTo(BigDecimal.ZERO) != 0
-                                           && effectiveRate != null)
+                        && effectiveRate != null)
                         ? cost.divide(quantity, 10, RoundingMode.HALF_UP).multiply(effectiveRate)
                         : null;
 
@@ -136,30 +163,6 @@ public class AJBellSippParser implements AccountParser {
         }
 
         return holdings;
-    }
-
-    // -------------------------------------------------------------------------
-
-    static String normaliseSecurityId(String rawId) {
-        if (rawId == null) return null;
-        String id = rawId.trim().toUpperCase();
-        return switch (id) {
-            case "GOOG", "GOOGL" -> "GOOG/GOOGL";
-            default              -> id;
-        };
-    }
-
-    static String extractBondId(String investment) {
-        Matcher cm = COUPON.matcher(investment);
-        Matcher dm = DATE.matcher(investment);
-        if (cm.find() && dm.find()) {
-            String coupon = cm.group(1);
-            String yr = dm.group(1);
-            int year = Integer.parseInt(yr);
-            if (yr.length() == 2) year += 2000;
-            return "GILT " + coupon + "% " + year;
-        }
-        return investment.replaceAll("\\s*\\(SEDOL:[^)]+\\)", "").trim();
     }
 
     private BigDecimal parseDecimal(String value) {

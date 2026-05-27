@@ -13,4 +13,5 @@ public record CashTransaction(
         Double cashBalance,       // running balance after this row in native currency; nullable
         Double cashBalanceGbp,    // running balance after this row in GBP; nullable
         String description        // raw description from the source file
-) {}
+) {
+}

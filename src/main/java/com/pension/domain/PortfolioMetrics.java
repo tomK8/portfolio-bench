@@ -12,13 +12,6 @@ import java.util.List;
  */
 public class PortfolioMetrics {
 
-    public record Totals(
-            BigDecimal totalGbp,
-            BigDecimal totalGainGbp,
-            BigDecimal totalCashGbp,
-            BigDecimal returnPct,
-            BigDecimal totalReturn) {}
-
     public Totals compute(List<AggHolding> aggregated, BigDecimal iiSippCash) {
         BigDecimal totalGbp = aggregated.stream()
                 .map(AggHolding::marketValueGbp)
@@ -36,8 +29,8 @@ public class PortfolioMetrics {
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .add(iiSippCash);
 
-        BigDecimal invested    = totalGbp.subtract(totalCashGbp);
-        BigDecimal returnPct   = invested.compareTo(BigDecimal.ZERO) != 0
+        BigDecimal invested = totalGbp.subtract(totalCashGbp);
+        BigDecimal returnPct = invested.compareTo(BigDecimal.ZERO) != 0
                 ? totalGainGbp.divide(invested, 10, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
         BigDecimal totalReturn = totalGbp.compareTo(BigDecimal.ZERO) != 0
@@ -45,5 +38,13 @@ public class PortfolioMetrics {
                 : BigDecimal.ZERO;
 
         return new Totals(totalGbp, totalGainGbp, totalCashGbp, returnPct, totalReturn);
+    }
+
+    public record Totals(
+            BigDecimal totalGbp,
+            BigDecimal totalGainGbp,
+            BigDecimal totalCashGbp,
+            BigDecimal returnPct,
+            BigDecimal totalReturn) {
     }
 }

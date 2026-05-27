@@ -4,11 +4,7 @@ import com.pension.ExcelReportWriter;
 import com.pension.PortfolioDatabase;
 import com.pension.adapter.FrankfurterFxClient;
 import com.pension.adapter.HoldingFileLocator;
-import com.pension.application.ExportExcelService;
-import com.pension.application.ImportCashService;
-import com.pension.application.PortfolioGatherer;
-import com.pension.application.RecordDividendsService;
-import com.pension.application.SyncPortfolioService;
+import com.pension.application.*;
 import com.pension.port.FxRateProvider;
 import com.pension.port.HistoricalFxRateProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +24,12 @@ import java.nio.file.Path;
  */
 @Configuration
 public class BeanConfiguration {
+
+    private static Path inputDir(String configured) {
+        return configured.isBlank()
+                ? Path.of(System.getProperty("user.home"), "Downloads")
+                : Path.of(configured);
+    }
 
     @Bean
     public FxRateProvider fxRateProvider() {
@@ -88,11 +90,5 @@ public class BeanConfiguration {
                                                PortfolioDatabase portfolioDatabase,
                                                HistoricalFxRateProvider historicalFxRateProvider) {
         return new ImportCashService(inputDir(inputDir), portfolioDatabase, historicalFxRateProvider);
-    }
-
-    private static Path inputDir(String configured) {
-        return configured.isBlank()
-                ? Path.of(System.getProperty("user.home"), "Downloads")
-                : Path.of(configured);
     }
 }

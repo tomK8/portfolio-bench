@@ -112,7 +112,7 @@ class RothIraParserTest {
 
         // No raw cash tickers should remain
         holdings.forEach(h -> {
-            assertNotEquals("BDP",       h.getSecurityId());
+            assertNotEquals("BDP", h.getSecurityId());
             assertNotEquals("USD999997", h.getSecurityId());
         });
 

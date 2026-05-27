@@ -9,32 +9,28 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Parses the fixed-path ~/Downloads/cashstatements.csv cash statement export from AJ Bell.
- *
+ * <p>
  * The file is newest-first; rows are reversed internally for chronological balance verification.
  * All amounts are already in GBP, so fx_to_gbp = 1.0 throughout.
  * BALANCE B/F rows (opening balance markers) anchor the verification chain but are not persisted.
  */
 public class AJBellCashStatementParser implements CashTransactionParser {
 
-    private static final String ACCOUNT   = "AJBell";
-    private static final String CURRENCY  = "GBP";
+    private static final String ACCOUNT = "AJBell";
+    private static final String CURRENCY = "GBP";
     private static final double FX_TO_GBP = 1.0;
 
-    private static final String COL_DATE        = "Date";
+    private static final String COL_DATE = "Date";
     private static final String COL_DESCRIPTION = "Description";
-    private static final String COL_RECEIPT     = "Receipt (GBP)";
-    private static final String COL_PAYMENT     = "Payment (GBP)";
-    private static final String COL_BALANCE     = "Balance (GBP)";
+    private static final String COL_RECEIPT = "Receipt (GBP)";
+    private static final String COL_PAYMENT = "Payment (GBP)";
+    private static final String COL_BALANCE = "Balance (GBP)";
 
     // Matches "Dividend 620 ..." or "DIVIDEND 620 ..."
     private static final Pattern PAT_DIVIDEND = Pattern.compile(
@@ -49,7 +45,7 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             "(?i)(.*?)\\s+Redemption\\s*$", Pattern.DOTALL);
 
     // Used to extract GILT coupon and maturity from descriptions
-    private static final Pattern PAT_COUPON    = Pattern.compile("(\\d+(?:\\.\\d+)?)%");
+    private static final Pattern PAT_COUPON = Pattern.compile("(\\d+(?:\\.\\d+)?)%");
     private static final Pattern PAT_GILT_DATE = Pattern.compile("\\d{1,2}/\\d{1,2}/(\\d{2,4})");
 
     // Compressed GILT names in redemption rows: TREASURY2.75L24, TSY3.5L28
@@ -59,49 +55,124 @@ public class AJBellCashStatementParser implements CashTransactionParser {
     // Compressed GILT names: HM TREA0.2525  (coupon=0.25, year=25→2025)
     private static final Pattern PAT_GILT_HM_TREA = Pattern.compile(
             "(?i)HM\\s+TREA(\\d+\\.\\d{2})(\\d{2})\\b");
-
-    // Ordered description-keyword → portfolio ticker rules; matched against uppercased name.
-    // Listed longest/most-specific first to avoid partial matches.
-    private record SymbolRule(Pattern pattern, String ticker) {}
-
     private static final List<SymbolRule> SYMBOL_RULES = List.of(
-        new SymbolRule(Pattern.compile("BRITISH AMERICAN TOBACCO"), "BATS"),
-        new SymbolRule(Pattern.compile("BANK OF AMERICA"),          "BAC"),
-        new SymbolRule(Pattern.compile("BNP PARIBAS"),              "BNP"),
-        new SymbolRule(Pattern.compile("SOCIETE GENERALE"),         "GLE"),
-        new SymbolRule(Pattern.compile("RHEINMETALL"),              "RHM"),
-        new SymbolRule(Pattern.compile("LONDON.*EXCHANGE"),         "LSEG"),
-        new SymbolRule(Pattern.compile("\\bRELX\\b"),               "REL"),
-        new SymbolRule(Pattern.compile("H.{0,3}S.{0,3}BC"),        "HSBA"),
-        new SymbolRule(Pattern.compile("(?:INVESCO|POWERSHARES).*EQQQ"), "EQQQ"),
-        new SymbolRule(Pattern.compile("(?:SSGA|STT).*SPDR"),      "SPX5"),
-        new SymbolRule(Pattern.compile("ALPHABET"),                 "GOOG/GOOGL"),
-        new SymbolRule(Pattern.compile("META PLATFORMS"),           "META"),
-        new SymbolRule(Pattern.compile("MICROSOFT"),                "MSFT"),
-        new SymbolRule(Pattern.compile("LEGAL.{0,5}GENERAL"),       "LGEN"),
-        new SymbolRule(Pattern.compile("\\bINTEL(?:CORP)?\\b"),    "INTC"),
-        new SymbolRule(Pattern.compile("\\bAVIVA\\b"),              "AV."),
-        new SymbolRule(Pattern.compile("BAE SYSTEMS"),              "BA."),
-        new SymbolRule(Pattern.compile("\\bBARCLAYS\\b"),           "BARC"),
-        new SymbolRule(Pattern.compile("\\bNETFLIX\\b"),            "NFLX"),
-        new SymbolRule(Pattern.compile("\\bAPPLE\\b"),              "AAPL"),
-        new SymbolRule(Pattern.compile("\\bAMAZON\\b"),             "AMZN"),
-        new SymbolRule(Pattern.compile("WISDOMTREE.*SWISS.*GOLD"),  "SGBX"),
-        new SymbolRule(Pattern.compile("WISDOMTREE.*GOLD"),         "PHGP"),
-        new SymbolRule(Pattern.compile("GOLD BULLION"),             "GBS"),
-        new SymbolRule(Pattern.compile("VANGUARD.*GILT"),           "VGOV"),
-        new SymbolRule(Pattern.compile("\\bBP\\b|\\bB\\s+P\\b"),    "BP.")
+            new SymbolRule(Pattern.compile("BRITISH AMERICAN TOBACCO"), "BATS"),
+            new SymbolRule(Pattern.compile("BANK OF AMERICA"), "BAC"),
+            new SymbolRule(Pattern.compile("BNP PARIBAS"), "BNP"),
+            new SymbolRule(Pattern.compile("SOCIETE GENERALE"), "GLE"),
+            new SymbolRule(Pattern.compile("RHEINMETALL"), "RHM"),
+            new SymbolRule(Pattern.compile("LONDON.*EXCHANGE"), "LSEG"),
+            new SymbolRule(Pattern.compile("\\bRELX\\b"), "REL"),
+            new SymbolRule(Pattern.compile("H.{0,3}S.{0,3}BC"), "HSBA"),
+            new SymbolRule(Pattern.compile("(?:INVESCO|POWERSHARES).*EQQQ"), "EQQQ"),
+            new SymbolRule(Pattern.compile("(?:SSGA|STT).*SPDR"), "SPX5"),
+            new SymbolRule(Pattern.compile("ALPHABET"), "GOOG/GOOGL"),
+            new SymbolRule(Pattern.compile("META PLATFORMS"), "META"),
+            new SymbolRule(Pattern.compile("MICROSOFT"), "MSFT"),
+            new SymbolRule(Pattern.compile("LEGAL.{0,5}GENERAL"), "LGEN"),
+            new SymbolRule(Pattern.compile("\\bINTEL(?:CORP)?\\b"), "INTC"),
+            new SymbolRule(Pattern.compile("\\bAVIVA\\b"), "AV."),
+            new SymbolRule(Pattern.compile("BAE SYSTEMS"), "BA."),
+            new SymbolRule(Pattern.compile("\\bBARCLAYS\\b"), "BARC"),
+            new SymbolRule(Pattern.compile("\\bNETFLIX\\b"), "NFLX"),
+            new SymbolRule(Pattern.compile("\\bAPPLE\\b"), "AAPL"),
+            new SymbolRule(Pattern.compile("\\bAMAZON\\b"), "AMZN"),
+            new SymbolRule(Pattern.compile("WISDOMTREE.*SWISS.*GOLD"), "SGBX"),
+            new SymbolRule(Pattern.compile("WISDOMTREE.*GOLD"), "PHGP"),
+            new SymbolRule(Pattern.compile("GOLD BULLION"), "GBS"),
+            new SymbolRule(Pattern.compile("VANGUARD.*GILT"), "VGOV"),
+            new SymbolRule(Pattern.compile("\\bBP\\b|\\bB\\s+P\\b"), "BP.")
     );
+
+    private static String resolveSymbol(String name) {
+        String bondId = tryExtractGiltId(name);
+        if (bondId != null) return bondId;
+
+        String upper = name.toUpperCase();
+        for (SymbolRule rule : SYMBOL_RULES) {
+            if (rule.pattern().matcher(upper).find()) return rule.ticker();
+        }
+
+        return cleanName(name);
+    }
 
     // ---- CashTransactionParser ----
 
+    private static String tryExtractGiltId(String name) {
+        // Compressed "TREASURY2.75L24" / "TSY3.5L28" format
+        Matcher lm = PAT_GILT_TREASURY_L.matcher(name);
+        if (lm.find()) {
+            return "GILT " + lm.group(1) + "% " + (Integer.parseInt(lm.group(2)) + 2000);
+        }
+        // Compressed "HM TREA0.2525" format (coupon=0.25, year=25)
+        Matcher hm = PAT_GILT_HM_TREA.matcher(name);
+        if (hm.find()) {
+            return "GILT " + hm.group(1) + "% " + (Integer.parseInt(hm.group(2)) + 2000);
+        }
+        // Standard "0.875% TREASURY GILT 22/01/2033" format
+        Matcher cm = PAT_COUPON.matcher(name);
+        Matcher dm = PAT_GILT_DATE.matcher(name);
+        if (cm.find() && dm.find()) {
+            String coupon = cm.group(1);
+            String yr = dm.group(1);
+            int year = Integer.parseInt(yr);
+            if (yr.length() == 2) year += 2000;
+            return "GILT " + coupon + "% " + year;
+        }
+        return null;
+    }
+
+    private static String cleanName(String name) {
+        String cleaned = name.trim().toUpperCase();
+        cleaned = cleaned.replaceAll("\\s+(ORD|NPV|COM|ADR)\\b.*$", "").trim();
+        cleaned = cleaned.replaceAll("\\s+(GBP|USD|EUR)\\d.*$", "").trim();
+        return cleaned.isEmpty() ? name.trim().toUpperCase() : cleaned;
+    }
+
+    private static double deriveStartingBalance(double bofBalance, RawRow firstRow) {
+        if (!Double.isNaN(bofBalance)) return bofBalance;
+        // No B/F row: back-calculate from the oldest transaction
+        return firstRow.balance() - firstRow.receipt() - firstRow.payment();
+    }
+
+    // ---- Classification ----
+
+    private static double parseAmount(String value) {
+        if (value == null || value.isBlank() || "-".equals(value.trim())) return 0.0;
+        try {
+            return Double.parseDouble(value.replace(",", "").trim());
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
+    }
+
+    private static double parseQty(String value) {
+        if (value == null || value.isBlank()) return 0.0;
+        try {
+            return Double.parseDouble(value.replace(",", "").trim());
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
+    }
+
+    // ---- Symbol resolution ----
+
+    private static String convertDate(String ddmmyyyy) {
+        String[] p = ddmmyyyy.split("/");
+        return p.length == 3 ? p[2] + "-" + p[1] + "-" + p[0] : ddmmyyyy;
+    }
+
     @Override
-    public String accountName() { return ACCOUNT; }
+    public String accountName() {
+        return ACCOUNT;
+    }
 
     @Override
     public boolean supports(Path file) {
         return "cashstatements.csv".equals(file.getFileName().toString());
     }
+
+    // ---- Helpers ----
 
     @Override
     public List<CashTransaction> parse(Path file) throws IOException, ParseException {
@@ -194,10 +265,6 @@ public class AJBellCashStatementParser implements CashTransactionParser {
         return result;
     }
 
-    // ---- Classification ----
-
-    private record ClassifiedRow(String type, String symbol, double quantity) {}
-
     private ClassifiedRow classify(String description) {
         Matcher m = PAT_DIVIDEND.matcher(description);
         if (m.matches()) {
@@ -210,10 +277,10 @@ public class AJBellCashStatementParser implements CashTransactionParser {
         }
 
         String upper = description.trim().toUpperCase();
-        if (upper.contains("CHARGE"))             return new ClassifiedRow("CHARGE",       "GBP", 0.0);
-        if (upper.startsWith("GROSS INTEREST"))   return new ClassifiedRow("INTEREST",     "GBP", 0.0);
+        if (upper.contains("CHARGE")) return new ClassifiedRow("CHARGE", "GBP", 0.0);
+        if (upper.startsWith("GROSS INTEREST")) return new ClassifiedRow("INTEREST", "GBP", 0.0);
         if (upper.startsWith("PENSION")
-         || upper.startsWith("TRANSFER"))         return new ClassifiedRow("CONTRIBUTION", "GBP", 0.0);
+                || upper.startsWith("TRANSFER")) return new ClassifiedRow("CONTRIBUTION", "GBP", 0.0);
 
         m = PAT_REVERSED_REDEMPTION.matcher(description);
         if (m.matches()) {
@@ -224,81 +291,14 @@ public class AJBellCashStatementParser implements CashTransactionParser {
         return new ClassifiedRow("CONTRIBUTION", "GBP", 0.0);
     }
 
-    // ---- Symbol resolution ----
-
-    private static String resolveSymbol(String name) {
-        String bondId = tryExtractGiltId(name);
-        if (bondId != null) return bondId;
-
-        String upper = name.toUpperCase();
-        for (SymbolRule rule : SYMBOL_RULES) {
-            if (rule.pattern().matcher(upper).find()) return rule.ticker();
-        }
-
-        return cleanName(name);
+    // Ordered description-keyword → portfolio ticker rules; matched against uppercased name.
+    // Listed longest/most-specific first to avoid partial matches.
+    private record SymbolRule(Pattern pattern, String ticker) {
     }
 
-    private static String tryExtractGiltId(String name) {
-        // Compressed "TREASURY2.75L24" / "TSY3.5L28" format
-        Matcher lm = PAT_GILT_TREASURY_L.matcher(name);
-        if (lm.find()) {
-            return "GILT " + lm.group(1) + "% " + (Integer.parseInt(lm.group(2)) + 2000);
-        }
-        // Compressed "HM TREA0.2525" format (coupon=0.25, year=25)
-        Matcher hm = PAT_GILT_HM_TREA.matcher(name);
-        if (hm.find()) {
-            return "GILT " + hm.group(1) + "% " + (Integer.parseInt(hm.group(2)) + 2000);
-        }
-        // Standard "0.875% TREASURY GILT 22/01/2033" format
-        Matcher cm = PAT_COUPON.matcher(name);
-        Matcher dm = PAT_GILT_DATE.matcher(name);
-        if (cm.find() && dm.find()) {
-            String coupon = cm.group(1);
-            String yr = dm.group(1);
-            int year = Integer.parseInt(yr);
-            if (yr.length() == 2) year += 2000;
-            return "GILT " + coupon + "% " + year;
-        }
-        return null;
+    private record ClassifiedRow(String type, String symbol, double quantity) {
     }
 
-    private static String cleanName(String name) {
-        String cleaned = name.trim().toUpperCase();
-        cleaned = cleaned.replaceAll("\\s+(ORD|NPV|COM|ADR)\\b.*$", "").trim();
-        cleaned = cleaned.replaceAll("\\s+(GBP|USD|EUR)\\d.*$",     "").trim();
-        return cleaned.isEmpty() ? name.trim().toUpperCase() : cleaned;
+    private record RawRow(String date, String description, double receipt, double payment, double balance) {
     }
-
-    // ---- Helpers ----
-
-    private static double deriveStartingBalance(double bofBalance, RawRow firstRow) {
-        if (!Double.isNaN(bofBalance)) return bofBalance;
-        // No B/F row: back-calculate from the oldest transaction
-        return firstRow.balance() - firstRow.receipt() - firstRow.payment();
-    }
-
-    private static double parseAmount(String value) {
-        if (value == null || value.isBlank() || "-".equals(value.trim())) return 0.0;
-        try {
-            return Double.parseDouble(value.replace(",", "").trim());
-        } catch (NumberFormatException e) {
-            return 0.0;
-        }
-    }
-
-    private static double parseQty(String value) {
-        if (value == null || value.isBlank()) return 0.0;
-        try {
-            return Double.parseDouble(value.replace(",", "").trim());
-        } catch (NumberFormatException e) {
-            return 0.0;
-        }
-    }
-
-    private static String convertDate(String ddmmyyyy) {
-        String[] p = ddmmyyyy.split("/");
-        return p.length == 3 ? p[2] + "-" + p[1] + "-" + p[0] : ddmmyyyy;
-    }
-
-    private record RawRow(String date, String description, double receipt, double payment, double balance) {}
 }

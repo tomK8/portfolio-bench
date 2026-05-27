@@ -12,13 +12,8 @@ import java.util.Map;
 public interface HistoricalFxRateProvider {
 
     /**
-     * Daily rates for {@code currency} over the inclusive {@code [start, end]} range.
-     * Only the source's business days are present; callers should fall back to the
-     * nearest earlier date for weekends/holidays via {@link #rateOnOrBefore}.
+     * The rate for {@code date}, or the most recent earlier one; null if none at or before.
      */
-    Map<LocalDate, BigDecimal> fetchRateSeries(String currency, LocalDate start, LocalDate end) throws Exception;
-
-    /** The rate for {@code date}, or the most recent earlier one; null if none at or before. */
     static BigDecimal rateOnOrBefore(Map<LocalDate, BigDecimal> series, LocalDate date) {
         BigDecimal exact = series.get(date);
         if (exact != null) return exact;
@@ -28,4 +23,11 @@ public interface HistoricalFxRateProvider {
                 .map(Map.Entry::getValue)
                 .orElse(null);
     }
+
+    /**
+     * Daily rates for {@code currency} over the inclusive {@code [start, end]} range.
+     * Only the source's business days are present; callers should fall back to the
+     * nearest earlier date for weekends/holidays via {@link #rateOnOrBefore}.
+     */
+    Map<LocalDate, BigDecimal> fetchRateSeries(String currency, LocalDate start, LocalDate end) throws Exception;
 }

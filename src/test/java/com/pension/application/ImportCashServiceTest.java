@@ -11,9 +11,7 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class ImportCashServiceTest {
 
@@ -23,8 +21,10 @@ class ImportCashServiceTest {
             01/05/2026,BALANCE B/F,,,100.00
             """;
 
-    @TempDir Path inputDir;
-    @TempDir Path dbDir;
+    @TempDir
+    Path inputDir;
+    @TempDir
+    Path dbDir;
 
     private ImportCashService service() {
         // No History.xlsx in these tests, so the FX provider is never invoked.

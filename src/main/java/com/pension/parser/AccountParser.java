@@ -17,7 +17,7 @@ public interface AccountParser {
      *
      * @param file path to the downloaded holdings file
      * @return non-null, possibly empty list of holdings
-     * @throws IOException if the file cannot be read
+     * @throws IOException    if the file cannot be read
      * @throws ParseException if the file format is unrecognised or malformed
      */
     List<Holding> parse(Path file) throws IOException, ParseException;
@@ -28,6 +28,8 @@ public interface AccountParser {
      */
     boolean supports(Path file);
 
-    /** Human-readable account name, used as the tab label in the output workbook. */
+    /**
+     * Human-readable account name, used as the tab label in the output workbook.
+     */
     String sourceName();
 }

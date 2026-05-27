@@ -5,7 +5,7 @@
 <table>
     <tbody>
     <tr th:fragment="row">
-        <td><input type="date" name="date" th:value="${today}"/></td>
+        <td><input name="date" th:value="${today}" type="date"/></td>
         <td>
             <select name="account">
                 <option value="AJBELL">AJBELL</option>
@@ -13,7 +13,7 @@
                 <option value="ROTH_IRA">ROTH_IRA</option>
             </select>
         </td>
-        <td><input type="text" name="symbol" placeholder="e.g. AAPL"/></td>
+        <td><input name="symbol" placeholder="e.g. AAPL" type="text"/></td>
         <td>
             <select name="currency">
                 <option value="GBP">GBP</option>
@@ -21,18 +21,19 @@
                 <option value="EUR">EUR</option>
             </select>
         </td>
-        <td><input type="text" name="amount" placeholder="0.00"/></td>
+        <td><input name="amount" placeholder="0.00" type="text"/></td>
         <td class="remove">
-            <button type="button" title="Remove row" onclick="this.closest('tr').remove()">&times;</button>
+            <button onclick="this.closest('tr').remove()" title="Remove row" type="button">&times;</button>
         </td>
     </tr>
     </tbody>
 </table>
 
 <div th:fragment="result">
-    <div th:if="${result.ok}" class="ok"
-         th:text="'Saved ' + ${result.savedCount} + ' dividend(s).'">Saved</div>
-    <div th:unless="${result.ok}" class="err">
+    <div class="ok" th:if="${result.ok}"
+         th:text="'Saved ' + ${result.savedCount} + ' dividend(s).'">Saved
+    </div>
+    <div class="err" th:unless="${result.ok}">
         <strong>Could not save — fix these and try again:</strong>
         <ul>
             <li th:each="e : ${result.errors}" th:text="${e}">error</li>

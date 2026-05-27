@@ -14,18 +14,19 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class ExportExcelServiceTest {
 
     private static final FxRateProvider FX =
             () -> Map.of("GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"));
 
-    @TempDir Path inputDir;
-    @TempDir Path dbDir;
-    @TempDir Path outputDir;
+    @TempDir
+    Path inputDir;
+    @TempDir
+    Path dbDir;
+    @TempDir
+    Path outputDir;
 
     private ExportExcelService service() {
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));

@@ -8,7 +8,6 @@ import com.pension.domain.model.AggHolding;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * On-demand equivalent of the original batch run, minus the Swing prompts, Excel
@@ -35,16 +34,14 @@ public class SyncPortfolioService {
             return SyncResult.empty(gathered.rates());
         }
 
-        List<AggHolding> aggregated =
-                new PortfolioAggregator().aggregate(gathered.holdings(), gathered.rates());
-        Map<String, BigDecimal> dividendsBySymbol = db.loadDividendsBySymbol();
+        List<AggHolding> aggregated = new PortfolioAggregator()
+                .aggregate(gathered.holdings(), gathered.rates(), db.loadDividendsBySymbol());
         PortfolioMetrics.Totals totals = new PortfolioMetrics().compute(aggregated, iiSippCash);
 
         db.saveSnapshot(totals.totalGbp(), totals.totalGainGbp(), totals.totalCashGbp(),
                 totals.returnPct(), totals.totalReturn(), gathered.rates());
 
         List<String> sources = new ArrayList<>(gathered.sources().keySet());
-        return new SyncResult(aggregated, totals, gathered.rates(), dividendsBySymbol,
-                iiSippCash, sources, false);
+        return new SyncResult(aggregated, totals, gathered.rates(), iiSippCash, sources, false);
     }
 }

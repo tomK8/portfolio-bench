@@ -37,12 +37,14 @@ public class ExcelReportWriter {
     private static final int COL_AVG_PRICE = 2;  // C
     private static final int COL_MKT_VALUE = 3;  // D  (native currency)
     private static final int COL_MKT_VALUE_GBP = 4;  // E
-    private static final int COL_GAIN = 5;  // F  Gain (£)
+    private static final int COL_GAIN = 5;  // F  Gain (£) — price appreciation
     private static final int COL_GAIN_PCT = 6;  // G  Gain/Loss %
-    private static final int COL_TOTAL_GAIN_PCT = 7;  // H  Total Gain/Loss % (incl. dividends)
-    private static final int COL_CURRENCY = 8;  // I
-    private static final int COL_SOURCE = 9;  // J
-    private static final int NUM_COLS = 10;
+    private static final int COL_DIVIDEND = 7;  // H  Dividends (£)
+    private static final int COL_TOTAL_GAIN = 8;  // I  Total Gain (£) = gain + dividends
+    private static final int COL_TOTAL_GAIN_PCT = 9;  // J  Total Gain % = (gain + dividends) / cost
+    private static final int COL_CURRENCY = 10;  // K
+    private static final int COL_SOURCE = 11;  // L
+    private static final int NUM_COLS = 12;
 
     // ---- Aggregated Portfolio sheet columns ----
     private static final int AGG_ID = 0;  // A
@@ -50,11 +52,13 @@ public class ExcelReportWriter {
     private static final int AGG_AVG = 2;  // C
     private static final int AGG_CCY = 3;  // D  Exchange Currency
     private static final int AGG_MKTGBP = 4;  // E  Market Value GBP
-    private static final int AGG_GAIN = 5;  // F  Gain (£)
+    private static final int AGG_GAIN = 5;  // F  Gain (£) — price appreciation
     private static final int AGG_GAINPCT = 6;  // G  Gain/Loss %
-    private static final int AGG_TOTAL_GAIN_PCT = 7;  // H  Total Gain/Loss % (incl. dividends)
-    private static final int AGG_SOURCES = 8;  // I
-    private static final int AGG_COLS = 9;
+    private static final int AGG_DIV = 7;  // H  Dividends (£)
+    private static final int AGG_TOTAL_GAIN = 8;  // I  Total Gain (£) = gain + dividends
+    private static final int AGG_TOTAL_GAIN_PCT = 9;  // J  Total Gain % = (gain + dividends) / cost
+    private static final int AGG_SOURCES = 10;  // K
+    private static final int AGG_COLS = 11;
 
     private static final byte[] GREEN = {(byte) 0, (byte) 176, (byte) 80};
     private static final byte[] RED = {(byte) 255, (byte) 0, (byte) 0};
@@ -66,7 +70,6 @@ public class ExcelReportWriter {
     private static String writeAggregatedSheet(Sheet sheet, List<AggHolding> rows,
                                                Map<String, BigDecimal> gbpRates,
                                                BigDecimal iiSippCash,
-                                               Map<String, BigDecimal> dividendsBySymbol,
                                                Workbook wb) {
         CellStyle dataText = wb.createCellStyle();
         CellStyle dataNum = numericStyle(wb, false);
@@ -102,7 +105,8 @@ public class ExcelReportWriter {
 
         // Header
         String[] headers = {"Security ID", "Quantity", "Avg Price Paid", "Exchange Currency",
-                "Market Value GBP", "Gain (£)", "Gain/Loss %", "Total Gain/Loss %", "Sources"};
+                "Market Value GBP", "Gain (£)", "Gain/Loss %", "Dividends (£)",
+                "Total Gain (£)", "Total Gain %", "Sources"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
         sheet.setAutoFilter(new CellRangeAddress(0, nEquity, 0, AGG_COLS - 1));
@@ -110,8 +114,7 @@ public class ExcelReportWriter {
         // Equity rows
         int rowNum = 1;
         for (AggHolding h : equities) {
-            BigDecimal div = dividendsBySymbol.getOrDefault(h.securityId().toUpperCase(), BigDecimal.ZERO);
-            writeAggRow(sheet.createRow(rowNum++), h, div, dataText, dataNum, wb);
+            writeAggRow(sheet.createRow(rowNum++), h, dataText, dataNum, wb);
         }
 
         // Cash section header
@@ -216,7 +219,7 @@ public class ExcelReportWriter {
         return sheet.getSheetName() + "!E" + (inputValuePoi + 1);
     }
 
-    private static void writeAggRow(Row row, AggHolding h, BigDecimal dividendGbp,
+    private static void writeAggRow(Row row, AggHolding h,
                                     CellStyle textStyle, CellStyle numStyle, Workbook wb) {
         styledCell(row, AGG_ID, h.securityId(), textStyle);
         setNumeric(row, AGG_QTY, h.quantity(), numStyle);
@@ -224,22 +227,20 @@ public class ExcelReportWriter {
         styledCell(row, AGG_CCY, h.currency().getCurrencyCode(), textStyle);
         setNumeric(row, AGG_MKTGBP, h.marketValueGbp(), numStyle);
         if (h.gainGbp() != null) {
-            boolean g = h.gainGbp().compareTo(BigDecimal.ZERO) >= 0;
-            setNumeric(row, AGG_GAIN, h.gainGbp(), gainLossNumStyle(wb, g));
+            setNumeric(row, AGG_GAIN, h.gainGbp(), gainLossNumStyle(wb, h.gainGbp().signum() >= 0));
         }
         if (h.gainPct() != null) {
-            boolean g = h.gainPct().compareTo(BigDecimal.ZERO) >= 0;
-            Cell c = row.createCell(AGG_GAINPCT);
-            c.setCellValue(h.gainPct().setScale(4, RoundingMode.HALF_UP).doubleValue());
-            c.setCellStyle(gainLossPctStyle(wb, g));
+            setPercent(row, AGG_GAINPCT, h.gainPct(), gainLossPctStyle(wb, h.gainPct().signum() >= 0));
         }
-        // Total Gain/Loss % = (gain + dividends) / cost, where cost = market_value - gain
-        int r = row.getRowNum() + 1;
-        String divStr = (dividendGbp != null ? dividendGbp : BigDecimal.ZERO)
-                .setScale(2, RoundingMode.HALF_UP).toPlainString();
-        Cell tc = row.createCell(AGG_TOTAL_GAIN_PCT);
-        tc.setCellFormula("IFERROR((F" + r + "+" + divStr + ")/(E" + r + "-F" + r + "),\"\")");
-        tc.setCellStyle(pctStyle(wb, false));
+        setNumeric(row, AGG_DIV, h.dividendGbp(), numStyle);
+        if (h.totalGainGbp() != null) {
+            setNumeric(row, AGG_TOTAL_GAIN, h.totalGainGbp(),
+                    gainLossNumStyle(wb, h.totalGainGbp().signum() >= 0));
+        }
+        if (h.totalGainPct() != null) {
+            setPercent(row, AGG_TOTAL_GAIN_PCT, h.totalGainPct(),
+                    gainLossPctStyle(wb, h.totalGainPct().signum() >= 0));
+        }
         styledCell(row, AGG_SOURCES, h.sources(), textStyle);
     }
 
@@ -264,7 +265,7 @@ public class ExcelReportWriter {
 
         String[] headers = {"Security ID", "Quantity", "Avg Price Paid",
                 "Market Value", "Market Value GBP", "Gain (£)", "Gain/Loss %",
-                "Total Gain/Loss %", "Currency", "Source"};
+                "Dividends (£)", "Total Gain (£)", "Total Gain %", "Currency", "Source"};
         Row headerRow = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(headerRow, i, headers[i], boldText);
 
@@ -428,23 +429,25 @@ public class ExcelReportWriter {
         BigDecimal gbpVal = PortfolioAggregator.toGbp(h, gbpRates);
         setNumeric(row, COL_MKT_VALUE_GBP, gbpVal, numStyle);
 
+        BigDecimal dividend = dividendGbp != null ? dividendGbp : BigDecimal.ZERO;
+        setNumeric(row, COL_DIVIDEND, dividend, numStyle);
+
         BigDecimal costGbp = PortfolioAggregator.costInGbp(h, gbpRates);
         if (costGbp != null && gbpVal != null) {
-            BigDecimal g = gbpVal.subtract(costGbp);
-            boolean pos = g.compareTo(BigDecimal.ZERO) >= 0;
-            setNumeric(row, COL_GAIN, g, pos ? gainNum : lossNum);
-            if (costGbp.compareTo(BigDecimal.ZERO) != 0) {
-                BigDecimal pct = g.divide(costGbp, 10, RoundingMode.HALF_UP);
-                Cell c = row.createCell(COL_GAIN_PCT);
-                c.setCellValue(pct.setScale(4, RoundingMode.HALF_UP).doubleValue());
-                c.setCellStyle(pos ? gainPct : lossPct);
+            BigDecimal gain = gbpVal.subtract(costGbp);
+            boolean gainPos = gain.signum() >= 0;
+            setNumeric(row, COL_GAIN, gain, gainPos ? gainNum : lossNum);
 
-                int r = row.getRowNum() + 1;
-                String divStr = (dividendGbp != null ? dividendGbp : BigDecimal.ZERO)
-                        .setScale(2, RoundingMode.HALF_UP).toPlainString();
-                Cell tc = row.createCell(COL_TOTAL_GAIN_PCT);
-                tc.setCellFormula("IFERROR((F" + r + "+" + divStr + ")/(E" + r + "-F" + r + "),\"\")");
-                tc.setCellStyle(pos ? gainPct : lossPct);
+            // Total Gain = price appreciation + dividends, computed in code (no Excel formula)
+            BigDecimal totalGain = gain.add(dividend);
+            boolean totalPos = totalGain.signum() >= 0;
+            setNumeric(row, COL_TOTAL_GAIN, totalGain, totalPos ? gainNum : lossNum);
+
+            if (costGbp.signum() != 0) {
+                setPercent(row, COL_GAIN_PCT, gain.divide(costGbp, 10, RoundingMode.HALF_UP),
+                        gainPos ? gainPct : lossPct);
+                setPercent(row, COL_TOTAL_GAIN_PCT, totalGain.divide(costGbp, 10, RoundingMode.HALF_UP),
+                        totalPos ? gainPct : lossPct);
             }
         }
 
@@ -507,6 +510,17 @@ public class ExcelReportWriter {
         if (value == null) return;
         Cell cell = row.createCell(col);
         cell.setCellValue(value.setScale(2, RoundingMode.HALF_UP).doubleValue());
+        cell.setCellStyle(style);
+    }
+
+    /**
+     * Writes a percentage value held as a decimal fraction (0.1234 → displayed "12.34%");
+     * the supplied style carries the "0.00%" number format.
+     */
+    private static void setPercent(Row row, int col, BigDecimal value, CellStyle style) {
+        if (value == null) return;
+        Cell cell = row.createCell(col);
+        cell.setCellValue(value.setScale(4, RoundingMode.HALF_UP).doubleValue());
         cell.setCellStyle(style);
     }
 
@@ -627,7 +641,7 @@ public class ExcelReportWriter {
                                 Map<String, BigDecimal> dividendsBySymbol) throws IOException {
         try (Workbook wb = new XSSFWorkbook()) {
             String portfolioInputRef = writeAggregatedSheet(
-                    wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, dividendsBySymbol, wb);
+                    wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
             writePortfolioSheet(
                     wb.createSheet("Portfolio Raw"), holdings, gbpRates, portfolioInputRef, dividendsBySymbol, wb);
             for (Map.Entry<String, Path> e : rawSources.entrySet())
@@ -642,11 +656,9 @@ public class ExcelReportWriter {
     public void writeSummaryReport(Path outputPath,
                                    List<AggHolding> aggregated,
                                    Map<String, BigDecimal> gbpRates,
-                                   BigDecimal iiSippCash,
-                                   Map<String, BigDecimal> dividendsBySymbol) throws IOException {
+                                   BigDecimal iiSippCash) throws IOException {
         try (Workbook wb = new XSSFWorkbook()) {
-            writeAggregatedSheet(
-                    wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, dividendsBySymbol, wb);
+            writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
             write(wb, outputPath);
         }
     }

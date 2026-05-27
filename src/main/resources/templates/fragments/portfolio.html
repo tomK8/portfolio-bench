@@ -36,6 +36,8 @@
                 <th data-sort="num">Gain (£)</th>
                 <th data-sort="num">Gain %</th>
                 <th data-sort="num">Dividends (£)</th>
+                <th data-sort="num">Total Gain (£)</th>
+                <th data-sort="num">Total Gain %</th>
                 <th class="txt" data-sort="text">Sources</th>
             </tr>
             </thead>
@@ -48,10 +50,10 @@
                 <td th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
                 </td>
                 <td th:text="${h.gainPct != null ? #numbers.formatPercent(h.gainPct, 1, 2) : '—'}">—</td>
-                <td th:text="${result.dividendsBySymbol[h.securityId] != null
-                                ? #numbers.formatDecimal(result.dividendsBySymbol[h.securityId], 1, 'COMMA', 2, 'POINT')
-                                : '—'}">—
+                <td th:text="${#numbers.formatDecimal(h.dividendGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+                <td th:text="${h.totalGainGbp != null ? #numbers.formatDecimal(h.totalGainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
                 </td>
+                <td th:text="${h.totalGainPct != null ? #numbers.formatPercent(h.totalGainPct, 1, 2) : '—'}">—</td>
                 <td class="txt" th:text="${h.sources}">src</td>
             </tr>
             </tbody>

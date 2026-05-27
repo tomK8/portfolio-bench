@@ -55,7 +55,10 @@ class DashboardControllerTest {
         mvc.perform(post("/sync").param("iiSippCash", "500"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("AAPL")))
-                .andExpect(content().string(containsString("Total value")));
+                .andExpect(content().string(containsString("Total value")))
+                .andExpect(content().string(containsString("Dividends (£)")))
+                .andExpect(content().string(containsString("Total Gain (£)")))
+                .andExpect(content().string(containsString("Total Gain %")));
     }
 
     /**

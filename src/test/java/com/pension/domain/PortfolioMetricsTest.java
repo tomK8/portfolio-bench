@@ -14,13 +14,17 @@ class PortfolioMetricsTest {
     private static final Currency USD = Currency.getInstance("USD");
 
     private static AggHolding agg(String id, String marketValueGbp, String gainGbp) {
+        BigDecimal gain = gainGbp == null ? null : new BigDecimal(gainGbp);
         return new AggHolding(
                 id,
                 BigDecimal.ONE,                 // quantity — unused by metrics
                 null,                           // avgPricePaid — unused
                 new BigDecimal(marketValueGbp),
-                gainGbp == null ? null : new BigDecimal(gainGbp),
+                gain,
                 null,                           // gainPct — unused
+                BigDecimal.ZERO,                // dividendGbp — unused by metrics
+                gain,                           // totalGainGbp — unused
+                null,                           // totalGainPct — unused
                 USD,
                 "test");
     }

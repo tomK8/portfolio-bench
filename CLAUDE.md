@@ -35,9 +35,9 @@ Layered, ports-and-adapters style. **Spring is confined to the `web` and `config
 `domain`, `application`, `adapter` and `parser` carry no Spring annotations.
 
 - `com.pension.domain` — pure logic, no IO/framework: `PortfolioAggregator` (aggregates
-  `Holding`s; owns `toGbp`/`costInGbp`/`isBond`), `PortfolioMetrics` (totals/return),
-  `DividendCalculator` (dividend FX→GBP). `domain.model`: `Holding`, `AggHolding`,
-  `CashTransaction`, `DividendEntry`.
+  `Holding`s; owns `toGbp`/`costInGbp`/`isBond`; folds per-symbol dividends into each
+  `AggHolding`'s total-gain fields), `PortfolioMetrics` (totals/return — price appreciation
+  only, dividends excluded). `domain.model`: `Holding`, `AggHolding`, `CashTransaction`.
 - `com.pension.port` — `FxRateProvider` (latest rates) and `HistoricalFxRateProvider`
   (rates by date); the only interfaces, justified by faking the network in tests. Everything
   else is concrete by design.
@@ -47,8 +47,8 @@ Layered, ports-and-adapters style. **Spring is confined to the `web` and `config
 - `com.pension.parser` — `AccountParser` / `CashTransactionParser` interfaces + impls.
 - `com.pension.application` — the operations (plain classes, wired as beans):
   `PortfolioGatherer` (shared fetch-rates + parse step → `GatheredPortfolio`),
-  `SyncPortfolioService`, `ExportExcelService`, `RecordDividendsService`, `ImportCashService`.
-- `com.pension.web` — `DashboardController`, `DividendsController` (thin; HTTP ↔ service only),
+  `SyncPortfolioService`, `ExportExcelService`, `ImportCashService`.
+- `com.pension.web` — `DashboardController` (thin; HTTP ↔ service only),
   Thymeleaf templates + htmx fragments.
 - `com.pension.config` — `BeanConfiguration` wires the adapters/services as `@Bean`s.
 - `com.pension` — `PortfolioDatabase` (all SQLite + settings-file IO), `ExcelReportWriter`
@@ -66,7 +66,6 @@ connections — so concurrency safety (a future price-poller) can be added in on
 |-----------------------|-----------------------|--------------------------|-----------------------------------------------------------------------------------------------------|
 | Sync portfolio        | `POST /sync`          | `SyncPortfolioService`   | fetch rates → parse → aggregate → save snapshot → show table                                        |
 | Export Excel          | `POST /export`        | `ExportExcelService`     | write `portfolio<date>.xlsx` + `Portfolio Summary-<date>.xlsx`                                      |
-| Record dividends      | `GET/POST /dividends` | `RecordDividendsService` | validate + FX-convert + persist manual dividend rows                                                |
 | Import cash statement | `POST /import-cash`   | `ImportCashService`      | parse → dedup-save → archive/delete both `cashstatements.csv` (AJBell) and `History.xlsx` (RothIRA) |
 
 These are independent operations; Sync no longer auto-writes Excel or imports cash. Import
@@ -117,6 +116,23 @@ II SIPP CASH row back to that cell so editing the Excel file directly also works
 Bonds in AJ Bell exports carry `(SEDOL:...)` in the Investment description. `AJBellSippParser.extractBondId` converts
 these to `"GILT {coupon}% {year}"` format. `PortfolioAggregator.isBond` checks for `%` presence or `GILT` prefix to sort
 bonds into their own section at the bottom of the Portfolio sheet.
+
+## Dividends
+
+Dividend data comes **exclusively** from `cash_transactions WHERE type = 'DIVIDEND'` — there is no
+separate dividend table or manual-entry screen (both were removed). `PortfolioDatabase.loadDividendsBySymbol()`
+sums `amount_gbp` per symbol (keyed upper-cased). `PortfolioAggregator.aggregate(holdings, rates, dividendsBySymbol)`
+takes that map and, per holding, sets:
+
+- `dividendGbp` — total dividends for the symbol (£; ZERO when none)
+- `totalGainGbp` — price-appreciation `gainGbp` + `dividendGbp` (null when cost basis is unknown)
+- `totalGainPct` — `totalGainGbp / cost` (null when cost is unknown/zero)
+
+These surface as **Dividends (£)**, **Total Gain (£)** and **Total Gain %** columns on the web table and
+both Excel sheets (aggregated Portfolio + Portfolio Raw), all computed in code — no Excel formulas. The
+raw sheet, which writes per-`Holding` rows, still receives the dividends map directly. Portfolio-level
+totals/returns (`PortfolioMetrics`, the saved snapshot) remain price-appreciation only and do **not** fold
+in dividends.
 
 ## Cash transaction ingestion
 

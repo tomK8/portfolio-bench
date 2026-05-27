@@ -69,12 +69,6 @@ public class BeanConfiguration {
     }
 
     @Bean
-    public RecordDividendsService recordDividendsService(FxRateProvider fxRateProvider,
-                                                         PortfolioDatabase portfolioDatabase) {
-        return new RecordDividendsService(fxRateProvider, portfolioDatabase);
-    }
-
-    @Bean
     public ExportExcelService exportExcelService(PortfolioGatherer portfolioGatherer,
                                                  PortfolioDatabase portfolioDatabase,
                                                  ExcelReportWriter excelReportWriter,

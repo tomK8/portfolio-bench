@@ -15,12 +15,11 @@ public record SyncResult(
         List<AggHolding> holdings,
         PortfolioMetrics.Totals totals,
         Map<String, BigDecimal> rates,
-        Map<String, BigDecimal> dividendsBySymbol,
         BigDecimal iiSippCash,
         List<String> sources,
         boolean empty) {
 
     public static SyncResult empty(Map<String, BigDecimal> rates) {
-        return new SyncResult(List.of(), null, rates, Map.of(), BigDecimal.ZERO, List.of(), true);
+        return new SyncResult(List.of(), null, rates, BigDecimal.ZERO, List.of(), true);
     }
 }

@@ -42,9 +42,9 @@ public class ExportExcelService {
             return ExportResult.nothing();
         }
 
-        List<AggHolding> aggregated =
-                new PortfolioAggregator().aggregate(gathered.holdings(), gathered.rates());
         Map<String, BigDecimal> dividendsBySymbol = db.loadDividendsBySymbol();
+        List<AggHolding> aggregated = new PortfolioAggregator()
+                .aggregate(gathered.holdings(), gathered.rates(), dividendsBySymbol);
         String date = LocalDateTime.now().format(DATE_FMT);
 
         try {
@@ -55,7 +55,7 @@ public class ExportExcelService {
                     gathered.rates(), iiSippCash, dividendsBySymbol);
 
             Path summary = outputDir.resolve("Portfolio Summary-" + date + ".xlsx");
-            writer.writeSummaryReport(summary, aggregated, gathered.rates(), iiSippCash, dividendsBySymbol);
+            writer.writeSummaryReport(summary, aggregated, gathered.rates(), iiSippCash);
 
             return new ExportResult(false, List.of(fullReport.toString(), summary.toString()));
         } catch (IOException e) {

@@ -1,7 +1,6 @@
 package com.pension;
 
 import com.pension.domain.model.CashTransaction;
-import com.pension.domain.model.DividendEntry;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -28,17 +27,6 @@ public class PortfolioDatabase {
                 total_return       REAL,
                 gbpusd             REAL,
                 gbpeur             REAL
-            )""";
-    private static final String CREATE_DIVIDEND_TABLE = """
-            CREATE TABLE IF NOT EXISTS dividend_events (
-                payment_date     TEXT NOT NULL,
-                account          TEXT NOT NULL CHECK (account IN ('AJBELL', 'II', 'ROTH_IRA')),
-                symbol           TEXT NOT NULL,
-                currency         TEXT NOT NULL CHECK (currency IN ('GBP', 'USD', 'EUR')),
-                dividend_amount  REAL NOT NULL,
-                fx_to_gbp        REAL NOT NULL,
-                dividend_gbp     REAL NOT NULL,
-                PRIMARY KEY (payment_date, account, symbol, currency)
             )""";
     private static final String CREATE_CASH_TABLE = """
             CREATE TABLE IF NOT EXISTS cash_transactions (
@@ -201,14 +189,20 @@ public class PortfolioDatabase {
         }
     }
 
+    /**
+     * Total dividends received per security, in GBP, summed from the {@code DIVIDEND}
+     * rows of {@code cash_transactions} (the single source of dividend data). Keyed by
+     * upper-cased symbol so callers can match against holdings case-insensitively.
+     */
     public Map<String, BigDecimal> loadDividendsBySymbol() {
         Map<String, BigDecimal> result = new HashMap<>();
         if (!Files.exists(dbPath)) return result;
         try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
              Statement st = conn.createStatement()) {
-            st.execute(CREATE_DIVIDEND_TABLE);
+            st.execute(CREATE_CASH_TABLE);
             try (var rs = st.executeQuery(
-                    "SELECT symbol, SUM(dividend_gbp) FROM dividend_events GROUP BY symbol")) {
+                    "SELECT symbol, SUM(amount_gbp) FROM cash_transactions " +
+                            "WHERE type = 'DIVIDEND' GROUP BY symbol")) {
                 while (rs.next())
                     result.put(rs.getString(1).toUpperCase(), BigDecimal.valueOf(rs.getDouble(2)));
             }
@@ -216,38 +210,6 @@ public class PortfolioDatabase {
             System.err.println("Warning: could not load dividends — " + e.getMessage());
         }
         return result;
-    }
-
-    public void saveDividends(List<DividendEntry> entries) {
-        try {
-            Files.createDirectories(dbDir);
-            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
-                 Statement ddl = conn.createStatement()) {
-
-                ddl.execute(CREATE_DIVIDEND_TABLE);
-
-                int saved = 0;
-                try (PreparedStatement ps = conn.prepareStatement(
-                        "INSERT OR REPLACE INTO dividend_events " +
-                                "(payment_date, account, symbol, currency, dividend_amount, fx_to_gbp, dividend_gbp) " +
-                                "VALUES (?, ?, ?, ?, ?, ?, ?)")) {
-                    for (DividendEntry d : entries) {
-                        ps.setString(1, d.paymentDate());
-                        ps.setString(2, d.account());
-                        ps.setString(3, d.symbol());
-                        ps.setString(4, d.currency());
-                        ps.setDouble(5, d.amount());
-                        ps.setDouble(6, d.fxToGbp());
-                        ps.setDouble(7, d.amountGbp());
-                        ps.executeUpdate();
-                        saved++;
-                    }
-                }
-                System.out.printf("Dividends saved: %d entr%s%n", saved, saved == 1 ? "y" : "ies");
-            }
-        } catch (IOException | SQLException e) {
-            System.err.println("Warning: could not save dividends — " + e.getMessage());
-        }
     }
 
     // ---- Shared cash-table helpers ------------------------------------------

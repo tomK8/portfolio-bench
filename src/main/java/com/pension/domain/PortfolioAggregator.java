@@ -32,7 +32,8 @@ public class PortfolioAggregator {
         return id.contains("%") || id.toUpperCase().startsWith("GILT");
     }
 
-    public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates) {
+    public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
+                                      Map<String, BigDecimal> dividendsBySymbol) {
         record Key(String id, String ccy) {
         }
 
@@ -81,8 +82,15 @@ public class PortfolioAggregator {
                     BigDecimal gain = acc.hasCostGbp ? acc.mktValGbp.subtract(acc.totalCostGbp) : null;
                     BigDecimal pct = (acc.hasCostGbp && acc.totalCostGbp.compareTo(BigDecimal.ZERO) != 0)
                             ? gain.divide(acc.totalCostGbp, 10, RoundingMode.HALF_UP) : null;
+
+                    BigDecimal dividend = dividendsBySymbol.getOrDefault(
+                            acc.securityId.toUpperCase(), BigDecimal.ZERO);
+                    BigDecimal totalGain = gain != null ? gain.add(dividend) : null;
+                    BigDecimal totalGainPct = (acc.hasCostGbp && acc.totalCostGbp.compareTo(BigDecimal.ZERO) != 0)
+                            ? totalGain.divide(acc.totalCostGbp, 10, RoundingMode.HALF_UP) : null;
+
                     return new AggHolding(acc.securityId, acc.qty, avg, acc.mktValGbp, gain, pct,
-                            acc.currency, String.join(", ", acc.srcs));
+                            dividend, totalGain, totalGainPct, acc.currency, String.join(", ", acc.srcs));
                 }).sorted(Comparator.comparingInt(this::section).thenComparing(this::sortKey))
                 .collect(Collectors.toList());
     }

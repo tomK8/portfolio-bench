@@ -38,10 +38,12 @@ Layered, ports-and-adapters style. **Spring is confined to the `web` and `config
   `Holding`s; owns `toGbp`/`costInGbp`/`isBond`), `PortfolioMetrics` (totals/return),
   `DividendCalculator` (dividend FX→GBP). `domain.model`: `Holding`, `AggHolding`,
   `CashTransaction`, `DividendEntry`.
-- `com.pension.port` — `FxRateProvider`, the one interface (its only justification is faking
-  the network in tests). Everything else is concrete by design.
-- `com.pension.adapter` — `FrankfurterFxClient` (implements `FxRateProvider`, hits
-  `api.frankfurter.dev`), `HoldingFileLocator` (finds the most recent supported file per parser).
+- `com.pension.port` — `FxRateProvider` (latest rates) and `HistoricalFxRateProvider`
+  (rates by date); the only interfaces, justified by faking the network in tests. Everything
+  else is concrete by design.
+- `com.pension.adapter` — `FrankfurterFxClient` (implements both FX ports — `latest` and the
+  time-series endpoint on `api.frankfurter.dev`), `HoldingFileLocator` (finds the most recent
+  supported file per parser).
 - `com.pension.parser` — `AccountParser` / `CashTransactionParser` interfaces + impls.
 - `com.pension.application` — the operations (plain classes, wired as beans):
   `PortfolioGatherer` (shared fetch-rates + parse step → `GatheredPortfolio`),
@@ -65,9 +67,10 @@ connections — so concurrency safety (a future price-poller) can be added in on
 | Sync portfolio        | `POST /sync`        | `SyncPortfolioService` | fetch rates → parse → aggregate → save snapshot → show table |
 | Export Excel          | `POST /export`      | `ExportExcelService`   | write `portfolio<date>.xlsx` + `Portfolio Summary-<date>.xlsx` |
 | Record dividends      | `GET/POST /dividends` | `RecordDividendsService` | validate + FX-convert + persist manual dividend rows |
-| Import cash statement | `POST /import-cash` | `ImportCashService`    | parse → dedup-save → archive/delete `cashstatements.csv` |
+| Import cash statement | `POST /import-cash` | `ImportCashService`    | parse → dedup-save → archive/delete both `cashstatements.csv` (AJBell) and `History.xlsx` (RothIRA) |
 
-These are independent operations; Sync no longer auto-writes Excel or imports cash.
+These are independent operations; Sync no longer auto-writes Excel or imports cash. Import
+cash returns one result per source (`List<ImportCashResult>`, each carrying a `source` label).
 
 **Sync data flow:** `PortfolioGatherer` fetches rates (`FxRateProvider`) and parses the most
 recent supported file per parser → `PortfolioAggregator` aggregates by `(securityId, currency)`
@@ -89,9 +92,11 @@ recent supported file per parser → `PortfolioAggregator` aggregates by `(secur
 3. If the source provides GBP values directly, set `currentMarketValueGbp` and `costBasisGbp` on the `Holding`; otherwise leave them null and `PortfolioAggregator` will convert via FX
 
 **Parser file-detection conventions:**
-- `RothIraParser` — `Holdings*.xlsx`
+- `RothIraParser` — `Holdings*.xlsx` (holdings)
 - `AJBellSippParser` — `portfolio*.csv` (takes live FX rates in constructor for native-value calculation)
 - `IISippParser` — UUID-named `.csv` (e.g. `1f072c5f-....csv`); infers currency from `$`/`£` prefix on Market Value
+- `AJBellCashStatementParser` — `cashstatements.csv` (cash flows, GBP)
+- `RothIraCashStatementParser` — `History.xlsx` (cash flows, native USD; takes a `HistoricalFxRateProvider` in constructor for per-date GBP conversion)
 
 ## II SIPP cash handling
 
@@ -108,22 +113,25 @@ Bonds in AJ Bell exports carry `(SEDOL:...)` in the Investment description. `AJB
 
 ## Cash transaction ingestion
 
-`CashTransactionParser` is a separate interface from `AccountParser` — cash flows and holdings are different concerns. `AJBellCashStatementParser` implements it for `cashstatements.csv`.
+`CashTransactionParser` is a separate interface from `AccountParser` — cash flows and holdings are different concerns. Two impls feed the `cash_transactions` table: `AJBellCashStatementParser` (`cashstatements.csv`, GBP) and `RothIraCashStatementParser` (`History.xlsx`, native USD).
 
-**Ingestion flow in `ImportCashService.importCash()`** (one cohesive operation):
-1. If `cashstatements.csv` is absent from the input dir, return NOT_FOUND
-2. Parse → classify rows → resolve symbols → `PortfolioDatabase.saveCashTransactions()` into the `cash_transactions` table
-3. If new rows were written: archive the file to `<db-dir>/cashstatements_<date>.csv`
-4. If no new rows (file is a duplicate): delete it
+The table stores both a native-currency running balance (`cash_balance`) and its GBP equivalent (`cash_balance_gbp`). For AJBell these are equal (GBP); for RothIRA `cash_balance` is USD. `PortfolioDatabase.ensureCashTable()` adds the `cash_balance` column to pre-existing DBs and backfills GBP rows from `cash_balance_gbp`.
 
-The parsed rows are passed through in file order, and the dedup/integrity logic stays inside
-`saveCashTransactions` (it needs the existing-keys query and the inserts in one connection).
+**Ingestion flow in `ImportCashService.importCash()`** — runs both sources independently, returning one `ImportCashResult` each. Per source:
+1. If the file is absent from the input dir, that source's result is NOT_FOUND
+2. Parse → save into `cash_transactions`
+3. If new rows were written: archive the file to `<db-dir>/<prefix>_<date>.<ext>` (move, not copy)
+4. If no new rows (duplicate): delete it
 
-**Incremental dedup:** before inserting, `saveCashTransactions` loads all existing `(transaction_date, cash_balance_gbp)` pairs for the account into a `Set<String>`. Rows whose key is already present are skipped. If a known key reappears *after* a new row has been inserted, the import aborts with a data integrity error (gap detected in input file).
+**AJBell dedup** (in `saveCashTransactions`): loads existing `(transaction_date, cash_balance_gbp)` pairs into a `Set`; known rows are skipped; a known key reappearing *after* a new row aborts the import as a data-integrity gap. Rows are passed through in file order; the dedup/integrity logic stays in one connection.
+
+**RothIRA dedup + balance** (in `saveRothIraCashTransactions`): rows arrive with `fxToGbp`/`amountGbp` already resolved per-date by the parser (historical GBP→USD via `HistoricalFxRateProvider`, falling back to the nearest prior business day). Dedup key is `(date, symbol, quantity, type, amount)` — native USD amount, FX-stable across imports — so overlapping re-imports skip known rows. The running native balance continues from the latest stored `cash_balance`, or from the opening-balance *seed* when the account is empty. The seed (`0`, the balance before the earliest transaction) is persisted to `<db-dir>/roth_balance_brought_forward.txt` for traceability; it is only consulted to seed an empty account. New rows are applied oldest-first; `cash_balance_gbp = cash_balance / fxToGbp` of the row's date.
 
 **Symbol resolution in `AJBellCashStatementParser`** (three tiers, in order):
 1. GILT detection — standard `coupon% ... dd/mm/yyyy` format, or compressed names like `TREASURY2.75L24` / `HM TREA0.2525`; unresolvable redemptions (e.g. `TSY STK25`) borrow the symbol from a same-date DIVIDEND row in a second pass
 2. `SYMBOL_RULES` list — ~25 equity/ETF patterns mapped to tickers (longest/most-specific first)
 3. `cleanName` fallback — strips share-class suffixes and currency codes
 
-**Row classification:** `TRANSACTION` (purchase/sale/redemption), `DIVIDEND`, `INTEREST`, `CHARGE`, `CONTRIBUTION`. Reversed-format redemption descriptions (`NAME Redemption`) are handled by `PAT_REVERSED_REDEMPTION` before the fallback path.
+**Row classification (AJBell):** `TRANSACTION` (purchase/sale/redemption), `DIVIDEND`, `INTEREST`, `CHARGE`, `CONTRIBUTION`. Reversed-format redemption descriptions (`NAME Redemption`) are handled by `PAT_REVERSED_REDEMPTION` before the fallback path.
+
+**Row classification (RothIRA):** by Activity Description — Buy/Sell *and* Stock Split → `TRANSACTION` (splits move no cash: `amount`/`amountGbp` = 0 but `quantity` = the extra shares); Cash/Foreign Security Dividend → `DIVIDEND`; Foreign Tax Withheld → `CHARGE` (its own negative row, not netted into the dividend). Quantity keeps the file's sign (negative for sells). Symbols pass through `RothIraParser.normaliseSecurityId` for consistency with holdings.

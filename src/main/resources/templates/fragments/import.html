@@ -3,16 +3,20 @@
 <body>
 
 <div th:fragment="result" class="note">
-    <span th:if="${cashImport.status.name() == 'NOT_FOUND'}">
-        No <code>cashstatements.csv</code> found in <code>~/Downloads</code>.
-    </span>
-    <span th:if="${cashImport.status.name() == 'NO_NEW_DATA'}">
-        Cash statement contained no new data — file removed.
-    </span>
-    <span th:if="${cashImport.status.name() == 'IMPORTED'}"
-          th:text="'Imported ' + ${cashImport.inserted} + ' cash transaction(s); archived to ' + ${cashImport.detail}">
-        Imported.
-    </span>
+    <div th:each="imp : ${cashImports}">
+        <span th:if="${imp.status.name() == 'NOT_FOUND'}"
+              th:text="'[' + ${imp.source} + '] No statement file found in ~/Downloads.'">
+            Not found.
+        </span>
+        <span th:if="${imp.status.name() == 'NO_NEW_DATA'}"
+              th:text="'[' + ${imp.source} + '] No new data — file removed.'">
+            No new data.
+        </span>
+        <span th:if="${imp.status.name() == 'IMPORTED'}"
+              th:text="'[' + ${imp.source} + '] Imported ' + ${imp.inserted} + ' cash transaction(s); archived to ' + ${imp.detail}">
+            Imported.
+        </span>
+    </div>
 </div>
 
 </body>

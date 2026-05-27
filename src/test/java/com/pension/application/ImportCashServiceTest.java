@@ -5,8 +5,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -24,7 +27,15 @@ class ImportCashServiceTest {
     @TempDir Path dbDir;
 
     private ImportCashService service() {
-        return new ImportCashService(inputDir, new PortfolioDatabase(dbDir));
+        // No History.xlsx in these tests, so the FX provider is never invoked.
+        return new ImportCashService(inputDir, new PortfolioDatabase(dbDir),
+                (ccy, start, end) -> Map.of(start, BigDecimal.ONE));
+    }
+
+    private ImportCashResult ajBell(ImportCashService service) {
+        return service.importCash().stream()
+                .filter(r -> "AJBell".equals(r.source()))
+                .findFirst().orElseThrow();
     }
 
     private void writeStatement() throws IOException {
@@ -33,30 +44,29 @@ class ImportCashServiceTest {
 
     @Test
     void notFoundWhenNoFile() {
-        ImportCashResult result = service().importCash();
-        assertEquals(ImportCashResult.Status.NOT_FOUND, result.status());
+        assertEquals(ImportCashResult.Status.NOT_FOUND, ajBell(service()).status());
     }
 
     @Test
     void importsThenArchivesFile() throws IOException {
         writeStatement();
 
-        ImportCashResult result = service().importCash();
+        ImportCashResult result = ajBell(service());
 
         assertEquals(ImportCashResult.Status.IMPORTED, result.status());
         assertTrue(result.inserted() > 0);
         assertFalse(Files.exists(inputDir.resolve("cashstatements.csv")), "source should be moved out of input dir");
-        assertTrue(Files.exists(dbDir.resolve("cashstatements_" + java.time.LocalDate.now() + ".csv")),
+        assertTrue(Files.exists(dbDir.resolve("cashstatements_" + LocalDate.now() + ".csv")),
                 "archived copy should exist in the db dir");
     }
 
     @Test
     void reimportingIdenticalFileFindsNoNewDataAndDeletes() throws IOException {
         writeStatement();
-        service().importCash();          // first import: archived
+        ajBell(service());               // first import: archived
 
         writeStatement();                // identical file appears again
-        ImportCashResult result = service().importCash();
+        ImportCashResult result = ajBell(service());
 
         assertEquals(ImportCashResult.Status.NO_NEW_DATA, result.status());
         assertFalse(Files.exists(inputDir.resolve("cashstatements.csv")), "duplicate should be deleted");

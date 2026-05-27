@@ -7,9 +7,10 @@ public record CashTransaction(
         String symbol,            // ticker, GILT id, or "GBP" for non-security rows
         double quantity,          // shares / nominal; 0 when not applicable
         double amount,            // positive = cash in, negative = cash out
-        String currency,          // "GBP" for AJBell
-        double fxToGbp,           // 1.0 for GBP accounts
+        String currency,          // "GBP" for AJBell, "USD" for RothIRA
+        double fxToGbp,           // foreign units per 1 GBP; 1.0 for GBP accounts
         double amountGbp,         // same as amount when currency is GBP
-        Double cashBalanceGbp,    // running account balance after this row; nullable
+        Double cashBalance,       // running balance after this row in native currency; nullable
+        Double cashBalanceGbp,    // running balance after this row in GBP; nullable
         String description        // raw description from the source file
 ) {}

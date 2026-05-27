@@ -10,6 +10,7 @@ import com.pension.application.PortfolioGatherer;
 import com.pension.application.RecordDividendsService;
 import com.pension.application.SyncPortfolioService;
 import com.pension.port.FxRateProvider;
+import com.pension.port.HistoricalFxRateProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,6 +31,11 @@ public class BeanConfiguration {
 
     @Bean
     public FxRateProvider fxRateProvider() {
+        return new FrankfurterFxClient();
+    }
+
+    @Bean
+    public HistoricalFxRateProvider historicalFxRateProvider() {
         return new FrankfurterFxClient();
     }
 
@@ -79,8 +85,9 @@ public class BeanConfiguration {
 
     @Bean
     public ImportCashService importCashService(@Value("${pension.input-dir:}") String inputDir,
-                                               PortfolioDatabase portfolioDatabase) {
-        return new ImportCashService(inputDir(inputDir), portfolioDatabase);
+                                               PortfolioDatabase portfolioDatabase,
+                                               HistoricalFxRateProvider historicalFxRateProvider) {
+        return new ImportCashService(inputDir(inputDir), portfolioDatabase, historicalFxRateProvider);
     }
 
     private static Path inputDir(String configured) {

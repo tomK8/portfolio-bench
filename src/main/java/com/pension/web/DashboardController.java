@@ -3,7 +3,6 @@ package com.pension.web;
 import com.pension.PortfolioDatabase;
 import com.pension.application.ExportExcelService;
 import com.pension.application.ExportResult;
-import com.pension.application.ImportCashResult;
 import com.pension.application.ImportCashService;
 import com.pension.application.SyncPortfolioService;
 import com.pension.application.SyncResult;
@@ -60,8 +59,7 @@ public class DashboardController {
 
     @PostMapping("/import-cash")
     public String importCash(Model model) {
-        ImportCashResult result = importCashService.importCash();
-        model.addAttribute("cashImport", result);
+        model.addAttribute("cashImports", importCashService.importCash());
         return "fragments/import :: result";
     }
 

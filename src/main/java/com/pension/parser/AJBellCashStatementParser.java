@@ -164,6 +164,7 @@ public class AJBellCashStatementParser implements CashTransactionParser {
                     FX_TO_GBP,
                     amount,
                     row.balance(),
+                    row.balance(),
                     row.description()
             ));
         }
@@ -184,7 +185,7 @@ public class AJBellCashStatementParser implements CashTransactionParser {
                 if (gilt != null) {
                     return new CashTransaction(t.transactionDate(), t.account(), t.type(),
                             gilt, t.quantity(), t.amount(), t.currency(), t.fxToGbp(),
-                            t.amountGbp(), t.cashBalanceGbp(), t.description());
+                            t.amountGbp(), t.cashBalance(), t.cashBalanceGbp(), t.description());
                 }
             }
             return t;

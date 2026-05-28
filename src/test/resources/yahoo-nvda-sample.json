@@ -1,0 +1,30 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "USD",
+          "symbol": "NVDA",
+          "gmtoffset": -18000,
+          "exchangeTimezoneName": "America/New_York"
+        },
+        "timestamp": [1704207600, 1704294000, 1704380400],
+        "indicators": {
+          "quote": [
+            {
+              "open":   [48.10, 47.50, 49.00],
+              "high":   [49.30, 48.20, 49.50],
+              "low":    [47.60, 47.10, 48.50],
+              "close":  [48.20, 47.80, null],
+              "volume": [411254000, null, 300000000]
+            }
+          ],
+          "adjclose": [
+            { "adjclose": [48.18, null, 48.90] }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

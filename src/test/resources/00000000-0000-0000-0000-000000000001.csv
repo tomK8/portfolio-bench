@@ -1,0 +1,5 @@
+Symbol,Name,Qty,Price,Day Gain/Loss,Day Gain/Loss %,Market Value £,Market Value,Book Cost,Gain/Loss,Gain/Loss %,Average Price
+GOOGL,Alphabet Inc Class A,10,$200.00,$0.00,0.00%,£1500.00,$2000.00,$1500.00,$500.00,33.33%,$150.00
+MSFT,Microsoft Corp,5,$300.00,$0.00,0.00%,£1125.00,$1500.00,$1250.00,$250.00,20.00%,$250.00
+SEMI,iShares MSCI Global Semiconductors ETF,100,£10.00,£0.00,0.00%,£1000.00,£1000.00,£800.00,£200.00,25.00%,£8.00
+XAIX,Xtrackers AI & Big Data ETF,50,£100.00,£0.00,0.00%,£5000.00,£5000.00,£4000.00,£1000.00,25.00%,£80.00

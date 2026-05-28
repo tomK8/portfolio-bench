@@ -4,6 +4,8 @@ import com.pension.ExcelReportWriter;
 import com.pension.PortfolioDatabase;
 import com.pension.adapter.FrankfurterFxClient;
 import com.pension.adapter.HoldingFileLocator;
+import com.pension.adapter.YahooPriceFetcher;
+import com.pension.adapter.YahooTickerMap;
 import com.pension.application.*;
 import com.pension.port.FxRateProvider;
 import com.pension.port.HistoricalFxRateProvider;
@@ -90,5 +92,22 @@ public class BeanConfiguration {
                                                PortfolioDatabase portfolioDatabase,
                                                HistoricalFxRateProvider historicalFxRateProvider) {
         return new ImportCashService(inputDir(inputDir), portfolioDatabase, historicalFxRateProvider);
+    }
+
+    @Bean
+    public YahooTickerMap yahooTickerMap() {
+        return new YahooTickerMap();
+    }
+
+    @Bean
+    public YahooPriceFetcher yahooPriceFetcher() {
+        return new YahooPriceFetcher();
+    }
+
+    @Bean
+    public PriceFetchJob priceFetchJob(PortfolioDatabase portfolioDatabase,
+                                       YahooPriceFetcher yahooPriceFetcher,
+                                       YahooTickerMap yahooTickerMap) {
+        return new PriceFetchJob(portfolioDatabase, yahooPriceFetcher, yahooTickerMap);
     }
 }

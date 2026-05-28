@@ -1,6 +1,7 @@
 package com.pension;
 
 import com.pension.domain.model.CashTransaction;
+import com.pension.domain.model.PriceBar;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -44,6 +45,23 @@ public class PortfolioDatabase {
                 description      TEXT,
                 PRIMARY KEY (transaction_date, account, type, symbol, amount_gbp, cash_balance_gbp)
             )""";
+    private static final String CREATE_PRICE_TABLE = """
+            CREATE TABLE IF NOT EXISTS price_history (
+                symbol     TEXT    NOT NULL,
+                date       TEXT    NOT NULL,
+                open       REAL,
+                high       REAL,
+                low        REAL,
+                close      REAL    NOT NULL,
+                adj_close  REAL    NOT NULL,
+                volume     INTEGER,
+                currency   TEXT    NOT NULL,
+                fetched_at TEXT    NOT NULL,
+                PRIMARY KEY (symbol, date)
+            )""";
+    private static final String CREATE_PRICE_INDEX = """
+            CREATE INDEX IF NOT EXISTS idx_price_symbol_date
+                ON price_history(symbol, date DESC)""";
     private static final String INSERT_CASH_SQL =
             "INSERT INTO cash_transactions " +
                     "(transaction_date, account, type, symbol, quantity, amount, currency, " +
@@ -371,5 +389,135 @@ public class PortfolioDatabase {
             System.err.println("Warning: could not save RothIRA cash transactions — " + e.getMessage());
         }
         return 0;
+    }
+
+    // ---- Price history ------------------------------------------------------
+
+    private static void ensurePriceTable(Statement ddl) throws SQLException {
+        ddl.execute(CREATE_PRICE_TABLE);
+        ddl.execute(CREATE_PRICE_INDEX);
+    }
+
+    /**
+     * Every security ever traded (buys/sells/dividends) — the fetch universe before gilt filtering.
+     * Excludes INTEREST/CHARGE/CONTRIBUTION rows, whose {@code symbol} is not a real instrument.
+     */
+    public List<String> distinctTradedSymbols() {
+        List<String> symbols = new ArrayList<>();
+        if (!Files.exists(dbPath)) return symbols;
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             Statement st = conn.createStatement()) {
+            st.execute(CREATE_CASH_TABLE);
+            try (var rs = st.executeQuery(
+                    "SELECT DISTINCT symbol FROM cash_transactions " +
+                            "WHERE type IN ('TRANSACTION', 'DIVIDEND') ORDER BY symbol")) {
+                while (rs.next()) symbols.add(rs.getString(1));
+            }
+        } catch (SQLException e) {
+            System.err.println("Warning: could not load symbols — " + e.getMessage());
+        }
+        return symbols;
+    }
+
+    /** Idempotent insert (INSERT OR IGNORE on the (symbol, date) PK). Returns rows actually written. */
+    public int savePriceBars(List<PriceBar> bars) {
+        if (bars.isEmpty()) return 0;
+        String fetchedAt = Instant.now().toString();
+        try {
+            Files.createDirectories(dbDir);
+            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+                 Statement ddl = conn.createStatement()) {
+                ensurePriceTable(ddl);
+                int inserted = 0;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT OR IGNORE INTO price_history " +
+                                "(symbol, date, open, high, low, close, adj_close, volume, currency, fetched_at) " +
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    for (PriceBar b : bars) {
+                        ps.setString(1, b.symbol());
+                        ps.setString(2, b.date().toString());
+                        setNullableDouble(ps, 3, b.open());
+                        setNullableDouble(ps, 4, b.high());
+                        setNullableDouble(ps, 5, b.low());
+                        ps.setDouble(6, b.close());
+                        ps.setDouble(7, b.adjClose());
+                        if (b.volume() != null) ps.setLong(8, b.volume());
+                        else ps.setNull(8, Types.INTEGER);
+                        ps.setString(9, b.currency());
+                        ps.setString(10, fetchedAt);
+                        inserted += ps.executeUpdate();
+                    }
+                }
+                return inserted;
+            }
+        } catch (IOException | SQLException e) {
+            System.err.println("Warning: could not save price bars — " + e.getMessage());
+        }
+        return 0;
+    }
+
+    /** Most recent stored date for a symbol, or null if none. */
+    public LocalDate getLatestPriceDate(String symbol) {
+        if (!Files.exists(dbPath)) return null;
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             Statement ddl = conn.createStatement()) {
+            ensurePriceTable(ddl);
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT MAX(date) FROM price_history WHERE symbol = ?")) {  // ISO text → lexical = chrono
+                ps.setString(1, symbol);
+                try (var rs = ps.executeQuery()) {
+                    String d = rs.next() ? rs.getString(1) : null;
+                    return d == null ? null : LocalDate.parse(d);
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Warning: could not read latest price date — " + e.getMessage());
+        }
+        return null;
+    }
+
+    /** Closest bar on or before {@code date}, or null. */
+    public PriceBar getPriceOn(String symbol, LocalDate date) {
+        return queryBars("SELECT symbol, date, open, high, low, close, adj_close, volume, currency " +
+                "FROM price_history WHERE symbol = ? AND date <= ? ORDER BY date DESC LIMIT 1",
+                symbol, date.toString(), null).stream().findFirst().orElse(null);
+    }
+
+    public List<PriceBar> getPriceHistory(String symbol, LocalDate from, LocalDate to) {
+        return queryBars("SELECT symbol, date, open, high, low, close, adj_close, volume, currency " +
+                "FROM price_history WHERE symbol = ? AND date BETWEEN ? AND ? ORDER BY date",
+                symbol, from.toString(), to.toString());
+    }
+
+    private List<PriceBar> queryBars(String sql, String symbol, String a, String b) {
+        List<PriceBar> out = new ArrayList<>();
+        if (!Files.exists(dbPath)) return out;
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             Statement ddl = conn.createStatement()) {
+            ensurePriceTable(ddl);
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, symbol);
+                ps.setString(2, a);
+                if (b != null) ps.setString(3, b);
+                try (var rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        String sym = rs.getString(1);
+                        LocalDate d = LocalDate.parse(rs.getString(2));
+                        Double open = getNullableDouble(rs, 3);
+                        Double high = getNullableDouble(rs, 4);
+                        Double low = getNullableDouble(rs, 5);
+                        double close = rs.getDouble(6);
+                        double adjClose = rs.getDouble(7);
+                        long vol = rs.getLong(8);
+                        Long volume = rs.wasNull() ? null : vol;   // wasNull reflects the column just read
+                        out.add(new PriceBar(sym, d, open, high, low, close, adjClose,
+                                volume, rs.getString(9)));
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Warning: could not read price history — " + e.getMessage());
+        }
+        return out;
     }
 }

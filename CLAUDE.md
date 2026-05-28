@@ -195,3 +195,46 @@ before the fallback path.
 cash: `amount`/`amountGbp` = 0 but `quantity` = the extra shares); Cash/Foreign Security Dividend → `DIVIDEND`; Foreign
 Tax Withheld → `CHARGE` (its own negative row, not netted into the dividend). Quantity keeps the file's sign (negative
 for sells). Symbols pass through `RothIraParser.normaliseSecurityId` for consistency with holdings.
+
+## Price history
+
+Daily OHLCV prices for every instrument ever held are fetched from Yahoo Finance into the `price_history`
+table (Phase 1 of a larger price/performance initiative; web-sourced valuation and time-series charts are
+future phases). Equities only — **gilts are skipped** (Yahoo lacks coverage; the broker price stays source
+of truth for them).
+
+**Schema** (`price_history`, created/ensured by `PortfolioDatabase.ensurePriceTable`): PK `(symbol, date)`,
+both `close` (unadjusted) and `adj_close` (split/dividend-adjusted), plus `open/high/low/volume`, the listing
+`currency`, and a `fetched_at` timestamp. Rows are keyed by the **resolved Yahoo ticker** (e.g. `EQQQ.L`),
+not the internal symbol — this auto-dedups share classes (e.g. `GOOG`/`GOOGL` → `GOOG`).
+
+**Pipeline** (`PriceFetchJob.run()`):
+
+1. `PortfolioDatabase.distinctTradedSymbols()` → every symbol from `cash_transactions WHERE type IN
+   ('TRANSACTION','DIVIDEND')` (excludes INTEREST/CHARGE/CONTRIBUTION placeholder symbols).
+2. Skip gilts (`YahooTickerMap.isGilt`), map the rest to Yahoo tickers (`YahooTickerMap.tickerFor`, backed by
+   `resources/yahoo-tickers.properties`), and dedup.
+3. Per ticker: `getLatestPriceDate` → fetch `[latest+1 .. today]`, or a ~10-year backfill on first run.
+4. `YahooPriceFetcher.fetch` (java.net.http + Jackson, browser User-Agent, retry-once) → `savePriceBars`
+   (`INSERT OR IGNORE`, idempotent). A 500ms throttle separates requests.
+
+**`close` vs `adj_close`:** use `close` for "market value of the position on date X", `adj_close` for total-return
+calculations. Because fetching is incremental + `INSERT OR IGNORE`, historical `adj_close` is **not** refreshed as
+later dividends/splits accrue; a future full re-pull (keyed off `fetched_at`) can fix that if needed.
+
+**Currency is stored verbatim** from Yahoo — no GBP conversion in this layer. Note `.L` (London) tickers report
+`"GBp"` (pence, not pounds); downstream valuation must divide by 100.
+
+**Scheduling:** `PriceFetchScheduler` (the only price-layer Spring class) runs the job on `ApplicationReadyEvent`
+(on a daemon thread, so a first-run backfill doesn't block the web UI) and via `@Scheduled` cron at 22:00
+Europe/London. `@EnableScheduling` is on `PensionAggregatorApplication`.
+
+**Persistence stays on `PortfolioDatabase`** (the price methods listed above) — consistent with the single-JDBC-owner
+rule. `YahooPriceFetcher`/`YahooTickerMap` (adapter) and `PriceFetchJob` (application) carry no Spring annotations.
+
+**Adding a Yahoo ticker mapping:** add an `internal=YAHOO` line to `resources/yahoo-tickers.properties`. US listings
+need no entry (they map to themselves); non-US need an exchange suffix (`.L` London, `.PA` Paris, `.AS` Amsterdam).
+
+**Testing:** JSON parsing is unit-tested against a saved sample (`yahoo-nvda-sample.json`); a live-API test
+(`YahooPriceFetcherIntegrationTest`) is `@Tag("integration")` and excluded from the default `mvn test` by the
+surefire `excludedGroups` property. Run it with `mvn test -Dgroups=integration -DexcludedGroups=`.

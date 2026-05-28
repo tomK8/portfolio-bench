@@ -39,9 +39,9 @@ class IISippParserTest {
     // --- normaliseSecurityId() ---
 
     @Test
-    void normalise_googlBecomesGoogGoogl() {
-        assertEquals("GOOG/GOOGL", IISippParser.normaliseSecurityId("GOOGL"));
-        assertEquals("GOOG/GOOGL", IISippParser.normaliseSecurityId("GOOG"));
+    void normalise_keepsAlphabetClassesSeparate() {
+        assertEquals("GOOGL", IISippParser.normaliseSecurityId("GOOGL"));
+        assertEquals("GOOG", IISippParser.normaliseSecurityId("GOOG"));
     }
 
     @Test
@@ -69,11 +69,11 @@ class IISippParserTest {
         assertTrue(holdings.stream().anyMatch(h -> h.getCurrency().equals(Currency.getInstance("USD"))));
         assertTrue(holdings.stream().anyMatch(h -> h.getCurrency().equals(Currency.getInstance("GBP"))));
 
-        // GOOGL should be normalised
+        // Alphabet share class kept as-is (no GOOG/GOOGL merge)
         holdings.stream()
-                .filter(h -> h.getSecurityId().equals("GOOG/GOOGL"))
+                .filter(h -> h.getSecurityId().equals("GOOGL"))
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("Expected a GOOG/GOOGL holding"));
+                .orElseThrow(() -> new AssertionError("Expected a GOOGL holding"));
 
         // All holdings have positive quantity, avgPricePaid, and currentMarketValue
         holdings.forEach(h -> {

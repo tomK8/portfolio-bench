@@ -66,7 +66,7 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             new SymbolRule(Pattern.compile("H.{0,3}S.{0,3}BC"), "HSBA"),
             new SymbolRule(Pattern.compile("(?:INVESCO|POWERSHARES).*EQQQ"), "EQQQ"),
             new SymbolRule(Pattern.compile("(?:SSGA|STT).*SPDR"), "SPX5"),
-            new SymbolRule(Pattern.compile("ALPHABET"), "GOOG/GOOGL"),
+            new SymbolRule(Pattern.compile("ALPHABET"), "GOOG"),   // AJBell holds Class C (GOOG)
             new SymbolRule(Pattern.compile("META PLATFORMS"), "META"),
             new SymbolRule(Pattern.compile("MICROSOFT"), "MSFT"),
             new SymbolRule(Pattern.compile("LEGAL.{0,5}GENERAL"), "LGEN"),

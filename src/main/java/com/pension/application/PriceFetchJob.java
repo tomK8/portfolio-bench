@@ -39,7 +39,7 @@ public class PriceFetchJob {
                 System.out.println("Skipping " + symbol + " — gilts not supported");
                 continue;
             }
-            tickerSet.addAll(tickers.tickersFor(symbol));   // a symbol may map to several listings
+            tickerSet.add(tickers.tickerFor(symbol));
         }
 
         for (String ticker : tickerSet) {

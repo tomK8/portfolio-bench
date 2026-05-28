@@ -50,10 +50,10 @@ class AJBellSippParserTest {
     // --- normaliseSecurityId() ---
 
     @Test
-    void normalise_googBecomesGoogGoogl() {
-        assertEquals("GOOG/GOOGL", AJBellSippParser.normaliseSecurityId("GOOG"));
-        assertEquals("GOOG/GOOGL", AJBellSippParser.normaliseSecurityId("GOOGL"));
-        assertEquals("GOOG/GOOGL", AJBellSippParser.normaliseSecurityId("googl"));
+    void normalise_keepsAlphabetClassesSeparate() {
+        assertEquals("GOOG", AJBellSippParser.normaliseSecurityId("GOOG"));
+        assertEquals("GOOGL", AJBellSippParser.normaliseSecurityId("GOOGL"));
+        assertEquals("GOOGL", AJBellSippParser.normaliseSecurityId("googl"));
     }
 
     @Test
@@ -82,11 +82,11 @@ class AJBellSippParserTest {
         assertTrue(holdings.stream().anyMatch(h -> h.getCurrency().equals(Currency.getInstance("USD"))));
         assertTrue(holdings.stream().anyMatch(h -> h.getCurrency().equals(Currency.getInstance("EUR"))));
 
-        // GOOG should be normalised
+        // Alphabet class kept as-is (no GOOG/GOOGL merge)
         holdings.stream()
-                .filter(h -> h.getSecurityId().equals("GOOG/GOOGL"))
+                .filter(h -> h.getSecurityId().equals("GOOG") || h.getSecurityId().equals("GOOGL"))
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("Expected a GOOG/GOOGL holding"));
+                .orElseThrow(() -> new AssertionError("Expected a GOOG or GOOGL holding"));
 
         // Exactly one CASH entry
         long cashCount = holdings.stream().filter(h -> h.getSecurityId().equals("CASH")).count();

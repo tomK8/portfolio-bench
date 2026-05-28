@@ -38,18 +38,10 @@ class RothIraParserTest {
     // --- normaliseSecurityId() ---
 
     @Test
-    void normalise_googBecomesGoogGoogl() {
-        assertEquals("GOOG/GOOGL", RothIraParser.normaliseSecurityId("GOOG"));
-    }
-
-    @Test
-    void normalise_googlBecomesGoogGoogl() {
-        assertEquals("GOOG/GOOGL", RothIraParser.normaliseSecurityId("GOOGL"));
-    }
-
-    @Test
-    void normalise_lowercaseGoogIsHandled() {
-        assertEquals("GOOG/GOOGL", RothIraParser.normaliseSecurityId("googl"));
+    void normalise_keepsAlphabetClassesSeparate() {
+        assertEquals("GOOG", RothIraParser.normaliseSecurityId("GOOG"));
+        assertEquals("GOOGL", RothIraParser.normaliseSecurityId("GOOGL"));
+        assertEquals("GOOGL", RothIraParser.normaliseSecurityId("googl"));
     }
 
     @Test
@@ -93,11 +85,11 @@ class RothIraParserTest {
         holdings.forEach(h ->
                 assertEquals(Currency.getInstance("USD"), h.getCurrency(), "Unexpected currency for: " + h.getSecurityId()));
 
-        // GOOGL should be normalised
+        // Alphabet share class kept as-is (no GOOG/GOOGL merge)
         holdings.stream()
-                .filter(h -> h.getSecurityId().equals("GOOG/GOOGL"))
+                .filter(h -> h.getSecurityId().equals("GOOGL"))
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("Expected a GOOG/GOOGL holding"));
+                .orElseThrow(() -> new AssertionError("Expected a GOOGL holding"));
 
         // BDP and USD999997 must be merged into exactly one CASH entry
         long cashCount = holdings.stream()

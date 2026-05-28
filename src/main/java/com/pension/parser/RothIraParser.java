@@ -39,7 +39,6 @@ public class RothIraParser implements AccountParser {
         if (rawId == null) return null;
         String id = rawId.trim().toUpperCase();
         return switch (id) {
-            case "GOOG", "GOOGL" -> "GOOG/GOOGL";
             case "USD999997", "BDP" -> CASH_ID;
             default -> id;
         };

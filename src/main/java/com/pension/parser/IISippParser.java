@@ -38,11 +38,7 @@ public class IISippParser implements AccountParser {
 
     static String normaliseSecurityId(String rawId) {
         if (rawId == null) return null;
-        String id = rawId.trim().toUpperCase();
-        return switch (id) {
-            case "GOOG", "GOOGL" -> "GOOG/GOOGL";
-            default -> id;
-        };
+        return rawId.trim().toUpperCase();
     }
 
     @Override

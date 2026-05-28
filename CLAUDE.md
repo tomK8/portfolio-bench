@@ -25,6 +25,23 @@ mvn spring-boot:run -Dspring-boot.run.arguments="--pension.input-dir=/tmp/in --p
 | `pension.db-dir`     | `~/Documents/Investing` | SQLite `portfolio.db`, archived cash files, `ii_sipp_cash_last.txt` |
 | `pension.output-dir` | `~/Documents`           | generated Excel workbooks                                           |
 
+### Test fixtures
+
+`src/test/resources/` **must contain only synthetic data — no real brokerage exports.** The
+fixtures are committed (the directory is not gitignored) so every checkout runs the same tests,
+including the parser integration tests that load files from disk:
+
+- `00000000-0000-0000-0000-000000000001.csv` — synthetic II SIPP holdings (UUID-named so
+  `IISippParser.supports` matches); mixed USD/GBP rows, includes a `GOOGL` row.
+- `Holdings.xlsx` — synthetic RothIRA holdings (sheet `Holdings`, headers at row index 11);
+  includes a `GOOGL` row and `BDP` + `USD999997` cash rows to exercise the merge-to-`CASH` path.
+- `yahoo-nvda-sample.json` — synthetic Yahoo chart response for `YahooPriceFetcherTest`.
+
+The parser integration tests (`RothIraParserTest`, `IISippParserTest`) assert *structural*
+properties (normalisation, currency mix, positive quantities), not exact values, so the synthetic
+numbers can change freely. Real exports were never committed — they only ever existed as local,
+untracked files; keep it that way. Regenerate the xlsx with openpyxl if its shape needs to change.
+
 ## Architecture
 
 A Spring Boot web app. The user issues actions from a dashboard; each action is an

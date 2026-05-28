@@ -33,13 +33,13 @@ public class PriceFetchJob {
     public void run() {
         LocalDate today = LocalDate.now();
 
-        Set<String> tickerSet = new LinkedHashSet<>();   // dedups e.g. GOOG/GOOGL → GOOG
+        Set<String> tickerSet = new LinkedHashSet<>();   // dedups tickers shared across symbols
         for (String symbol : db.distinctTradedSymbols()) {
             if (tickers.isGilt(symbol)) {
                 System.out.println("Skipping " + symbol + " — gilts not supported");
                 continue;
             }
-            tickerSet.add(tickers.tickerFor(symbol));
+            tickerSet.addAll(tickers.tickersFor(symbol));   // a symbol may map to several listings
         }
 
         for (String ticker : tickerSet) {

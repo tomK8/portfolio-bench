@@ -2,6 +2,8 @@ package com.pension.adapter;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class YahooTickerMapTest {
@@ -9,18 +11,23 @@ class YahooTickerMapTest {
     private final YahooTickerMap map = new YahooTickerMap();
 
     @Test
-    void appliesExchangeSuffixesAndNormalisations() {
-        assertEquals("EQQQ.L", map.tickerFor("EQQQ"));
-        assertEquals("LGEN.L", map.tickerFor("LGEN"));
-        assertEquals("BNP.PA", map.tickerFor("BNP"));
-        assertEquals("ASML.AS", map.tickerFor("ASML"));
-        assertEquals("GOOG", map.tickerFor("GOOGL"), "GOOGL normalises onto GOOG");
+    void appliesExchangeSuffixes() {
+        assertEquals(List.of("EQQQ.L"), map.tickersFor("EQQQ"));
+        assertEquals(List.of("BNP.PA"), map.tickersFor("BNP"));
+        assertEquals(List.of("ASML.AS"), map.tickersFor("ASML"));
+        assertEquals(List.of("HSBA.L"), map.tickersFor("HSBA"));
+        assertEquals(List.of("SGBX.L"), map.tickersFor("SGBX"));
+    }
+
+    @Test
+    void splitsCommaSeparatedValuesForDualListings() {
+        assertEquals(List.of("GOOG", "GOOGL"), map.tickersFor("GOOG/GOOGL"));
     }
 
     @Test
     void usListingsMapToThemselves() {
-        assertEquals("NVDA", map.tickerFor("NVDA"));
-        assertEquals("MSFT", map.tickerFor("MSFT"));
+        assertEquals(List.of("NVDA"), map.tickersFor("NVDA"));
+        assertEquals(List.of("MSFT"), map.tickersFor("MSFT"));
     }
 
     @Test

@@ -229,8 +229,10 @@ not the internal symbol — this auto-dedups share classes (e.g. `GOOG`/`GOOGL` 
 
 1. `PortfolioDatabase.distinctTradedSymbols()` → every symbol from `cash_transactions WHERE type IN
    ('TRANSACTION','DIVIDEND')` (excludes INTEREST/CHARGE/CONTRIBUTION placeholder symbols).
-2. Skip gilts (`YahooTickerMap.isGilt`), map the rest to Yahoo tickers (`YahooTickerMap.tickerFor`, backed by
-   `resources/yahoo-tickers.properties`), and dedup.
+2. Skip gilts (`YahooTickerMap.isGilt`), map the rest to Yahoo tickers (`YahooTickerMap.tickersFor`, backed by
+   `resources/yahoo-tickers.properties`), and dedup. A symbol may map to **several** tickers (comma-separated
+   value) — e.g. `GOOG/GOOGL=GOOG,GOOGL` fetches both Alphabet share classes even though the holdings stay
+   aggregated under one symbol.
 3. Per ticker: `getLatestPriceDate` → fetch `[latest+1 .. today]`, or a ~10-year backfill on first run.
 4. `YahooPriceFetcher.fetch` (java.net.http + Jackson, browser User-Agent, retry-once) → `savePriceBars`
    (`INSERT OR IGNORE`, idempotent). A 500ms throttle separates requests.
@@ -249,8 +251,10 @@ Europe/London. `@EnableScheduling` is on `PensionAggregatorApplication`.
 **Persistence stays on `PortfolioDatabase`** (the price methods listed above) — consistent with the single-JDBC-owner
 rule. `YahooPriceFetcher`/`YahooTickerMap` (adapter) and `PriceFetchJob` (application) carry no Spring annotations.
 
-**Adding a Yahoo ticker mapping:** add an `internal=YAHOO` line to `resources/yahoo-tickers.properties`. US listings
-need no entry (they map to themselves); non-US need an exchange suffix (`.L` London, `.PA` Paris, `.AS` Amsterdam).
+**Adding a Yahoo ticker mapping:** add an `internal=YAHOO` line to `resources/yahoo-tickers.properties` (the single
+source of mappings — edited in code, no external/runtime override). US listings need no entry (they map to
+themselves); non-US need an exchange suffix (`.L` London, `.PA` Paris, `.AS` Amsterdam, `.DE` Frankfurt). Use a
+comma-separated value for multiple listings.
 
 **Testing:** JSON parsing is unit-tested against a saved sample (`yahoo-nvda-sample.json`); a live-API test
 (`YahooPriceFetcherIntegrationTest`) is `@Tag("integration")` and excluded from the default `mvn test` by the

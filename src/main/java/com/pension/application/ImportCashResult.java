@@ -1,13 +1,10 @@
 package com.pension.application;
 
 /**
- * Outcome of importing one cash source (one statement file).
+ * Outcome of importing one cash source (one statement file). Only emitted when
+ * a file was actually processed — missing files produce no result.
  */
 public record ImportCashResult(String source, Status status, int inserted, String detail) {
-
-    public static ImportCashResult notFound(String source) {
-        return new ImportCashResult(source, Status.NOT_FOUND, 0, null);
-    }
 
     public static ImportCashResult noNewData(String source) {
         return new ImportCashResult(source, Status.NO_NEW_DATA, 0, null);
@@ -17,5 +14,5 @@ public record ImportCashResult(String source, Status status, int inserted, Strin
         return new ImportCashResult(source, Status.IMPORTED, inserted, archivedTo);
     }
 
-    public enum Status {NOT_FOUND, NO_NEW_DATA, IMPORTED}
+    public enum Status {NO_NEW_DATA, IMPORTED}
 }

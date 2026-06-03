@@ -43,8 +43,27 @@ class ImportCashServiceTest {
     }
 
     @Test
-    void notFoundWhenNoFile() {
-        assertEquals(ImportCashResult.Status.NOT_FOUND, ajBell(service()).status());
+    void absentFilesProduceNoResultRow() {
+        assertTrue(service().importCash().isEmpty(), "no files in input dir → no results");
+    }
+
+    @Test
+    void picksMostRecentMatchWhenMultipleCopiesExist() throws IOException {
+        Files.writeString(inputDir.resolve("cashstatements.csv"), """
+                Date,Description,Receipt (GBP),Payment (GBP),Balance (GBP)
+                01/04/2026,Old file,1.00,,1.00
+                """);
+        // newer copy with extra row + suffix in filename
+        Path newer = inputDir.resolve("cashstatements (1).csv");
+        Files.writeString(newer, STATEMENT);
+        Files.setLastModifiedTime(newer,
+                java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() + 60_000));
+
+        ImportCashResult result = ajBell(service());
+
+        assertEquals(ImportCashResult.Status.IMPORTED, result.status());
+        assertFalse(Files.exists(newer), "newer file should be archived out of input dir");
+        assertTrue(Files.exists(inputDir.resolve("cashstatements.csv")), "older file should remain untouched");
     }
 
     @Test

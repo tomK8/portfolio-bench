@@ -4,6 +4,7 @@ import com.pension.PortfolioDatabase;
 import com.pension.domain.model.CashTransaction;
 import com.pension.parser.AJBellCashStatementParser;
 import com.pension.parser.CashTransactionParser;
+import com.pension.parser.IICashStatementParser;
 import com.pension.parser.ParseException;
 import com.pension.parser.RothIraCashStatementParser;
 import com.pension.port.HistoricalFxRateProvider;
@@ -22,26 +23,35 @@ import java.util.Optional;
 
 /**
  * Imports the cash statements as one cohesive operation: for each known source it
- * picks the most-recent matching file in the input dir (if any), parses it, dedup-saves
- * its rows, then archives the file to the Investing folder if anything new was written
+ * picks the matching files in the input dir (if any), parses them, dedup-saves the
+ * rows, then archives each file to the Investing folder if anything new was written
  * or deletes it if it was a duplicate.
  *
  * <p>Sources match a glob so re-downloads like {@code cashstatements (1).csv} are picked
- * up; the newest by modification time wins. Missing files produce no result row.
+ * up; the newest by modification time wins where only one file per source is expected.
+ * Missing files produce no result row.
  *
- * <p>Two sources are handled, each independently:
+ * <p>Three sources are handled, each independently:
  * <ul>
  *   <li>AJBell — {@code cashstatements*.csv}, GBP, dedup by (date, balance) inside
  *       {@link PortfolioDatabase#saveCashTransactions};</li>
  *   <li>RothIRA — {@code History*.xlsx}, native USD with historical-FX conversion,
  *       dedup by (date, symbol, qty, type, amount) and running-balance derivation
- *       inside {@link PortfolioDatabase#saveRothIraCashTransactions}.</li>
+ *       inside {@link PortfolioDatabase#saveRothIraCashTransactions};</li>
+ *   <li>II — UUID-named CSVs whose header carries {@code Debit,Credit,Running Balance};
+ *       one file per currency, each processed independently and labelled
+ *       {@code II SIPP (GBP)} / {@code II SIPP (USD)}. Dedup by
+ *       (date, type, symbol, amount, currency) inside
+ *       {@link PortfolioDatabase#saveIiCashTransactions}.</li>
  * </ul>
  */
 public class ImportCashService {
 
     private static final String AJBELL_GLOB = "cashstatements*.csv";
     private static final String ROTH_GLOB = "History*.xlsx";
+    /** UUID-named CSV (8-4-4-4-12 hex) — both II holdings and cash use this naming scheme;
+     *  the parser's header sniff distinguishes them. */
+    private static final String II_GLOB = "????????-????-????-????-????????????.csv";
 
     /**
      * RothIRA opening balance before the earliest transaction; only used to seed an empty account.
@@ -52,11 +62,13 @@ public class ImportCashService {
     private final PortfolioDatabase db;
     private final AJBellCashStatementParser ajBellParser = new AJBellCashStatementParser();
     private final RothIraCashStatementParser rothParser;
+    private final IICashStatementParser iiParser;
 
     public ImportCashService(Path inputDir, PortfolioDatabase db, HistoricalFxRateProvider fxProvider) {
         this.inputDir = inputDir;
         this.db = db;
         this.rothParser = new RothIraCashStatementParser(fxProvider);
+        this.iiParser = new IICashStatementParser(fxProvider);
     }
 
     private static String extension(Path file) {
@@ -66,13 +78,14 @@ public class ImportCashService {
     }
 
     /**
-     * One result per source that was actually processed; sources whose file is absent
-     * produce no entry. Stable order: AJBell, RothIRA.
+     * One result per file that was actually processed; sources whose file is absent
+     * produce no entry. Stable order: AJBell, RothIRA, then each II file by mtime.
      */
     public List<ImportCashResult> importCash() {
         List<ImportCashResult> results = new ArrayList<>();
         importAjBell().ifPresent(results::add);
         importRothIra().ifPresent(results::add);
+        results.addAll(importIi());
         return results;
     }
 
@@ -90,20 +103,42 @@ public class ImportCashService {
         });
     }
 
+    private List<ImportCashResult> importIi() {
+        List<Path> files = matchingFiles(II_GLOB).stream()
+                .filter(iiParser::supports)
+                .sorted(Comparator.comparingLong(this::mtime))
+                .toList();
+
+        List<ImportCashResult> results = new ArrayList<>();
+        for (Path file : files) {
+            List<CashTransaction> rows = parse(iiParser, file);
+            String ccy = rows.isEmpty() ? "?" : rows.get(0).currency();
+            String source = "II SIPP (" + ccy + ")";
+            int inserted = db.saveIiCashTransactions(rows);
+            results.add(archiveOrDelete(source, file, inserted, "ii_cash_" + ccy));
+        }
+        return results;
+    }
+
     private Optional<Path> mostRecent(String glob) {
+        return matchingFiles(glob).stream().max(Comparator.comparingLong(this::mtime));
+    }
+
+    private List<Path> matchingFiles(String glob) {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(inputDir, glob)) {
-            Path newest = null;
-            long newestMtime = Long.MIN_VALUE;
-            for (Path p : stream) {
-                long m = Files.getLastModifiedTime(p).toMillis();
-                if (m > newestMtime) {
-                    newestMtime = m;
-                    newest = p;
-                }
-            }
-            return Optional.ofNullable(newest);
+            List<Path> out = new ArrayList<>();
+            for (Path p : stream) out.add(p);
+            return out;
         } catch (IOException e) {
             throw new IllegalStateException("Failed to scan input directory " + inputDir, e);
+        }
+    }
+
+    private long mtime(Path p) {
+        try {
+            return Files.getLastModifiedTime(p).toMillis();
+        } catch (IOException e) {
+            return Long.MIN_VALUE;
         }
     }
 

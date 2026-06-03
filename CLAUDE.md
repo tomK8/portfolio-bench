@@ -33,6 +33,9 @@ including the parser integration tests that load files from disk:
 
 - `00000000-0000-0000-0000-000000000001.csv` — synthetic II SIPP holdings (UUID-named so
   `IISippParser.supports` matches); mixed USD/GBP rows, includes a `GOOGL` row.
+- `00000000-0000-0000-0000-000000000002.csv` / `…0003.csv` — synthetic II cash statements (GBP
+  and USD respectively); UUID-named with a `Debit,Credit,Running Balance` header so
+  `IICashStatementParser.supports` matches and `IISippParser.supports` rejects.
 - `Holdings.xlsx` — synthetic RothIRA holdings (sheet `Holdings`, headers at row index 11);
   includes a `GOOGL` row and `BDP` + `USD999997` cash rows to exercise the merge-to-`CASH` path.
 - `yahoo-nvda-sample.json` — synthetic Yahoo chart response for `YahooPriceFetcherTest`.
@@ -116,9 +119,12 @@ native → GBP, divide by the rate.
 - `RothIraParser` — `Holdings*.xlsx` (holdings)
 - `AJBellSippParser` — `portfolio*.csv` (takes live FX rates in constructor for native-value calculation)
 - `IISippParser` — UUID-named `.csv` (e.g. `1f072c5f-....csv`); infers currency from `$`/`£` prefix on Market Value
-- `AJBellCashStatementParser` — `cashstatements.csv` (cash flows, GBP)
-- `RothIraCashStatementParser` — `History.xlsx` (cash flows, native USD; takes a `HistoricalFxRateProvider` in
+- `AJBellCashStatementParser` — `cashstatements*.csv` (cash flows, GBP)
+- `RothIraCashStatementParser` — `History*.xlsx` (cash flows, native USD; takes a `HistoricalFxRateProvider` in
   constructor for per-date GBP conversion)
+- `IICashStatementParser` — UUID-named `.csv` with `Debit,Credit,Running Balance` header (one file per
+  currency: GBP, USD, …); takes a `HistoricalFxRateProvider` for listing-currency detection and per-date GBP
+  conversion. Distinguished from `IISippParser` (holdings) by header sniff.
 
 ## II SIPP cash handling
 
@@ -169,17 +175,20 @@ in dividends.
 ## Cash transaction ingestion
 
 `CashTransactionParser` is a separate interface from `AccountParser` — cash flows and holdings are different concerns.
-Two impls feed the `cash_transactions` table: `AJBellCashStatementParser` (`cashstatements.csv`, GBP) and
-`RothIraCashStatementParser` (`History.xlsx`, native USD).
+Three impls feed the `cash_transactions` table: `AJBellCashStatementParser` (`cashstatements*.csv`, GBP),
+`RothIraCashStatementParser` (`History*.xlsx`, native USD) and `IICashStatementParser` (UUID-named `.csv`, one
+file per currency).
 
 The table stores both a native-currency running balance (`cash_balance`) and its GBP equivalent (`cash_balance_gbp`).
-For AJBell these are equal (GBP); for RothIRA `cash_balance` is USD. `PortfolioDatabase.ensureCashTable()` adds the
+For AJBell these are equal (GBP); for RothIRA `cash_balance` is USD; for II each row's `currency` column distinguishes
+the per-currency ledger within the shared `account='II'`. `PortfolioDatabase.ensureCashTable()` adds the
 `cash_balance` column to pre-existing DBs and backfills GBP rows from `cash_balance_gbp`.
 
-**Ingestion flow in `ImportCashService.importCash()`** — runs both sources independently, returning one
-`ImportCashResult` each. Per source:
+**Ingestion flow in `ImportCashService.importCash()`** — runs each source independently, returning one
+`ImportCashResult` per file that was actually processed. Missing files produce no result row. Per file:
 
-1. If the file is absent from the input dir, that source's result is NOT_FOUND
+1. Match files in input dir (AJBell + RothIRA use a glob and pick the newest; II picks every UUID-named CSV whose
+   header carries `Debit,Credit,Running Balance`).
 2. Parse → save into `cash_transactions`
 3. If new rows were written: archive the file to `<db-dir>/<prefix>_<date>.<ext>` (move, not copy)
 4. If no new rows (duplicate): delete it
@@ -212,6 +221,21 @@ before the fallback path.
 cash: `amount`/`amountGbp` = 0 but `quantity` = the extra shares); Cash/Foreign Security Dividend → `DIVIDEND`; Foreign
 Tax Withheld → `CHARGE` (its own negative row, not netted into the dividend). Quantity keeps the file's sign (negative
 for sells). Symbols pass through `RothIraParser.normaliseSecurityId` for consistency with holdings.
+
+**II dedup + balance** (in `saveIiCashTransactions`): rows arrive with `cashBalance`/`cashBalanceGbp` already set from
+the file's `Running Balance` column (per-currency). Dedup key is `(date, type, symbol, amount, currency)` within
+`account='II'`; the currency component isolates the GBP and USD ledgers within the shared account so dividend FIFO
+still groups by `(account, symbol)` across currencies (a USD-listed stock bought from GBP cash and later sold to USD
+cash attributes correctly).
+
+**Row classification (II):** by `Description` — `Div N <name>` → `DIVIDEND`; `Gross interest…` → `INTEREST`;
+`Total Monthly Fee` → `CHARGE`; `Trf from… / PBB NET CONTRIBUTION / Basic rate tax relief…` → `CONTRIBUTION`;
+`N POUNDS STERLING NoTf…` (currency exchange) → `CONTRIBUTION` (paired across the GBP/USD files); buy/sell
+descriptions `N <name> Del|Bal <price> S Date dd/mm/yy` → `TRANSACTION`. Every trade row produces a `TRANSACTION`
+plus a `CHARGE` for the commission/FX markup so the cost is broken out rather than buried in the position cost basis.
+Listing currency is detected heuristically (`price·qty` vs file debit/credit, trying file ccy first, then USD/EUR via
+historical FX); the residual becomes the markup. Running balance per row is verified against the file's
+`Running Balance` column — a mismatch >1p/1c aborts the import.
 
 ## Price history
 

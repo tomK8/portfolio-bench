@@ -1,0 +1,4 @@
+Date,Settlement Date,Symbol,Sedol,Quantity,Price,Description,Reference,Debit,Credit,Running Balance
+20/10/2025,20/10/2025,n/a,n/a,n/a,n/a,Total Monthly Fee,n/a,£5.99,n/a,"£5,519.01"
+15/10/2025,15/10/2025,n/a,n/a,n/a,n/a,Trf from elsewhere,n/a,n/a,"£5,000.00","£5,525.00"
+10/10/2025,12/10/2025,AAPL,XYZ123,10,£190.00,10 APPLE  Del  190.00 S Date 12/10/25,REFX1,"£1,475.00",n/a,£525.00

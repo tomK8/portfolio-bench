@@ -391,6 +391,58 @@ public class PortfolioDatabase {
         return 0;
     }
 
+    /**
+     * Saves II cash rows. The parser already populated {@code cashBalance}/{@code cashBalanceGbp}
+     * from the file's per-currency Running Balance column, so this method only dedups and inserts.
+     * Dedup key: {@code (transaction_date, type, symbol, amount, currency)} within
+     * {@code account='II'} — the currency component keeps the GBP and USD ledgers isolated even
+     * though they share an account.
+     */
+    public int saveIiCashTransactions(List<CashTransaction> rows) {
+        if (rows.isEmpty()) return 0;
+        try {
+            Files.createDirectories(dbDir);
+            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+                 Statement ddl = conn.createStatement()) {
+                ensureCashTable(ddl);
+
+                Set<String> existingKeys = new HashSet<>();
+                try (PreparedStatement q = conn.prepareStatement(
+                        "SELECT transaction_date, type, symbol, amount, currency " +
+                                "FROM cash_transactions WHERE account = 'II'")) {
+                    try (var rs = q.executeQuery()) {
+                        while (rs.next()) {
+                            existingKeys.add(iiKey(rs.getString(1), rs.getString(2),
+                                    rs.getString(3), rs.getDouble(4), rs.getString(5)));
+                        }
+                    }
+                }
+
+                int inserted = 0;
+                try (PreparedStatement ps = conn.prepareStatement(INSERT_CASH_SQL)) {
+                    for (CashTransaction t : rows) {
+                        String key = iiKey(t.transactionDate(), t.type(), t.symbol(),
+                                t.amount(), t.currency());
+                        if (existingKeys.contains(key)) continue;
+                        bindCashRow(ps, t);
+                        ps.executeUpdate();
+                        inserted++;
+                    }
+                }
+                System.out.printf("Cash transactions [II]: %d inserted, %d already present (skipped)%n",
+                        inserted, rows.size() - inserted);
+                return inserted;
+            }
+        } catch (IOException | SQLException e) {
+            System.err.println("Warning: could not save II cash transactions — " + e.getMessage());
+        }
+        return 0;
+    }
+
+    private static String iiKey(String date, String type, String symbol, double amount, String currency) {
+        return date + "|" + type + "|" + symbol + "|" + amount + "|" + currency;
+    }
+
     // ---- Price history ------------------------------------------------------
 
     private static void ensurePriceTable(Statement ddl) throws SQLException {

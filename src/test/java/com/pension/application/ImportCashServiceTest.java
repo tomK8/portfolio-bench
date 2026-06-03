@@ -59,6 +59,13 @@ class ImportCashServiceTest {
     }
 
     @Test
+    void missingInputDirTreatedAsEmpty() {
+        ImportCashService svc = new ImportCashService(
+                inputDir.resolve("does-not-exist"), new PortfolioDatabase(dbDir), FX);
+        assertTrue(svc.importCash().isEmpty(), "missing input dir → no results, no exception");
+    }
+
+    @Test
     void picksMostRecentMatchWhenMultipleCopiesExist() throws IOException {
         Files.writeString(inputDir.resolve("cashstatements.csv"), """
                 Date,Description,Receipt (GBP),Payment (GBP),Balance (GBP)

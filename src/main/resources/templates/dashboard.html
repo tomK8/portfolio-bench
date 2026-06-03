@@ -55,8 +55,21 @@
             opacity: 1;
         }
 
-        #result {
+        .result-panel {
             margin-top: 2rem;
+        }
+
+        .result-panel h2 {
+            font-size: 1rem;
+            color: #555;
+            margin: 0 0 0.5rem 0;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .result-panel:has(> div:empty) {
+            display: none;
         }
 
         table {
@@ -135,21 +148,34 @@
 <h1 th:text="${appName}">Pension Aggregator</h1>
 <p class="sub">Local portfolio dashboard</p>
 
-<form class="actions" hx-indicator="#spinner" hx-target="#result">
+<form class="actions" hx-indicator="#spinner">
     <label>II SIPP cash (GBP):
         <input name="iiSippCash" th:value="${iiSippCash}" type="text" value="0"/>
     </label>
-    <button hx-post="/sync" type="submit">Sync portfolio</button>
-    <button hx-post="/export" type="submit">Export Excel</button>
+    <button hx-post="/sync" hx-target="#portfolio-result" type="submit">Aggregated Portfolio</button>
+    <button hx-post="/export" hx-target="#export-result" type="submit">Export Excel</button>
 </form>
 
-<form class="actions" hx-indicator="#spinner" hx-post="/import-cash" hx-target="#result">
-    <button type="submit">Import cash statement</button>
-    <span class="muted">reads <code>~/Downloads/cashstatements.csv</code> (AJBell) and <code>~/Downloads/History.xlsx</code> (RothIRA)</span>
+<form class="actions" hx-indicator="#spinner">
+    <button hx-post="/import-cash" hx-target="#import-result" type="submit">Import cash statement</button>
+    <span class="muted">reads <code>~/Downloads/cashstatements*.csv</code> (AJBell), <code>~/Downloads/History*.xlsx</code> (RothIRA) and UUID-named <code>~/Downloads/*.csv</code> (II SIPP)</span>
     <span class="htmx-indicator" id="spinner">Working…</span>
 </form>
 
-<div id="result"></div>
+<section class="result-panel">
+    <h2>Aggregated portfolio</h2>
+    <div id="portfolio-result"></div>
+</section>
+
+<section class="result-panel">
+    <h2>Export Excel</h2>
+    <div id="export-result"></div>
+</section>
+
+<section class="result-panel">
+    <h2>Import cash statement</h2>
+    <div id="import-result"></div>
+</section>
 
 <script>
     (function () {
@@ -193,7 +219,7 @@
         }
 
         document.body.addEventListener('htmx:afterSettle', function () {
-            var table = document.querySelector('#result table');
+            var table = document.querySelector('#portfolio-result table');
             if (table && !table.dataset.sortAttached) {
                 table.dataset.sortAttached = '1';
                 attachSort(table);

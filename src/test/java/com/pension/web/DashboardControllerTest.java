@@ -47,7 +47,7 @@ class DashboardControllerTest {
     void dashboardShowsSyncForm() throws Exception {
         mvc.perform(get("/"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("Sync portfolio")));
+                .andExpect(content().string(containsString("Aggregated Portfolio")));
     }
 
     @Test

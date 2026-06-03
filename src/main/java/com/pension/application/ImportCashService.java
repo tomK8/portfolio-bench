@@ -125,6 +125,7 @@ public class ImportCashService {
     }
 
     private List<Path> matchingFiles(String glob) {
+        if (!Files.isDirectory(inputDir)) return List.of();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(inputDir, glob)) {
             List<Path> out = new ArrayList<>();
             for (Path p : stream) out.add(p);

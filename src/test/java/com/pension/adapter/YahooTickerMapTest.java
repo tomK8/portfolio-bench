@@ -27,6 +27,13 @@ class YahooTickerMapTest {
     }
 
     @Test
+    void rewritesShareClassPunctuationAndLseSuffixes() {
+        assertEquals("BRK-B", map.tickerFor("BRK.B"));
+        assertEquals("RBTX.L", map.tickerFor("RBTX"));
+        assertEquals("MCTS.L", map.tickerFor("MCTS"));
+    }
+
+    @Test
     void detectsGilts() {
         assertTrue(map.isGilt("GILT 0.875% 2033"));
         assertFalse(map.isGilt("NVDA"));

@@ -72,6 +72,7 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             new SymbolRule(Pattern.compile("LEGAL.{0,5}GENERAL"), "LGEN"),
             new SymbolRule(Pattern.compile("\\bINTEL(?:CORP)?\\b"), "INTC"),
             new SymbolRule(Pattern.compile("\\bAVIVA\\b"), "AV."),
+            new SymbolRule(Pattern.compile("\\bASTRAZENECA\\b"), "AZN"),
             new SymbolRule(Pattern.compile("BAE SYSTEMS"), "BA."),
             new SymbolRule(Pattern.compile("\\bBARCLAYS\\b"), "BARC"),
             new SymbolRule(Pattern.compile("\\bNETFLIX\\b"), "NFLX"),

@@ -6,7 +6,13 @@ import com.portfolio.domain.model.IntradayPrice;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.*;
+import java.util.Comparator;
+import java.util.Currency;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 public class PortfolioAggregator {
@@ -29,70 +35,13 @@ public class PortfolioAggregator {
                 : native_.divide(rate, 10, RoundingMode.HALF_UP);
     }
 
-public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
+    public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
                                       Map<String, BigDecimal> dividendsBySymbol,
                                       Map<String, IntradayPrice> latestPricesBySymbol) {
-        record Key(String id, String ccy) {
-        }
-
-        class Acc {
-            final Set<String> srcs = new LinkedHashSet<>();
-            String securityId;
-            BigDecimal qty = BigDecimal.ZERO;
-            BigDecimal nativeCost = BigDecimal.ZERO;
-            boolean hasCost = false;
-            BigDecimal mktValGbp = BigDecimal.ZERO;
-            BigDecimal totalCostGbp = BigDecimal.ZERO;
-            boolean hasCostGbp = false;
-            Currency currency;
-        }
-
-        Map<Key, Acc> map = new LinkedHashMap<>();
-
-        for (Holding h : holdings) {
-            Key key = new Key(h.getSecurityId(), h.getCurrency().getCurrencyCode());
-            Acc acc = map.computeIfAbsent(key, k -> {
-                Acc a = new Acc();
-                a.securityId = h.getSecurityId();
-                a.currency = h.getCurrency();
-                return a;
-            });
-            acc.qty = acc.qty.add(h.getQuantity());
-            acc.srcs.add(h.getSource());
-
-            if (h.getAvgPricePaid() != null) {
-                acc.nativeCost = acc.nativeCost.add(h.getQuantity().multiply(h.getAvgPricePaid()));
-                acc.hasCost = true;
-            }
-            BigDecimal gbp = toGbp(h, gbpRates);
-            if (gbp != null) acc.mktValGbp = acc.mktValGbp.add(gbp);
-
-            BigDecimal costGbp = costInGbp(h, gbpRates);
-            if (costGbp != null) {
-                acc.totalCostGbp = acc.totalCostGbp.add(costGbp);
-                acc.hasCostGbp = true;
-            }
-        }
-
-        return map.values().stream().map(acc -> {
-                    BigDecimal avg = acc.hasCost && acc.qty.compareTo(BigDecimal.ZERO) > 0
-                            ? acc.nativeCost.divide(acc.qty, 10, RoundingMode.HALF_UP) : null;
-                    BigDecimal gain = acc.hasCostGbp ? acc.mktValGbp.subtract(acc.totalCostGbp) : null;
-                    BigDecimal pct = (acc.hasCostGbp && acc.totalCostGbp.compareTo(BigDecimal.ZERO) != 0)
-                            ? gain.divide(acc.totalCostGbp, 10, RoundingMode.HALF_UP) : null;
-
-                    BigDecimal dividend = dividendsBySymbol.getOrDefault(
-                            acc.securityId.toUpperCase(), BigDecimal.ZERO);
-                    BigDecimal totalGain = gain != null ? gain.add(dividend) : null;
-                    BigDecimal totalGainPct = (acc.hasCostGbp && acc.totalCostGbp.compareTo(BigDecimal.ZERO) != 0)
-                            ? totalGain.divide(acc.totalCostGbp, 10, RoundingMode.HALF_UP) : null;
-
-                    BigDecimal[] rt = realtime(acc.securityId, acc.currency, acc.qty, latestPricesBySymbol, gbpRates);
-
-                    return new AggHolding(acc.securityId, acc.qty, avg, acc.mktValGbp, gain, pct,
-                            dividend, totalGain, totalGainPct, acc.currency, String.join(", ", acc.srcs),
-                            rt[0], rt[1], rt[2]);
-                }).sorted(Comparator.comparingInt(this::section).thenComparing(this::sortKey))
+        Map<Key, Accumulator> accs = groupAccumulators(holdings, gbpRates);
+        return accs.values().stream()
+                .map(acc -> buildAggHolding(acc, dividendsBySymbol, latestPricesBySymbol, gbpRates))
+                .sorted(Comparator.comparingInt(this::section).thenComparing(this::sortKey))
                 .collect(Collectors.toList());
     }
 
@@ -103,6 +52,42 @@ public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal
     public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
                                       Map<String, BigDecimal> dividendsBySymbol) {
         return aggregate(holdings, gbpRates, dividendsBySymbol, Map.of());
+    }
+
+    /** Pass 1: fold raw holdings into per-{@code (securityId, currency)} totals. */
+    private static Map<Key, Accumulator> groupAccumulators(List<Holding> holdings,
+                                                           Map<String, BigDecimal> gbpRates) {
+        Map<Key, Accumulator> accs = new LinkedHashMap<>();
+        for (Holding h : holdings) {
+            Key key = new Key(h.getSecurityId(), h.getCurrency().getCurrencyCode());
+            Accumulator acc = accs.computeIfAbsent(key, k -> new Accumulator(h.getSecurityId(), h.getCurrency()));
+            acc.add(h, gbpRates);
+        }
+        return accs;
+    }
+
+    /** Pass 2: derive the per-symbol view (averages, gains, dividends, RT) from one accumulator. */
+    private static AggHolding buildAggHolding(Accumulator acc,
+                                              Map<String, BigDecimal> dividendsBySymbol,
+                                              Map<String, IntradayPrice> latestPricesBySymbol,
+                                              Map<String, BigDecimal> gbpRates) {
+        BigDecimal avg = acc.hasCost && acc.qty.compareTo(BigDecimal.ZERO) > 0
+                ? acc.nativeCost.divide(acc.qty, 10, RoundingMode.HALF_UP) : null;
+        BigDecimal gain = acc.hasCostGbp ? acc.mktValGbp.subtract(acc.totalCostGbp) : null;
+        BigDecimal pct = (acc.hasCostGbp && acc.totalCostGbp.compareTo(BigDecimal.ZERO) != 0)
+                ? gain.divide(acc.totalCostGbp, 10, RoundingMode.HALF_UP) : null;
+
+        BigDecimal dividend = dividendsBySymbol.getOrDefault(
+                acc.securityId.toUpperCase(), BigDecimal.ZERO);
+        BigDecimal totalGain = gain != null ? gain.add(dividend) : null;
+        BigDecimal totalGainPct = (acc.hasCostGbp && acc.totalCostGbp.compareTo(BigDecimal.ZERO) != 0)
+                ? totalGain.divide(acc.totalCostGbp, 10, RoundingMode.HALF_UP) : null;
+
+        BigDecimal[] rt = realtime(acc.securityId, acc.currency, acc.qty, latestPricesBySymbol, gbpRates);
+
+        return new AggHolding(acc.securityId, acc.qty, avg, acc.mktValGbp, gain, pct,
+                dividend, totalGain, totalGainPct, acc.currency, String.join(", ", acc.srcs),
+                rt[0], rt[1], rt[2]);
     }
 
     /** Returns {@code {latestPrice, rtMarketValue, rtMarketValueGbp}}; all null when unavailable. */
@@ -144,5 +129,47 @@ public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal
 
     private String sortKey(AggHolding h) {
         return h.securityId().equals("CASH") ? "~" : h.securityId();
+    }
+
+    private record Key(String id, String ccy) {
+    }
+
+    /**
+     * Per-{@code (securityId, currency)} running totals built during the first pass.
+     * Mutable on purpose — gets folded into an immutable {@link AggHolding} in the second pass.
+     */
+    private static final class Accumulator {
+        final String securityId;
+        final Currency currency;
+        final Set<String> srcs = new LinkedHashSet<>();
+        BigDecimal qty = BigDecimal.ZERO;
+        BigDecimal nativeCost = BigDecimal.ZERO;
+        BigDecimal mktValGbp = BigDecimal.ZERO;
+        BigDecimal totalCostGbp = BigDecimal.ZERO;
+        boolean hasCost = false;
+        boolean hasCostGbp = false;
+
+        Accumulator(String securityId, Currency currency) {
+            this.securityId = securityId;
+            this.currency = currency;
+        }
+
+        void add(Holding h, Map<String, BigDecimal> gbpRates) {
+            qty = qty.add(h.getQuantity());
+            srcs.add(h.getSource());
+
+            if (h.getAvgPricePaid() != null) {
+                nativeCost = nativeCost.add(h.getQuantity().multiply(h.getAvgPricePaid()));
+                hasCost = true;
+            }
+            BigDecimal gbp = toGbp(h, gbpRates);
+            if (gbp != null) mktValGbp = mktValGbp.add(gbp);
+
+            BigDecimal costGbp = costInGbp(h, gbpRates);
+            if (costGbp != null) {
+                totalCostGbp = totalCostGbp.add(costGbp);
+                hasCostGbp = true;
+            }
+        }
     }
 }

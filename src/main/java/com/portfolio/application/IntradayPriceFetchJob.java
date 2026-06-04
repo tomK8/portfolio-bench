@@ -10,7 +10,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -46,11 +45,7 @@ public class IntradayPriceFetchJob {
     }
 
     public void run() {
-        Set<String> tickerSet = new LinkedHashSet<>();
-        for (String symbol : cashRepo.distinctTradedSymbols()) {
-            if (tickers.isGilt(symbol)) continue;
-            tickerSet.add(tickers.tickerFor(symbol));
-        }
+        Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers);
 
         Instant now = Instant.now();
         Instant earliest = now.minus(LOOKBACK);
@@ -67,18 +62,10 @@ public class IntradayPriceFetchJob {
             List<IntradayBar> bars = fetcher.fetchIntraday(ticker, from, now);
             int saved = intradayRepo.saveIntradayBars(bars);
             log.info("Intraday {} — {} bars ({} new)", ticker, bars.size(), saved);
-            sleep(THROTTLE_MS);
+            PriceFetchSupport.sleep(THROTTLE_MS);
         }
 
         int pruned = intradayRepo.pruneIntradayBefore(now.minus(Duration.ofDays(RETENTION_DAYS)));
         if (pruned > 0) log.info("Intraday prune — removed {} rows older than {} days", pruned, RETENTION_DAYS);
-    }
-
-    private static void sleep(long ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 }

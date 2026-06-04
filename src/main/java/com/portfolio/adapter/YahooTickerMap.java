@@ -25,8 +25,4 @@ public class YahooTickerMap {
     public String tickerFor(String internalSymbol) {
         return props.getProperty(internalSymbol, internalSymbol);
     }
-
-    public boolean isGilt(String internalSymbol) {
-        return internalSymbol != null && internalSymbol.startsWith("GILT");
-    }
 }

@@ -95,11 +95,11 @@ public class CashTransactionRepository {
                             existingKeys.contains(tx.transactionDate() + "|" + bal);
                     if (known) {
                         if (seenNewRow) {
-                            log.error(String.format(
-                                    "DATA INTEGRITY ERROR: %s balance %.2f on %s already exists in DB " +
-                                            "but appears after new rows — possible gap or corrupt input file. Aborting import.",
+                            throw new IllegalStateException(String.format(
+                                    "Data integrity error: %s balance %.2f on %s already exists in DB "
+                                            + "but appears after new rows — possible gap or corrupt input file. "
+                                            + "Aborting import.",
                                     account.dbValue(), bal, tx.transactionDate()));
-                            return 0;
                         }
                         skipped++;
                     } else {
@@ -113,9 +113,10 @@ public class CashTransactionRepository {
             log.info("Cash transactions [{}]: {} inserted, {} already present (skipped)",
                     account.dbValue(), inserted, skipped);
             return inserted;
+        } catch (IllegalStateException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("Could not save cash transactions", e);
-            return 0;
+            throw new IllegalStateException("Could not save AJBell cash transactions", e);
         }
     }
 
@@ -176,8 +177,7 @@ public class CashTransactionRepository {
                     account.dbValue(), inserted, rows.size() - inserted);
             return inserted;
         } catch (Exception e) {
-            log.warn("Could not save RothIRA cash transactions", e);
-            return 0;
+            throw new IllegalStateException("Could not save RothIRA cash transactions", e);
         }
     }
 
@@ -215,8 +215,7 @@ public class CashTransactionRepository {
                     inserted, rows.size() - inserted);
             return inserted;
         } catch (Exception e) {
-            log.warn("Could not save II cash transactions", e);
-            return 0;
+            throw new IllegalStateException("Could not save II cash transactions", e);
         }
     }
 

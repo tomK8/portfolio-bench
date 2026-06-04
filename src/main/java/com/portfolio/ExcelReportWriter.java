@@ -1,5 +1,6 @@
 package com.portfolio;
 
+import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PortfolioAggregator;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.Holding;
@@ -82,7 +83,7 @@ public class ExcelReportWriter {
         boolean hasCashGbp = cashList.stream().anyMatch(h -> "GBP".equals(h.currency().getCurrencyCode()));
 
         int nEquity = equities.size();
-        int nBond = (int) equities.stream().filter(h -> PortfolioAggregator.isBond(h.securityId())).count();
+        int nBond = (int) equities.stream().filter(h -> Instruments.isBond(h.securityId())).count();
         int nNonBond = nEquity - nBond;
         int nCash = cashList.size() + (hasCashGbp ? 0 : 1);
 

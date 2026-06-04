@@ -129,12 +129,31 @@ public class BeanConfiguration {
     }
 
     @Bean
-    public ImportCashService importCashService(@Value("${portfolio.input-dir:}") String inputDir,
-                                               JdbcConnectionFactory jdbcConnectionFactory,
-                                               CashTransactionRepository cashTransactionRepository,
-                                               HistoricalFxRateProvider historicalFxRateProvider) {
-        return new ImportCashService(inputDir(inputDir), jdbcConnectionFactory.dbDir(),
+    public AjBellCashImporter ajBellCashImporter(JdbcConnectionFactory jdbcConnectionFactory,
+                                                 CashTransactionRepository cashTransactionRepository) {
+        return new AjBellCashImporter(jdbcConnectionFactory.dbDir(), cashTransactionRepository);
+    }
+
+    @Bean
+    public RothIraCashImporter rothIraCashImporter(JdbcConnectionFactory jdbcConnectionFactory,
+                                                   CashTransactionRepository cashTransactionRepository,
+                                                   HistoricalFxRateProvider historicalFxRateProvider) {
+        return new RothIraCashImporter(jdbcConnectionFactory.dbDir(),
                 cashTransactionRepository, historicalFxRateProvider);
+    }
+
+    @Bean
+    public IiCashImporter iiCashImporter(JdbcConnectionFactory jdbcConnectionFactory,
+                                         CashTransactionRepository cashTransactionRepository,
+                                         HistoricalFxRateProvider historicalFxRateProvider) {
+        return new IiCashImporter(jdbcConnectionFactory.dbDir(),
+                cashTransactionRepository, historicalFxRateProvider);
+    }
+
+    @Bean
+    public ImportCashService importCashService(@Value("${portfolio.input-dir:}") String inputDir,
+                                               java.util.List<CashImporter> cashImporters) {
+        return new ImportCashService(inputDir(inputDir), cashImporters);
     }
 
     @Bean

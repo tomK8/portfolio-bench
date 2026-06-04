@@ -33,10 +33,4 @@ class YahooTickerMapTest {
         assertEquals("MCTS.L", map.tickerFor("MCTS"));
     }
 
-    @Test
-    void detectsGilts() {
-        assertTrue(map.isGilt("GILT 0.875% 2033"));
-        assertFalse(map.isGilt("NVDA"));
-        assertFalse(map.isGilt(null));
-    }
 }

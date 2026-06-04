@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -40,15 +39,7 @@ public class PriceFetchJob {
 
     public void run() {
         LocalDate today = LocalDate.now();
-
-        Set<String> tickerSet = new LinkedHashSet<>();   // dedups tickers shared across symbols
-        for (String symbol : cashRepo.distinctTradedSymbols()) {
-            if (tickers.isGilt(symbol)) {
-                log.info("Skipping {} — gilts not supported", symbol);
-                continue;
-            }
-            tickerSet.add(tickers.tickerFor(symbol));
-        }
+        Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers);
 
         for (String ticker : tickerSet) {
             LocalDate latest = priceRepo.getLatestPriceDate(ticker);
@@ -60,15 +51,7 @@ public class PriceFetchJob {
             List<PriceBar> bars = fetcher.fetch(ticker, from, today);
             int saved = priceRepo.savePriceBars(bars);
             log.info("Fetched {} rows for {} ({} new)", bars.size(), ticker, saved);
-            sleep(THROTTLE_MS);
-        }
-    }
-
-    private static void sleep(long ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            PriceFetchSupport.sleep(THROTTLE_MS);
         }
     }
 }

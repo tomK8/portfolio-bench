@@ -92,7 +92,7 @@ public class SnapshotRepository {
                     totalGainGbp.doubleValue(),
                     returnPct.multiply(BigDecimal.valueOf(100)).doubleValue()));
         } catch (Exception e) {
-            log.warn("Could not save DB snapshot", e);
+            throw new IllegalStateException("Could not save portfolio snapshot", e);
         }
     }
 }

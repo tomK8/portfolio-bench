@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<div th:fragment="result" class="note" style="border-left:4px solid #c33; padding-left:0.75rem;">
+    <p class="completed-at" th:text="'Failed at ' + ${completedAt}">Failed at 00:00:00</p>
+    <p><b>Error:</b> <span th:text="${errorMessage}">message</span></p>
+    <p class="muted" style="font-size:0.85em;">See <code>~/log/portfolio-bench.log</code> for the full stack trace.</p>
+</div>
+
+</body>
+</html>

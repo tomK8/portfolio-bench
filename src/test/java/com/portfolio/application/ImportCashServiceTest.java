@@ -42,7 +42,15 @@ class ImportCashServiceTest {
     };
 
     private ImportCashService service() {
-        return new ImportCashService(inputDir, dbDir, repo(), FX);
+        return service(inputDir);
+    }
+
+    private ImportCashService service(Path scanDir) {
+        CashTransactionRepository repo = repo();
+        return new ImportCashService(scanDir, List.of(
+                new AjBellCashImporter(dbDir, repo),
+                new RothIraCashImporter(dbDir, repo, FX),
+                new IiCashImporter(dbDir, repo, FX)));
     }
 
     private CashTransactionRepository repo() {
@@ -74,8 +82,7 @@ class ImportCashServiceTest {
 
     @Test
     void missingInputDirTreatedAsEmpty() {
-        ImportCashService svc = new ImportCashService(
-                inputDir.resolve("does-not-exist"), dbDir, repo(), FX);
+        ImportCashService svc = service(inputDir.resolve("does-not-exist"));
         assertAllNotFound(svc.importCash());
     }
 

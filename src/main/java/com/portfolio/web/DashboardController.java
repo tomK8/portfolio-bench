@@ -4,8 +4,11 @@ import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.SyncPortfolioService;
 import com.portfolio.persistence.KeyValueStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -16,6 +19,8 @@ import java.time.format.DateTimeFormatter;
 
 @Controller
 public class DashboardController {
+
+    private static final Logger log = LoggerFactory.getLogger(DashboardController.class);
 
     /** KV key for the last II SIPP cash balance entered on the dashboard. */
     static final String II_SIPP_CASH_KEY = "ii_sipp_cash_last";
@@ -59,12 +64,20 @@ public class DashboardController {
         return "dashboard";
     }
 
+    /**
+     * Parses the II SIPP cash form field and persists the value, returning the parsed amount.
+     * Shared by every action that takes the form parameter (sync, export).
+     */
+    private BigDecimal persistIiSippCash(String raw) {
+        BigDecimal cash = parseCash(raw);
+        settings.putBigDecimal(II_SIPP_CASH_KEY, cash);
+        return cash;
+    }
+
     @PostMapping("/sync")
     public String sync(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
                        Model model) {
-        BigDecimal cash = parseCash(iiSippCash);
-        settings.putBigDecimal(II_SIPP_CASH_KEY, cash);
-        model.addAttribute("result", syncService.sync(cash));
+        model.addAttribute("result", syncService.sync(persistIiSippCash(iiSippCash)));
         model.addAttribute("completedAt", now());
         return "fragments/portfolio :: result";
     }
@@ -72,9 +85,7 @@ public class DashboardController {
     @PostMapping("/export")
     public String export(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
                          Model model) {
-        BigDecimal cash = parseCash(iiSippCash);
-        settings.putBigDecimal(II_SIPP_CASH_KEY, cash);
-        model.addAttribute("export", exportService.export(cash));
+        model.addAttribute("export", exportService.export(persistIiSippCash(iiSippCash)));
         model.addAttribute("completedAt", now());
         return "fragments/export :: result";
     }
@@ -84,5 +95,18 @@ public class DashboardController {
         model.addAttribute("cashImports", importCashService.importCash());
         model.addAttribute("completedAt", now());
         return "fragments/import :: result";
+    }
+
+    /**
+     * Surfaces write-path failures (snapshot save, cash import, integrity gaps) as a friendly
+     * fragment in the result panel rather than a stark 500. The full stack trace already lives
+     * in the log file.
+     */
+    @ExceptionHandler(IllegalStateException.class)
+    public String handlePersistenceFailure(IllegalStateException e, Model model) {
+        log.warn("Action failed", e);
+        model.addAttribute("errorMessage", e.getMessage());
+        model.addAttribute("completedAt", now());
+        return "fragments/error :: result";
     }
 }

@@ -29,11 +29,7 @@ public class PortfolioAggregator {
                 : native_.divide(rate, 10, RoundingMode.HALF_UP);
     }
 
-    public static boolean isBond(String id) {
-        return id.contains("%") || id.toUpperCase().startsWith("GILT");
-    }
-
-    public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
+public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
                                       Map<String, BigDecimal> dividendsBySymbol,
                                       Map<String, IntradayPrice> latestPricesBySymbol) {
         record Key(String id, String ccy) {
@@ -114,7 +110,7 @@ public class PortfolioAggregator {
                                          Map<String, IntradayPrice> prices,
                                          Map<String, BigDecimal> gbpRates) {
         BigDecimal[] empty = {null, null, null};
-        if (securityId.equals("CASH") || isBond(securityId)) return empty;
+        if (securityId.equals("CASH") || Instruments.isBond(securityId)) return empty;
 
         IntradayPrice p = prices.get(securityId.toUpperCase());
         if (p == null) return empty;
@@ -137,7 +133,7 @@ public class PortfolioAggregator {
     }
 
     private int section(AggHolding h) {
-        if (isBond(h.securityId())) return 4;
+        if (Instruments.isBond(h.securityId())) return 4;
         return switch (h.currency().getCurrencyCode()) {
             case "USD" -> 0;
             case "GBP" -> 1;

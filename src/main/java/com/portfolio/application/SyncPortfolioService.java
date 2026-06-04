@@ -1,6 +1,7 @@
 package com.portfolio.application;
 
 import com.portfolio.adapter.YahooTickerMap;
+import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PortfolioAggregator;
 import com.portfolio.domain.PortfolioMetrics;
 import com.portfolio.domain.model.AggHolding;
@@ -73,8 +74,7 @@ public class SyncPortfolioService {
         Map<String, String> tickerBySymbol = new LinkedHashMap<>();   // preserves first-seen order
         for (Holding h : holdings) {
             String sym = h.getSecurityId();
-            if (sym == null || sym.equals("CASH") || PortfolioAggregator.isBond(sym)) continue;
-            if (tickerMap.isGilt(sym)) continue;
+            if (sym == null || sym.equals("CASH") || Instruments.isBond(sym)) continue;
             tickerBySymbol.putIfAbsent(sym.toUpperCase(), tickerMap.tickerFor(sym));
         }
         if (tickerBySymbol.isEmpty()) return Map.of();

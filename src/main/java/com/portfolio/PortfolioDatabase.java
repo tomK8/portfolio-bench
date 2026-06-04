@@ -1,6 +1,8 @@
 package com.portfolio;
 
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.IntradayBar;
+import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.PriceBar;
 
 import java.io.IOException;
@@ -62,6 +64,19 @@ public class PortfolioDatabase {
     private static final String CREATE_PRICE_INDEX = """
             CREATE INDEX IF NOT EXISTS idx_price_symbol_date
                 ON price_history(symbol, date DESC)""";
+    private static final String CREATE_INTRADAY_TABLE = """
+            CREATE TABLE IF NOT EXISTS price_intraday (
+                symbol     TEXT    NOT NULL,
+                ts         TEXT    NOT NULL,
+                close      REAL    NOT NULL,
+                volume     INTEGER,
+                currency   TEXT    NOT NULL,
+                fetched_at TEXT    NOT NULL,
+                PRIMARY KEY (symbol, ts)
+            )""";
+    private static final String CREATE_INTRADAY_INDEX = """
+            CREATE INDEX IF NOT EXISTS idx_intraday_symbol_ts
+                ON price_intraday(symbol, ts DESC)""";
     private static final String INSERT_CASH_SQL =
             "INSERT INTO cash_transactions " +
                     "(transaction_date, account, type, symbol, quantity, amount, currency, " +
@@ -571,5 +586,122 @@ public class PortfolioDatabase {
             System.err.println("Warning: could not read price history — " + e.getMessage());
         }
         return out;
+    }
+
+    // ---- Intraday prices ----------------------------------------------------
+
+    private static void ensureIntradayTable(Statement ddl) throws SQLException {
+        ddl.execute(CREATE_INTRADAY_TABLE);
+        ddl.execute(CREATE_INTRADAY_INDEX);
+    }
+
+    /** Idempotent insert (INSERT OR IGNORE on (symbol, ts)). Returns rows actually written. */
+    public int saveIntradayBars(List<IntradayBar> bars) {
+        if (bars.isEmpty()) return 0;
+        String fetchedAt = Instant.now().toString();
+        try {
+            Files.createDirectories(dbDir);
+            try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+                 Statement ddl = conn.createStatement()) {
+                ensureIntradayTable(ddl);
+                int inserted = 0;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT OR IGNORE INTO price_intraday " +
+                                "(symbol, ts, close, volume, currency, fetched_at) " +
+                                "VALUES (?, ?, ?, ?, ?, ?)")) {
+                    for (IntradayBar b : bars) {
+                        ps.setString(1, b.symbol());
+                        ps.setString(2, b.ts().toString());
+                        ps.setDouble(3, b.close());
+                        if (b.volume() != null) ps.setLong(4, b.volume());
+                        else ps.setNull(4, Types.INTEGER);
+                        ps.setString(5, b.currency());
+                        ps.setString(6, fetchedAt);
+                        inserted += ps.executeUpdate();
+                    }
+                }
+                return inserted;
+            }
+        } catch (IOException | SQLException e) {
+            System.err.println("Warning: could not save intraday bars — " + e.getMessage());
+        }
+        return 0;
+    }
+
+    /** Most recent stored timestamp for a ticker, or null if none. */
+    public Instant getLatestIntradayTs(String ticker) {
+        if (!Files.exists(dbPath)) return null;
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             Statement ddl = conn.createStatement()) {
+            ensureIntradayTable(ddl);
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT MAX(ts) FROM price_intraday WHERE symbol = ?")) {  // ISO instants sort lexically
+                ps.setString(1, ticker);
+                try (var rs = ps.executeQuery()) {
+                    String t = rs.next() ? rs.getString(1) : null;
+                    return t == null ? null : Instant.parse(t);
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Warning: could not read latest intraday ts — " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Bulk lookup: latest stored bar per ticker. One DB hit, not N — used by the dashboard's
+     * RT columns. Tickers with no rows are absent from the result.
+     */
+    public Map<String, IntradayPrice> loadLatestIntradayPrices(Collection<String> tickers) {
+        Map<String, IntradayPrice> out = new HashMap<>();
+        if (tickers.isEmpty() || !Files.exists(dbPath)) return out;
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             Statement ddl = conn.createStatement()) {
+            ensureIntradayTable(ddl);
+            String sql = "SELECT p.symbol, p.ts, p.close, p.currency FROM price_intraday p " +
+                    "JOIN (SELECT symbol, MAX(ts) AS max_ts FROM price_intraday GROUP BY symbol) m " +
+                    "ON p.symbol = m.symbol AND p.ts = m.max_ts " +
+                    "WHERE p.symbol IN (" + placeholders(tickers.size()) + ")";
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                int i = 1;
+                for (String t : tickers) ps.setString(i++, t);
+                try (var rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        out.put(rs.getString(1),
+                                new IntradayPrice(Instant.parse(rs.getString(2)),
+                                        rs.getDouble(3), rs.getString(4)));
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Warning: could not load latest intraday prices — " + e.getMessage());
+        }
+        return out;
+    }
+
+    private static String placeholders(int n) {
+        StringBuilder sb = new StringBuilder(n * 2);
+        for (int i = 0; i < n; i++) {
+            if (i > 0) sb.append(',');
+            sb.append('?');
+        }
+        return sb.toString();
+    }
+
+    /** Deletes rows with {@code ts < cutoff}. Returns number of rows removed. */
+    public int pruneIntradayBefore(Instant cutoff) {
+        if (!Files.exists(dbPath)) return 0;
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             Statement ddl = conn.createStatement()) {
+            ensureIntradayTable(ddl);
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM price_intraday WHERE ts < ?")) {
+                ps.setString(1, cutoff.toString());
+                return ps.executeUpdate();
+            }
+        } catch (SQLException e) {
+            System.err.println("Warning: could not prune intraday rows — " + e.getMessage());
+        }
+        return 0;
     }
 }

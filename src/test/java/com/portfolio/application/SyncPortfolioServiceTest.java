@@ -2,6 +2,7 @@ package com.portfolio.application;
 
 import com.portfolio.PortfolioDatabase;
 import com.portfolio.adapter.HoldingFileLocator;
+import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.port.FxRateProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,7 +31,7 @@ class SyncPortfolioServiceTest {
     private SyncPortfolioService service() {
         PortfolioDatabase db = new PortfolioDatabase(dbDir);
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
-        return new SyncPortfolioService(gatherer, db, new DividendService(db));
+        return new SyncPortfolioService(gatherer, db, new DividendService(db), new YahooTickerMap());
     }
 
     @Test

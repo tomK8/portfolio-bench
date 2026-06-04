@@ -1,5 +1,6 @@
 package com.portfolio.adapter;
 
+import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.PriceBar;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -27,5 +28,19 @@ class YahooPriceFetcherIntegrationTest {
         assertEquals("NVDA", b.symbol());
         assertEquals("USD", b.currency());
         assertTrue(b.close() > 0);
+    }
+
+    @Test
+    void fetchesRecentAaplIntradayBars() {
+        java.time.Instant now = java.time.Instant.now();
+        List<IntradayBar> bars = new YahooPriceFetcher()
+                .fetchIntraday("AAPL", now.minus(java.time.Duration.ofDays(2)), now);
+
+        assertFalse(bars.isEmpty(), "expected at least a few minute bars in the last 2 days");
+        IntradayBar b = bars.get(0);
+        assertEquals("AAPL", b.symbol());
+        assertEquals("USD", b.currency());
+        assertTrue(b.close() > 0);
+        assertTrue(b.ts().isBefore(now.plusSeconds(60)));
     }
 }

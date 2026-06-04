@@ -1,0 +1,24 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "USD",
+          "symbol": "AAPL",
+          "gmtoffset": -18000,
+          "exchangeTimezoneName": "America/New_York"
+        },
+        "timestamp": [1717074000, 1717074060, 1717074120, 1717074180],
+        "indicators": {
+          "quote": [
+            {
+              "close":  [190.10, 190.25, null, 190.50],
+              "volume": [12000, 9500, null, 8800]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

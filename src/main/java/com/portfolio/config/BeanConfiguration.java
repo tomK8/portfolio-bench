@@ -72,8 +72,9 @@ public class BeanConfiguration {
     @Bean
     public SyncPortfolioService syncPortfolioService(PortfolioGatherer portfolioGatherer,
                                                      PortfolioDatabase portfolioDatabase,
-                                                     DividendService dividendService) {
-        return new SyncPortfolioService(portfolioGatherer, portfolioDatabase, dividendService);
+                                                     DividendService dividendService,
+                                                     YahooTickerMap yahooTickerMap) {
+        return new SyncPortfolioService(portfolioGatherer, portfolioDatabase, dividendService, yahooTickerMap);
     }
 
     @Bean
@@ -109,5 +110,12 @@ public class BeanConfiguration {
                                        YahooPriceFetcher yahooPriceFetcher,
                                        YahooTickerMap yahooTickerMap) {
         return new PriceFetchJob(portfolioDatabase, yahooPriceFetcher, yahooTickerMap);
+    }
+
+    @Bean
+    public IntradayPriceFetchJob intradayPriceFetchJob(PortfolioDatabase portfolioDatabase,
+                                                       YahooPriceFetcher yahooPriceFetcher,
+                                                       YahooTickerMap yahooTickerMap) {
+        return new IntradayPriceFetchJob(portfolioDatabase, yahooPriceFetcher, yahooTickerMap);
     }
 }

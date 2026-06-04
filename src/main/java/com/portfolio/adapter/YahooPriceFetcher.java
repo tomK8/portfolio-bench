@@ -2,6 +2,7 @@ package com.portfolio.adapter;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.PriceBar;
 
 import java.net.URI;
@@ -24,6 +25,9 @@ public class YahooPriceFetcher {
     private static final String CHART_URL =
             "https://query1.finance.yahoo.com/v8/finance/chart/%s" +
                     "?period1=%d&period2=%d&interval=1d&events=div,split";
+    private static final String INTRADAY_URL =
+            "https://query1.finance.yahoo.com/v8/finance/chart/%s" +
+                    "?period1=%d&period2=%d&interval=1m&includePrePost=false";
     // Yahoo rejects requests without a browser-like User-Agent.
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
@@ -99,5 +103,47 @@ public class YahooPriceFetcher {
     private static Double num(JsonNode arr, int i) {
         JsonNode n = arr.path(i);
         return n.isNumber() ? n.asDouble() : null;
+    }
+
+    /**
+     * 1-minute closes for {@code yahooTicker} in {@code [from, to]}. Yahoo's chart endpoint
+     * caps the 1-minute interval at ~7 days per request; callers should clamp accordingly.
+     * Off-hours minutes (weekends, pre/post-market) simply aren't returned. Empty on persistent
+     * failure (logged).
+     */
+    public List<IntradayBar> fetchIntraday(String yahooTicker, Instant from, Instant to) {
+        String url = String.format(INTRADAY_URL, yahooTicker, from.getEpochSecond(), to.getEpochSecond());
+        String body = get(url);
+        if (body == null) {
+            System.err.println("Yahoo intraday fetch failed for " + yahooTicker);
+            return List.of();
+        }
+        try {
+            return parseIntraday(yahooTicker, body);
+        } catch (Exception e) {
+            System.err.println("Yahoo intraday parse failed for " + yahooTicker + " — " + e.getMessage());
+            return List.of();
+        }
+    }
+
+    List<IntradayBar> parseIntraday(String ticker, String json) throws Exception {   // package-private for tests
+        JsonNode result = mapper.readTree(json).path("chart").path("result");
+        if (!result.isArray() || result.isEmpty()) return List.of();
+        JsonNode r = result.get(0);
+
+        String currency = r.path("meta").path("currency").asText(null);
+        JsonNode ts = r.path("timestamp");
+        JsonNode q = r.path("indicators").path("quote").path(0);
+        JsonNode close = q.path("close"), vol = q.path("volume");
+
+        List<IntradayBar> bars = new ArrayList<>();
+        for (int i = 0; i < ts.size(); i++) {
+            Double c = num(close, i);
+            if (c == null) continue;   // off-hours minute, no trade
+            Instant t = Instant.ofEpochSecond(ts.get(i).asLong());
+            Long volume = vol.path(i).isNumber() ? vol.get(i).asLong() : null;
+            bars.add(new IntradayBar(ticker, t, c, volume, currency));
+        }
+        return bars;
     }
 }

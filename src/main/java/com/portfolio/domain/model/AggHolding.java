@@ -14,7 +14,10 @@ public record AggHolding(
         BigDecimal totalGainGbp,    // gainGbp + dividendGbp; null when gainGbp is unknown
         BigDecimal totalGainPct,    // totalGainGbp / cost; null when cost is unknown/zero
         Currency currency,
-        String sources
+        String sources,
+        BigDecimal latestPrice,        // native ccy, post-GBp adjustment; null when no intraday data
+        BigDecimal rtMarketValue,      // latestPrice * quantity (native); null when no intraday data
+        BigDecimal rtMarketValueGbp    // rtMarketValue converted to GBP; null when no intraday data
 ) {
     /**
      * ISO code (e.g. "USD") — lets views read the currency without navigating java.util.Currency.

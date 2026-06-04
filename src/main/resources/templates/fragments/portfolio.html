@@ -34,7 +34,10 @@
                 <th class="txt" data-sort="text">Security</th>
                 <th class="txt" data-sort="text">Ccy</th>
                 <th data-sort="num">Quantity</th>
-                <th data-sort="num">Market value (£)</th>
+                <th data-sort="num">Market Value £</th>
+                <th data-sort="num">RT Market Value £</th>
+                <th data-sort="num">Market Value</th>
+                <th data-sort="num">Price</th>
                 <th data-sort="num">Gain (£)</th>
                 <th data-sort="num">Gain %</th>
                 <th data-sort="num">Dividends (£)</th>
@@ -49,6 +52,12 @@
                 <td class="txt" th:text="${h.currencyCode}">USD</td>
                 <td th:text="${#numbers.formatDecimal(h.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>
                 <td th:text="${#numbers.formatDecimal(h.marketValueGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+                <td th:text="${h.rtMarketValueGbp != null ? #numbers.formatDecimal(h.rtMarketValueGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
+                </td>
+                <td th:text="${h.rtMarketValue != null ? #numbers.formatDecimal(h.rtMarketValue, 1, 'COMMA', 2, 'POINT') : '—'}">—
+                </td>
+                <td th:text="${h.latestPrice != null ? #numbers.formatDecimal(h.latestPrice, 1, 'COMMA', 4, 'POINT') : '—'}">—
+                </td>
                 <td th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
                 </td>
                 <td th:text="${h.gainPct != null ? #numbers.formatPercent(h.gainPct, 1, 2) : '—'}">—</td>

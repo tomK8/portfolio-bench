@@ -1,10 +1,12 @@
 package com.portfolio.adapter;
 
+import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.PriceBar;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -44,6 +46,34 @@ class YahooPriceFetcherTest {
     void returnsEmptyForErrorShapedResponse() throws Exception {
         List<PriceBar> bars = new YahooPriceFetcher()
                 .parse("BAD", "{\"chart\":{\"result\":null,\"error\":{\"code\":\"Not Found\"}}}");
+        assertTrue(bars.isEmpty());
+    }
+
+    @Test
+    void parsesIntradayBarsSkippingNullClosesWithUtcInstants() throws Exception {
+        String json = Files.readString(Path.of(
+                getClass().getResource("/yahoo-aapl-intraday-sample.json").toURI()));
+
+        List<IntradayBar> bars = new YahooPriceFetcher().parseIntraday("AAPL", json);
+
+        assertEquals(3, bars.size(), "the third minute has a null close and is dropped");
+
+        IntradayBar first = bars.get(0);
+        assertEquals("AAPL", first.symbol());
+        assertEquals(Instant.ofEpochSecond(1717074000), first.ts(),
+                "intraday ts is raw epoch seconds → UTC Instant, no gmtoffset shift");
+        assertEquals(190.10, first.close());
+        assertEquals(12000L, first.volume());
+        assertEquals("USD", first.currency());
+
+        assertEquals(190.50, bars.get(2).close());
+        assertEquals(8800L, bars.get(2).volume());
+    }
+
+    @Test
+    void parseIntradayReturnsEmptyForErrorShape() throws Exception {
+        List<IntradayBar> bars = new YahooPriceFetcher()
+                .parseIntraday("BAD", "{\"chart\":{\"result\":null,\"error\":{\"code\":\"Not Found\"}}}");
         assertTrue(bars.isEmpty());
     }
 }

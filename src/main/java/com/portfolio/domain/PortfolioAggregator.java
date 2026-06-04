@@ -2,6 +2,7 @@ package com.portfolio.domain;
 
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.Holding;
+import com.portfolio.domain.model.IntradayPrice;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -33,7 +34,8 @@ public class PortfolioAggregator {
     }
 
     public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
-                                      Map<String, BigDecimal> dividendsBySymbol) {
+                                      Map<String, BigDecimal> dividendsBySymbol,
+                                      Map<String, IntradayPrice> latestPricesBySymbol) {
         record Key(String id, String ccy) {
         }
 
@@ -89,10 +91,49 @@ public class PortfolioAggregator {
                     BigDecimal totalGainPct = (acc.hasCostGbp && acc.totalCostGbp.compareTo(BigDecimal.ZERO) != 0)
                             ? totalGain.divide(acc.totalCostGbp, 10, RoundingMode.HALF_UP) : null;
 
+                    BigDecimal[] rt = realtime(acc.securityId, acc.currency, acc.qty, latestPricesBySymbol, gbpRates);
+
                     return new AggHolding(acc.securityId, acc.qty, avg, acc.mktValGbp, gain, pct,
-                            dividend, totalGain, totalGainPct, acc.currency, String.join(", ", acc.srcs));
+                            dividend, totalGain, totalGainPct, acc.currency, String.join(", ", acc.srcs),
+                            rt[0], rt[1], rt[2]);
                 }).sorted(Comparator.comparingInt(this::section).thenComparing(this::sortKey))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Convenience overload — call sites that don't carry intraday prices (Excel export,
+     * older tests) pass nothing and get null RT fields.
+     */
+    public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
+                                      Map<String, BigDecimal> dividendsBySymbol) {
+        return aggregate(holdings, gbpRates, dividendsBySymbol, Map.of());
+    }
+
+    /** Returns {@code {latestPrice, rtMarketValue, rtMarketValueGbp}}; all null when unavailable. */
+    private static BigDecimal[] realtime(String securityId, Currency ccy, BigDecimal qty,
+                                         Map<String, IntradayPrice> prices,
+                                         Map<String, BigDecimal> gbpRates) {
+        BigDecimal[] empty = {null, null, null};
+        if (securityId.equals("CASH") || isBond(securityId)) return empty;
+
+        IntradayPrice p = prices.get(securityId.toUpperCase());
+        if (p == null) return empty;
+
+        BigDecimal price = BigDecimal.valueOf(p.close());
+        if ("GBp".equals(p.currency()) && "GBP".equals(ccy.getCurrencyCode())) {
+            price = price.movePointLeft(2);   // pence → pounds
+        }
+        BigDecimal rtNative = price.multiply(qty);
+
+        BigDecimal rtGbp;
+        if ("GBP".equals(ccy.getCurrencyCode())) {
+            rtGbp = rtNative;
+        } else {
+            BigDecimal rate = gbpRates.get(ccy.getCurrencyCode());
+            rtGbp = (rate == null || rate.compareTo(BigDecimal.ZERO) == 0)
+                    ? null : rtNative.divide(rate, 10, RoundingMode.HALF_UP);
+        }
+        return new BigDecimal[]{price, rtNative, rtGbp};
     }
 
     private int section(AggHolding h) {

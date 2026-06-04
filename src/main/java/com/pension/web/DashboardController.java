@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import java.math.BigDecimal;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 
 @Controller
 public class DashboardController {
@@ -28,6 +30,12 @@ public class DashboardController {
         this.exportService = exportService;
         this.importCashService = importCashService;
         this.db = db;
+    }
+
+    private static final DateTimeFormatter HMS = DateTimeFormatter.ofPattern("HH:mm:ss");
+
+    private static String now() {
+        return LocalTime.now().format(HMS);
     }
 
     private static BigDecimal parseCash(String raw) {
@@ -53,6 +61,7 @@ public class DashboardController {
         BigDecimal cash = parseCash(iiSippCash);
         db.saveLastIiSippCash(cash);
         model.addAttribute("result", syncService.sync(cash));
+        model.addAttribute("completedAt", now());
         return "fragments/portfolio :: result";
     }
 
@@ -62,12 +71,14 @@ public class DashboardController {
         BigDecimal cash = parseCash(iiSippCash);
         db.saveLastIiSippCash(cash);
         model.addAttribute("export", exportService.export(cash));
+        model.addAttribute("completedAt", now());
         return "fragments/export :: result";
     }
 
     @PostMapping("/import-cash")
     public String importCash(Model model) {
         model.addAttribute("cashImports", importCashService.importCash());
+        model.addAttribute("completedAt", now());
         return "fragments/import :: result";
     }
 }

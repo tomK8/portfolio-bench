@@ -78,13 +78,14 @@ public class ImportCashService {
     }
 
     /**
-     * One result per file that was actually processed; sources whose file is absent
-     * produce no entry. Stable order: AJBell, RothIRA, then each II file by mtime.
+     * One result per source. AJBell and RothIRA always emit one row (IMPORTED, NO_NEW_DATA
+     * or NOT_FOUND). II emits one row per matching file, or a single NOT_FOUND if none.
+     * Stable order: AJBell, RothIRA, then each II file by mtime.
      */
     public List<ImportCashResult> importCash() {
         List<ImportCashResult> results = new ArrayList<>();
-        importAjBell().ifPresent(results::add);
-        importRothIra().ifPresent(results::add);
+        results.add(importAjBell().orElseGet(() -> ImportCashResult.notFound("AJBell")));
+        results.add(importRothIra().orElseGet(() -> ImportCashResult.notFound("RothIRA")));
         results.addAll(importIi());
         return results;
     }
@@ -108,6 +109,8 @@ public class ImportCashService {
                 .filter(iiParser::supports)
                 .sorted(Comparator.comparingLong(this::mtime))
                 .toList();
+
+        if (files.isEmpty()) return List.of(ImportCashResult.notFound("II SIPP"));
 
         List<ImportCashResult> results = new ArrayList<>();
         for (Path file : files) {
@@ -152,14 +155,15 @@ public class ImportCashService {
     }
 
     private ImportCashResult archiveOrDelete(String source, Path file, int inserted, String archivePrefix) {
+        String sourceFile = file.getFileName().toString();
         try {
             if (inserted > 0) {
                 Path archived = db.dbDir.resolve(archivePrefix + "_" + LocalDate.now() + extension(file));
                 Files.move(file, archived, StandardCopyOption.REPLACE_EXISTING);
-                return ImportCashResult.imported(source, inserted, archived.toString());
+                return ImportCashResult.imported(source, inserted, sourceFile, archived.toString());
             }
             Files.delete(file);
-            return ImportCashResult.noNewData(source);
+            return ImportCashResult.noNewData(source, sourceFile);
         } catch (IOException e) {
             throw new IllegalStateException("Imported rows but could not archive/remove " + file, e);
         }

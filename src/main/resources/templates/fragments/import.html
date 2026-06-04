@@ -2,17 +2,27 @@
 <html lang="en" xmlns:th="http://www.thymeleaf.org">
 <body>
 
-<div class="note" th:fragment="result">
-    <span th:if="${#lists.isEmpty(cashImports)}">No cash statement files found in ~/Downloads.</span>
-    <div th:each="imp : ${cashImports}">
-        <span th:if="${imp.status.name() == 'NO_NEW_DATA'}"
-              th:text="'[' + ${imp.source} + '] No new data — file removed.'">
-            No new data.
-        </span>
-        <span th:if="${imp.status.name() == 'IMPORTED'}"
-              th:text="'[' + ${imp.source} + '] Imported ' + ${imp.inserted} + ' cash transaction(s); archived to ' + ${imp.detail}">
-            Imported.
-        </span>
+<div th:fragment="result">
+    <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>
+    <div class="note">
+        <ul style="margin: 0; padding-left: 1.2rem;">
+            <li th:each="imp : ${cashImports}">
+                <span th:if="${imp.status.name() == 'IMPORTED'}">
+                    <b th:text="${imp.source}">src</b> —
+                    found <code th:text="${imp.sourceFile}">file</code>,
+                    imported <b th:text="${imp.inserted}">N</b> new transaction(s),
+                    archived to <code th:text="${imp.detail}">path</code>.
+                </span>
+                <span th:if="${imp.status.name() == 'NO_NEW_DATA'}">
+                    <b th:text="${imp.source}">src</b> —
+                    found <code th:text="${imp.sourceFile}">file</code>,
+                    no new transactions, file deleted.
+                </span>
+                <span th:if="${imp.status.name() == 'NOT_FOUND'}" class="muted">
+                    <b th:text="${imp.source}">src</b> — no matching file in ~/Downloads.
+                </span>
+            </li>
+        </ul>
     </div>
 </div>
 

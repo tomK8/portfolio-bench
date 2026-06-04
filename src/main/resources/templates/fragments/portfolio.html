@@ -4,6 +4,8 @@
 
 <div th:fragment="result">
 
+    <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>
+
     <div class="note" th:if="${result.empty}">
         No input files found in <code>~/Downloads</code>. Add your broker exports (Roth IRA
         <code>Holdings*.xlsx</code>, AJ Bell <code>portfolio*.csv</code>, II SIPP UUID

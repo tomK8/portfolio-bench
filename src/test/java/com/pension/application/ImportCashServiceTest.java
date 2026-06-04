@@ -53,16 +53,24 @@ class ImportCashServiceTest {
         Files.writeString(inputDir.resolve("cashstatements.csv"), STATEMENT);
     }
 
+    private static void assertAllNotFound(List<ImportCashResult> results) {
+        assertEquals(3, results.size(), "one NOT_FOUND row per source (AJBell, RothIRA, II)");
+        assertTrue(results.stream().allMatch(r -> r.status() == ImportCashResult.Status.NOT_FOUND));
+        assertTrue(results.stream().anyMatch(r -> "AJBell".equals(r.source())));
+        assertTrue(results.stream().anyMatch(r -> "RothIRA".equals(r.source())));
+        assertTrue(results.stream().anyMatch(r -> "II SIPP".equals(r.source())));
+    }
+
     @Test
-    void absentFilesProduceNoResultRow() {
-        assertTrue(service().importCash().isEmpty(), "no files in input dir → no results");
+    void absentFilesProduceNotFoundRowPerSource() {
+        assertAllNotFound(service().importCash());
     }
 
     @Test
     void missingInputDirTreatedAsEmpty() {
         ImportCashService svc = new ImportCashService(
                 inputDir.resolve("does-not-exist"), new PortfolioDatabase(dbDir), FX);
-        assertTrue(svc.importCash().isEmpty(), "missing input dir → no results, no exception");
+        assertAllNotFound(svc.importCash());
     }
 
     @Test
@@ -106,10 +114,13 @@ class ImportCashServiceTest {
 
         List<ImportCashResult> results = service().importCash();
 
-        assertEquals(2, results.size(), "one result per II file");
-        assertTrue(results.stream().anyMatch(r -> "II SIPP (GBP)".equals(r.source())));
-        assertTrue(results.stream().anyMatch(r -> "II SIPP (USD)".equals(r.source())));
-        assertTrue(results.stream().allMatch(r -> r.status() == ImportCashResult.Status.IMPORTED));
+        List<ImportCashResult> iiResults = results.stream()
+                .filter(r -> r.source().startsWith("II SIPP"))
+                .toList();
+        assertEquals(2, iiResults.size(), "one result per II file");
+        assertTrue(iiResults.stream().anyMatch(r -> "II SIPP (GBP)".equals(r.source())));
+        assertTrue(iiResults.stream().anyMatch(r -> "II SIPP (USD)".equals(r.source())));
+        assertTrue(iiResults.stream().allMatch(r -> r.status() == ImportCashResult.Status.IMPORTED));
 
         // Both source files should be archived out of the input dir.
         assertFalse(Files.exists(inputDir.resolve("00000000-0000-0000-0000-000000000002.csv")));
@@ -124,9 +135,9 @@ class ImportCashServiceTest {
 
         List<ImportCashResult> results = service().importCash();
 
-        assertTrue(results.isEmpty(), "holdings file must not be treated as a cash statement");
+        assertAllNotFound(results);
         assertTrue(Files.exists(inputDir.resolve("00000000-0000-0000-0000-000000000001.csv")),
-                "untouched in the input dir");
+                "holdings file untouched in the input dir");
     }
 
     @Test

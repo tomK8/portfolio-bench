@@ -3,13 +3,14 @@
 <body>
 
 <div th:fragment="result">
+    <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>
     <div class="note" th:if="${export.empty}">
         Nothing to export — no input files found in <code>~/Downloads</code>.
     </div>
     <div class="note" th:unless="${export.empty}">
-        Wrote Excel reports:
-        <ul>
-            <li th:each="f : ${export.files}" th:text="${f}">path</li>
+        Wrote <span th:text="${#lists.size(export.files)}">2</span> Excel file(s):
+        <ul style="margin: 0.3rem 0 0; padding-left: 1.2rem;">
+            <li th:each="f : ${export.files}"><code th:text="${f}">path</code></li>
         </ul>
     </div>
 </div>

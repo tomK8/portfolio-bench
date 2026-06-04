@@ -1,9 +1,9 @@
 package com.portfolio.web;
 
-import com.portfolio.PortfolioDatabase;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.SyncPortfolioService;
+import com.portfolio.persistence.KeyValueStore;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,22 +17,25 @@ import java.time.format.DateTimeFormatter;
 @Controller
 public class DashboardController {
 
+    /** KV key for the last II SIPP cash balance entered on the dashboard. */
+    static final String II_SIPP_CASH_KEY = "ii_sipp_cash_last";
+
+    private static final DateTimeFormatter HMS = DateTimeFormatter.ofPattern("HH:mm:ss");
+
     private final SyncPortfolioService syncService;
     private final ExportExcelService exportService;
     private final ImportCashService importCashService;
-    private final PortfolioDatabase db;
+    private final KeyValueStore settings;
 
     public DashboardController(SyncPortfolioService syncService,
                                ExportExcelService exportService,
                                ImportCashService importCashService,
-                               PortfolioDatabase db) {
+                               KeyValueStore settings) {
         this.syncService = syncService;
         this.exportService = exportService;
         this.importCashService = importCashService;
-        this.db = db;
+        this.settings = settings;
     }
-
-    private static final DateTimeFormatter HMS = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private static String now() {
         return LocalTime.now().format(HMS);
@@ -51,7 +54,8 @@ public class DashboardController {
     @GetMapping("/")
     public String dashboard(Model model) {
         model.addAttribute("appName", "Portfolio Bench");
-        model.addAttribute("iiSippCash", db.loadLastIiSippCash().toPlainString());
+        model.addAttribute("iiSippCash",
+                settings.getBigDecimal(II_SIPP_CASH_KEY, BigDecimal.ZERO).toPlainString());
         return "dashboard";
     }
 
@@ -59,7 +63,7 @@ public class DashboardController {
     public String sync(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
                        Model model) {
         BigDecimal cash = parseCash(iiSippCash);
-        db.saveLastIiSippCash(cash);
+        settings.putBigDecimal(II_SIPP_CASH_KEY, cash);
         model.addAttribute("result", syncService.sync(cash));
         model.addAttribute("completedAt", now());
         return "fragments/portfolio :: result";
@@ -69,7 +73,7 @@ public class DashboardController {
     public String export(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
                          Model model) {
         BigDecimal cash = parseCash(iiSippCash);
-        db.saveLastIiSippCash(cash);
+        settings.putBigDecimal(II_SIPP_CASH_KEY, cash);
         model.addAttribute("export", exportService.export(cash));
         model.addAttribute("completedAt", now());
         return "fragments/export :: result";

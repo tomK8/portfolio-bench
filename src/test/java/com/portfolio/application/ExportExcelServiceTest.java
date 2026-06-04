@@ -1,8 +1,10 @@
 package com.portfolio.application;
 
 import com.portfolio.ExcelReportWriter;
-import com.portfolio.PortfolioDatabase;
 import com.portfolio.adapter.HoldingFileLocator;
+import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.JdbcConnectionFactory;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.port.FxRateProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,9 +31,10 @@ class ExportExcelServiceTest {
     Path outputDir;
 
     private ExportExcelService service() {
-        PortfolioDatabase db = new PortfolioDatabase(dbDir);
+        CashTransactionRepository repo = new CashTransactionRepository(
+                new JdbcConnectionFactory(dbDir), new KeyValueStore(dbDir));
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
-        return new ExportExcelService(gatherer, new DividendService(db), new ExcelReportWriter(), outputDir);
+        return new ExportExcelService(gatherer, new DividendService(repo), new ExcelReportWriter(), outputDir);
     }
 
     @Test

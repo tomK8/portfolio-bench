@@ -41,7 +41,7 @@ class IICashStatementParserTest {
     private static CashTransaction findRow(List<CashTransaction> rows, String date,
                                            String type, String symbol) {
         return rows.stream()
-                .filter(t -> t.transactionDate().equals(date) && t.type().equals(type)
+                .filter(t -> t.transactionDate().equals(date) && t.type().name().equals(type)
                         && t.symbol().equals(symbol))
                 .findFirst().orElseThrow(() ->
                         new AssertionError("No " + type + " row for " + symbol + " on " + date));

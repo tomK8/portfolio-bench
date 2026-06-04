@@ -1,12 +1,17 @@
 package com.portfolio.config;
 
 import com.portfolio.ExcelReportWriter;
-import com.portfolio.PortfolioDatabase;
 import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.*;
+import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.JdbcConnectionFactory;
+import com.portfolio.persistence.KeyValueStore;
+import com.portfolio.persistence.PriceHistoryRepository;
+import com.portfolio.persistence.SnapshotRepository;
 import com.portfolio.port.FxRateProvider;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,8 +22,8 @@ import java.nio.file.Path;
 
 /**
  * The only place outside the web layer that knows about Spring. Wires the
- * framework-agnostic adapters and application services as beans, so the domain,
- * adapter and application classes stay free of Spring annotations.
+ * framework-agnostic adapters, repositories and application services as beans, so the
+ * domain, adapter, persistence and application classes stay free of Spring annotations.
  *
  * <p>{@code portfolio.input-dir}, {@code portfolio.db-dir} and {@code portfolio.output-dir}
  * are overridable (blank = use the production defaults) — primarily so tests and
@@ -27,10 +32,17 @@ import java.nio.file.Path;
 @Configuration
 public class BeanConfiguration {
 
+    private static final Path DEFAULT_DB_DIR =
+            Path.of(System.getProperty("user.home"), "Documents", "Investing");
+
     private static Path inputDir(String configured) {
         return configured.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Downloads")
                 : Path.of(configured);
+    }
+
+    private static Path dbDir(String configured) {
+        return configured.isBlank() ? DEFAULT_DB_DIR : Path.of(configured);
     }
 
     @Bean
@@ -44,8 +56,34 @@ public class BeanConfiguration {
     }
 
     @Bean
-    public PortfolioDatabase portfolioDatabase(@Value("${portfolio.db-dir:}") String dbDir) {
-        return dbDir.isBlank() ? new PortfolioDatabase() : new PortfolioDatabase(Path.of(dbDir));
+    public JdbcConnectionFactory jdbcConnectionFactory(@Value("${portfolio.db-dir:}") String dbDir) {
+        return new JdbcConnectionFactory(dbDir(dbDir));
+    }
+
+    @Bean
+    public KeyValueStore keyValueStore(JdbcConnectionFactory connections) {
+        return new KeyValueStore(connections.dbDir());
+    }
+
+    @Bean
+    public SnapshotRepository snapshotRepository(JdbcConnectionFactory connections) {
+        return new SnapshotRepository(connections);
+    }
+
+    @Bean
+    public CashTransactionRepository cashTransactionRepository(JdbcConnectionFactory connections,
+                                                               KeyValueStore keyValueStore) {
+        return new CashTransactionRepository(connections, keyValueStore);
+    }
+
+    @Bean
+    public PriceHistoryRepository priceHistoryRepository(JdbcConnectionFactory connections) {
+        return new PriceHistoryRepository(connections);
+    }
+
+    @Bean
+    public IntradayPriceRepository intradayPriceRepository(JdbcConnectionFactory connections) {
+        return new IntradayPriceRepository(connections);
     }
 
     @Bean
@@ -65,16 +103,18 @@ public class BeanConfiguration {
     }
 
     @Bean
-    public DividendService dividendService(PortfolioDatabase portfolioDatabase) {
-        return new DividendService(portfolioDatabase);
+    public DividendService dividendService(CashTransactionRepository cashTransactionRepository) {
+        return new DividendService(cashTransactionRepository);
     }
 
     @Bean
     public SyncPortfolioService syncPortfolioService(PortfolioGatherer portfolioGatherer,
-                                                     PortfolioDatabase portfolioDatabase,
+                                                     SnapshotRepository snapshotRepository,
+                                                     IntradayPriceRepository intradayPriceRepository,
                                                      DividendService dividendService,
                                                      YahooTickerMap yahooTickerMap) {
-        return new SyncPortfolioService(portfolioGatherer, portfolioDatabase, dividendService, yahooTickerMap);
+        return new SyncPortfolioService(portfolioGatherer, snapshotRepository, intradayPriceRepository,
+                dividendService, yahooTickerMap);
     }
 
     @Bean
@@ -90,9 +130,11 @@ public class BeanConfiguration {
 
     @Bean
     public ImportCashService importCashService(@Value("${portfolio.input-dir:}") String inputDir,
-                                               PortfolioDatabase portfolioDatabase,
+                                               JdbcConnectionFactory jdbcConnectionFactory,
+                                               CashTransactionRepository cashTransactionRepository,
                                                HistoricalFxRateProvider historicalFxRateProvider) {
-        return new ImportCashService(inputDir(inputDir), portfolioDatabase, historicalFxRateProvider);
+        return new ImportCashService(inputDir(inputDir), jdbcConnectionFactory.dbDir(),
+                cashTransactionRepository, historicalFxRateProvider);
     }
 
     @Bean
@@ -106,16 +148,20 @@ public class BeanConfiguration {
     }
 
     @Bean
-    public PriceFetchJob priceFetchJob(PortfolioDatabase portfolioDatabase,
+    public PriceFetchJob priceFetchJob(CashTransactionRepository cashTransactionRepository,
+                                       PriceHistoryRepository priceHistoryRepository,
                                        YahooPriceFetcher yahooPriceFetcher,
                                        YahooTickerMap yahooTickerMap) {
-        return new PriceFetchJob(portfolioDatabase, yahooPriceFetcher, yahooTickerMap);
+        return new PriceFetchJob(cashTransactionRepository, priceHistoryRepository,
+                yahooPriceFetcher, yahooTickerMap);
     }
 
     @Bean
-    public IntradayPriceFetchJob intradayPriceFetchJob(PortfolioDatabase portfolioDatabase,
+    public IntradayPriceFetchJob intradayPriceFetchJob(CashTransactionRepository cashTransactionRepository,
+                                                       IntradayPriceRepository intradayPriceRepository,
                                                        YahooPriceFetcher yahooPriceFetcher,
                                                        YahooTickerMap yahooTickerMap) {
-        return new IntradayPriceFetchJob(portfolioDatabase, yahooPriceFetcher, yahooTickerMap);
+        return new IntradayPriceFetchJob(cashTransactionRepository, intradayPriceRepository,
+                yahooPriceFetcher, yahooTickerMap);
     }
 }

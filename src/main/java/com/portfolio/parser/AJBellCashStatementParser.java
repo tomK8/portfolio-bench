@@ -1,9 +1,13 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.TransactionType;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -22,7 +26,9 @@ import java.util.regex.Pattern;
  */
 public class AJBellCashStatementParser implements CashTransactionParser {
 
-    private static final String ACCOUNT = "AJBell";
+    private static final Logger log = LoggerFactory.getLogger(AJBellCashStatementParser.class);
+
+    private static final Account ACCOUNT = Account.AJBELL;
     private static final String CURRENCY = "GBP";
     private static final double FX_TO_GBP = 1.0;
 
@@ -164,7 +170,7 @@ public class AJBellCashStatementParser implements CashTransactionParser {
     }
 
     @Override
-    public String accountName() {
+    public Account account() {
         return ACCOUNT;
     }
 
@@ -218,8 +224,9 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             // so the balance change is receipt + payment in both directions.
             double expected = running + row.receipt() + row.payment();
             if (Math.abs(expected - row.balance()) > 0.02) {
-                System.err.printf("[AJBell cash] Balance mismatch at %s '%s': expected %.2f, got %.2f%n",
-                        row.date(), row.description(), expected, row.balance());
+                log.warn("[AJBell cash] Balance mismatch at {} '{}': expected {}, got {}",
+                        row.date(), row.description(), String.format("%.2f", expected),
+                        String.format("%.2f", row.balance()));
             }
             running = row.balance();
 
@@ -245,12 +252,12 @@ public class AJBellCashStatementParser implements CashTransactionParser {
         // (e.g. "TSY STK25 Redemption" has no coupon), borrow the symbol from a same-date DIVIDEND.
         Map<String, String> dateToGilt = new HashMap<>();
         for (CashTransaction t : result) {
-            if ("DIVIDEND".equals(t.type()) && t.symbol().startsWith("GILT ")) {
+            if (t.type() == TransactionType.DIVIDEND && t.symbol().startsWith("GILT ")) {
                 dateToGilt.put(t.transactionDate(), t.symbol());
             }
         }
         result.replaceAll(t -> {
-            if ("TRANSACTION".equals(t.type())
+            if (t.type() == TransactionType.TRANSACTION
                     && !t.symbol().startsWith("GILT ")
                     && t.description().trim().toUpperCase().endsWith("REDEMPTION")) {
                 String gilt = dateToGilt.get(t.transactionDate());
@@ -269,27 +276,27 @@ public class AJBellCashStatementParser implements CashTransactionParser {
     private ClassifiedRow classify(String description) {
         Matcher m = PAT_DIVIDEND.matcher(description);
         if (m.matches()) {
-            return new ClassifiedRow("DIVIDEND", resolveSymbol(m.group(2).trim()), parseQty(m.group(1)));
+            return new ClassifiedRow(TransactionType.DIVIDEND, resolveSymbol(m.group(2).trim()), parseQty(m.group(1)));
         }
 
         m = PAT_TRANSACTION.matcher(description);
         if (m.matches()) {
-            return new ClassifiedRow("TRANSACTION", resolveSymbol(m.group(3).trim()), parseQty(m.group(2)));
+            return new ClassifiedRow(TransactionType.TRANSACTION, resolveSymbol(m.group(3).trim()), parseQty(m.group(2)));
         }
 
         String upper = description.trim().toUpperCase();
-        if (upper.contains("CHARGE")) return new ClassifiedRow("CHARGE", "GBP", 0.0);
-        if (upper.startsWith("GROSS INTEREST")) return new ClassifiedRow("INTEREST", "GBP", 0.0);
+        if (upper.contains("CHARGE")) return new ClassifiedRow(TransactionType.CHARGE, "GBP", 0.0);
+        if (upper.startsWith("GROSS INTEREST")) return new ClassifiedRow(TransactionType.INTEREST, "GBP", 0.0);
         if (upper.startsWith("PENSION")
-                || upper.startsWith("TRANSFER")) return new ClassifiedRow("CONTRIBUTION", "GBP", 0.0);
+                || upper.startsWith("TRANSFER")) return new ClassifiedRow(TransactionType.CONTRIBUTION, "GBP", 0.0);
 
         m = PAT_REVERSED_REDEMPTION.matcher(description);
         if (m.matches()) {
-            return new ClassifiedRow("TRANSACTION", resolveSymbol(m.group(1).trim()), 0.0);
+            return new ClassifiedRow(TransactionType.TRANSACTION, resolveSymbol(m.group(1).trim()), 0.0);
         }
 
-        System.err.println("[AJBell cash] Unclassified row, defaulting to CONTRIBUTION: " + description);
-        return new ClassifiedRow("CONTRIBUTION", "GBP", 0.0);
+        log.warn("[AJBell cash] Unclassified row, defaulting to CONTRIBUTION: {}", description);
+        return new ClassifiedRow(TransactionType.CONTRIBUTION, "GBP", 0.0);
     }
 
     // Ordered description-keyword → portfolio ticker rules; matched against uppercased name.
@@ -297,7 +304,7 @@ public class AJBellCashStatementParser implements CashTransactionParser {
     private record SymbolRule(Pattern pattern, String ticker) {
     }
 
-    private record ClassifiedRow(String type, String symbol, double quantity) {
+    private record ClassifiedRow(TransactionType type, String symbol, double quantity) {
     }
 
     private record RawRow(String date, String description, double receipt, double payment, double balance) {

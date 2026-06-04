@@ -1,9 +1,13 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.TransactionType;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -25,8 +29,10 @@ import java.util.*;
  */
 public class RothIraCashStatementParser implements CashTransactionParser {
 
+    private static final Logger log = LoggerFactory.getLogger(RothIraCashStatementParser.class);
+
     static final String FILE_NAME = "History.xlsx";
-    private static final String ACCOUNT = "RothIRA";
+    private static final Account ACCOUNT = Account.ROTH_IRA;
     private static final String CURRENCY = "USD";
     private static final String SHEET = "history";
     private static final String COL_DATE = "Date";
@@ -71,17 +77,17 @@ public class RothIraCashStatementParser implements CashTransactionParser {
     /**
      * Maps the broker's Activity Description to a cash_transactions type.
      */
-    static String classifyType(String description) {
+    static TransactionType classifyType(String description) {
         String d = description == null ? "" : description.toLowerCase();
-        if (d.contains("dividend")) return "DIVIDEND";
-        if (d.contains("tax withheld")) return "CHARGE";
+        if (d.contains("dividend")) return TransactionType.DIVIDEND;
+        if (d.contains("tax withheld")) return TransactionType.CHARGE;
         if (d.contains("buy") || d.contains("sell")
-                || d.contains("stock split")) return "TRANSACTION";
-        if (d.contains("interest")) return "INTEREST";
+                || d.contains("stock split")) return TransactionType.TRANSACTION;
+        if (d.contains("interest")) return TransactionType.INTEREST;
         if (d.contains("deposit") || d.contains("transfer")
-                || d.contains("contribution")) return "CONTRIBUTION";
-        System.err.println("[RothIRA cash] Unclassified row, defaulting to TRANSACTION: " + description);
-        return "TRANSACTION";
+                || d.contains("contribution")) return TransactionType.CONTRIBUTION;
+        log.warn("[RothIRA cash] Unclassified row, defaulting to TRANSACTION: {}", description);
+        return TransactionType.TRANSACTION;
     }
 
     // ---- Reading ------------------------------------------------------------
@@ -130,7 +136,7 @@ public class RothIraCashStatementParser implements CashTransactionParser {
     // ---- FX -----------------------------------------------------------------
 
     @Override
-    public String accountName() {
+    public Account account() {
         return ACCOUNT;
     }
 

@@ -1,6 +1,7 @@
 package com.portfolio.parser;
 
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.TransactionType;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -78,11 +79,11 @@ class RothIraCashStatementParserTest {
         Map<String, CashTransaction> bySymbol = rows.stream()
                 .collect(Collectors.toMap(CashTransaction::symbol, Function.identity()));
 
-        assertEquals("DIVIDEND", bySymbol.get("AAPL").type());
-        assertEquals("CHARGE", bySymbol.get("ASML").type());
+        assertEquals(TransactionType.DIVIDEND, bySymbol.get("AAPL").type());
+        assertEquals(TransactionType.CHARGE, bySymbol.get("ASML").type());
 
         CashTransaction sell = bySymbol.get("BIDU");
-        assertEquals("TRANSACTION", sell.type());
+        assertEquals(TransactionType.TRANSACTION, sell.type());
         assertEquals(-30, sell.quantity(), 0.001, "sell keeps negative share quantity");
         assertTrue(sell.amount() > 0, "sell is cash in");
 
@@ -91,7 +92,7 @@ class RothIraCashStatementParserTest {
         assertTrue(buy.amount() < 0, "buy is cash out");
 
         CashTransaction split = bySymbol.get("NOW");
-        assertEquals("TRANSACTION", split.type());
+        assertEquals(TransactionType.TRANSACTION, split.type());
         assertEquals(0.0, split.amount(), 0.001, "split moves no cash");
         assertEquals(8, split.quantity(), 0.001, "split records the extra shares");
     }

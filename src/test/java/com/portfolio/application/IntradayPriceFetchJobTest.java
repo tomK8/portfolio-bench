@@ -1,11 +1,16 @@
 package com.portfolio.application;
 
-import com.portfolio.PortfolioDatabase;
 import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooTickerMap;
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.IntradayPrice;
+import com.portfolio.domain.model.TransactionType;
+import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.JdbcConnectionFactory;
+import com.portfolio.persistence.KeyValueStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -38,14 +43,23 @@ class IntradayPriceFetchJobTest {
     }
 
     private static CashTransaction tx(String date, String type, String symbol) {
-        return new CashTransaction(date, "AJBell", type, symbol, 1, -10, "GBP",
-                1.0, -10, 100.0, 100.0, date);
+        return new CashTransaction(date, Account.AJBELL, TransactionType.valueOf(type),
+                symbol, 1, -10, "GBP", 1.0, -10, 100.0, 100.0, date);
+    }
+
+    private CashTransactionRepository cashRepo() {
+        return new CashTransactionRepository(new JdbcConnectionFactory(dbDir), new KeyValueStore(dbDir));
+    }
+
+    private IntradayPriceRepository intradayRepo() {
+        return new IntradayPriceRepository(new JdbcConnectionFactory(dbDir));
     }
 
     @Test
     void skipsGiltsAndPersistsBarsForEquities() {
-        PortfolioDatabase db = new PortfolioDatabase(dbDir);
-        db.saveCashTransactions(List.of(
+        CashTransactionRepository cash = cashRepo();
+        IntradayPriceRepository intraday = intradayRepo();
+        cash.saveAjBell(List.of(
                 tx("2024-01-01", "TRANSACTION", "AAPL"),
                 tx("2024-01-02", "TRANSACTION", "GILT 0.25% 2026")));
 
@@ -56,23 +70,24 @@ class IntradayPriceFetchJobTest {
                 new IntradayBar("AAPL", t0, 190.10, 1000L, "USD"),
                 new IntradayBar("AAPL", t0.plusSeconds(60), 190.25, 900L, "USD")));
 
-        new IntradayPriceFetchJob(db, fetcher, new YahooTickerMap()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap()).run();
 
         assertEquals(List.of("AAPL"), fetcher.requested, "gilt was filtered out before the fetch loop");
-        Map<String, IntradayPrice> latest = db.loadLatestIntradayPrices(Set.of("AAPL"));
+        Map<String, IntradayPrice> latest = intraday.loadLatestIntradayPrices(Set.of("AAPL"));
         assertEquals(190.25, latest.get("AAPL").close());
     }
 
     @Test
     void fetchesOnlyTheGapSinceLatestStoredBar() {
-        PortfolioDatabase db = new PortfolioDatabase(dbDir);
-        db.saveCashTransactions(List.of(tx("2024-01-01", "TRANSACTION", "AAPL")));
+        CashTransactionRepository cash = cashRepo();
+        IntradayPriceRepository intraday = intradayRepo();
+        cash.saveAjBell(List.of(tx("2024-01-01", "TRANSACTION", "AAPL")));
 
         Instant lastSeen = Instant.now().minus(java.time.Duration.ofMinutes(30));
-        db.saveIntradayBars(List.of(new IntradayBar("AAPL", lastSeen, 100.0, null, "USD")));
+        intraday.saveIntradayBars(List.of(new IntradayBar("AAPL", lastSeen, 100.0, null, "USD")));
 
         FakeFetcher fetcher = new FakeFetcher();
-        new IntradayPriceFetchJob(db, fetcher, new YahooTickerMap()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap()).run();
 
         assertEquals(lastSeen.plusSeconds(60), fetcher.requestedFrom.get("AAPL"),
                 "incremental fetch starts from the bar immediately after the last stored one");
@@ -80,12 +95,13 @@ class IntradayPriceFetchJobTest {
 
     @Test
     void firstRunStartsWithinRetentionWindowToAvoidImmediatePrune() {
-        PortfolioDatabase db = new PortfolioDatabase(dbDir);
-        db.saveCashTransactions(List.of(tx("2024-01-01", "TRANSACTION", "AAPL")));
+        CashTransactionRepository cash = cashRepo();
+        IntradayPriceRepository intraday = intradayRepo();
+        cash.saveAjBell(List.of(tx("2024-01-01", "TRANSACTION", "AAPL")));
 
         FakeFetcher fetcher = new FakeFetcher();
         Instant before = Instant.now();
-        new IntradayPriceFetchJob(db, fetcher, new YahooTickerMap()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap()).run();
         Instant after = Instant.now();
 
         Instant from = fetcher.requestedFrom.get("AAPL");
@@ -101,21 +117,22 @@ class IntradayPriceFetchJobTest {
 
     @Test
     void prunesRowsOlderThanRetention() {
-        PortfolioDatabase db = new PortfolioDatabase(dbDir);
-        db.saveCashTransactions(List.of(tx("2024-01-01", "TRANSACTION", "AAPL")));
+        CashTransactionRepository cash = cashRepo();
+        IntradayPriceRepository intraday = intradayRepo();
+        cash.saveAjBell(List.of(tx("2024-01-01", "TRANSACTION", "AAPL")));
 
         Instant stale = Instant.now().minus(java.time.Duration.ofDays(10));
         Instant fresh = Instant.now().minus(java.time.Duration.ofMinutes(5));
-        db.saveIntradayBars(List.of(
+        intraday.saveIntradayBars(List.of(
                 new IntradayBar("AAPL", stale, 1.0, null, "USD"),
                 new IntradayBar("AAPL", fresh, 2.0, null, "USD")));
 
         FakeFetcher fetcher = new FakeFetcher();   // no new bars
-        new IntradayPriceFetchJob(db, fetcher, new YahooTickerMap()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap()).run();
 
-        Instant remaining = db.getLatestIntradayTs("AAPL");
+        Instant remaining = intraday.getLatestIntradayTs("AAPL");
         assertEquals(fresh, remaining, "fresh row remains");
         // Pruned rows mean the stale one is gone — load-latest still finds the fresh row only.
-        assertEquals(2.0, db.loadLatestIntradayPrices(Set.of("AAPL")).get("AAPL").close());
+        assertEquals(2.0, intraday.loadLatestIntradayPrices(Set.of("AAPL")).get("AAPL").close());
     }
 }

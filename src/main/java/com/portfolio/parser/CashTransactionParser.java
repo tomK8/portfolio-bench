@@ -1,5 +1,6 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 
 import java.io.IOException;
@@ -7,7 +8,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 public interface CashTransactionParser {
-    String accountName();
+    Account account();
 
     boolean supports(Path file);
 

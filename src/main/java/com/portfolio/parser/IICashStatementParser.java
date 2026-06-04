@@ -1,10 +1,14 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.TransactionType;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -39,7 +43,9 @@ import java.util.regex.Pattern;
  */
 public class IICashStatementParser implements CashTransactionParser {
 
-    static final String ACCOUNT = "II";
+    private static final Logger log = LoggerFactory.getLogger(IICashStatementParser.class);
+
+    static final Account ACCOUNT = Account.II;
 
     private static final DateTimeFormatter DDMMYYYY =
             DateTimeFormatter.ofPattern("dd/MM/yyyy");
@@ -84,7 +90,7 @@ public class IICashStatementParser implements CashTransactionParser {
     }
 
     @Override
-    public String accountName() {
+    public Account account() {
         return ACCOUNT;
     }
 
@@ -147,23 +153,23 @@ public class IICashStatementParser implements CashTransactionParser {
 
         if (PAT_FX_EXCHANGE.matcher(desc).matches()) {
             // Currency exchange — paired row in the other file produces the mirror entry.
-            return List.of(make(isoDate, "CONTRIBUTION", "FX", 0.0,
+            return List.of(make(isoDate, TransactionType.CONTRIBUTION, "FX", 0.0,
                     row.net(), fileCcy, fxToGbp, row.balance(), desc));
         }
         if (PAT_DIVIDEND.matcher(desc).matches()) {
-            return List.of(make(isoDate, "DIVIDEND", row.symbol(), 0.0,
+            return List.of(make(isoDate, TransactionType.DIVIDEND, row.symbol(), 0.0,
                     row.net(), fileCcy, fxToGbp, row.balance(), desc));
         }
         if (PAT_INTEREST.matcher(desc).matches()) {
-            return List.of(make(isoDate, "INTEREST", fileCcy, 0.0,
+            return List.of(make(isoDate, TransactionType.INTEREST, fileCcy, 0.0,
                     row.net(), fileCcy, fxToGbp, row.balance(), desc));
         }
         if (PAT_MONTHLY_FEE.matcher(desc).matches()) {
-            return List.of(make(isoDate, "CHARGE", fileCcy, 0.0,
+            return List.of(make(isoDate, TransactionType.CHARGE, fileCcy, 0.0,
                     row.net(), fileCcy, fxToGbp, row.balance(), desc));
         }
         if (PAT_CONTRIBUTION.matcher(desc).matches()) {
-            return List.of(make(isoDate, "CONTRIBUTION", fileCcy, 0.0,
+            return List.of(make(isoDate, TransactionType.CONTRIBUTION, fileCcy, 0.0,
                     row.net(), fileCcy, fxToGbp, row.balance(), desc));
         }
 
@@ -172,9 +178,8 @@ public class IICashStatementParser implements CashTransactionParser {
             return splitTrade(row, fileCcy, fxByCcy, fxToGbp);
         }
 
-        System.err.printf("[II cash %s] Unclassified row, defaulting to CONTRIBUTION: %s%n",
-                fileCcy, desc);
-        return List.of(make(isoDate, "CONTRIBUTION", fileCcy, 0.0,
+        log.warn("[II cash {}] Unclassified row, defaulting to CONTRIBUTION: {}", fileCcy, desc);
+        return List.of(make(isoDate, TransactionType.CONTRIBUTION, fileCcy, 0.0,
                 row.net(), fileCcy, fxToGbp, row.balance(), desc));
     }
 
@@ -200,13 +205,13 @@ public class IICashStatementParser implements CashTransactionParser {
         String desc = row.description();
 
         CashTransaction tx = new CashTransaction(
-                isoDate, ACCOUNT, "TRANSACTION", symbol, qty,
+                isoDate, ACCOUNT, TransactionType.TRANSACTION, symbol, qty,
                 grossFileCcy, fileCcy, fxToGbp, grossFileCcy / fxToGbp,
                 null,                       // intermediate row — running balance set on the CHARGE
                 null,
                 desc);
         CashTransaction charge = new CashTransaction(
-                isoDate, ACCOUNT, "CHARGE", symbol, 0.0,
+                isoDate, ACCOUNT, TransactionType.CHARGE, symbol, 0.0,
                 markup, fileCcy, fxToGbp, markup / fxToGbp,
                 row.balance(), row.balance() / fxToGbp,
                 desc + " [commission+FX]");
@@ -361,7 +366,7 @@ public class IICashStatementParser implements CashTransactionParser {
 
     // ---- Helpers -----------------------------------------------------------
 
-    private static CashTransaction make(String date, String type, String symbol, double qty,
+    private static CashTransaction make(String date, TransactionType type, String symbol, double qty,
                                         double amount, String currency, double fxToGbp,
                                         Double cashBalance, String description) {
         return new CashTransaction(date, ACCOUNT, type, symbol, qty,

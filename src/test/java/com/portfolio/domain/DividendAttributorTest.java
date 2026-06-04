@@ -1,6 +1,8 @@
 package com.portfolio.domain;
 
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.TransactionType;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -15,8 +17,8 @@ class DividendAttributorTest {
 
     private static CashTransaction tx(String date, String account, String type,
                                       String symbol, double qty, double amount, double amountGbp) {
-        return new CashTransaction(date, account, type, symbol, qty, amount,
-                "GBP", 1.0, amountGbp, null, null, null);
+        return new CashTransaction(date, Account.fromDbValue(account), TransactionType.valueOf(type),
+                symbol, qty, amount, "GBP", 1.0, amountGbp, null, null, null);
     }
 
     private static CashTransaction buy(String date, String symbol, double qty, double costGbp) {

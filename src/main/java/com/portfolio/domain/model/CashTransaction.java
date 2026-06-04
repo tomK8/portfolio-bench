@@ -2,8 +2,8 @@ package com.portfolio.domain.model;
 
 public record CashTransaction(
         String transactionDate,   // YYYY-MM-DD
-        String account,           // e.g. "AJBell"
-        String type,              // TRANSACTION | DIVIDEND | INTEREST | CHARGE | CONTRIBUTION
+        Account account,
+        TransactionType type,
         String symbol,            // ticker, GILT id, or "GBP" for non-security rows
         double quantity,          // shares / nominal; 0 when not applicable
         double amount,            // positive = cash in, negative = cash out

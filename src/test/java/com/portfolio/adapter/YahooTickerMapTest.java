@@ -12,7 +12,7 @@ class YahooTickerMapTest {
     void appliesExchangeSuffixes() {
         assertEquals("EQQQ.L", map.tickerFor("EQQQ"));
         assertEquals("BNP.PA", map.tickerFor("BNP"));
-        assertEquals("ASML.AS", map.tickerFor("ASML"));
+        assertEquals("XAIX.L", map.tickerFor("XAIX"));
         assertEquals("HSBA.L", map.tickerFor("HSBA"));
         assertEquals("SGBX.L", map.tickerFor("SGBX"));
         assertEquals("RHM.DE", map.tickerFor("RHM"));

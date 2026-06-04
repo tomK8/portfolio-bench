@@ -1,9 +1,12 @@
 package com.portfolio.application;
 
-import com.portfolio.PortfolioDatabase;
 import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.model.PriceBar;
+import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.PriceHistoryRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
 import java.util.LinkedHashSet;
@@ -17,15 +20,20 @@ import java.util.Set;
  */
 public class PriceFetchJob {
 
+    private static final Logger log = LoggerFactory.getLogger(PriceFetchJob.class);
+
     private static final int LOOKBACK_YEARS = 10;
     private static final long THROTTLE_MS = 500;   // be polite to Yahoo: ≤1 request / 500ms
 
-    private final PortfolioDatabase db;
+    private final CashTransactionRepository cashRepo;
+    private final PriceHistoryRepository priceRepo;
     private final YahooPriceFetcher fetcher;
     private final YahooTickerMap tickers;
 
-    public PriceFetchJob(PortfolioDatabase db, YahooPriceFetcher fetcher, YahooTickerMap tickers) {
-        this.db = db;
+    public PriceFetchJob(CashTransactionRepository cashRepo, PriceHistoryRepository priceRepo,
+                         YahooPriceFetcher fetcher, YahooTickerMap tickers) {
+        this.cashRepo = cashRepo;
+        this.priceRepo = priceRepo;
         this.fetcher = fetcher;
         this.tickers = tickers;
     }
@@ -34,24 +42,24 @@ public class PriceFetchJob {
         LocalDate today = LocalDate.now();
 
         Set<String> tickerSet = new LinkedHashSet<>();   // dedups tickers shared across symbols
-        for (String symbol : db.distinctTradedSymbols()) {
+        for (String symbol : cashRepo.distinctTradedSymbols()) {
             if (tickers.isGilt(symbol)) {
-                System.out.println("Skipping " + symbol + " — gilts not supported");
+                log.info("Skipping {} — gilts not supported", symbol);
                 continue;
             }
             tickerSet.add(tickers.tickerFor(symbol));
         }
 
         for (String ticker : tickerSet) {
-            LocalDate latest = db.getLatestPriceDate(ticker);
+            LocalDate latest = priceRepo.getLatestPriceDate(ticker);
             LocalDate from = (latest == null) ? today.minusYears(LOOKBACK_YEARS) : latest.plusDays(1);
             if (from.isAfter(today)) {
-                System.out.println("Skipped " + ticker + " — already up to date");
+                log.info("Skipped {} — already up to date", ticker);
                 continue;
             }
             List<PriceBar> bars = fetcher.fetch(ticker, from, today);
-            int saved = db.savePriceBars(bars);
-            System.out.printf("Fetched %d rows for %s (%d new)%n", bars.size(), ticker, saved);
+            int saved = priceRepo.savePriceBars(bars);
+            log.info("Fetched {} rows for {} ({} new)", bars.size(), ticker, saved);
             sleep(THROTTLE_MS);
         }
     }

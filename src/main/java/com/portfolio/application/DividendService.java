@@ -1,9 +1,11 @@
 package com.portfolio.application;
 
-import com.portfolio.PortfolioDatabase;
 import com.portfolio.domain.DividendAttributor;
 import com.portfolio.domain.DividendAttributor.Attribution;
 import com.portfolio.domain.model.Holding;
+import com.portfolio.persistence.CashTransactionRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -19,20 +21,22 @@ import java.util.Map;
  */
 public class DividendService {
 
+    private static final Logger log = LoggerFactory.getLogger(DividendService.class);
+
     /**
      * Shares can be fractional (RothIRA); tolerate tiny rounding noise before warning.
      */
     private static final BigDecimal SHARE_TOLERANCE = new BigDecimal("0.01");
 
-    private final PortfolioDatabase db;
+    private final CashTransactionRepository repo;
     private final DividendAttributor attributor = new DividendAttributor();
 
-    public DividendService(PortfolioDatabase db) {
-        this.db = db;
+    public DividendService(CashTransactionRepository repo) {
+        this.repo = repo;
     }
 
     public Map<String, BigDecimal> dividendsBySymbol(List<Holding> holdings) {
-        Map<String, Attribution> attributed = attributor.attributeBySymbol(db.loadDividendTransactions());
+        Map<String, Attribution> attributed = attributor.attributeBySymbol(repo.loadDividendTransactions());
         reconcile(attributed, holdings);
 
         Map<String, BigDecimal> dividends = new HashMap<>();
@@ -48,9 +52,8 @@ public class DividendService {
         attributed.forEach((symbol, a) -> {
             BigDecimal held = heldBySymbol.getOrDefault(symbol, BigDecimal.ZERO);
             if (a.shares().subtract(held).abs().compareTo(SHARE_TOLERANCE) > 0) {
-                System.err.printf(
-                        "[dividends] %s: cash history reconstructs to %s shares but holdings show %s " +
-                                "— dividend attribution may be inaccurate (incomplete transaction history?)%n",
+                log.warn("[dividends] {}: cash history reconstructs to {} shares but holdings show {} "
+                                + "— dividend attribution may be inaccurate (incomplete transaction history?)",
                         symbol, a.shares().stripTrailingZeros().toPlainString(),
                         held.stripTrailingZeros().toPlainString());
             }

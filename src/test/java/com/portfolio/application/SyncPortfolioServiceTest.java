@@ -1,8 +1,12 @@
 package com.portfolio.application;
 
-import com.portfolio.PortfolioDatabase;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooTickerMap;
+import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.JdbcConnectionFactory;
+import com.portfolio.persistence.KeyValueStore;
+import com.portfolio.persistence.SnapshotRepository;
 import com.portfolio.port.FxRateProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,9 +33,14 @@ class SyncPortfolioServiceTest {
     Path dbDir;
 
     private SyncPortfolioService service() {
-        PortfolioDatabase db = new PortfolioDatabase(dbDir);
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
+        KeyValueStore kv = new KeyValueStore(dbDir);
+        CashTransactionRepository cashRepo = new CashTransactionRepository(cf, kv);
+        SnapshotRepository snapshots = new SnapshotRepository(cf);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(cf);
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
-        return new SyncPortfolioService(gatherer, db, new DividendService(db), new YahooTickerMap());
+        return new SyncPortfolioService(gatherer, snapshots, intraday,
+                new DividendService(cashRepo), new YahooTickerMap());
     }
 
     @Test

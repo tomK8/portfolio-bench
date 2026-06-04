@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.PriceBar;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -21,6 +23,8 @@ import java.util.List;
  * instrument's listing currency (see {@link PriceBar}); no FX conversion happens here.
  */
 public class YahooPriceFetcher {
+
+    private static final Logger log = LoggerFactory.getLogger(YahooPriceFetcher.class);
 
     private static final String CHART_URL =
             "https://query1.finance.yahoo.com/v8/finance/chart/%s" +
@@ -44,13 +48,13 @@ public class YahooPriceFetcher {
 
         String body = get(url);
         if (body == null) {
-            System.err.println("Yahoo fetch failed for " + yahooTicker);
+            log.warn("Yahoo fetch failed for {}", yahooTicker);
             return List.of();
         }
         try {
             return parse(yahooTicker, body);
         } catch (Exception e) {
-            System.err.println("Yahoo parse failed for " + yahooTicker + " — " + e.getMessage());
+            log.warn("Yahoo parse failed for {}", yahooTicker, e);
             return List.of();
         }
     }
@@ -63,9 +67,9 @@ public class YahooPriceFetcher {
                         .timeout(Duration.ofSeconds(20)).GET().build();
                 HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
                 if (resp.statusCode() == 200) return resp.body();
-                System.err.printf("Yahoo HTTP %d for %s (attempt %d)%n", resp.statusCode(), url, attempt);
+                log.warn("Yahoo HTTP {} for {} (attempt {})", resp.statusCode(), url, attempt);
             } catch (Exception e) {
-                System.err.printf("Yahoo error %s (attempt %d) — %s%n", url, attempt, e.getMessage());
+                log.warn("Yahoo error {} (attempt {})", url, attempt, e);
             }
         }
         return null;
@@ -115,13 +119,13 @@ public class YahooPriceFetcher {
         String url = String.format(INTRADAY_URL, yahooTicker, from.getEpochSecond(), to.getEpochSecond());
         String body = get(url);
         if (body == null) {
-            System.err.println("Yahoo intraday fetch failed for " + yahooTicker);
+            log.warn("Yahoo intraday fetch failed for {}", yahooTicker);
             return List.of();
         }
         try {
             return parseIntraday(yahooTicker, body);
         } catch (Exception e) {
-            System.err.println("Yahoo intraday parse failed for " + yahooTicker + " — " + e.getMessage());
+            log.warn("Yahoo intraday parse failed for {}", yahooTicker, e);
             return List.of();
         }
     }

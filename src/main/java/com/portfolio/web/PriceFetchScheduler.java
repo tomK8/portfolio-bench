@@ -2,6 +2,8 @@ package com.portfolio.web;
 
 import com.portfolio.application.IntradayPriceFetchJob;
 import com.portfolio.application.PriceFetchJob;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -14,6 +16,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class PriceFetchScheduler {
+
+    private static final Logger log = LoggerFactory.getLogger(PriceFetchScheduler.class);
 
     private final PriceFetchJob job;
     private final IntradayPriceFetchJob intradayJob;
@@ -49,7 +53,7 @@ public class PriceFetchScheduler {
         try {
             job.run();
         } catch (RuntimeException e) {
-            System.err.println("Price fetch run failed — " + e.getMessage());
+            log.warn("Price fetch run failed", e);
         }
     }
 
@@ -57,7 +61,7 @@ public class PriceFetchScheduler {
         try {
             intradayJob.run();
         } catch (RuntimeException e) {
-            System.err.println("Intraday price fetch run failed — " + e.getMessage());
+            log.warn("Intraday price fetch run failed", e);
         }
     }
 }

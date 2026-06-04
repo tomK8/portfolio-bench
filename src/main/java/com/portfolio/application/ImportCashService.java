@@ -1,12 +1,12 @@
 package com.portfolio.application;
 
-import com.portfolio.PortfolioDatabase;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.parser.AJBellCashStatementParser;
 import com.portfolio.parser.CashTransactionParser;
 import com.portfolio.parser.IICashStatementParser;
 import com.portfolio.parser.ParseException;
 import com.portfolio.parser.RothIraCashStatementParser;
+import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.port.HistoricalFxRateProvider;
 
 import java.io.IOException;
@@ -59,14 +59,18 @@ public class ImportCashService {
     private static final BigDecimal ROTH_BALANCE_BROUGHT_FORWARD = new BigDecimal("0");
 
     private final Path inputDir;
-    private final PortfolioDatabase db;
+    private final Path archiveDir;
+    private final CashTransactionRepository repo;
     private final AJBellCashStatementParser ajBellParser = new AJBellCashStatementParser();
     private final RothIraCashStatementParser rothParser;
     private final IICashStatementParser iiParser;
 
-    public ImportCashService(Path inputDir, PortfolioDatabase db, HistoricalFxRateProvider fxProvider) {
+    public ImportCashService(Path inputDir, Path archiveDir,
+                             CashTransactionRepository repo,
+                             HistoricalFxRateProvider fxProvider) {
         this.inputDir = inputDir;
-        this.db = db;
+        this.archiveDir = archiveDir;
+        this.repo = repo;
         this.rothParser = new RothIraCashStatementParser(fxProvider);
         this.iiParser = new IICashStatementParser(fxProvider);
     }
@@ -92,14 +96,14 @@ public class ImportCashService {
 
     private Optional<ImportCashResult> importAjBell() {
         return mostRecent(AJBELL_GLOB).map(file -> {
-            int inserted = db.saveCashTransactions(parse(ajBellParser, file));
+            int inserted = repo.saveAjBell(parse(ajBellParser, file));
             return archiveOrDelete("AJBell", file, inserted, "cashstatements");
         });
     }
 
     private Optional<ImportCashResult> importRothIra() {
         return mostRecent(ROTH_GLOB).map(file -> {
-            int inserted = db.saveRothIraCashTransactions(parse(rothParser, file), ROTH_BALANCE_BROUGHT_FORWARD);
+            int inserted = repo.saveRothIra(parse(rothParser, file), ROTH_BALANCE_BROUGHT_FORWARD);
             return archiveOrDelete("RothIRA", file, inserted, "History");
         });
     }
@@ -117,7 +121,7 @@ public class ImportCashService {
             List<CashTransaction> rows = parse(iiParser, file);
             String ccy = rows.isEmpty() ? "?" : rows.get(0).currency();
             String source = "II SIPP (" + ccy + ")";
-            int inserted = db.saveIiCashTransactions(rows);
+            int inserted = repo.saveII(rows);
             results.add(archiveOrDelete(source, file, inserted, "ii_cash_" + ccy));
         }
         return results;
@@ -158,7 +162,7 @@ public class ImportCashService {
         String sourceFile = file.getFileName().toString();
         try {
             if (inserted > 0) {
-                Path archived = db.dbDir.resolve(archivePrefix + "_" + LocalDate.now() + extension(file));
+                Path archived = archiveDir.resolve(archivePrefix + "_" + LocalDate.now() + extension(file));
                 Files.move(file, archived, StandardCopyOption.REPLACE_EXISTING);
                 return ImportCashResult.imported(source, inserted, sourceFile, archived.toString());
             }

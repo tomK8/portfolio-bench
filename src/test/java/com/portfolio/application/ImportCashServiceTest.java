@@ -1,6 +1,8 @@
 package com.portfolio.application;
 
-import com.portfolio.PortfolioDatabase;
+import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.JdbcConnectionFactory;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -40,7 +42,11 @@ class ImportCashServiceTest {
     };
 
     private ImportCashService service() {
-        return new ImportCashService(inputDir, new PortfolioDatabase(dbDir), FX);
+        return new ImportCashService(inputDir, dbDir, repo(), FX);
+    }
+
+    private CashTransactionRepository repo() {
+        return new CashTransactionRepository(new JdbcConnectionFactory(dbDir), new KeyValueStore(dbDir));
     }
 
     private ImportCashResult ajBell(ImportCashService service) {
@@ -69,7 +75,7 @@ class ImportCashServiceTest {
     @Test
     void missingInputDirTreatedAsEmpty() {
         ImportCashService svc = new ImportCashService(
-                inputDir.resolve("does-not-exist"), new PortfolioDatabase(dbDir), FX);
+                inputDir.resolve("does-not-exist"), dbDir, repo(), FX);
         assertAllNotFound(svc.importCash());
     }
 

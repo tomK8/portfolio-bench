@@ -47,6 +47,7 @@ class PortfolioMetricsTest {
         PortfolioMetrics.Totals t = new PortfolioMetrics().compute(holdings, iiSippCash);
 
         assertBigDecimalEquals("1800", t.totalGbp());        // 1000 + 500 + 300
+        assertBigDecimalEquals("1800", t.rtTotalGbp());      // no RT data → falls back to marketValueGbp
         assertBigDecimalEquals("200", t.totalGainGbp());     // null gain filtered out
         assertBigDecimalEquals("800", t.totalCashGbp());     // CASH 500 + ii cash 300
         assertBigDecimalEquals("0.2", t.returnPct());        // 200 / (1800 - 800)
@@ -58,6 +59,7 @@ class PortfolioMetricsTest {
         PortfolioMetrics.Totals t = new PortfolioMetrics().compute(List.of(), BigDecimal.ZERO);
 
         assertBigDecimalEquals("0", t.totalGbp());
+        assertBigDecimalEquals("0", t.rtTotalGbp());
         assertBigDecimalEquals("0", t.totalGainGbp());
         assertBigDecimalEquals("0", t.totalCashGbp());
         assertBigDecimalEquals("0", t.returnPct());

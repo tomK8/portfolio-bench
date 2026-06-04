@@ -16,6 +16,8 @@
         <div class="totals">
             <span>Total value<br/><b
                     th:text="'£' + ${#numbers.formatDecimal(result.totals.totalGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
+            <span>RT Total value<br/><b
+                    th:text="'£' + ${#numbers.formatDecimal(result.totals.rtTotalGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
             <span>Total gain<br/><b
                     th:text="'£' + ${#numbers.formatDecimal(result.totals.totalGainGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
             <span>Cash<br/><b

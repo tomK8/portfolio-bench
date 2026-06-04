@@ -18,6 +18,11 @@ public class PortfolioMetrics {
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .add(iiSippCash);
 
+        BigDecimal rtTotalGbp = aggregated.stream()
+                .map(h -> h.rtMarketValueGbp() != null ? h.rtMarketValueGbp() : h.marketValueGbp())
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .add(iiSippCash);
+
         BigDecimal totalGainGbp = aggregated.stream()
                 .filter(h -> h.gainGbp() != null)
                 .map(AggHolding::gainGbp)
@@ -37,11 +42,12 @@ public class PortfolioMetrics {
                 ? totalGainGbp.divide(totalGbp, 10, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
 
-        return new Totals(totalGbp, totalGainGbp, totalCashGbp, returnPct, totalReturn);
+        return new Totals(totalGbp, rtTotalGbp, totalGainGbp, totalCashGbp, returnPct, totalReturn);
     }
 
     public record Totals(
             BigDecimal totalGbp,
+            BigDecimal rtTotalGbp,    // same as totalGbp, but uses RT market value when available
             BigDecimal totalGainGbp,
             BigDecimal totalCashGbp,
             BigDecimal returnPct,

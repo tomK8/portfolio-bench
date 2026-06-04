@@ -12,8 +12,8 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.pension</groupId>
-    <artifactId>pension-aggregator</artifactId>
+    <groupId>com.portfolio</groupId>
+    <artifactId>portfolio-bench</artifactId>
     <version>1.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
@@ -71,7 +71,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <mainClass>com.pension.PensionAggregatorApplication</mainClass>
+                    <mainClass>com.portfolio.PortfolioBenchApplication</mainClass>
                 </configuration>
             </plugin>
             <plugin>

@@ -16,14 +16,14 @@ The server binds to loopback only, no auth — it is a single-user local tool. O
 default directories (e.g. for a throwaway run that doesn't touch real data):
 
 ```bash
-mvn spring-boot:run -Dspring-boot.run.arguments="--pension.input-dir=/tmp/in --pension.db-dir=/tmp/db --pension.output-dir=/tmp/out"
+mvn spring-boot:run -Dspring-boot.run.arguments="--portfolio.input-dir=/tmp/in --portfolio.db-dir=/tmp/db --portfolio.output-dir=/tmp/out"
 ```
 
 | Property             | Default                 | Purpose                                                             |
 |----------------------|-------------------------|---------------------------------------------------------------------|
-| `pension.input-dir`  | `~/Downloads`           | where broker exports + `cashstatements.csv` are read                |
-| `pension.db-dir`     | `~/Documents/Investing` | SQLite `portfolio.db`, archived cash files, `ii_sipp_cash_last.txt` |
-| `pension.output-dir` | `~/Documents`           | generated Excel workbooks                                           |
+| `portfolio.input-dir`  | `~/Downloads`           | where broker exports + `cashstatements.csv` are read                |
+| `portfolio.db-dir`     | `~/Documents/Investing` | SQLite `portfolio.db`, archived cash files, `ii_sipp_cash_last.txt` |
+| `portfolio.output-dir` | `~/Documents`           | generated Excel workbooks                                           |
 
 ### Test fixtures
 
@@ -54,26 +54,26 @@ batch `Main`, since removed — see git history for the migration.)
 Layered, ports-and-adapters style. **Spring is confined to the `web` and `config` packages**;
 `domain`, `application`, `adapter` and `parser` carry no Spring annotations.
 
-- `com.pension.domain` — pure logic, no IO/framework: `PortfolioAggregator` (aggregates
+- `com.portfolio.domain` — pure logic, no IO/framework: `PortfolioAggregator` (aggregates
   `Holding`s; owns `toGbp`/`costInGbp`/`isBond`; folds per-symbol dividends into each
   `AggHolding`'s total-gain fields), `PortfolioMetrics` (totals/return — price appreciation
   only, dividends excluded). `domain.model`: `Holding`, `AggHolding`, `CashTransaction`.
-- `com.pension.port` — `FxRateProvider` (latest rates) and `HistoricalFxRateProvider`
+- `com.portfolio.port` — `FxRateProvider` (latest rates) and `HistoricalFxRateProvider`
   (rates by date); the only interfaces, justified by faking the network in tests. Everything
   else is concrete by design.
-- `com.pension.adapter` — `FrankfurterFxClient` (implements both FX ports — `latest` and the
+- `com.portfolio.adapter` — `FrankfurterFxClient` (implements both FX ports — `latest` and the
   time-series endpoint on `api.frankfurter.dev`), `HoldingFileLocator` (finds the most recent
   supported file per parser).
-- `com.pension.parser` — `AccountParser` / `CashTransactionParser` interfaces + impls.
-- `com.pension.application` — the operations (plain classes, wired as beans):
+- `com.portfolio.parser` — `AccountParser` / `CashTransactionParser` interfaces + impls.
+- `com.portfolio.application` — the operations (plain classes, wired as beans):
   `PortfolioGatherer` (shared fetch-rates + parse step → `GatheredPortfolio`),
   `SyncPortfolioService`, `ExportExcelService`, `ImportCashService`,
   `DividendService` (FIFO attribution + share-count reconciliation).
-- `com.pension.web` — `DashboardController` (thin; HTTP ↔ service only),
+- `com.portfolio.web` — `DashboardController` (thin; HTTP ↔ service only),
   Thymeleaf templates + htmx fragments.
-- `com.pension.config` — `BeanConfiguration` wires the adapters/services as `@Bean`s.
-- `com.pension` — `PortfolioDatabase` (all SQLite + settings-file IO), `ExcelReportWriter`
-  (Apache POI), `PensionAggregatorApplication` (entry point).
+- `com.portfolio.config` — `BeanConfiguration` wires the adapters/services as `@Bean`s.
+- `com.portfolio` — `PortfolioDatabase` (all SQLite + settings-file IO), `ExcelReportWriter`
+  (Apache POI), `PortfolioBenchApplication` (entry point).
 
 **UI:** server-rendered Thymeleaf + htmx (CDN) + Chart.js. Actions run synchronously and swap
 a result fragment into `#result`.
@@ -268,7 +268,7 @@ later dividends/splits accrue; a future full re-pull (keyed off `fetched_at`) ca
 
 **Scheduling:** `PriceFetchScheduler` (the only price-layer Spring class) runs the job on `ApplicationReadyEvent`
 (on a daemon thread, so a first-run backfill doesn't block the web UI) and via `@Scheduled` cron at 22:00
-Europe/London. `@EnableScheduling` is on `PensionAggregatorApplication`.
+Europe/London. `@EnableScheduling` is on `PortfolioBenchApplication`.
 
 **Persistence stays on `PortfolioDatabase`** (the price methods listed above) — consistent with the single-JDBC-owner
 rule. `YahooPriceFetcher`/`YahooTickerMap` (adapter) and `PriceFetchJob` (application) carry no Spring annotations.

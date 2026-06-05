@@ -55,11 +55,12 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js. Actions are synchronous; result fragment
 swaps into `#result`. Logging is SLF4J + Logback (`logback-spring.xml`); no `System.out` in production code.
 
-| Action                | Endpoint            | Service              |
-|-----------------------|---------------------|----------------------|
-| Sync portfolio        | `POST /sync`        | `SyncPortfolioService` |
-| Export Excel          | `POST /export`      | `ExportExcelService` |
-| Import cash statement | `POST /import-cash` | `ImportCashService`  |
+| Action                | Endpoint                   | Service                   |
+|-----------------------|----------------------------|---------------------------|
+| Sync portfolio        | `POST /sync`               | `SyncPortfolioService`    |
+| Export Excel          | `POST /export`             | `ExportExcelService`      |
+| Import cash statement | `POST /import-cash`        | `ImportCashService`       |
+| Import gilt prices    | `POST /import-gilt-prices` | `ImportGiltPricesService` |
 
 ## Holding fields
 
@@ -102,9 +103,12 @@ same literal strings — don't rename enum constants without a migration.
 
 `Instruments.isBond(securityId)` checks for `%` or `GILT` prefix. Single source of truth used to
 (1) sort bonds into their own section at the bottom of the Portfolio sheet, (2) skip Yahoo price
-fetches (no coverage), (3) skip RT market-value calculation (broker price stays source of truth).
+fetches (no coverage there), (3) switch `PortfolioAggregator.realtime` to the per-£100-nominal
+formula (`qty × price / 100`) when scoring the cached dividenddata clean price.
 
 Bonds in AJBell exports are normalised to `"GILT {coupon}% {year}"` by `AJBellSippParser.extractBondId`.
+The same string is the symbol under which `GiltPriceFetchJob` writes to `price_intraday`, so the
+aggregator joins holding → RT price without any ticker translation.
 
 ## Dividends
 
@@ -150,12 +154,27 @@ holdings; distinguished from II cash by header sniff), `cashstatements*.csv` (AJ
 
 ## Price history
 
-Two tables, two jobs, shared scaffolding in `PriceFetchSupport`:
+Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
 
 - `PriceFetchJob` → `price_history` (daily). First run backfills ~10 years per ticker; later runs
   fetch the gap to today. Cron 22:00 Europe/London + startup.
 - `IntradayPriceFetchJob` → `price_intraday` (1-minute closes). 7-day retention; pruned after each
   fetch tick. Every 5 minutes + startup.
+- `GiltPriceFetchJob` → also `price_intraday`, one HTTP GET to `dividenddata.co.uk/uk-gilts-prices-yields.py`.
+  Hourly + startup. Symbols are `"GILT {coupon}% {year}"` (no Yahoo ticker map). Currency `"GBP"`.
+  Rides the intraday job's prune for retention. Dividenddata returns 403 to the default Java
+  `User-Agent`; `GiltPriceFetcher` sends a browser UA. Each tick also **upserts** today's row
+  into `price_history` so the daily series self-accumulates even when the app isn't running
+  all day — last-write-wins.
+- `ImportGiltPricesService` → bulk historical import for gilts from manually downloaded
+  `~/Downloads/Tradeweb_FTSE_ClosePrices*.csv`. Runs on startup (daemon) and on demand via
+  `POST /import-gilt-prices`. Upserts into `price_history`, archives consumed files to the
+  DB dir with a symbol-embedded name. One file = one gilt across a date range.
+
+**Gilt price history sources:** two independent feeds writing the same table via the same
+upsert. Either can fill or overwrite the other's day. The intraday rollup gives continuous
+coverage while the app runs; Tradeweb batch imports give authoritative closes for whatever
+range the user downloads — typically the source of truth when both are present.
 
 `PriceFetchSupport.tickersToFetch` builds the universe: every symbol from
 `CashTransactionRepository.distinctTradedSymbols()`, minus bonds (`Instruments.isBond`), mapped to
@@ -170,8 +189,11 @@ US listings map to themselves; non-US need an exchange suffix (`.L` London, `.PA
 Amsterdam, `.DE` Frankfurt).
 
 **`close` vs `adj_close`:** use `close` for "market value of the position on date X", `adj_close`
-for total-return calculations. Because fetching is incremental + `INSERT OR IGNORE`, historical
-`adj_close` is **not** refreshed as later dividends/splits accrue.
+for total-return calculations. Because Yahoo fetching is incremental + `INSERT OR IGNORE`,
+historical `adj_close` is **not** refreshed as later dividends/splits accrue. The gilt paths
+(intraday rollup, Tradeweb batch import) use `upsertPriceBars` instead, so the latest write
+wins for `(symbol, date)` — clean price feeds both `close` and `adj_close` (no total-return
+math for bonds).
 
 **Currency is stored verbatim** from Yahoo. `.L` (London) tickers report `"GBp"` (pence);
 `PortfolioAggregator.realtime` divides by 100 before producing the RT market value.

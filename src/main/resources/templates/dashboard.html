@@ -168,6 +168,11 @@
     <span class="htmx-indicator" id="spinner">Working…</span>
 </form>
 
+<form class="actions" hx-indicator="#spinner">
+    <button hx-post="/import-gilt-prices" hx-target="#gilt-import-result" type="submit">Import gilt prices</button>
+    <span class="muted">reads <code>~/Downloads/Tradeweb_FTSE_ClosePrices*.csv</code> (manual Tradeweb downloads)</span>
+</form>
+
 <section class="result-panel">
     <h2>Export Excel</h2>
     <div id="export-result"></div>
@@ -176,6 +181,11 @@
 <section class="result-panel">
     <h2>Import cash statement</h2>
     <div id="import-result"></div>
+</section>
+
+<section class="result-panel">
+    <h2>Import gilt prices</h2>
+    <div id="gilt-import-result"></div>
 </section>
 
 <section class="result-panel">

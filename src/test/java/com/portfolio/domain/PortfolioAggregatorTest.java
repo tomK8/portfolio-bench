@@ -104,18 +104,35 @@ class PortfolioAggregatorTest {
     }
 
     @Test
-    void rtFieldsNullForGiltsEvenWhenPriceSupplied() {
+    void giltUsesCleanPriceDividedByHundred() {
+        // £100,000 nominal of TG44 at clean price 75.01 → market value £75,010.
+        // latestPrice keeps the per-£100 quote form a UK investor expects to see.
+        Holding gilt = Holding.builder("GILT 3.25% 2044", new BigDecimal("100000"), GBP, "AJ Bell SIPP")
+                .avgPricePaid(new BigDecimal("80"))
+                .currentMarketValue(new BigDecimal("80000"))
+                .build();
+        Map<String, IntradayPrice> latest = Map.of(
+                "GILT 3.25% 2044", new IntradayPrice(T0, 75.01, "GBP"));
+
+        AggHolding h = only(new PortfolioAggregator().aggregate(List.of(gilt), RATES, Map.of(), latest),
+                "GILT 3.25% 2044");
+
+        eq("75.01", h.latestPrice());
+        eq("75010", h.rtMarketValue());       // 100000 * 75.01 / 100
+        eq("75010", h.rtMarketValueGbp());    // already GBP
+    }
+
+    @Test
+    void giltRtFieldsNullWhenNoCachedPrice() {
         Holding gilt = Holding.builder("GILT 0.25% 2026", new BigDecimal("1000"), GBP, "AJ Bell SIPP")
                 .avgPricePaid(new BigDecimal("0.95"))
                 .currentMarketValue(new BigDecimal("950"))
                 .build();
-        Map<String, IntradayPrice> latest = Map.of(
-                "GILT 0.25% 2026", new IntradayPrice(T0, 0.96, "GBP"));   // ignored
 
-        AggHolding h = only(new PortfolioAggregator().aggregate(List.of(gilt), RATES, Map.of(), latest),
+        AggHolding h = only(new PortfolioAggregator().aggregate(List.of(gilt), RATES, Map.of(), Map.of()),
                 "GILT 0.25% 2026");
 
-        assertNull(h.latestPrice(), "gilts skip RT columns regardless of cached price");
+        assertNull(h.latestPrice());
         assertNull(h.rtMarketValue());
     }
 

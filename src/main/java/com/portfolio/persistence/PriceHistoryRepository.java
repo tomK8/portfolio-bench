@@ -85,6 +85,49 @@ public class PriceHistoryRepository {
         }
     }
 
+    /**
+     * Last-write-wins upsert. Used by the gilt batch import (so re-importing a Tradeweb file
+     * refreshes any earlier intraday-derived row) and by the gilt intraday rollup (so the most
+     * recent intraday price each day replaces the prior in-day write).
+     *
+     * <p>Returns total rows touched (inserts + updates). SQLite's {@code ON CONFLICT … DO UPDATE}
+     * reports updates as affected rows, so this counts both.
+     */
+    public int upsertPriceBars(List<PriceBar> bars) {
+        if (bars.isEmpty()) return 0;
+        String fetchedAt = Instant.now().toString();
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "INSERT INTO price_history " +
+                             "(symbol, date, open, high, low, close, adj_close, volume, currency, fetched_at) " +
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                             "ON CONFLICT(symbol, date) DO UPDATE SET " +
+                             "open = excluded.open, high = excluded.high, low = excluded.low, " +
+                             "close = excluded.close, adj_close = excluded.adj_close, " +
+                             "volume = excluded.volume, currency = excluded.currency, " +
+                             "fetched_at = excluded.fetched_at")) {
+            int touched = 0;
+            for (PriceBar b : bars) {
+                ps.setString(1, b.symbol());
+                ps.setString(2, b.date().toString());
+                setNullableDouble(ps, 3, b.open());
+                setNullableDouble(ps, 4, b.high());
+                setNullableDouble(ps, 5, b.low());
+                ps.setDouble(6, b.close());
+                ps.setDouble(7, b.adjClose());
+                if (b.volume() != null) ps.setLong(8, b.volume());
+                else ps.setNull(8, Types.INTEGER);
+                ps.setString(9, b.currency());
+                ps.setString(10, fetchedAt);
+                touched += ps.executeUpdate();
+            }
+            return touched;
+        } catch (Exception e) {
+            log.warn("Could not upsert price bars", e);
+            return 0;
+        }
+    }
+
     public LocalDate getLatestPriceDate(String symbol) {
         if (!connections.dbExists()) return null;
         try (Connection conn = connections.open();

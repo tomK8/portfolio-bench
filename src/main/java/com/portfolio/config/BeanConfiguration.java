@@ -2,6 +2,7 @@ package com.portfolio.config;
 
 import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.FrankfurterFxClient;
+import com.portfolio.adapter.GiltPriceFetcher;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooTickerMap;
@@ -182,5 +183,25 @@ public class BeanConfiguration {
                                                        YahooTickerMap yahooTickerMap) {
         return new IntradayPriceFetchJob(cashTransactionRepository, intradayPriceRepository,
                 yahooPriceFetcher, yahooTickerMap);
+    }
+
+    @Bean
+    public GiltPriceFetcher giltPriceFetcher() {
+        return new GiltPriceFetcher();
+    }
+
+    @Bean
+    public GiltPriceFetchJob giltPriceFetchJob(GiltPriceFetcher giltPriceFetcher,
+                                               IntradayPriceRepository intradayPriceRepository,
+                                               PriceHistoryRepository priceHistoryRepository) {
+        return new GiltPriceFetchJob(giltPriceFetcher, intradayPriceRepository, priceHistoryRepository);
+    }
+
+    @Bean
+    public ImportGiltPricesService importGiltPricesService(@Value("${portfolio.input-dir:}") String inputDir,
+                                                           JdbcConnectionFactory jdbcConnectionFactory,
+                                                           PriceHistoryRepository priceHistoryRepository) {
+        return new ImportGiltPricesService(inputDir(inputDir), jdbcConnectionFactory.dbDir(),
+                priceHistoryRepository);
     }
 }

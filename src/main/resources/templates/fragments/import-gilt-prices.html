@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<div th:fragment="result">
+    <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>
+    <div class="note">
+        <ul style="margin: 0; padding-left: 1.2rem;">
+            <li th:each="imp : ${giltImports}">
+                <span th:if="${imp.status.name() == 'IMPORTED'}">
+                    Imported <code th:text="${imp.sourceFile}">file</code> —
+                    <b th:text="${imp.touched}">N</b> row(s) upserted,
+                    archived to <code th:text="${imp.detail}">path</code>.
+                </span>
+                <span th:if="${imp.status.name() == 'FAILED'}" style="color:#b00;">
+                    Failed <code th:text="${imp.sourceFile}">file</code> —
+                    <span th:text="${imp.detail}">reason</span>.
+                </span>
+                <span th:if="${imp.status.name() == 'NOT_FOUND'}" class="muted">
+                    No <code>Tradeweb_FTSE_ClosePrices*.csv</code> in ~/Downloads.
+                </span>
+            </li>
+        </ul>
+    </div>
+</div>
+
+</body>
+</html>

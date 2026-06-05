@@ -90,12 +90,19 @@ public class PortfolioAggregator {
                 rt[0], rt[1], rt[2]);
     }
 
-    /** Returns {@code {latestPrice, rtMarketValue, rtMarketValueGbp}}; all null when unavailable. */
+    /**
+     * Returns {@code {latestPrice, rtMarketValue, rtMarketValueGbp}}; all null when unavailable.
+     *
+     * <p>Gilt prices arrive as clean prices per £100 nominal (e.g. 75.01), so the value formula
+     * is {@code qty × price / 100}. {@code latestPrice} keeps the clean-price form a UK
+     * investor expects to see in the Price column; the divide-by-100 happens only inside the
+     * market-value calculation.
+     */
     private static BigDecimal[] realtime(String securityId, Currency ccy, BigDecimal qty,
                                          Map<String, IntradayPrice> prices,
                                          Map<String, BigDecimal> gbpRates) {
         BigDecimal[] empty = {null, null, null};
-        if (securityId.equals("CASH") || Instruments.isBond(securityId)) return empty;
+        if (securityId.equals("CASH")) return empty;
 
         IntradayPrice p = prices.get(securityId.toUpperCase());
         if (p == null) return empty;
@@ -104,7 +111,9 @@ public class PortfolioAggregator {
         if ("GBp".equals(p.currency()) && "GBP".equals(ccy.getCurrencyCode())) {
             price = price.movePointLeft(2);   // pence → pounds
         }
-        BigDecimal rtNative = price.multiply(qty);
+        BigDecimal rtNative = Instruments.isBond(securityId)
+                ? price.multiply(qty).movePointLeft(2)   // clean price is per £100 nominal
+                : price.multiply(qty);
 
         BigDecimal rtGbp;
         if ("GBP".equals(ccy.getCurrencyCode())) {

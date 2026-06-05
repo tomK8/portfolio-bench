@@ -93,6 +93,22 @@ class PriceHistoryRepositoryTest {
     }
 
     @Test
+    void upsertPriceBarsReplacesOnConflict() {
+        PriceHistoryRepository repo = newPriceRepo();
+        PriceBar first = new PriceBar("GILT 3.75% 2038", LocalDate.of(2024, 1, 2),
+                null, null, null, 90.0, 90.0, null, "GBP");
+        PriceBar second = new PriceBar("GILT 3.75% 2038", LocalDate.of(2024, 1, 2),
+                null, null, null, 91.5, 91.5, null, "GBP");
+
+        assertEquals(1, repo.upsertPriceBars(List.of(first)), "fresh insert");
+        assertEquals(1, repo.upsertPriceBars(List.of(second)),
+                "same (symbol,date) updates rather than ignoring");
+
+        assertEquals(91.5, repo.getPriceOn("GILT 3.75% 2038", LocalDate.of(2024, 1, 2)).close(),
+                "later upsert wins");
+    }
+
+    @Test
     void distinctTradedSymbolsExcludesNonInstrumentRows() {
         CashTransactionRepository cashRepo = newCashRepo();
         cashRepo.saveAjBell(List.of(

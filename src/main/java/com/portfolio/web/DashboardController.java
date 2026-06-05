@@ -2,6 +2,7 @@ package com.portfolio.web;
 
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
+import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.SyncPortfolioService;
 import com.portfolio.persistence.KeyValueStore;
 import org.slf4j.Logger;
@@ -30,15 +31,18 @@ public class DashboardController {
     private final SyncPortfolioService syncService;
     private final ExportExcelService exportService;
     private final ImportCashService importCashService;
+    private final ImportGiltPricesService importGiltPricesService;
     private final KeyValueStore settings;
 
     public DashboardController(SyncPortfolioService syncService,
                                ExportExcelService exportService,
                                ImportCashService importCashService,
+                               ImportGiltPricesService importGiltPricesService,
                                KeyValueStore settings) {
         this.syncService = syncService;
         this.exportService = exportService;
         this.importCashService = importCashService;
+        this.importGiltPricesService = importGiltPricesService;
         this.settings = settings;
     }
 
@@ -95,6 +99,13 @@ public class DashboardController {
         model.addAttribute("cashImports", importCashService.importCash());
         model.addAttribute("completedAt", now());
         return "fragments/import :: result";
+    }
+
+    @PostMapping("/import-gilt-prices")
+    public String importGiltPrices(Model model) {
+        model.addAttribute("giltImports", importGiltPricesService.importAll());
+        model.addAttribute("completedAt", now());
+        return "fragments/import-gilt-prices :: result";
     }
 
     /**

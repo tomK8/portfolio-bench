@@ -66,16 +66,20 @@ public class SyncPortfolioService {
 
     /**
      * Bulk-load the latest cached intraday price per holding, re-keyed by <b>internal symbol</b>
-     * (upper-cased) — that's how the aggregator looks them up alongside dividends. Gilts and
-     * CASH rows are filtered out upstream (they have no Yahoo price); a holding whose ticker
-     * has no cached bar simply won't appear in the result and the RT columns render as "—".
+     * (upper-cased) — that's how the aggregator looks them up alongside dividends. CASH rows
+     * are filtered out (no price); stocks route through {@code YahooTickerMap}, gilts are
+     * stored under their own {@code GILT %} symbol by {@link GiltPriceFetchJob} so the lookup
+     * key equals the symbol itself. A holding whose symbol has no cached bar simply won't appear
+     * in the result and the RT columns render as "—".
      */
     private Map<String, IntradayPrice> latestPricesBySymbol(List<Holding> holdings) {
         Map<String, String> tickerBySymbol = new LinkedHashMap<>();   // preserves first-seen order
         for (Holding h : holdings) {
             String sym = h.getSecurityId();
-            if (sym == null || sym.equals("CASH") || Instruments.isBond(sym)) continue;
-            tickerBySymbol.putIfAbsent(sym.toUpperCase(), tickerMap.tickerFor(sym));
+            if (sym == null || sym.equals("CASH")) continue;
+            String upper = sym.toUpperCase();
+            String ticker = Instruments.isBond(sym) ? upper : tickerMap.tickerFor(sym);
+            tickerBySymbol.putIfAbsent(upper, ticker);
         }
         if (tickerBySymbol.isEmpty()) return Map.of();
 

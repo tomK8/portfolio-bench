@@ -304,6 +304,62 @@
             font-size: 0.9rem;
             display: none;
         }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.4);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-backdrop.open {
+            display: flex;
+        }
+
+        .modal-box {
+            background: #fff;
+            border-radius: 8px;
+            padding: 1.25rem 1.5rem;
+            max-width: 460px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+        }
+
+        .modal-box h3 {
+            margin: 0 0 0.5rem 0;
+            font-size: 1.05rem;
+        }
+
+        .modal-box p {
+            margin: 0.4rem 0;
+            color: #444;
+            font-size: 0.92rem;
+        }
+
+        .modal-box code {
+            background: rgba(0, 0, 0, 0.05);
+            padding: 0 4px;
+            border-radius: 3px;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 0.6rem;
+            justify-content: flex-end;
+            margin-top: 1rem;
+        }
+
+        .modal-actions button {
+            padding: 0.45rem 1.1rem;
+        }
+
+        .modal-actions .primary {
+            background: #1f77b4;
+            color: #fff;
+            border: 1px solid #1d6ba2;
+        }
     </style>
 </head>
 <body>
@@ -426,6 +482,21 @@
     </div>
     <div id="whatif-error" class="whatif-error"></div>
     <div id="whatif-warnings" class="value-warnings" style="display: none;"></div>
+
+    <div id="whatif-backfill-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div class="modal-box">
+            <h3>Download price history?</h3>
+            <p>We have no <code>price_history</code> rows for the following ticker(s):</p>
+            <p><b id="whatif-backfill-list">—</b></p>
+            <p>Fetch the full 10-year window from Yahoo and re-run the backtest?
+               Takes ~2s per ticker. Choosing <i>Cancel</i> leaves a partial chart
+               where the missing allocations stay as GBP cash.</p>
+            <div class="modal-actions">
+                <button id="whatif-backfill-cancel" type="button">Cancel</button>
+                <button id="whatif-backfill-ok" type="button" class="primary">Download &amp; re-run</button>
+            </div>
+        </div>
+    </div>
     <div style="height: 480px; margin-top: 1rem;">
         <canvas id="whatif-chart"></canvas>
     </div>
@@ -596,21 +667,18 @@
             status.textContent = 'Working…';
 
             postWhatIf(params, false).then(function (synthetic) {
-                // If the basket has unknown tickers, render what we have, then ask whether
-                // to backfill from Yahoo and re-run. confirm() blocks the page but keeps the
-                // user in control — backfilling 7 unknown tickers can take ~15s.
+                // If the basket has unknown tickers, show the in-page modal asking whether
+                // to backfill from Yahoo and re-run. The modal returns a promise that
+                // resolves true on OK, false on Cancel — same shape as the old confirm().
                 if (synthetic.missingPrices && synthetic.missingPrices.length) {
                     var names = synthetic.missingPrices.map(function (m) { return m.symbol; }).join(', ');
-                    var ok = window.confirm(
-                        "We have no price history for: " + names + "\n\n" +
-                        "Backfill from Yahoo and re-run? Takes ~2s per symbol.\n" +
-                        "(Cancel keeps the partial chart; missing allocations stay as GBP cash.)");
-                    if (ok) {
-                        status.textContent = 'Backfilling ' + synthetic.missingPrices.length + ' ticker(s) from Yahoo…';
-                        return postWhatIf(params, true).then(function (fresh) {
-                            return overlayWhatIf(fresh);
-                        });
-                    }
+                    return askBackfill(names).then(function (ok) {
+                        if (ok) {
+                            status.textContent = 'Backfilling ' + synthetic.missingPrices.length + ' ticker(s) from Yahoo…';
+                            return postWhatIf(params, true).then(overlayWhatIf);
+                        }
+                        return overlayWhatIf(synthetic);
+                    });
                 }
                 return overlayWhatIf(synthetic);
             }).then(function () {
@@ -627,6 +695,31 @@
             return fetch(url, { method: 'POST', body: params }).then(function (r) {
                 if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Request failed'); });
                 return r.json();
+            });
+        }
+
+        // Promise<boolean> — resolves true on OK, false on Cancel/backdrop. One handler
+        // attached per click so we don't leak listeners across runs.
+        function askBackfill(tickerList) {
+            return new Promise(function (resolve) {
+                var modal = document.getElementById('whatif-backfill-modal');
+                document.getElementById('whatif-backfill-list').textContent = tickerList;
+                var okBtn = document.getElementById('whatif-backfill-ok');
+                var cancelBtn = document.getElementById('whatif-backfill-cancel');
+                function close(value) {
+                    modal.classList.remove('open');
+                    okBtn.removeEventListener('click', onOk);
+                    cancelBtn.removeEventListener('click', onCancel);
+                    modal.removeEventListener('click', onBackdrop);
+                    resolve(value);
+                }
+                function onOk() { close(true); }
+                function onCancel() { close(false); }
+                function onBackdrop(e) { if (e.target === modal) close(false); }
+                okBtn.addEventListener('click', onOk);
+                cancelBtn.addEventListener('click', onCancel);
+                modal.addEventListener('click', onBackdrop);
+                modal.classList.add('open');
             });
         }
 

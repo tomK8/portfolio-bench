@@ -3,3 +3,4 @@
 .idea/
 target/
 portfolio-bench.pid
+node_modules/

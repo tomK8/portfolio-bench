@@ -11,9 +11,9 @@ import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -62,9 +62,12 @@ public class ImportGiltPricesService {
         }
         int touched = repo.upsertPriceBars(bars);
         String symbol = bars.get(0).symbol();
+        LocalDate fromDate = bars.stream().map(PriceBar::date).min(Comparator.naturalOrder()).orElseThrow();
+        LocalDate toDate = bars.stream().map(PriceBar::date).max(Comparator.naturalOrder()).orElseThrow();
         try {
-            Path archived = archiveDir.resolve(archiveName(symbol, file));
-            Files.move(file, archived, StandardCopyOption.REPLACE_EXISTING);
+            Path archived = nonClobberingTarget(archiveDir, archiveBase(symbol, fromDate, toDate),
+                    extension(file));
+            Files.move(file, archived);
             return GiltPriceImportResult.imported(touched, name, archived.toString());
         } catch (IOException e) {
             log.warn("Imported {} rows but could not archive {}", touched, name, e);
@@ -83,11 +86,30 @@ public class ImportGiltPricesService {
         }
     }
 
-    /** {@code Tradeweb_GILT_3.75pct_2038_2026-06-05.csv} — "%" isn't filename-safe. */
-    private static String archiveName(String symbol, Path original) {
+    /**
+     * Base filename (no extension) embedding the symbol and the actual data range from the
+     * file — e.g. {@code Tradeweb_GILT_3.75pct_2038_2022-11-09_to_2023-06-02}. The range is
+     * the load-bearing identifier (which window of history was sourced); today's date adds
+     * noise and collides with prior runs of the same window. "%" isn't filename-safe.
+     */
+    private static String archiveBase(String symbol, LocalDate from, LocalDate to) {
         String safe = symbol.replace(' ', '_').replace("%", "pct");
-        String ext = extension(original);
-        return "Tradeweb_" + safe + "_" + LocalDate.now() + ext;
+        return "Tradeweb_" + safe + "_" + from + "_to_" + to;
+    }
+
+    /**
+     * Tradeweb files are manually sourced and irreplaceable, so archiving must never clobber.
+     * If {@code base+ext} already exists, append a {@code _2}, {@code _3} suffix until a free
+     * name is found. The earlier file stays put.
+     */
+    private static Path nonClobberingTarget(Path dir, String base, String ext) {
+        Path target = dir.resolve(base + ext);
+        if (!Files.exists(target)) return target;
+        for (int n = 2; n < 1000; n++) {
+            target = dir.resolve(base + "_" + n + ext);
+            if (!Files.exists(target)) return target;
+        }
+        throw new IllegalStateException("Could not find a free archive name for " + base + ext);
     }
 
     private static String extension(Path file) {

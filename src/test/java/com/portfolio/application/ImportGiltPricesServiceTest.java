@@ -39,9 +39,37 @@ class ImportGiltPricesServiceTest {
         assertFalse(Files.exists(dropped), "source file moved out of Downloads");
         assertTrue(r.detail().contains("GILT_3.75pct_2038"),
                 "archived name embeds the gilt symbol; was: " + r.detail());
+        // Sample covers 2022-11-09 .. 2023-06-02.
+        assertTrue(r.detail().contains("2022-11-09_to_2023-06-02"),
+                "archived name embeds the data range; was: " + r.detail());
         assertTrue(Files.exists(Path.of(r.detail())), "file lives at the archived path");
 
         assertEquals(93.300, repo.getPriceOn("GILT 3.75% 2038", LocalDate.of(2023, 6, 1)).close());
+    }
+
+    @Test
+    void preexistingArchiveNotClobbered_whenSameRangeReimported() throws Exception {
+        Path sample = Path.of("src/test/resources/tradeweb-gilts-sample.csv");
+
+        // Drop the same file twice — second run must coexist, not overwrite the first.
+        Files.copy(sample, inputDir.resolve("Tradeweb_FTSE_ClosePrices.csv"));
+        PriceHistoryRepository repo = repo();
+        ImportGiltPricesService svc = new ImportGiltPricesService(inputDir, archiveDir, repo);
+        GiltPriceImportResult first = svc.importAll().get(0);
+        Path firstArchive = Path.of(first.detail());
+        // Mark the first archive so we can prove it wasn't overwritten.
+        Files.writeString(firstArchive, "ORIGINAL");
+
+        Files.copy(sample, inputDir.resolve("Tradeweb_FTSE_ClosePrices.csv"));
+        GiltPriceImportResult second = svc.importAll().get(0);
+        Path secondArchive = Path.of(second.detail());
+
+        assertTrue(Files.exists(firstArchive), "first archive must still exist");
+        assertEquals("ORIGINAL", Files.readString(firstArchive),
+                "first archive's content was overwritten");
+        assertNotEquals(firstArchive, secondArchive, "second archive must use a different name");
+        assertTrue(secondArchive.getFileName().toString().endsWith("_2.csv"),
+                "second archive should be suffixed _2.csv; was: " + secondArchive);
     }
 
     @Test

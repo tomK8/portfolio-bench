@@ -113,54 +113,47 @@ public class YahooPriceFetcher {
     }
 
     /**
-     * Walks bars and events backward in lockstep to derive total-return adj_close. For each
-     * event encountered (i.e. one whose date falls strictly after the current bar's date but
-     * not after any later bar we've already passed), update a multiplicative factor:
+     * Walks bars and dividend events backward in lockstep to derive total-return adj_close.
+     * For each dividend whose date falls strictly after the current bar's date but not after
+     * any later bar we've already passed, multiply the running factor by
+     * {@code (prevClose − D) / prevClose}, where {@code prevClose} is the close on the
+     * trading day immediately before the ex-date (= the current bar) and {@code D} is the
+     * dividend per share.
      *
-     * <ul>
-     *   <li>Split with ratio R (R-for-1): factor /= R — for bars on or before the split, prices
-     *       were R× higher per share than today's share count, so scale down.</li>
-     *   <li>Dividend with amount D: factor *= (prevClose − D_original) / prevClose. {@code prevClose}
-     *       is the raw close on the trading day immediately before the ex-date (= the current bar).
-     *       {@code D_original} is the dividend amount on that day's share basis, which equals
-     *       Yahoo's reported {@code D} divided by the running {@code splitFactor} (Yahoo reports
-     *       dividends on the current-share basis, so any split between the dividend and today
-     *       has to be unwound before comparing to the raw historical close).</li>
-     * </ul>
+     * <p><b>Splits are intentionally not adjusted here</b> — Yahoo's {@code close} column is
+     * already split-adjusted across the whole returned series (e.g. GOOG's 2016 close shows
+     * as ~$37 even though the raw pre-split price was ~$735; same for NVDA's 10:1 in 2024).
+     * Applying our own split factor would double-count and inflate pre-split returns 10–20×.
+     * Yahoo's dividend amounts are on the same split-adjusted basis as the close, so the
+     * simple {@code (prevClose − D)/prevClose} formula is exact in either basis — no
+     * split-unwinding needed.
      */
     private static List<PriceBar> applyAdjustments(List<PriceBar> bars, List<CorporateEvent> events) {
         events.sort((a, b) -> a.date.compareTo(b.date));
-        double splitFactor = 1.0;
         double divFactor = 1.0;
         int eventIdx = events.size() - 1;
-        List<PriceBar> out = new ArrayList<>(bars.size());
-        // Build the output in reverse, then flip — simpler than mutating PriceBar (it's a record).
         PriceBar[] reversed = new PriceBar[bars.size()];
         for (int barIdx = bars.size() - 1; barIdx >= 0; barIdx--) {
             PriceBar bar = bars.get(barIdx);
             while (eventIdx >= 0 && events.get(eventIdx).date.isAfter(bar.date())) {
                 CorporateEvent e = events.get(eventIdx);
-                if (e.isSplit()) {
-                    if (e.amount > 0) splitFactor /= e.amount;
-                } else {
-                    double dOriginal = splitFactor > 0 ? e.amount / splitFactor : e.amount;
-                    if (bar.close() > 0) {
-                        divFactor *= (bar.close() - dOriginal) / bar.close();
-                    }
+                if (bar.close() > 0) {
+                    divFactor *= (bar.close() - e.amount) / bar.close();
                 }
                 eventIdx--;
             }
-            double factor = splitFactor * divFactor;
             reversed[barIdx] = new PriceBar(bar.symbol(), bar.date(), bar.open(), bar.high(),
-                    bar.low(), bar.close(), bar.close() * factor, bar.volume(), bar.currency());
+                    bar.low(), bar.close(), bar.close() * divFactor, bar.volume(), bar.currency());
         }
+        List<PriceBar> out = new ArrayList<>(bars.size());
         for (PriceBar pb : reversed) out.add(pb);
         return out;
     }
 
     /**
-     * Reads {@code events.dividends} (amount = cash dividend per share, current-share basis)
-     * and {@code events.splits} (amount = split ratio, e.g. 4 for a 4-for-1) into a flat list.
+     * Reads {@code events.dividends} (amount = cash dividend per share, on the same
+     * split-adjusted basis as the close column). Splits are not read because Yahoo's close
+     * is already split-adjusted; see {@link #applyAdjustments} for the rationale.
      * Empty when the events block is missing.
      */
     private static List<CorporateEvent> parseEvents(JsonNode eventsNode) {
@@ -174,29 +167,15 @@ public class YahooPriceFetcher {
                 double a = e.path("amount").asDouble(0);
                 if (d > 0 && a > 0) {
                     events.add(new CorporateEvent(
-                            Instant.ofEpochSecond(d).atZone(ZoneOffset.UTC).toLocalDate(), a, false));
-                }
-            });
-        }
-        JsonNode splits = eventsNode.path("splits");
-        if (splits.isObject()) {
-            splits.fields().forEachRemaining(entry -> {
-                JsonNode e = entry.getValue();
-                long d = e.path("date").asLong(0);
-                double a = e.path("numerator").asDouble(0);
-                double denom = e.path("denominator").asDouble(1);
-                double ratio = denom > 0 ? a / denom : a;
-                if (d > 0 && ratio > 0) {
-                    events.add(new CorporateEvent(
-                            Instant.ofEpochSecond(d).atZone(ZoneOffset.UTC).toLocalDate(), ratio, true));
+                            Instant.ofEpochSecond(d).atZone(ZoneOffset.UTC).toLocalDate(), a));
                 }
             });
         }
         return events;
     }
 
-    /** Internal: one dividend or split event from Yahoo's events block. */
-    private record CorporateEvent(LocalDate date, double amount, boolean isSplit) {
+    /** Internal: one dividend event from Yahoo's events block. */
+    private record CorporateEvent(LocalDate date, double amount) {
     }
 
     private static Double num(JsonNode arr, int i) {

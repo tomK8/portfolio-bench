@@ -62,17 +62,20 @@ class YahooPriceFetcherTest {
     }
 
     @Test
-    void appliesSplitAdjustmentToBarsBeforeSplit() throws Exception {
-        // Synthetic fixture: 4 trading days. A 4-for-1 split takes effect on day 3
-        // (2024-02-05), so bars on day 1 and day 2 should be scaled to 1/4 of close.
+    void ignoresSplitsBecauseCloseIsAlreadySplitAdjusted() throws Exception {
+        // Synthetic fixture: closes look continuous across the split date because Yahoo's
+        // close column is already split-adjusted across the whole series. Verifying we do
+        // NOT scale them again — otherwise pre-split bars would be inflated 4× by our walk.
+        // Real-world canary: GOOG's pre-2022 close shows as ~$37, NVDA's pre-Jun-2024
+        // close shows as ~$110 — applying the split factor on top would double-count.
         List<PriceBar> bars = new YahooPriceFetcher().parse("SPL",
                 Files.readString(Path.of(getClass().getResource("/yahoo-split-sample.json").toURI())));
 
         assertEquals(4, bars.size());
-        assertEquals(400.0 / 4, bars.get(0).adjClose(), 1e-9, "pre-split close scaled by 1/4");
-        assertEquals(404.0 / 4, bars.get(1).adjClose(), 1e-9, "pre-split close scaled by 1/4");
-        assertEquals(101.0, bars.get(2).adjClose(), 1e-9, "split day onwards: unadjusted");
-        assertEquals(102.0, bars.get(3).adjClose(), 1e-9);
+        for (PriceBar b : bars) {
+            assertEquals(b.close(), b.adjClose(), 1e-9,
+                    "no dividends in fixture, so adjClose must equal close even across split date");
+        }
     }
 
     @Test

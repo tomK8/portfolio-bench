@@ -5,6 +5,8 @@ import com.portfolio.application.ContributionService.ContributionTimeline;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
+import com.portfolio.application.PortfolioValueService;
+import com.portfolio.application.PortfolioValueService.ValueTimeline;
 import com.portfolio.application.SyncFromCashService;
 import com.portfolio.application.SyncPortfolioService;
 import com.portfolio.persistence.KeyValueStore;
@@ -41,6 +43,7 @@ public class DashboardController {
     private final ImportCashService importCashService;
     private final ImportGiltPricesService importGiltPricesService;
     private final ContributionService contributionService;
+    private final PortfolioValueService portfolioValueService;
     private final KeyValueStore settings;
 
     public DashboardController(SyncPortfolioService syncService,
@@ -49,6 +52,7 @@ public class DashboardController {
                                ImportCashService importCashService,
                                ImportGiltPricesService importGiltPricesService,
                                ContributionService contributionService,
+                               PortfolioValueService portfolioValueService,
                                KeyValueStore settings) {
         this.syncService = syncService;
         this.syncFromCashService = syncFromCashService;
@@ -56,6 +60,7 @@ public class DashboardController {
         this.importCashService = importCashService;
         this.importGiltPricesService = importGiltPricesService;
         this.contributionService = contributionService;
+        this.portfolioValueService = portfolioValueService;
         this.settings = settings;
     }
 
@@ -135,6 +140,12 @@ public class DashboardController {
     @ResponseBody
     public ContributionTimeline contributions() {
         return contributionService.timeline();
+    }
+
+    @GetMapping("/portfolio-value")
+    @ResponseBody
+    public ValueTimeline portfolioValue() {
+        return portfolioValueService.timeline();
     }
 
     @PostMapping("/import-gilt-prices")

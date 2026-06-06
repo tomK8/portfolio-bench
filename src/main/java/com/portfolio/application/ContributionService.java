@@ -4,9 +4,11 @@ import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.KeyValueStore;
+import com.portfolio.port.HistoricalFxRateProvider;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,17 +35,21 @@ public class ContributionService {
 
     private final CashTransactionRepository repo;
     private final KeyValueStore settings;
+    private final HistoricalFxRateProvider fxProvider;
 
-    public ContributionService(CashTransactionRepository repo, KeyValueStore settings) {
+    public ContributionService(CashTransactionRepository repo, KeyValueStore settings,
+                               HistoricalFxRateProvider fxProvider) {
         this.repo = repo;
         this.settings = settings;
+        this.fxProvider = fxProvider;
     }
 
     public ContributionTimeline timeline() {
         List<CashTransaction> contribs = repo.loadContributions();
-        BigDecimal rothSeed = settings.getBigDecimal(
+        BigDecimal rothSeedUsd = settings.getBigDecimal(
                 CashTransactionRepository.ROTH_BROUGHT_FORWARD_KEY, BigDecimal.ZERO);
         String rothStart = repo.earliestTransactionDate(Account.ROTH_IRA);
+        BigDecimal rothSeed = rothSeedAsGbp(rothSeedUsd, rothStart);
 
         // Merge Roth's seed into the same stream as the contribution rows so the chronology
         // is exact: Roth's first dollar lands on rothStart, not at the start of AJBell history.
@@ -93,6 +99,25 @@ public class ContributionService {
     }
 
     private record TimedEvent(String date, String account, BigDecimal amount) {
+    }
+
+    /**
+     * Convert the Roth USD seed to GBP at the FX rate prevailing on its effective date. The
+     * seed represents money that entered the portfolio at {@code rothStart}, so the GBP
+     * equivalent at that date is the meaningful contribution figure.
+     */
+    private BigDecimal rothSeedAsGbp(BigDecimal seedUsd, String rothStartDate) {
+        if (seedUsd.signum() == 0 || rothStartDate == null) return BigDecimal.ZERO;
+        LocalDate date = LocalDate.parse(rothStartDate);
+        try {
+            Map<LocalDate, BigDecimal> series = fxProvider.fetchRateSeries(
+                    "USD", date.minusDays(14), date.plusDays(1));
+            BigDecimal rate = HistoricalFxRateProvider.rateOnOrBefore(series, date);
+            if (rate == null || rate.signum() == 0) return BigDecimal.ZERO;
+            return seedUsd.divide(rate, 2, RoundingMode.HALF_UP);
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
+        }
     }
 
     public record DataPoint(String date, BigDecimal cumulativeGbp) {

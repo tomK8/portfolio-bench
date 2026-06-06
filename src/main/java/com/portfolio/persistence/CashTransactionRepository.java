@@ -267,6 +267,33 @@ public class CashTransactionRepository {
     }
 
     /**
+     * Every row in the table, oldest first — used by the historical valuation pass which
+     * needs to replay the full ledger end-to-end (positions plus every cash movement).
+     */
+    public List<CashTransaction> loadAllTransactions() {
+        List<CashTransaction> rows = new ArrayList<>();
+        if (!connections.dbExists()) return rows;
+        try (Connection conn = connections.open();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT transaction_date, account, type, symbol, quantity, amount, currency, " +
+                             "fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description " +
+                             "FROM cash_transactions ORDER BY transaction_date, rowid")) {
+            while (rs.next()) {
+                rows.add(new CashTransaction(
+                        rs.getString(1), Account.fromDbValue(rs.getString(2)),
+                        TransactionType.valueOf(rs.getString(3)), rs.getString(4),
+                        rs.getDouble(5), rs.getDouble(6), rs.getString(7), rs.getDouble(8),
+                        rs.getDouble(9), getNullableDouble(rs, 10), getNullableDouble(rs, 11),
+                        rs.getString(12)));
+            }
+        } catch (Exception e) {
+            log.warn("Could not load all transactions", e);
+        }
+        return rows;
+    }
+
+    /**
      * Every {@code CONTRIBUTION} row, oldest first — used to chart cash inflows over time.
      * Other types (TRANSACTION, DIVIDEND, INTEREST, CHARGE) are not external contributions.
      */

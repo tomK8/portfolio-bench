@@ -120,9 +120,21 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public PortfolioValueService portfolioValueService(CashTransactionRepository cashTransactionRepository,
+                                                       PriceHistoryRepository priceHistoryRepository,
+                                                       HistoricalFxRateProvider historicalFxRateProvider,
+                                                       YahooTickerMap yahooTickerMap,
+                                                       KeyValueStore keyValueStore) {
+        return new PortfolioValueService(cashTransactionRepository, priceHistoryRepository,
+                historicalFxRateProvider, yahooTickerMap, keyValueStore);
+    }
+
+    @Bean
     public ContributionService contributionService(CashTransactionRepository cashTransactionRepository,
-                                                   KeyValueStore keyValueStore) {
-        return new ContributionService(cashTransactionRepository, keyValueStore);
+                                                   KeyValueStore keyValueStore,
+                                                   HistoricalFxRateProvider historicalFxRateProvider) {
+        return new ContributionService(cashTransactionRepository, keyValueStore,
+                historicalFxRateProvider);
     }
 
     @Bean

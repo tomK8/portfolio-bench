@@ -214,6 +214,35 @@
             color: #c0392b;
             font-weight: 600;
         }
+
+        .value-warnings {
+            margin: 1rem 0;
+            padding: 0.6rem 0.9rem;
+            border: 1px solid #f1c40f;
+            background: #fffbe6;
+            border-radius: 6px;
+            color: #7a5d00;
+            font-size: 0.9rem;
+        }
+
+        .value-warnings h4 {
+            margin: 0 0 0.4rem 0;
+            font-size: 0.85rem;
+            color: #c0392b;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .value-warnings ul {
+            margin: 0;
+            padding-left: 1.1rem;
+        }
+
+        .value-warnings code {
+            background: rgba(0, 0, 0, 0.04);
+            padding: 0 3px;
+            border-radius: 3px;
+        }
     </style>
 </head>
 <body>
@@ -245,6 +274,7 @@
     <button class="tab active" data-panel="panel-holdings" type="button">From holdings files</button>
     <button class="tab" data-panel="panel-cash" type="button">From cash ledger</button>
     <button class="tab" data-panel="panel-contributions" type="button">Contributions</button>
+    <button class="tab" data-panel="panel-value" type="button">Value over time</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -278,6 +308,21 @@
     </p>
     <div style="height: 480px; margin-top: 1rem;">
         <canvas id="contributions-chart"></canvas>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-value">
+    <p class="muted" style="margin-top: 0">
+        Total portfolio GBP value at end of each month. Forward-replays
+        <code>cash_transactions</code> and values surviving positions at the latest
+        <code>price_history</code> close ≤ that date (or the earliest available close, if
+        the sample predates all stored prices). FX from Frankfurter historical rates.
+        Roth IRA's $(figure redacted) USD seed is folded into Roth USD cash from its first ledger
+        date.
+    </p>
+    <div id="value-warnings" class="value-warnings" style="display: none;"></div>
+    <div style="height: 480px; margin-top: 1rem;">
+        <canvas id="value-chart"></canvas>
     </div>
 </section>
 
@@ -352,11 +397,81 @@
                     p.classList.toggle('active', p.id === btn.dataset.panel);
                 });
                 if (btn.dataset.panel === 'panel-contributions') loadContributionsChart();
+                if (btn.dataset.panel === 'panel-value') loadValueChart();
             });
         });
 
         var contributionsChart = null;
         var contributionsLoaded = false;
+
+        var valueChart = null;
+        var valueLoaded = false;
+
+        function loadValueChart() {
+            if (valueLoaded) return;
+            valueLoaded = true;
+            fetch('/portfolio-value').then(function (r) { return r.json(); }).then(function (timeline) {
+                var warn = document.getElementById('value-warnings');
+                if (timeline.missingPrices && timeline.missingPrices.length) {
+                    var items = timeline.missingPrices.map(function (m) {
+                        return '<li><code>' + m.symbol + '</code> — held ' + m.from +
+                            ' to ' + m.to + '</li>';
+                    }).join('');
+                    warn.innerHTML = '<h4>Missing price data</h4>' +
+                        '<p>The following symbols were held but have no rows in <code>price_history</code>. ' +
+                        'They contribute zero to the chart across their held range. Add prices to fix.</p>' +
+                        '<ul>' + items + '</ul>';
+                    warn.style.display = 'block';
+                } else {
+                    warn.style.display = 'none';
+                }
+                var data = timeline.points.map(function (p) {
+                    return { x: p.date, y: parseFloat(p.valueGbp) };
+                });
+                var ctx = document.getElementById('value-chart').getContext('2d');
+                valueChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Total portfolio value (£)',
+                            data: data,
+                            borderColor: '#1f77b4',
+                            backgroundColor: 'rgba(31, 119, 180, 0.1)',
+                            fill: true,
+                            pointRadius: 2,
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' } },
+                            y: {
+                                title: { display: true, text: 'Portfolio value (£)' },
+                                ticks: {
+                                    callback: function (v) {
+                                        return '£' + v.toLocaleString('en-GB', { maximumFractionDigits: 0 });
+                                    }
+                                }
+                            }
+                        },
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        return '£' + ctx.parsed.y.toLocaleString('en-GB',
+                                            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                    }
+                                }
+                            },
+                            legend: { position: 'bottom' }
+                        }
+                    }
+                });
+            });
+        }
 
         function loadContributionsChart() {
             if (contributionsLoaded) return;

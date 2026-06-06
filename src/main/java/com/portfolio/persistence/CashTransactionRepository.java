@@ -16,8 +16,10 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -76,42 +78,57 @@ public class CashTransactionRepository {
     }
 
     /**
-     * AJBell flow. Rows are GBP and already carry a running {@code cash_balance_gbp};
-     * dedup by (date, balance). A known balance reappearing after new rows aborts the
-     * import as a data-integrity gap.
+     * AJBell flow. Rows are GBP and carry a running {@code cash_balance_gbp} that AJ Bell may
+     * retroactively shift when they insert a dividend mid-file. Identity is therefore
+     * {@code (date, type, symbol, amount_gbp)} — the row itself, not its position. Matching
+     * rows have their stored balance/description updated; new rows are inserted. Integrity
+     * check: if the file's earliest row is newer than every stored AJBell row, refuse the
+     * import (a window has been lost between exports).
      */
     public int saveAjBell(List<CashTransaction> transactions) {
         if (transactions.isEmpty()) return 0;
         try (Connection conn = connections.open()) {
             Account account = transactions.get(0).account();
-            Set<String> existingKeys = loadKnownDateBalanceKeys(conn, account);
+            Map<String, StoredRow> existing = loadStoredAjBellRows(conn, account);
+            String maxStoredDate = existing.values().stream()
+                    .map(StoredRow::date).max(Comparator.naturalOrder()).orElse(null);
 
-            int inserted = 0, skipped = 0;
-            boolean seenNewRow = false;
-            try (PreparedStatement ps = conn.prepareStatement(INSERT_SQL)) {
+            String fileEarliest = transactions.get(0).transactionDate();
+            if (maxStoredDate != null && fileEarliest.compareTo(maxStoredDate) > 0) {
+                throw new IllegalStateException(String.format(
+                        "Data integrity error: %s file's earliest row %s is newer than the "
+                                + "latest stored row %s — a window of transactions is missing. "
+                                + "Aborting import.",
+                        account.dbValue(), fileEarliest, maxStoredDate));
+            }
+
+            int inserted = 0, updated = 0, unchanged = 0;
+            try (PreparedStatement insert = conn.prepareStatement(INSERT_SQL);
+                 PreparedStatement update = conn.prepareStatement(
+                         "UPDATE cash_transactions SET cash_balance = ?, cash_balance_gbp = ?, "
+                                 + "description = ? WHERE rowid = ?")) {
                 for (CashTransaction tx : transactions) {
-                    Double bal = tx.cashBalanceGbp();
-                    boolean known = bal != null &&
-                            existingKeys.contains(tx.transactionDate() + "|" + bal);
-                    if (known) {
-                        if (seenNewRow) {
-                            throw new IllegalStateException(String.format(
-                                    "Data integrity error: %s balance %.2f on %s already exists in DB "
-                                            + "but appears after new rows — possible gap or corrupt input file. "
-                                            + "Aborting import.",
-                                    account.dbValue(), bal, tx.transactionDate()));
-                        }
-                        skipped++;
-                    } else {
-                        seenNewRow = true;
-                        bindCashRow(ps, tx);
-                        ps.executeUpdate();
+                    String key = ajBellIdentityKey(
+                            tx.transactionDate(), tx.type().name(), tx.symbol(), tx.amountGbp());
+                    StoredRow prior = existing.get(key);
+                    if (prior == null) {
+                        bindCashRow(insert, tx);
+                        insert.executeUpdate();
                         inserted++;
+                    } else if (balancesMatch(prior.cashBalanceGbp(), tx.cashBalanceGbp())) {
+                        unchanged++;
+                    } else {
+                        setNullableDouble(update, 1, tx.cashBalance());
+                        setNullableDouble(update, 2, tx.cashBalanceGbp());
+                        update.setString(3, tx.description());
+                        update.setLong(4, prior.rowid());
+                        update.executeUpdate();
+                        updated++;
                     }
                 }
             }
-            log.info("Cash transactions [{}]: {} inserted, {} already present (skipped)",
-                    account.dbValue(), inserted, skipped);
+            log.info("Cash transactions [{}]: {} inserted, {} balance-updated, {} unchanged",
+                    account.dbValue(), inserted, updated, unchanged);
             return inserted;
         } catch (IllegalStateException e) {
             throw e;
@@ -270,16 +287,60 @@ public class CashTransactionRepository {
 
     // ---- helpers ------------------------------------------------------------
 
-    private static Set<String> loadKnownDateBalanceKeys(Connection conn, Account account) throws SQLException {
-        Set<String> out = new HashSet<>();
+    /**
+     * Load AJBell rows keyed by identity. If a prior import (under the old date/balance dedup)
+     * left two rows sharing one identity, keep the most recently inserted one (highest rowid)
+     * and delete the older copies — they are the stale-balance casualties of an AJ Bell
+     * retroactive insertion.
+     */
+    private Map<String, StoredRow> loadStoredAjBellRows(Connection conn, Account account) throws SQLException {
+        Map<String, StoredRow> out = new HashMap<>();
+        List<Long> toDelete = new ArrayList<>();
         try (PreparedStatement q = conn.prepareStatement(
-                "SELECT transaction_date, cash_balance_gbp FROM cash_transactions WHERE account = ?")) {
+                "SELECT rowid, transaction_date, type, symbol, amount_gbp, cash_balance_gbp "
+                        + "FROM cash_transactions WHERE account = ? ORDER BY rowid")) {
             q.setString(1, account.dbValue());
             try (ResultSet rs = q.executeQuery()) {
-                while (rs.next()) out.add(rs.getString(1) + "|" + rs.getDouble(2));
+                while (rs.next()) {
+                    long rowid = rs.getLong(1);
+                    String date = rs.getString(2);
+                    String type = rs.getString(3);
+                    String symbol = rs.getString(4);
+                    double amountGbp = rs.getDouble(5);
+                    Double balGbp = getNullableDouble(rs, 6);
+                    String key = ajBellIdentityKey(date, type, symbol, amountGbp);
+                    StoredRow prior = out.put(key, new StoredRow(rowid, date, balGbp));
+                    if (prior != null) {
+                        log.warn("Discarding stale duplicate AJBell row (rowid={}, date={}, " +
+                                "symbol={}, amount_gbp={}) — superseded by rowid={}",
+                                prior.rowid(), date, symbol, amountGbp, rowid);
+                        toDelete.add(prior.rowid());
+                    }
+                }
+            }
+        }
+        if (!toDelete.isEmpty()) {
+            try (PreparedStatement del = conn.prepareStatement(
+                    "DELETE FROM cash_transactions WHERE rowid = ?")) {
+                for (long rowid : toDelete) {
+                    del.setLong(1, rowid);
+                    del.executeUpdate();
+                }
             }
         }
         return out;
+    }
+
+    private static String ajBellIdentityKey(String date, String type, String symbol, double amountGbp) {
+        return date + "|" + type + "|" + symbol + "|" + amountGbp;
+    }
+
+    private static boolean balancesMatch(Double a, Double b) {
+        if (a == null || b == null) return a == b;
+        return Double.compare(a, b) == 0;
+    }
+
+    private record StoredRow(long rowid, String date, Double cashBalanceGbp) {
     }
 
     private static String rothKey(String date, String symbol, double qty, String type, double amount) {

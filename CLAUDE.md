@@ -142,9 +142,12 @@ holdings; distinguished from II cash by header sniff), `cashstatements*.csv` (AJ
    the dashboard shows results.
 
 **Cash dedup keys (one per broker, all cross-file):**
-- AJBell: `(transaction_date, cash_balance_gbp)`. A known key reappearing *after* a new row
-  **throws** as a data-integrity gap, so the file stays in place rather than being silently
-  deleted as a "duplicate".
+- AJBell: `(transaction_date, type, symbol, amount_gbp)`. AJ Bell can retroactively insert a
+  dividend mid-file, which shifts every later row's running balance — so identity is the row
+  itself, not its position. Re-importing UPDATEs `cash_balance_gbp` on matching rows.
+  Integrity check: if the file's earliest row is newer than every stored AJBell row, the
+  import **throws** as a gap (a window has been lost between exports). Legacy duplicates
+  from prior (date, balance)-keyed imports are collapsed on next load — highest-rowid wins.
 - RothIRA: `(date, symbol, quantity, type, amount)` — native USD amount, FX-stable across
   imports. Balance continues from latest stored `cash_balance`, or the
   `roth_balance_brought_forward` KV seed (~£(figure redacted)) on first import.

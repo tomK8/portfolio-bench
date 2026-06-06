@@ -226,6 +226,7 @@ public class SyncPortfolioService {
             BigDecimal hv = holdingsByKey.getOrDefault(k, BigDecimal.ZERO);
             BigDecimal lv = ledgerByKey.getOrDefault(k, BigDecimal.ZERO);
             BigDecimal diff = hv.subtract(lv);
+            if (diff.setScale(2, RoundingMode.HALF_UP).signum() == 0) continue;
             String[] parts = k.split("\\|", 2);
             boolean warn = diff.abs().compareTo(CASH_DRIFT_WARN_GBP) > 0;
             recon.add(new SyncResult.CashRecon(parts[0], parts[1],

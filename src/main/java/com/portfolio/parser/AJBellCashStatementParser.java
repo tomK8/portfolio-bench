@@ -249,21 +249,27 @@ public class AJBellCashStatementParser implements CashTransactionParser {
         }
 
         // Second pass: for Redemption rows whose symbol couldn't be resolved to a GILT ID
-        // (e.g. "TSY STK25 Redemption" has no coupon), borrow the symbol from a same-date DIVIDEND.
-        Map<String, String> dateToGilt = new HashMap<>();
+        // (e.g. "TSY STK25 Redemption" has no coupon), borrow the symbol AND the position
+        // size from a same-date DIVIDEND. Redemption descriptions don't carry the quantity,
+        // so without this back-fill the row would have qty=0 and the FIFO position-from-
+        // ledger reconstruction (used by the cash-ledger view and the value chart) would
+        // never see the gilt as sold — the holding would stay open forever.
+        record DividendInfo(String symbol, double quantity) {
+        }
+        Map<String, DividendInfo> dateToGilt = new HashMap<>();
         for (CashTransaction t : result) {
             if (t.type() == TransactionType.DIVIDEND && t.symbol().startsWith("GILT ")) {
-                dateToGilt.put(t.transactionDate(), t.symbol());
+                dateToGilt.put(t.transactionDate(), new DividendInfo(t.symbol(), t.quantity()));
             }
         }
         result.replaceAll(t -> {
             if (t.type() == TransactionType.TRANSACTION
                     && !t.symbol().startsWith("GILT ")
                     && t.description().trim().toUpperCase().endsWith("REDEMPTION")) {
-                String gilt = dateToGilt.get(t.transactionDate());
-                if (gilt != null) {
+                DividendInfo info = dateToGilt.get(t.transactionDate());
+                if (info != null) {
                     return new CashTransaction(t.transactionDate(), t.account(), t.type(),
-                            gilt, t.quantity(), t.amount(), t.currency(), t.fxToGbp(),
+                            info.symbol(), info.quantity(), t.amount(), t.currency(), t.fxToGbp(),
                             t.amountGbp(), t.cashBalance(), t.cashBalanceGbp(), t.description());
                 }
             }

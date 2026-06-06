@@ -57,6 +57,15 @@
             <version>3.46.0.0</version>
         </dependency>
 
+        <!-- Dev-time auto-restart: watches target/classes and restarts the app in-JVM
+             when .class files change. Marked optional so it isn't pulled into the
+             packaged fat jar (scripts/start.sh) — only active under `mvn spring-boot:run`. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Testing (JUnit 5 + Spring test support; versions managed by the Boot parent) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

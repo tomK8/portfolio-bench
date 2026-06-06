@@ -407,9 +407,10 @@
         <code>CONTRIBUTION</code> row (plus the Roth USD seed at its earliest ledger
         date), the GBP amount is split by your weights and used to buy fractional
         shares at that day's <code>adj_close</code> — total-return mode, so the
-        basket's dividends are reinvested. Up to 7 instruments; weights must sum to 100%.
+        basket's dividends are reinvested. Up to 7 instruments; weights may sum
+        to ≤ 100% — the unallocated remainder stays as GBP cash (flat in value).
         Symbols are matched against <code>price_history</code>; anything not found shows
-        in the warning panel and that allocation falls back to GBP cash.
+        in the warning panel and that allocation falls back to GBP cash too.
     </p>
     <form id="whatif-form" class="whatif-form">
         <div class="row-label">Symbol</div>
@@ -567,8 +568,14 @@
                 if (!isNaN(v)) sum += v;
             });
             var span = document.getElementById('whatif-sum');
-            span.textContent = 'Total: ' + sum.toFixed(2) + '%';
-            span.classList.toggle('bad', Math.abs(sum - 100) > 0.05 && sum !== 0);
+            var label = 'Total: ' + sum.toFixed(2) + '%';
+            // Under-allocation is allowed: surface the remainder as cash so the user sees it.
+            // Only over-allocation is invalid (would synthesize money that wasn't contributed).
+            if (sum > 0 && sum < 99.95) {
+                label += ' (' + (100 - sum).toFixed(2) + '% cash)';
+            }
+            span.textContent = label;
+            span.classList.toggle('bad', sum > 100.05);
         }
 
         function runWhatIf() {

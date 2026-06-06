@@ -164,20 +164,24 @@ public class WhatIfService {
 
     /**
      * Split this contribution across the basket, accumulating fractional shares. Returns the
-     * portion of the contribution that couldn't be allocated (no price series for a basket
-     * symbol) and which we therefore leave as GBP cash on the side.
+     * portion of the contribution that stayed as GBP cash: either because the basket weights
+     * don't sum to 100% (intentional cash allocation) or because a basket symbol has no
+     * price series we could buy at (unintentional residual). Both end up in the same bucket
+     * because they behave identically — flat in GBP, no return.
      */
     private BigDecimal applyContribution(Contribution c, List<Weight> basket,
                                          Map<String, BigDecimal> shares,
                                          Map<String, NavigableMap<LocalDate, PricePoint>> prices,
                                          Map<String, NavigableMap<LocalDate, BigDecimal>> fx) {
-        BigDecimal residual = BigDecimal.ZERO;
+        BigDecimal cashGbp = BigDecimal.ZERO;
+        BigDecimal weightSum = BigDecimal.ZERO;
         for (Weight w : basket) {
             String sym = w.symbol.toUpperCase();
             BigDecimal allocGbp = c.amountGbp.multiply(w.weight);
+            weightSum = weightSum.add(w.weight);
             BigDecimal priceGbp = priceGbpAt(sym, c.date, prices, fx);
             if (priceGbp == null || priceGbp.signum() <= 0) {
-                residual = residual.add(allocGbp);
+                cashGbp = cashGbp.add(allocGbp);
                 continue;
             }
             BigDecimal addedShares = Instruments.isBond(sym)
@@ -185,7 +189,11 @@ public class WhatIfService {
                     : allocGbp.divide(priceGbp, 10, RoundingMode.HALF_UP);
             shares.merge(sym, addedShares, BigDecimal::add);
         }
-        return residual;
+        BigDecimal unallocated = BigDecimal.ONE.subtract(weightSum);
+        if (unallocated.signum() > 0) {
+            cashGbp = cashGbp.add(c.amountGbp.multiply(unallocated));
+        }
+        return cashGbp;
     }
 
     // ---- Valuation ------------------------------------------------------
@@ -290,8 +298,10 @@ public class WhatIfService {
             }
             sum = sum.add(w.weight);
         }
-        if (sum.subtract(BigDecimal.ONE).abs().compareTo(WEIGHT_TOLERANCE) > 0) {
-            throw new IllegalArgumentException("Weights must sum to 100% (got "
+        // Allow under-allocation (the rest stays as GBP cash, modelled in applyContribution).
+        // Over-allocation is still an error — it would synthesize money that wasn't contributed.
+        if (sum.subtract(BigDecimal.ONE).compareTo(WEIGHT_TOLERANCE) > 0) {
+            throw new IllegalArgumentException("Weights must sum to 100% or less (got "
                     + sum.multiply(HUNDRED).setScale(2, RoundingMode.HALF_UP) + "%).");
         }
     }

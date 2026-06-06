@@ -130,6 +130,16 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public WhatIfService whatIfService(CashTransactionRepository cashTransactionRepository,
+                                       PriceHistoryRepository priceHistoryRepository,
+                                       HistoricalFxRateProvider historicalFxRateProvider,
+                                       YahooTickerMap yahooTickerMap,
+                                       KeyValueStore keyValueStore) {
+        return new WhatIfService(cashTransactionRepository, priceHistoryRepository,
+                historicalFxRateProvider, yahooTickerMap, keyValueStore);
+    }
+
+    @Bean
     public ContributionService contributionService(CashTransactionRepository cashTransactionRepository,
                                                    KeyValueStore keyValueStore,
                                                    HistoricalFxRateProvider historicalFxRateProvider) {

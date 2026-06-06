@@ -1,0 +1,35 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "USD",
+          "symbol": "SPL",
+          "gmtoffset": -18000,
+          "exchangeTimezoneName": "America/New_York"
+        },
+        "timestamp": [1706799600, 1706886000, 1707145200, 1707231600],
+        "events": {
+          "splits": {
+            "1707091200": { "date": 1707091200, "numerator": 4, "denominator": 1, "splitRatio": "4:1" }
+          }
+        },
+        "indicators": {
+          "quote": [
+            {
+              "open":   [400, 404, 101, 102],
+              "high":   [400, 404, 101, 102],
+              "low":    [400, 404, 101, 102],
+              "close":  [400, 404, 101, 102],
+              "volume": [1000, 1000, 4000, 4000]
+            }
+          ],
+          "adjclose": [
+            { "adjclose": [400, 404, 101, 102] }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

@@ -230,11 +230,17 @@ US listings map to themselves; non-US need an exchange suffix (`.L` London, `.PA
 Amsterdam, `.DE` Frankfurt).
 
 **`close` vs `adj_close`:** use `close` for "market value of the position on date X", `adj_close`
-for total-return calculations. Because Yahoo fetching is incremental + `INSERT OR IGNORE`,
-historical `adj_close` is **not** refreshed as later dividends/splits accrue. The gilt paths
-(intraday rollup, Tradeweb batch import) use `upsertPriceBars` instead, so the latest write
-wins for `(symbol, date)` — clean price feeds both `close` and `adj_close` (no total-return
-math for bonds).
+for total-return calculations. **`YahooPriceFetcher` re-derives `adj_close` from the
+`events.dividends` and `events.splits` stream on every fetch** — Yahoo's bundled `adjclose`
+field is only split-adjusted (not dividend-adjusted) for many UK listings, so trusting it
+silently understates total return. The backward-walk handles both dividends and splits and
+yields a true total-return adj_close. The daily incremental run only refreshes the latest
+day, so a new dividend on a held name leaves historical `adj_close` stale — trigger
+**Rebuild adj_close** on the dashboard (or `POST /rebuild-prices`) to re-fetch the full
+window per ticker and refresh every row via `upsertPriceBars`. The gilt paths (intraday
+rollup, Tradeweb batch import) also use `upsertPriceBars`, so latest write wins for
+`(symbol, date)` — clean price feeds both `close` and `adj_close` (no total-return math
+for bonds).
 
 **Currency is stored verbatim** from Yahoo. `.L` (London) tickers report `"GBp"` (pence);
 `PortfolioAggregator.realtime` divides by 100 before producing the RT market value.

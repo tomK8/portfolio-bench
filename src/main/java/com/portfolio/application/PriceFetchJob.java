@@ -60,4 +60,54 @@ public class PriceFetchJob {
             PriceFetchSupport.sleep(THROTTLE_MS);
         }
     }
+
+    /**
+     * Re-fetches the full {@value #LOOKBACK_YEARS}-year window for every ticker in the universe
+     * and upserts. Each Yahoo response is reparsed end-to-end, which is the only way to refresh
+     * historical {@code adj_close} after a new dividend or split — Yahoo's bundled adjclose
+     * field is unreliable for UK listings, so the fetcher derives total-return adj_close from the
+     * event stream on every call. Triggered manually via the dashboard; not on a cron schedule.
+     *
+     * @return number of tickers actually refreshed
+     */
+    public int runFullRebuild() {
+        LocalDate today = LocalDate.now();
+        LocalDate defaultFrom = today.minusYears(LOOKBACK_YEARS);
+        Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers);
+        int refreshed = 0;
+        for (String ticker : tickerSet) {
+            // Cover anything already stored. If we have rows older than the 10-year cutoff
+            // (early portfolio history that the first backfill caught), we must refetch them
+            // too — otherwise their stale adj_close survives the rebuild and pollutes
+            // total-return math at the start of the timeline.
+            LocalDate earliest = priceRepo.getEarliestPriceDate(ticker);
+            LocalDate from = (earliest != null && earliest.isBefore(defaultFrom)) ? earliest : defaultFrom;
+            List<PriceBar> bars = fetcher.fetch(ticker, from, today);
+            int touched = priceRepo.upsertPriceBars(bars);
+            log.info("Rebuild: {} from {} → {} rows ({} written)", ticker, from, bars.size(), touched);
+            if (!bars.isEmpty()) refreshed++;
+            PriceFetchSupport.sleep(THROTTLE_MS);
+        }
+        return refreshed;
+    }
+
+    /**
+     * Backfills the full {@value #LOOKBACK_YEARS}-year window for one specific symbol — used by
+     * the what-if simulator when a basket symbol has no rows in {@code price_history} yet, so the
+     * simulation can value it instead of leaving the allocation as GBP cash. {@code symbol} is
+     * the internal symbol (not the Yahoo ticker) — gilts are no-ops here since they aren't on
+     * Yahoo. Returns the row count written; 0 means Yahoo had nothing or rejected the ticker.
+     */
+    public int fetchSingle(String symbol) {
+        if (com.portfolio.domain.Instruments.isBond(symbol)) {
+            log.info("fetchSingle skipped {} — bonds are not on Yahoo", symbol);
+            return 0;
+        }
+        String ticker = tickers.tickerFor(symbol);
+        LocalDate today = LocalDate.now();
+        List<PriceBar> bars = fetcher.fetch(ticker, today.minusYears(LOOKBACK_YEARS), today);
+        int touched = priceRepo.upsertPriceBars(bars);
+        log.info("fetchSingle {} → {}: {} rows ({} written)", symbol, ticker, bars.size(), touched);
+        return touched;
+    }
 }

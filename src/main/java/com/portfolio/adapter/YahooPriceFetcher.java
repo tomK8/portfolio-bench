@@ -85,23 +85,118 @@ public class YahooPriceFetcher {
 
         JsonNode ts = r.path("timestamp");
         JsonNode q = r.path("indicators").path("quote").path(0);
-        JsonNode adj = r.path("indicators").path("adjclose").path(0).path("adjclose");
         JsonNode open = q.path("open"), high = q.path("high"),
                 low = q.path("low"), close = q.path("close"), vol = q.path("volume");
 
+        // First pass: read bars with placeholder adjClose = close. We don't trust Yahoo's
+        // bundled adjclose field — for many UK listings (LGEN.L is the canary) it's only
+        // split-adjusted, not dividend-adjusted, so total-return math via the column is wrong.
+        // Yahoo publishes the full dividend + split event stream alongside in the same
+        // response (we already pass events=div,split in the URL), so we re-derive adj_close
+        // ourselves below.
         List<PriceBar> bars = new ArrayList<>();
         for (int i = 0; i < ts.size(); i++) {
             Double c = num(close, i);
             if (c == null) continue;          // holiday / gap row
-            Double ac = num(adj, i);
-            if (ac == null) ac = c;           // fall back to unadjusted if adjclose absent
             LocalDate date = Instant.ofEpochSecond(ts.get(i).asLong() + gmtOffset)
                     .atZone(ZoneOffset.UTC).toLocalDate();
             Long volume = vol.path(i).isNumber() ? vol.get(i).asLong() : null;
             bars.add(new PriceBar(ticker, date, num(open, i), num(high, i),
-                    num(low, i), c, ac, volume, currency));
+                    num(low, i), c, c, volume, currency));
         }
-        return bars;
+        if (bars.isEmpty()) return bars;
+
+        List<CorporateEvent> events = parseEvents(r.path("events"));
+        if (events.isEmpty()) return bars;
+
+        return applyAdjustments(bars, events);
+    }
+
+    /**
+     * Walks bars and events backward in lockstep to derive total-return adj_close. For each
+     * event encountered (i.e. one whose date falls strictly after the current bar's date but
+     * not after any later bar we've already passed), update a multiplicative factor:
+     *
+     * <ul>
+     *   <li>Split with ratio R (R-for-1): factor /= R — for bars on or before the split, prices
+     *       were R× higher per share than today's share count, so scale down.</li>
+     *   <li>Dividend with amount D: factor *= (prevClose − D_original) / prevClose. {@code prevClose}
+     *       is the raw close on the trading day immediately before the ex-date (= the current bar).
+     *       {@code D_original} is the dividend amount on that day's share basis, which equals
+     *       Yahoo's reported {@code D} divided by the running {@code splitFactor} (Yahoo reports
+     *       dividends on the current-share basis, so any split between the dividend and today
+     *       has to be unwound before comparing to the raw historical close).</li>
+     * </ul>
+     */
+    private static List<PriceBar> applyAdjustments(List<PriceBar> bars, List<CorporateEvent> events) {
+        events.sort((a, b) -> a.date.compareTo(b.date));
+        double splitFactor = 1.0;
+        double divFactor = 1.0;
+        int eventIdx = events.size() - 1;
+        List<PriceBar> out = new ArrayList<>(bars.size());
+        // Build the output in reverse, then flip — simpler than mutating PriceBar (it's a record).
+        PriceBar[] reversed = new PriceBar[bars.size()];
+        for (int barIdx = bars.size() - 1; barIdx >= 0; barIdx--) {
+            PriceBar bar = bars.get(barIdx);
+            while (eventIdx >= 0 && events.get(eventIdx).date.isAfter(bar.date())) {
+                CorporateEvent e = events.get(eventIdx);
+                if (e.isSplit()) {
+                    if (e.amount > 0) splitFactor /= e.amount;
+                } else {
+                    double dOriginal = splitFactor > 0 ? e.amount / splitFactor : e.amount;
+                    if (bar.close() > 0) {
+                        divFactor *= (bar.close() - dOriginal) / bar.close();
+                    }
+                }
+                eventIdx--;
+            }
+            double factor = splitFactor * divFactor;
+            reversed[barIdx] = new PriceBar(bar.symbol(), bar.date(), bar.open(), bar.high(),
+                    bar.low(), bar.close(), bar.close() * factor, bar.volume(), bar.currency());
+        }
+        for (PriceBar pb : reversed) out.add(pb);
+        return out;
+    }
+
+    /**
+     * Reads {@code events.dividends} (amount = cash dividend per share, current-share basis)
+     * and {@code events.splits} (amount = split ratio, e.g. 4 for a 4-for-1) into a flat list.
+     * Empty when the events block is missing.
+     */
+    private static List<CorporateEvent> parseEvents(JsonNode eventsNode) {
+        List<CorporateEvent> events = new ArrayList<>();
+        if (eventsNode.isMissingNode() || !eventsNode.isObject()) return events;
+        JsonNode divs = eventsNode.path("dividends");
+        if (divs.isObject()) {
+            divs.fields().forEachRemaining(entry -> {
+                JsonNode e = entry.getValue();
+                long d = e.path("date").asLong(0);
+                double a = e.path("amount").asDouble(0);
+                if (d > 0 && a > 0) {
+                    events.add(new CorporateEvent(
+                            Instant.ofEpochSecond(d).atZone(ZoneOffset.UTC).toLocalDate(), a, false));
+                }
+            });
+        }
+        JsonNode splits = eventsNode.path("splits");
+        if (splits.isObject()) {
+            splits.fields().forEachRemaining(entry -> {
+                JsonNode e = entry.getValue();
+                long d = e.path("date").asLong(0);
+                double a = e.path("numerator").asDouble(0);
+                double denom = e.path("denominator").asDouble(1);
+                double ratio = denom > 0 ? a / denom : a;
+                if (d > 0 && ratio > 0) {
+                    events.add(new CorporateEvent(
+                            Instant.ofEpochSecond(d).atZone(ZoneOffset.UTC).toLocalDate(), ratio, true));
+                }
+            });
+        }
+        return events;
+    }
+
+    /** Internal: one dividend or split event from Yahoo's events block. */
+    private record CorporateEvent(LocalDate date, double amount, boolean isSplit) {
     }
 
     private static Double num(JsonNode arr, int i) {

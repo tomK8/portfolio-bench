@@ -144,6 +144,22 @@ public class PriceHistoryRepository {
         }
     }
 
+    public LocalDate getEarliestPriceDate(String symbol) {
+        if (!connections.dbExists()) return null;
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT MIN(date) FROM price_history WHERE symbol = ?")) {
+            ps.setString(1, symbol);
+            try (ResultSet rs = ps.executeQuery()) {
+                String d = rs.next() ? rs.getString(1) : null;
+                return d == null ? null : LocalDate.parse(d);
+            }
+        } catch (Exception e) {
+            log.warn("Could not read earliest price date", e);
+            return null;
+        }
+    }
+
     public PriceBar getPriceOn(String symbol, LocalDate date) {
         return queryBars("SELECT symbol, date, open, high, low, close, adj_close, volume, currency " +
                         "FROM price_history WHERE symbol = ? AND date <= ? ORDER BY date DESC LIMIT 1",

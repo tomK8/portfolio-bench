@@ -7,8 +7,11 @@ import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.PortfolioValueService;
 import com.portfolio.application.PortfolioValueService.ValueTimeline;
+import com.portfolio.application.PriceFetchJob;
 import com.portfolio.application.SyncFromCashService;
 import com.portfolio.application.SyncPortfolioService;
+import com.portfolio.application.WhatIfService;
+import com.portfolio.application.WhatIfService.Weight;
 import com.portfolio.persistence.KeyValueStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +26,8 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import java.math.BigDecimal;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 
 @Controller
 public class DashboardController {
@@ -44,6 +49,8 @@ public class DashboardController {
     private final ImportGiltPricesService importGiltPricesService;
     private final ContributionService contributionService;
     private final PortfolioValueService portfolioValueService;
+    private final WhatIfService whatIfService;
+    private final PriceFetchJob priceFetchJob;
     private final KeyValueStore settings;
 
     public DashboardController(SyncPortfolioService syncService,
@@ -53,6 +60,8 @@ public class DashboardController {
                                ImportGiltPricesService importGiltPricesService,
                                ContributionService contributionService,
                                PortfolioValueService portfolioValueService,
+                               WhatIfService whatIfService,
+                               PriceFetchJob priceFetchJob,
                                KeyValueStore settings) {
         this.syncService = syncService;
         this.syncFromCashService = syncFromCashService;
@@ -61,6 +70,8 @@ public class DashboardController {
         this.importGiltPricesService = importGiltPricesService;
         this.contributionService = contributionService;
         this.portfolioValueService = portfolioValueService;
+        this.whatIfService = whatIfService;
+        this.priceFetchJob = priceFetchJob;
         this.settings = settings;
     }
 
@@ -148,11 +159,80 @@ public class DashboardController {
         return portfolioValueService.timeline();
     }
 
+    /**
+     * Backtest a fixed basket against the actual contribution history. Symbols and weights
+     * arrive as two parallel lists from the form (e.g. {@code symbols=GOOG&symbols=EQQQ}).
+     * Weights are percentages — converted to fractions here so the service can stay in
+     * basis-point land. Validation errors bubble through {@link #handleBadRequest}.
+     */
+    @PostMapping("/whatif")
+    @ResponseBody
+    public ValueTimeline whatIf(@RequestParam(name = "symbols") List<String> symbols,
+                                @RequestParam(name = "weights") List<String> weights,
+                                @RequestParam(name = "backfill", defaultValue = "false") boolean backfill) {
+        if (symbols.size() != weights.size()) {
+            throw new IllegalArgumentException("Symbols and weights must have the same length.");
+        }
+        List<Weight> basket = new ArrayList<>();
+        for (int i = 0; i < symbols.size(); i++) {
+            String sym = symbols.get(i) == null ? "" : symbols.get(i).trim();
+            String w = weights.get(i) == null ? "" : weights.get(i).trim();
+            if (sym.isEmpty() && w.isEmpty()) continue;          // skip blank rows
+            if (sym.isEmpty()) throw new IllegalArgumentException("Row " + (i + 1) + ": symbol is required when a weight is set.");
+            if (w.isEmpty()) throw new IllegalArgumentException("Row " + (i + 1) + ": weight is required when a symbol is set.");
+            BigDecimal pct;
+            try {
+                pct = new BigDecimal(w);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Row " + (i + 1) + ": weight '" + w + "' is not a number.");
+            }
+            basket.add(new Weight(sym.toUpperCase(),
+                    pct.divide(new BigDecimal("100"), 10, java.math.RoundingMode.HALF_UP)));
+        }
+        // First pass returns whatever we already know — the chart still renders with any
+        // missing basket symbol's allocation falling back to GBP cash. If the caller passes
+        // backfill=true (after confirming the prompt client-side), fetch each missing symbol
+        // from Yahoo (~2s each, throttled inside the job) and re-run with fresh data.
+        ValueTimeline preview = whatIfService.timeline(basket);
+        if (backfill && preview.missingPrices() != null && !preview.missingPrices().isEmpty()) {
+            for (var mp : preview.missingPrices()) {
+                int rows = priceFetchJob.fetchSingle(mp.symbol());
+                log.info("What-if backfill: {} → {} rows", mp.symbol(), rows);
+            }
+            return whatIfService.timeline(basket);
+        }
+        return preview;
+    }
+
+    /**
+     * Re-fetches the full 10-year window for every traded symbol and re-derives
+     * {@code adj_close} from Yahoo's dividend + split events. Long-running (~50 tickers ×
+     * throttle ≈ 25–60s), so the UI shows a spinner.
+     */
+    @PostMapping("/rebuild-prices")
+    public String rebuildPrices(Model model) {
+        int refreshed = priceFetchJob.runFullRebuild();
+        model.addAttribute("rebuildCount", refreshed);
+        model.addAttribute("completedAt", now());
+        return "fragments/rebuild-prices :: result";
+    }
+
     @PostMapping("/import-gilt-prices")
     public String importGiltPrices(Model model) {
         model.addAttribute("giltImports", importGiltPricesService.importAll());
         model.addAttribute("completedAt", now());
         return "fragments/import-gilt-prices :: result";
+    }
+
+    /**
+     * Bad-basket errors from {@code POST /whatif}: respond 400 with a plain-text message so
+     * the JSON-fetching client can display it directly.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseBody
+    public org.springframework.http.ResponseEntity<String> handleBadRequest(IllegalArgumentException e) {
+        return org.springframework.http.ResponseEntity
+                .badRequest().body(e.getMessage());
     }
 
     /**

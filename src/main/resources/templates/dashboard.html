@@ -252,6 +252,58 @@
             padding: 0 3px;
             border-radius: 3px;
         }
+
+        .whatif-form {
+            margin: 0.5rem 0 1rem 0;
+            display: grid;
+            grid-template-columns: auto auto auto;
+            gap: 0.4rem 0.6rem;
+            align-items: center;
+            max-width: 480px;
+        }
+
+        .whatif-form .row-label {
+            color: #888;
+            font-size: 0.85rem;
+        }
+
+        .whatif-form input[type=text],
+        .whatif-form input[type=number] {
+            padding: 0.3rem 0.4rem;
+            width: 8rem;
+        }
+
+        .whatif-form input[type=number] {
+            width: 5rem;
+        }
+
+        .whatif-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .whatif-weight-sum {
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .whatif-weight-sum.bad {
+            color: #c0392b;
+            font-weight: 600;
+        }
+
+        .whatif-error {
+            margin: 0.5rem 0;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #c0392b;
+            background: #fdecea;
+            color: #7a1d12;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -269,6 +321,11 @@
     <span class="muted">reads <code>~/Downloads/Tradeweb_FTSE_ClosePrices*.csv</code> (manual Tradeweb downloads)</span>
 </form>
 
+<form class="actions" hx-indicator="#spinner">
+    <button hx-post="/rebuild-prices" hx-target="#rebuild-prices-result" type="submit">Rebuild adj_close</button>
+    <span class="muted">re-fetches the full 10-year history per ticker; re-run after a notable dividend or split (takes 30–60s)</span>
+</form>
+
 <section class="result-panel">
     <h2>Import cash statement</h2>
     <div id="import-result"></div>
@@ -279,11 +336,17 @@
     <div id="gilt-import-result"></div>
 </section>
 
+<section class="result-panel">
+    <h2>Rebuild adj_close</h2>
+    <div id="rebuild-prices-result"></div>
+</section>
+
 <div class="tabs" id="portfolio-tabs">
     <button class="tab active" data-panel="panel-holdings" type="button">From holdings files</button>
     <button class="tab" data-panel="panel-cash" type="button">From cash ledger</button>
     <button class="tab" data-panel="panel-contributions" type="button">Contributions</button>
     <button class="tab" data-panel="panel-value" type="button">Value over time</button>
+    <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -335,6 +398,35 @@
     <div id="value-warnings" class="value-warnings" style="display: none;"></div>
     <div style="height: 480px; margin-top: 1rem;">
         <canvas id="value-chart"></canvas>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-whatif">
+    <p class="muted" style="margin-top: 0">
+        Backtest a fixed basket against your actual contribution dates. On every
+        <code>CONTRIBUTION</code> row (plus the Roth USD seed at its earliest ledger
+        date), the GBP amount is split by your weights and used to buy fractional
+        shares at that day's <code>adj_close</code> — total-return mode, so the
+        basket's dividends are reinvested. Up to 7 instruments; weights must sum to 100%.
+        Symbols are matched against <code>price_history</code>; anything not found shows
+        in the warning panel and that allocation falls back to GBP cash.
+    </p>
+    <form id="whatif-form" class="whatif-form">
+        <div class="row-label">Symbol</div>
+        <div class="row-label">Weight (%)</div>
+        <div></div>
+        <!-- 7 rows are emitted by JS to keep the DOM tidy when reset -->
+    </form>
+    <div class="whatif-controls">
+        <button id="whatif-run" type="button">Run backtest</button>
+        <button id="whatif-reset" type="button">Reset</button>
+        <span id="whatif-sum" class="whatif-weight-sum">Total: 0%</span>
+        <span id="whatif-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+    <div id="whatif-error" class="whatif-error"></div>
+    <div id="whatif-warnings" class="value-warnings" style="display: none;"></div>
+    <div style="height: 480px; margin-top: 1rem;">
+        <canvas id="whatif-chart"></canvas>
     </div>
 </section>
 
@@ -392,11 +484,12 @@
 
         document.body.addEventListener('htmx:afterSettle', function () {
             ['#portfolio-result', '#portfolio-cash-result'].forEach(function (sel) {
-                var table = document.querySelector(sel + ' table');
-                if (table && !table.dataset.sortAttached) {
-                    table.dataset.sortAttached = '1';
-                    attachSort(table);
-                }
+                document.querySelectorAll(sel + ' table').forEach(function (table) {
+                    if (!table.dataset.sortAttached) {
+                        table.dataset.sortAttached = '1';
+                        attachSort(table);
+                    }
+                });
             });
         });
 
@@ -410,8 +503,228 @@
                 });
                 if (btn.dataset.panel === 'panel-contributions') loadContributionsChart();
                 if (btn.dataset.panel === 'panel-value') loadValueChart();
+                if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
             });
         });
+
+        var whatIfInitialized = false;
+        var whatIfChart = null;
+        var WHATIF_ROWS = 7;
+
+        function setupWhatIf() {
+            if (whatIfInitialized) return;
+            whatIfInitialized = true;
+            var form = document.getElementById('whatif-form');
+            for (var i = 0; i < WHATIF_ROWS; i++) {
+                var label = document.createElement('div');
+                label.className = 'row-label';
+                label.textContent = (i + 1) + '.';
+                var symInput = document.createElement('input');
+                symInput.type = 'text';
+                symInput.name = 'symbols';
+                symInput.placeholder = i === 0 ? 'e.g. GOOG' : '';
+                symInput.autocomplete = 'off';
+                var weightInput = document.createElement('input');
+                weightInput.type = 'number';
+                weightInput.name = 'weights';
+                weightInput.min = '0';
+                weightInput.max = '100';
+                weightInput.step = '0.01';
+                weightInput.placeholder = i === 0 ? 'e.g. 50' : '';
+                weightInput.addEventListener('input', refreshWeightSum);
+                form.appendChild(symInput);
+                form.appendChild(weightInput);
+                form.appendChild(label);
+            }
+            document.getElementById('whatif-run').addEventListener('click', runWhatIf);
+            document.getElementById('whatif-reset').addEventListener('click', resetWhatIf);
+            refreshWeightSum();
+        }
+
+        function resetWhatIf() {
+            document.querySelectorAll('#whatif-form input').forEach(function (el) {
+                el.value = '';
+            });
+            var errBox = document.getElementById('whatif-error');
+            errBox.style.display = 'none';
+            errBox.textContent = '';
+            var warn = document.getElementById('whatif-warnings');
+            warn.style.display = 'none';
+            warn.innerHTML = '';
+            document.getElementById('whatif-status').textContent = '';
+            if (whatIfChart) {
+                whatIfChart.destroy();
+                whatIfChart = null;
+            }
+            refreshWeightSum();
+        }
+
+        function refreshWeightSum() {
+            var inputs = document.querySelectorAll('#whatif-form input[name="weights"]');
+            var sum = 0;
+            inputs.forEach(function (el) {
+                var v = parseFloat(el.value);
+                if (!isNaN(v)) sum += v;
+            });
+            var span = document.getElementById('whatif-sum');
+            span.textContent = 'Total: ' + sum.toFixed(2) + '%';
+            span.classList.toggle('bad', Math.abs(sum - 100) > 0.05 && sum !== 0);
+        }
+
+        function runWhatIf() {
+            var symInputs = document.querySelectorAll('#whatif-form input[name="symbols"]');
+            var weightInputs = document.querySelectorAll('#whatif-form input[name="weights"]');
+            var params = new URLSearchParams();
+            for (var i = 0; i < symInputs.length; i++) {
+                var sym = symInputs[i].value.trim();
+                var w = weightInputs[i].value.trim();
+                if (sym === '' && w === '') continue;
+                params.append('symbols', sym);
+                params.append('weights', w);
+            }
+            var errBox = document.getElementById('whatif-error');
+            errBox.style.display = 'none';
+            errBox.textContent = '';
+            var status = document.getElementById('whatif-status');
+            status.textContent = 'Working…';
+
+            postWhatIf(params, false).then(function (synthetic) {
+                // If the basket has unknown tickers, render what we have, then ask whether
+                // to backfill from Yahoo and re-run. confirm() blocks the page but keeps the
+                // user in control — backfilling 7 unknown tickers can take ~15s.
+                if (synthetic.missingPrices && synthetic.missingPrices.length) {
+                    var names = synthetic.missingPrices.map(function (m) { return m.symbol; }).join(', ');
+                    var ok = window.confirm(
+                        "We have no price history for: " + names + "\n\n" +
+                        "Backfill from Yahoo and re-run? Takes ~2s per symbol.\n" +
+                        "(Cancel keeps the partial chart; missing allocations stay as GBP cash.)");
+                    if (ok) {
+                        status.textContent = 'Backfilling ' + synthetic.missingPrices.length + ' ticker(s) from Yahoo…';
+                        return postWhatIf(params, true).then(function (fresh) {
+                            return overlayWhatIf(fresh);
+                        });
+                    }
+                }
+                return overlayWhatIf(synthetic);
+            }).then(function () {
+                status.textContent = '';
+            }).catch(function (err) {
+                status.textContent = '';
+                errBox.textContent = err.message || String(err);
+                errBox.style.display = 'block';
+            });
+        }
+
+        function postWhatIf(params, backfill) {
+            var url = backfill ? '/whatif?backfill=true' : '/whatif';
+            return fetch(url, { method: 'POST', body: params }).then(function (r) {
+                if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Request failed'); });
+                return r.json();
+            });
+        }
+
+        // Fetch the actual-portfolio + contributions overlays and render the combined chart.
+        // Pulled out so the run flow can call it once after either the initial sim or the
+        // post-backfill re-run, without duplicating the Chart.js setup.
+        function overlayWhatIf(synthetic) {
+            return Promise.all([
+                fetch('/portfolio-value').then(function (r) { return r.json(); }),
+                fetch('/contributions').then(function (r) { return r.json(); })
+            ]).then(function (results) {
+                renderWhatIfChart(synthetic, results[0], results[1]);
+            });
+        }
+
+        function renderWhatIfChart(synthetic, actual, contribTimeline) {
+            var warn = document.getElementById('whatif-warnings');
+            if (synthetic.missingPrices && synthetic.missingPrices.length) {
+                var items = synthetic.missingPrices.map(function (m) {
+                    return '<li><code>' + m.symbol + '</code> — no rows in <code>price_history</code>; ' +
+                        'its allocation stayed as GBP cash.</li>';
+                }).join('');
+                warn.innerHTML = '<h4>Missing price data</h4>' +
+                    '<p>The simulator could not value these basket symbols. Add prices and re-run.</p>' +
+                    '<ul>' + items + '</ul>';
+                warn.style.display = 'block';
+            } else {
+                warn.style.display = 'none';
+            }
+
+            function toXY(points, key) {
+                return points.map(function (p) { return { x: p.date, y: parseFloat(p[key]) }; });
+            }
+
+            var syntheticData = toXY(synthetic.points, 'valueGbp');
+            var actualData = toXY(actual.points, 'valueGbp');
+            var totalLine = (contribTimeline.lines || []).find(function (l) { return l.label === 'Total'; });
+            var contribData = totalLine ? toXY(totalLine.points, 'cumulativeGbp') : [];
+
+            var ctx = document.getElementById('whatif-chart').getContext('2d');
+            if (whatIfChart) whatIfChart.destroy();
+            whatIfChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'What-if basket (£)',
+                        data: syntheticData,
+                        borderColor: '#2ca02c',
+                        backgroundColor: 'rgba(44, 160, 44, 0.12)',
+                        fill: true,
+                        pointRadius: 2,
+                        tension: 0.1,
+                        order: 3
+                    }, {
+                        label: 'Actual portfolio (£)',
+                        data: actualData,
+                        borderColor: '#1f77b4',
+                        backgroundColor: 'rgba(31, 119, 180, 0.0)',
+                        fill: false,
+                        pointRadius: 2,
+                        tension: 0.1,
+                        order: 2
+                    }, {
+                        label: 'Cumulative contributions (£)',
+                        data: contribData,
+                        borderColor: '#d62728',
+                        backgroundColor: '#d62728',
+                        borderDash: [6, 4],
+                        fill: false,
+                        pointRadius: 0,
+                        stepped: 'before',
+                        tension: 0,
+                        order: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                    scales: {
+                        x: { type: 'time', time: { unit: 'year' } },
+                        y: {
+                            title: { display: true, text: 'Value (£)' },
+                            ticks: {
+                                callback: function (v) {
+                                    return '£' + v.toLocaleString('en-GB', { maximumFractionDigits: 0 });
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function (ctx) {
+                                    return ctx.dataset.label + ': £' +
+                                        ctx.parsed.y.toLocaleString('en-GB',
+                                            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                }
+                            }
+                        },
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+        }
 
         var contributionsChart = null;
         var contributionsLoaded = false;

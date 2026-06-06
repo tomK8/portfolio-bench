@@ -18,6 +18,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -263,6 +264,41 @@ public class CashTransactionRepository {
             log.warn("Could not load dividend transactions", e);
         }
         return rows;
+    }
+
+    /**
+     * Latest stored cash balance per {@code (account, currency)} — the live cash position
+     * derived from the running-balance column on the most recent row of each per-currency
+     * ledger. AJBell has one entry (GBP); RothIRA has one (USD); II has two (GBP, USD).
+     * Rows whose {@code cash_balance_gbp} is null (e.g. II's intermediate TRANSACTION rows)
+     * are skipped — the matching CHARGE row carries the post-trade balance.
+     */
+    public List<CashBalance> latestCashBalances() {
+        Map<String, CashBalance> latestByKey = new LinkedHashMap<>();
+        if (!connections.dbExists()) return List.of();
+        try (Connection conn = connections.open();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT account, currency, cash_balance, cash_balance_gbp " +
+                             "FROM cash_transactions " +
+                             "WHERE cash_balance_gbp IS NOT NULL " +
+                             "ORDER BY transaction_date, rowid")) {
+            while (rs.next()) {
+                String account = rs.getString(1);
+                String currency = rs.getString(2);
+                Double cashNative = getNullableDouble(rs, 3);
+                double cashGbp = rs.getDouble(4);
+                latestByKey.put(account + "|" + currency,
+                        new CashBalance(account, currency, cashNative, cashGbp));
+            }
+        } catch (Exception e) {
+            log.warn("Could not load latest cash balances", e);
+        }
+        return new ArrayList<>(latestByKey.values());
+    }
+
+    public record CashBalance(String accountDbValue, String currency,
+                              Double cashNative, double cashGbp) {
     }
 
     /**

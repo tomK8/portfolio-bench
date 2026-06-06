@@ -113,9 +113,19 @@ public class BeanConfiguration {
                                                      SnapshotRepository snapshotRepository,
                                                      IntradayPriceRepository intradayPriceRepository,
                                                      DividendService dividendService,
-                                                     YahooTickerMap yahooTickerMap) {
+                                                     YahooTickerMap yahooTickerMap,
+                                                     CashTransactionRepository cashTransactionRepository) {
         return new SyncPortfolioService(portfolioGatherer, snapshotRepository, intradayPriceRepository,
-                dividendService, yahooTickerMap);
+                dividendService, yahooTickerMap, cashTransactionRepository);
+    }
+
+    @Bean
+    public SyncFromCashService syncFromCashService(CashTransactionRepository cashTransactionRepository,
+                                                   IntradayPriceRepository intradayPriceRepository,
+                                                   FxRateProvider fxRateProvider,
+                                                   YahooTickerMap yahooTickerMap) {
+        return new SyncFromCashService(cashTransactionRepository, intradayPriceRepository,
+                fxRateProvider, yahooTickerMap);
     }
 
     @Bean

@@ -39,7 +39,7 @@ class ExportExcelServiceTest {
 
     @Test
     void emptyWhenNoInputFiles() {
-        ExportResult result = service().export(BigDecimal.ZERO);
+        ExportResult result = service().export(BigDecimal.ZERO, BigDecimal.ZERO);
         assertTrue(result.empty());
         assertTrue(result.files().isEmpty());
     }
@@ -49,7 +49,7 @@ class ExportExcelServiceTest {
         Files.writeString(inputDir.resolve("11111111-1111-1111-1111-111111111111.csv"),
                 "Symbol,Qty,Market Value,Book Cost\nAAPL,10,$1500.00,$1000.00\n");
 
-        ExportResult result = service().export(new BigDecimal("500"));
+        ExportResult result = service().export(new BigDecimal("500"), BigDecimal.ZERO);
 
         assertFalse(result.empty());
         assertEquals(2, result.files().size());

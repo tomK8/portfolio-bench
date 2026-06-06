@@ -148,19 +148,75 @@
             color: #333;
             font-size: 0.75em;
         }
+
+        .tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid #ccc;
+            margin: 1.5rem 0 0 0;
+        }
+
+        .tab {
+            background: none;
+            border: 1px solid transparent;
+            border-bottom: none;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            color: #666;
+            font-size: 0.95rem;
+            margin-bottom: -1px;
+        }
+
+        .tab.active {
+            color: #1a1a1a;
+            background: #fff;
+            border-color: #ccc;
+            border-radius: 4px 4px 0 0;
+            font-weight: 600;
+        }
+
+        .tab-panel {
+            display: none;
+            padding-top: 1rem;
+        }
+
+        .tab-panel.active {
+            display: block;
+        }
+
+        .cash-recon {
+            margin: 1rem 0 1.5rem 0;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #e5e5e5;
+            border-radius: 6px;
+            background: #fafafa;
+            max-width: 540px;
+        }
+
+        .cash-recon h3 {
+            margin: 0 0 0.4rem 0;
+            font-size: 0.85rem;
+            color: #555;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .recon-table th, .recon-table td {
+            padding: 0.2rem 0.6rem;
+            border-bottom: 1px solid #eee;
+            font-size: 0.9rem;
+        }
+
+        .recon-warn td {
+            color: #c0392b;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
 <h1 th:text="${appName}">Portfolio Bench</h1>
 <p class="sub">Local portfolio dashboard</p>
-
-<form class="actions" hx-indicator="#spinner">
-    <label>II SIPP cash (GBP):
-        <input name="iiSippCash" th:value="${iiSippCash}" type="text" value="0"/>
-    </label>
-    <button hx-post="/sync" hx-target="#portfolio-result" type="submit">Aggregated Portfolio</button>
-    <button hx-post="/export" hx-target="#export-result" type="submit">Export Excel</button>
-</form>
 
 <form class="actions" hx-indicator="#spinner">
     <button hx-post="/import-cash" hx-target="#import-result" type="submit">Import cash statement</button>
@@ -174,11 +230,6 @@
 </form>
 
 <section class="result-panel">
-    <h2>Export Excel</h2>
-    <div id="export-result"></div>
-</section>
-
-<section class="result-panel">
     <h2>Import cash statement</h2>
     <div id="import-result"></div>
 </section>
@@ -188,9 +239,41 @@
     <div id="gilt-import-result"></div>
 </section>
 
-<section class="result-panel">
-    <h2>Aggregated portfolio</h2>
-    <div id="portfolio-result"></div>
+<div class="tabs" id="portfolio-tabs">
+    <button class="tab active" data-panel="panel-holdings" type="button">From holdings files</button>
+    <button class="tab" data-panel="panel-cash" type="button">From cash ledger</button>
+</div>
+
+<section class="tab-panel active" id="panel-holdings">
+    <form class="actions" hx-indicator="#spinner">
+        <label>II SIPP cash £:
+            <input name="iiSippCash" th:value="${iiSippCash}" type="text" value="0" size="10"/>
+        </label>
+        <label>$:
+            <input name="iiSippCashUsd" th:value="${iiSippCashUsd}" type="text" value="0" size="10"/>
+        </label>
+        <button hx-post="/sync" hx-target="#portfolio-result" type="submit">Aggregated Portfolio</button>
+        <button hx-post="/export" hx-target="#export-result" type="submit">Export Excel</button>
+    </form>
+    <section class="result-panel">
+        <h2>Export Excel</h2>
+        <div id="export-result"></div>
+    </section>
+    <section class="result-panel">
+        <h2>Aggregated portfolio (from broker holdings files)</h2>
+        <div id="portfolio-result"></div>
+    </section>
+</section>
+
+<section class="tab-panel" id="panel-cash">
+    <form class="actions" hx-indicator="#spinner">
+        <button hx-post="/sync-from-cash" hx-target="#portfolio-cash-result" type="submit">Aggregated Portfolio (from cash ledger)</button>
+        <span class="muted">positions reconstructed FIFO from <code>cash_transactions</code>, priced by latest intraday quote</span>
+    </form>
+    <section class="result-panel">
+        <h2>Aggregated portfolio (from cash ledger)</h2>
+        <div id="portfolio-cash-result"></div>
+    </section>
 </section>
 
 <script>
@@ -235,11 +318,24 @@
         }
 
         document.body.addEventListener('htmx:afterSettle', function () {
-            var table = document.querySelector('#portfolio-result table');
-            if (table && !table.dataset.sortAttached) {
-                table.dataset.sortAttached = '1';
-                attachSort(table);
-            }
+            ['#portfolio-result', '#portfolio-cash-result'].forEach(function (sel) {
+                var table = document.querySelector(sel + ' table');
+                if (table && !table.dataset.sortAttached) {
+                    table.dataset.sortAttached = '1';
+                    attachSort(table);
+                }
+            });
+        });
+
+        var tabs = document.querySelectorAll('#portfolio-tabs .tab');
+        tabs.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                tabs.forEach(function (b) { b.classList.remove('active'); });
+                btn.classList.add('active');
+                document.querySelectorAll('.tab-panel').forEach(function (p) {
+                    p.classList.toggle('active', p.id === btn.dataset.panel);
+                });
+            });
         });
     }());
 </script>

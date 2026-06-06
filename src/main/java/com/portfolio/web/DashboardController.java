@@ -3,6 +3,7 @@ package com.portfolio.web;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
+import com.portfolio.application.SyncFromCashService;
 import com.portfolio.application.SyncPortfolioService;
 import com.portfolio.persistence.KeyValueStore;
 import org.slf4j.Logger;
@@ -23,23 +24,29 @@ public class DashboardController {
 
     private static final Logger log = LoggerFactory.getLogger(DashboardController.class);
 
-    /** KV key for the last II SIPP cash balance entered on the dashboard. */
+    /** KV key for the last II SIPP GBP cash balance entered on the dashboard. */
     static final String II_SIPP_CASH_KEY = "ii_sipp_cash_last";
+
+    /** KV key for the last II SIPP USD cash balance entered on the dashboard. */
+    static final String II_SIPP_CASH_USD_KEY = "ii_sipp_cash_last_usd";
 
     private static final DateTimeFormatter HMS = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private final SyncPortfolioService syncService;
+    private final SyncFromCashService syncFromCashService;
     private final ExportExcelService exportService;
     private final ImportCashService importCashService;
     private final ImportGiltPricesService importGiltPricesService;
     private final KeyValueStore settings;
 
     public DashboardController(SyncPortfolioService syncService,
+                               SyncFromCashService syncFromCashService,
                                ExportExcelService exportService,
                                ImportCashService importCashService,
                                ImportGiltPricesService importGiltPricesService,
                                KeyValueStore settings) {
         this.syncService = syncService;
+        this.syncFromCashService = syncFromCashService;
         this.exportService = exportService;
         this.importCashService = importCashService;
         this.importGiltPricesService = importGiltPricesService;
@@ -65,31 +72,48 @@ public class DashboardController {
         model.addAttribute("appName", "Portfolio Bench");
         model.addAttribute("iiSippCash",
                 settings.getBigDecimal(II_SIPP_CASH_KEY, BigDecimal.ZERO).toPlainString());
+        model.addAttribute("iiSippCashUsd",
+                settings.getBigDecimal(II_SIPP_CASH_USD_KEY, BigDecimal.ZERO).toPlainString());
         return "dashboard";
     }
 
-    /**
-     * Parses the II SIPP cash form field and persists the value, returning the parsed amount.
-     * Shared by every action that takes the form parameter (sync, export).
-     */
+    /** Parse + persist GBP form value. */
     private BigDecimal persistIiSippCash(String raw) {
         BigDecimal cash = parseCash(raw);
         settings.putBigDecimal(II_SIPP_CASH_KEY, cash);
         return cash;
     }
 
+    /** Parse + persist USD form value. */
+    private BigDecimal persistIiSippCashUsd(String raw) {
+        BigDecimal cash = parseCash(raw);
+        settings.putBigDecimal(II_SIPP_CASH_USD_KEY, cash);
+        return cash;
+    }
+
     @PostMapping("/sync")
     public String sync(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
+                       @RequestParam(name = "iiSippCashUsd", required = false, defaultValue = "0") String iiSippCashUsd,
                        Model model) {
-        model.addAttribute("result", syncService.sync(persistIiSippCash(iiSippCash)));
+        model.addAttribute("result", syncService.sync(
+                persistIiSippCash(iiSippCash), persistIiSippCashUsd(iiSippCashUsd)));
         model.addAttribute("completedAt", now());
         return "fragments/portfolio :: result";
     }
 
+    @PostMapping("/sync-from-cash")
+    public String syncFromCash(Model model) {
+        model.addAttribute("result", syncFromCashService.sync());
+        model.addAttribute("completedAt", now());
+        return "fragments/portfolio-ledger :: result";
+    }
+
     @PostMapping("/export")
     public String export(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
+                         @RequestParam(name = "iiSippCashUsd", required = false, defaultValue = "0") String iiSippCashUsd,
                          Model model) {
-        model.addAttribute("export", exportService.export(persistIiSippCash(iiSippCash)));
+        model.addAttribute("export", exportService.export(
+                persistIiSippCash(iiSippCash), persistIiSippCashUsd(iiSippCashUsd)));
         model.addAttribute("completedAt", now());
         return "fragments/export :: result";
     }

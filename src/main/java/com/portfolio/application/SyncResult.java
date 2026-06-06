@@ -17,9 +17,16 @@ public record SyncResult(
         Map<String, BigDecimal> rates,
         BigDecimal iiSippCash,
         List<String> sources,
-        boolean empty) {
+        boolean empty,
+        List<CashRecon> cashRecon) {
+
+    /** Per {@code (account, currency)} comparison of holdings-side vs ledger-side cash, in GBP. */
+    public record CashRecon(String account, String currency,
+                            BigDecimal holdingsGbp, BigDecimal ledgerGbp, BigDecimal diffGbp,
+                            boolean warn) {
+    }
 
     public static SyncResult empty(Map<String, BigDecimal> rates) {
-        return new SyncResult(List.of(), null, rates, BigDecimal.ZERO, List.of(), true);
+        return new SyncResult(List.of(), null, rates, BigDecimal.ZERO, List.of(), true, List.of());
     }
 }

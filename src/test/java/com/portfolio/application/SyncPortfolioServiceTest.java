@@ -40,12 +40,12 @@ class SyncPortfolioServiceTest {
         IntradayPriceRepository intraday = new IntradayPriceRepository(cf);
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
         return new SyncPortfolioService(gatherer, snapshots, intraday,
-                new DividendService(cashRepo), new YahooTickerMap());
+                new DividendService(cashRepo), new YahooTickerMap(), cashRepo);
     }
 
     @Test
     void returnsEmptyWhenNoInputFiles() {
-        SyncResult result = service().sync(new BigDecimal("1000"));
+        SyncResult result = service().sync(new BigDecimal("1000"), BigDecimal.ZERO);
 
         assertTrue(result.empty());
         assertTrue(result.holdings().isEmpty());
@@ -58,7 +58,7 @@ class SyncPortfolioServiceTest {
         Files.writeString(inputDir.resolve("11111111-1111-1111-1111-111111111111.csv"),
                 "Symbol,Qty,Market Value,Book Cost\nAAPL,10,$1500.00,$1000.00\n");
 
-        SyncResult result = service().sync(new BigDecimal("500"));
+        SyncResult result = service().sync(new BigDecimal("500"), BigDecimal.ZERO);
 
         assertFalse(result.empty());
         assertEquals(1, result.holdings().size());

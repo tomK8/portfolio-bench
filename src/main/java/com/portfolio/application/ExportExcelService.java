@@ -35,12 +35,14 @@ public class ExportExcelService {
         this.outputDir = outputDir;
     }
 
-    public ExportResult export(BigDecimal iiSippCash) {
+    public ExportResult export(BigDecimal iiSippCashGbp, BigDecimal iiSippCashUsd) {
         GatheredPortfolio gathered = gatherer.gather();
         if (gathered.holdings().isEmpty()) {
             return ExportResult.nothing();
         }
 
+        BigDecimal iiSippCash = SyncPortfolioService.combineIiCashAsGbp(
+                iiSippCashGbp, iiSippCashUsd, gathered.rates());
         Map<String, BigDecimal> dividendsBySymbol = dividendService.dividendsBySymbol(gathered.holdings());
         List<AggHolding> aggregated = new PortfolioAggregator()
                 .aggregate(gathered.holdings(), gathered.rates(), dividendsBySymbol);

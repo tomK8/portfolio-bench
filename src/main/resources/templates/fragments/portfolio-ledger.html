@@ -7,17 +7,13 @@
     <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>
 
     <div class="note" th:if="${result.empty}">
-        No input files found in <code>~/Downloads</code>. Add your broker exports (Roth IRA
-        <code>Holdings*.xlsx</code>, AJ Bell <code>portfolio*.csv</code>, II SIPP UUID
-        <code>.csv</code>) and sync again.
+        No cash ledger data. Import broker cash statements first.
     </div>
 
     <div th:unless="${result.empty}">
         <div class="totals">
             <span>Total value<br/><b
                     th:text="'£' + ${#numbers.formatDecimal(result.totals.totalGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
-            <span>RT Total value<br/><b
-                    th:text="'£' + ${#numbers.formatDecimal(result.totals.rtTotalGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
             <span>Total gain<br/><b
                     th:text="'£' + ${#numbers.formatDecimal(result.totals.totalGainGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
             <span>Cash<br/><b
@@ -30,41 +26,14 @@
 
         <p class="muted" th:text="'Sources: ' + ${#strings.listJoin(result.sources, ', ')}">Sources</p>
 
-        <div th:if="${result.cashRecon != null and !result.cashRecon.isEmpty()}" class="cash-recon">
-            <h3>Cash reconciliation (holdings vs ledger)</h3>
-            <table class="recon-table">
-                <thead>
-                <tr>
-                    <th class="txt">Account</th>
-                    <th class="txt">Ccy</th>
-                    <th>Holdings £</th>
-                    <th>Ledger £</th>
-                    <th>Diff £</th>
-                </tr>
-                </thead>
-                <tbody>
-                <tr th:each="r : ${result.cashRecon}"
-                    th:classappend="${r.warn} ? 'recon-warn'">
-                    <td class="txt" th:text="${r.account}">acc</td>
-                    <td class="txt" th:text="${r.currency}">ccy</td>
-                    <td th:text="${#numbers.formatDecimal(r.holdingsGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                    <td th:text="${#numbers.formatDecimal(r.ledgerGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                    <td th:text="${#numbers.formatDecimal(r.diffGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                </tr>
-                </tbody>
-            </table>
-        </div>
-
         <table>
             <thead>
             <tr>
                 <th class="txt" data-sort="text">Security</th>
                 <th class="txt" data-sort="text">Ccy</th>
                 <th data-sort="num">Quantity</th>
-                <th data-sort="num">Market Value £</th>
-                <th data-sort="num">RT Market Value £</th>
-                <th data-sort="num">Market Value</th>
                 <th data-sort="num">Price</th>
+                <th data-sort="num">Market Value £</th>
                 <th data-sort="num">Gain (£)</th>
                 <th data-sort="num">Gain %</th>
                 <th data-sort="num">Dividends (£)</th>
@@ -78,13 +47,9 @@
                 <td class="txt" th:text="${h.securityId}">SYM</td>
                 <td class="txt" th:text="${h.currencyCode}">USD</td>
                 <td th:text="${#numbers.formatDecimal(h.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>
-                <td th:text="${#numbers.formatDecimal(h.marketValueGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                <td th:text="${h.rtMarketValueGbp != null ? #numbers.formatDecimal(h.rtMarketValueGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
-                </td>
-                <td th:text="${h.rtMarketValue != null ? #numbers.formatDecimal(h.rtMarketValue, 1, 'COMMA', 2, 'POINT') : '—'}">—
-                </td>
                 <td th:text="${h.latestPrice != null ? #numbers.formatDecimal(h.latestPrice, 1, 'COMMA', 4, 'POINT') : '—'}">—
                 </td>
+                <td th:text="${#numbers.formatDecimal(h.marketValueGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
                 <td th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
                 </td>
                 <td th:text="${h.gainPct != null ? #numbers.formatPercent(h.gainPct, 1, 2) : '—'}">—</td>

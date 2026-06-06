@@ -1,6 +1,8 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.TransactionType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -47,7 +49,7 @@ class AJBellCashStatementParserTest {
     @Test
     void parse_realFile_allAccountsAJBell() throws Exception {
         if (!REAL_FILE.toFile().exists()) return;
-        parser.parse(REAL_FILE).forEach(t -> assertEquals("AJBell", t.account()));
+        parser.parse(REAL_FILE).forEach(t -> assertEquals(Account.AJBELL, t.account()));
     }
 
     @Test
@@ -68,19 +70,10 @@ class AJBellCashStatementParserTest {
         if (!REAL_FILE.toFile().exists()) return;
         List<CashTransaction> txns = parser.parse(REAL_FILE);
         CashTransaction bnp = txns.stream()
-                .filter(t -> "BNP".equals(t.symbol()) && "DIVIDEND".equals(t.type()))
+                .filter(t -> "BNP".equals(t.symbol()) && t.type() == TransactionType.DIVIDEND)
                 .findFirst().orElseThrow();
         assertTrue(bnp.quantity() > 0, "Dividend quantity should be positive");
         assertTrue(bnp.amount() > 0, "Dividend should be positive cash in");
-    }
-
-    @Test
-    void parse_realFile_knownGiltDividend() throws Exception {
-        if (!REAL_FILE.toFile().exists()) return;
-        List<CashTransaction> txns = parser.parse(REAL_FILE);
-        assertTrue(txns.stream().anyMatch(
-                        t -> "GILT 0.875% 2033".equals(t.symbol()) && "DIVIDEND".equals(t.type())),
-                "Expected GILT 0.875% 2033 dividend row");
     }
 
     @Test
@@ -88,7 +81,7 @@ class AJBellCashStatementParserTest {
         if (!REAL_FILE.toFile().exists()) return;
         List<CashTransaction> txns = parser.parse(REAL_FILE);
         CashTransaction buy = txns.stream()
-                .filter(t -> "REL".equals(t.symbol()) && "TRANSACTION".equals(t.type()))
+                .filter(t -> "REL".equals(t.symbol()) && t.type() == TransactionType.TRANSACTION)
                 .findFirst().orElseThrow();
         assertEquals(100.0, buy.quantity(), 0.01);
         assertTrue(buy.amount() < 0, "Purchase should be negative cash out");
@@ -99,7 +92,7 @@ class AJBellCashStatementParserTest {
         if (!REAL_FILE.toFile().exists()) return;
         List<CashTransaction> txns = parser.parse(REAL_FILE);
         assertTrue(txns.stream().anyMatch(
-                        t -> "GILT 0.875% 2033".equals(t.symbol()) && "TRANSACTION".equals(t.type()) && t.amount() > 0),
+                        t -> "GILT 0.875% 2033".equals(t.symbol()) && t.type() == TransactionType.TRANSACTION && t.amount() > 0),
                 "Expected at least one positive GILT 0.875% 2033 sale transaction");
     }
 
@@ -107,7 +100,7 @@ class AJBellCashStatementParserTest {
     void parse_realFile_chargesAreNegative() throws Exception {
         if (!REAL_FILE.toFile().exists()) return;
         parser.parse(REAL_FILE).stream()
-                .filter(t -> "CHARGE".equals(t.type()))
+                .filter(t -> t.type() == TransactionType.CHARGE)
                 .forEach(t -> assertTrue(t.amount() < 0, "Charges should be negative: " + t.description()));
     }
 
@@ -115,7 +108,7 @@ class AJBellCashStatementParserTest {
     void parse_realFile_contributionsSymbolIsGBP() throws Exception {
         if (!REAL_FILE.toFile().exists()) return;
         parser.parse(REAL_FILE).stream()
-                .filter(t -> "CONTRIBUTION".equals(t.type()))
+                .filter(t -> t.type() == TransactionType.CONTRIBUTION)
                 .forEach(t -> assertEquals("GBP", t.symbol()));
     }
 

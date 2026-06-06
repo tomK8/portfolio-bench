@@ -14,6 +14,8 @@ import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.CashTransactionRepository.CashBalance;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.port.FxRateProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -46,6 +48,8 @@ import java.util.Map;
  * </ul>
  */
 public class SyncFromCashService {
+
+    private static final Logger log = LoggerFactory.getLogger(SyncFromCashService.class);
 
     private static final Map<String, String> ACCOUNT_LABELS = Map.of(
             "AJBell", "AJ Bell SIPP",
@@ -87,11 +91,18 @@ public class SyncFromCashService {
 
         // Drop positions with no intraday price: we can't value them, and per the design of this
         // view (compare against the holdings RT total) silently substituting cost basis would
-        // make totals diverge for any position we can't price live.
+        // make totals diverge for any position we can't price live. The dropped symbols are
+        // surfaced in the result so the dashboard can flag them — a held position with no
+        // intraday quote is always worth investigating.
         List<AggHolding> aggregated = new ArrayList<>();
+        List<String> missingIntraday = new ArrayList<>();
         for (Position p : positions) {
             IntradayPrice ip = latestBySymbol.get(p.securityId().toUpperCase());
-            if (ip == null) continue;
+            if (ip == null) {
+                missingIntraday.add(p.securityId());
+                log.warn("No intraday price for held symbol {}", p.securityId());
+                continue;
+            }
             aggregated.add(toAggHolding(p, ip, attributed, rates));
         }
         for (CashBalance cb : cashBalances) {
@@ -108,7 +119,8 @@ public class SyncFromCashService {
         }
         if (sources.isEmpty()) sources.add("cash ledger");
 
-        return new SyncResult(aggregated, totals, rates, BigDecimal.ZERO, sources, false, List.of());
+        return new SyncResult(aggregated, totals, rates, BigDecimal.ZERO, sources, false,
+                List.of(), missingIntraday, List.of());
     }
 
     // ---- Holding construction ----------------------------------------------

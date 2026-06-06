@@ -26,6 +26,16 @@
 
         <p class="muted" th:text="'Sources: ' + ${#strings.listJoin(result.sources, ', ')}">Sources</p>
 
+        <div th:if="${result.missingIntradayPrices != null and !result.missingIntradayPrices.isEmpty()}"
+             class="value-warnings">
+            <h4>Missing intraday prices</h4>
+            <p>Held symbols dropped because no cached intraday quote is available — they aren't
+                reflected in the totals below:</p>
+            <ul>
+                <li th:each="s : ${result.missingIntradayPrices}"><code th:text="${s}">SYM</code></li>
+            </ul>
+        </div>
+
         <table>
             <thead>
             <tr>

@@ -30,29 +30,67 @@
 
         <p class="muted" th:text="'Sources: ' + ${#strings.listJoin(result.sources, ', ')}">Sources</p>
 
-        <div th:if="${result.cashRecon != null and !result.cashRecon.isEmpty()}" class="cash-recon">
-            <h3>Cash reconciliation (holdings vs ledger)</h3>
-            <table class="recon-table">
-                <thead>
-                <tr>
-                    <th class="txt">Account</th>
-                    <th class="txt">Ccy</th>
-                    <th>Holdings £</th>
-                    <th>Ledger £</th>
-                    <th>Diff £</th>
-                </tr>
-                </thead>
-                <tbody>
-                <tr th:each="r : ${result.cashRecon}"
-                    th:classappend="${r.warn} ? 'recon-warn'">
-                    <td class="txt" th:text="${r.account}">acc</td>
-                    <td class="txt" th:text="${r.currency}">ccy</td>
-                    <td th:text="${#numbers.formatDecimal(r.holdingsGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                    <td th:text="${#numbers.formatDecimal(r.ledgerGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                    <td th:text="${#numbers.formatDecimal(r.diffGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                </tr>
-                </tbody>
-            </table>
+        <div th:if="${result.missingIntradayPrices != null and !result.missingIntradayPrices.isEmpty()}"
+             class="value-warnings">
+            <h4>Missing intraday prices</h4>
+            <p>Held symbols with no cached intraday quote — RT total falls back to broker-supplied
+                GBP value for these:</p>
+            <ul>
+                <li th:each="s : ${result.missingIntradayPrices}"><code th:text="${s}">SYM</code></li>
+            </ul>
+        </div>
+
+        <div th:if="${(result.cashRecon != null and !result.cashRecon.isEmpty())
+                       or (result.assetRecon != null and !result.assetRecon.isEmpty())}"
+             class="cash-recon">
+            <h3>Reconciliation (holdings vs ledger)</h3>
+
+            <div th:if="${result.cashRecon != null and !result.cashRecon.isEmpty()}">
+                <h4 class="recon-subhead">Cash</h4>
+                <table class="recon-table">
+                    <thead>
+                    <tr>
+                        <th class="txt">Account</th>
+                        <th class="txt">Ccy</th>
+                        <th>Holdings £</th>
+                        <th>Ledger £</th>
+                        <th>Diff £</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="r : ${result.cashRecon}"
+                        th:classappend="${r.warn} ? 'recon-warn'">
+                        <td class="txt" th:text="${r.account}">acc</td>
+                        <td class="txt" th:text="${r.currency}">ccy</td>
+                        <td th:text="${#numbers.formatDecimal(r.holdingsGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+                        <td th:text="${#numbers.formatDecimal(r.ledgerGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+                        <td th:text="${#numbers.formatDecimal(r.diffGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div th:if="${result.assetRecon != null and !result.assetRecon.isEmpty()}">
+                <h4 class="recon-subhead">Assets</h4>
+                <table class="recon-table">
+                    <thead>
+                    <tr>
+                        <th class="txt">Symbol</th>
+                        <th>Holdings RT £</th>
+                        <th>Ledger RT £</th>
+                        <th>Diff £</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="r : ${result.assetRecon}" class="recon-warn">
+                        <td class="txt" th:text="${r.symbol}">sym</td>
+                        <td th:text="${#numbers.formatDecimal(r.holdingsGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+                        <td th:text="${#numbers.formatDecimal(r.ledgerGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+                        <td th:text="${#numbers.formatDecimal(r.diffGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <table>

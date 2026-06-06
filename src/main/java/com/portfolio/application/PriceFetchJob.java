@@ -15,7 +15,11 @@ import java.util.Set;
 /**
  * Maintains the local {@code price_history} table from Yahoo Finance. Driven by every symbol
  * ever traded (not just current holdings); gilts are skipped (broker price stays source of truth).
- * Idempotent: the first run backfills ~10 years per ticker, later runs fetch only the gap to today.
+ * Idempotent: the first run backfills ~10 years per ticker, later runs re-fetch from the latest
+ * stored day through today and upsert. Re-fetching the latest day matters because Yahoo's daily
+ * bar for an in-progress session reports the current trading price as {@code close} — if the job
+ * ran mid-session (e.g. a startup tick), the day's stored close is wrong until it's overwritten.
+ * The 22:00 London cron run completes after US close, so today's close ends up correct by EoD.
  */
 public class PriceFetchJob {
 
@@ -43,14 +47,16 @@ public class PriceFetchJob {
 
         for (String ticker : tickerSet) {
             LocalDate latest = priceRepo.getLatestPriceDate(ticker);
-            LocalDate from = (latest == null) ? today.minusYears(LOOKBACK_YEARS) : latest.plusDays(1);
+            // First run backfills; subsequent runs include the latest stored day so its close
+            // gets refreshed if it was captured mid-session.
+            LocalDate from = (latest == null) ? today.minusYears(LOOKBACK_YEARS) : latest;
             if (from.isAfter(today)) {
                 log.info("Skipped {} — already up to date", ticker);
                 continue;
             }
             List<PriceBar> bars = fetcher.fetch(ticker, from, today);
-            int saved = priceRepo.savePriceBars(bars);
-            log.info("Fetched {} rows for {} ({} new)", bars.size(), ticker, saved);
+            int touched = priceRepo.upsertPriceBars(bars);
+            log.info("Fetched {} rows for {} ({} written)", bars.size(), ticker, touched);
             PriceFetchSupport.sleep(THROTTLE_MS);
         }
     }

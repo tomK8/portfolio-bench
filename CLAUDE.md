@@ -36,31 +36,54 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 
 - `domain` — pure logic. `PortfolioAggregator` (two-pass: `groupAccumulators` →
   `buildAggHolding`), `PortfolioMetrics` (totals + `rtTotalGbp` for intraday valuation),
-  `DividendAttributor` (FIFO), `Instruments.isBond` (single home of the bond/gilt predicate).
-  `domain.model`: `Holding` (Builder; many nullable fields), `AggHolding`, `CashTransaction`,
-  `Account` + `TransactionType` enums, `PriceBar`, `IntradayBar`, `IntradayPrice`.
+  `DividendAttributor` (FIFO), `CashLedgerReconstructor` (FIFO position-from-ledger
+  reconstruction for the cash-ledger view), `Instruments.isBond` (single home of the
+  bond/gilt predicate). `domain.model`: `Holding` (Builder; many nullable fields),
+  `AggHolding`, `CashTransaction`, `Account` + `TransactionType` enums, `PriceBar`,
+  `IntradayBar`, `IntradayPrice`.
 - `port` — `FxRateProvider`, `HistoricalFxRateProvider` (interfaces, faked in tests).
 - `adapter` — `FrankfurterFxClient` (Jackson + shared HttpClient with timeouts),
   `HoldingFileLocator`, `YahooPriceFetcher`, `YahooTickerMap`.
 - `parser` — `AccountParser` / `CashTransactionParser` interfaces + impls.
 - `persistence` — `JdbcConnectionFactory` + 4 repositories + `KeyValueStore`. See below.
-- `application` — `PortfolioGatherer`, `SyncPortfolioService`, `ExportExcelService`,
-  `DividendService`, `ImportCashService` (composes `List<CashImporter>`), `PriceFetchJob` +
-  `IntradayPriceFetchJob` (share `PriceFetchSupport`).
+- `application` — `PortfolioGatherer`, `SyncPortfolioService`, `SyncFromCashService`
+  (cash-ledger-derived view), `ExportExcelService`, `DividendService`,
+  `ContributionService` (timeline for the Contributions chart), `PortfolioValueService`
+  (timeline for the Value-over-time chart), `ImportCashService` (composes
+  `List<CashImporter>`), `PriceFetchJob` + `IntradayPriceFetchJob` (share
+  `PriceFetchSupport`).
 - `web` — `DashboardController` (thin; `@ExceptionHandler(IllegalStateException)` renders
   `fragments/error` instead of HTTP 500), `PriceFetchScheduler`.
 - `config` — `BeanConfiguration`.
 - Root — `ExcelReportWriter`, `PortfolioBenchApplication`.
 
-UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js. Actions are synchronous; result fragment
-swaps into `#result`. Logging is SLF4J + Logback (`logback-spring.xml`); no `System.out` in production code.
+UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-fns`
+(CDN). Dashboard has four tabs:
+- **From holdings files** — `POST /sync` → `fragments/portfolio`. Includes a cash
+  reconciliation panel comparing the holdings-side cash (parsed CASH rows + form-supplied
+  II SIPP £/$) against the ledger-side latest stored cash balance, with red rows for
+  |diff| > £50 (threshold in `SyncPortfolioService.CASH_DRIFT_WARN_GBP`).
+- **From cash ledger** — `POST /sync-from-cash` → `fragments/portfolio-ledger`. Slimmer
+  table (no separate "Market Value £" / "RT Market Value £" columns — single combined
+  value column). Drops positions without an intraday price.
+- **Contributions** — `GET /contributions` → JSON, rendered by Chart.js. Cumulative
+  per-account + Total.
+- **Value over time** — `GET /portfolio-value` → JSON, Chart.js. Monthly portfolio GBP
+  value; yellow warning panel above the chart lists symbols that were ever held but
+  have zero rows in `price_history`.
+
+Charts load lazily on first tab click. Logging is SLF4J + Logback (`logback-spring.xml`);
+no `System.out` in production code.
 
 | Action                | Endpoint                   | Service                   |
 |-----------------------|----------------------------|---------------------------|
 | Sync portfolio        | `POST /sync`               | `SyncPortfolioService`    |
+| Sync from cash ledger | `POST /sync-from-cash`     | `SyncFromCashService`     |
 | Export Excel          | `POST /export`             | `ExportExcelService`      |
 | Import cash statement | `POST /import-cash`        | `ImportCashService`       |
 | Import gilt prices    | `POST /import-gilt-prices` | `ImportGiltPricesService` |
+| Contributions chart   | `GET /contributions`       | `ContributionService`     |
+| Value-over-time chart | `GET /portfolio-value`     | `PortfolioValueService`   |
 
 ## Holding fields
 
@@ -78,14 +101,24 @@ To convert native → GBP, **divide** by the rate.
 
 - `SnapshotRepository` — `portfolio_snapshots` (one row per snapshot date; re-run same day overwrites).
 - `CashTransactionRepository` — `cash_transactions`; per-broker save methods (`saveAjBell`,
-  `saveRothIra`, `saveII`) hold each broker's dedup + balance-derivation rules. Plus reads:
-  `loadDividendTransactions`, `distinctTradedSymbols`.
+  `saveRothIra`, `saveII`) hold each broker's dedup + balance-derivation rules. Reads:
+  `loadDividendTransactions` (TRANSACTION + DIVIDEND, for dividend FIFO and the cash-ledger
+  view), `loadContributions` (CONTRIBUTION-only, for the Contributions chart),
+  `loadAllTransactions` (everything in date order, for the Value-over-time forward
+  replay), `latestCashBalances` (latest stored cash per `(account, currency)`,
+  feeds the cash-ledger view's CASH rows and the holdings view's reconciliation panel),
+  `earliestTransactionDate(Account)` (anchors Roth's seed), `distinctTradedSymbols`.
 - `PriceHistoryRepository` — `price_history` (daily OHLCV).
 - `IntradayPriceRepository` — `price_intraday` (1-min closes). `loadLatestIntradayPrices` is a bulk
   query, not N round-trips.
 - `KeyValueStore` — file-backed scalar settings, one `<key>.txt` per key under `<db-dir>`:
-  - `ii_sipp_cash_last` — last II SIPP cash balance entered on the dashboard.
-  - `roth_balance_brought_forward` — RothIRA opening balance, persisted on first import for traceability.
+  - `ii_sipp_cash_last` — last II SIPP **GBP** cash balance entered on the dashboard.
+  - `ii_sipp_cash_last_usd` — last II SIPP **USD** cash balance entered on the dashboard.
+    Service converts via current FX before summing into the holdings view's totals.
+  - `roth_balance_brought_forward` — RothIRA opening balance in **USD** (≈$(figure redacted)), used to
+    seed the running balance on first import. Charts must convert to GBP via historical FX
+    (see `ContributionService.rothSeedAsGbp`, `PortfolioValueService.timeline`) — treating
+    the file as GBP underrepresents the gap by ~£50K.
 
 **Account / TransactionType persistence:** the enums map to TEXT columns via `Account.dbValue()`
 ("AJBell"/"RothIRA"/"II") and `TransactionType.name()`. The SQLite CHECK constraints use the
@@ -103,8 +136,10 @@ same literal strings — don't rename enum constants without a migration.
 
 `Instruments.isBond(securityId)` checks for `%` or `GILT` prefix. Single source of truth used to
 (1) sort bonds into their own section at the bottom of the Portfolio sheet, (2) skip Yahoo price
-fetches (no coverage there), (3) switch `PortfolioAggregator.realtime` to the per-£100-nominal
-formula (`qty × price / 100`) when scoring the cached dividenddata clean price.
+fetches (no coverage there), (3) switch the per-£100-nominal value formula (`qty × price / 100`)
+in `PortfolioAggregator.realtime`, `SyncFromCashService.realtime` (cash-ledger view), and
+`PortfolioValueService.positionGbp` (value chart) — keep these in sync if the bond price model
+changes.
 
 Bonds in AJBell exports are normalised to `"GILT {coupon}% {year}"` by `AJBellSippParser.extractBondId`.
 The same string is the symbol under which `GiltPriceFetchJob` writes to `price_intraday`, so the
@@ -172,7 +207,10 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
 - `ImportGiltPricesService` → bulk historical import for gilts from manually downloaded
   `~/Downloads/Tradeweb_FTSE_ClosePrices*.csv`. Runs on startup (daemon) and on demand via
   `POST /import-gilt-prices`. Upserts into `price_history`, archives consumed files to the
-  DB dir with a symbol-embedded name. One file = one gilt across a date range.
+  DB dir as `Tradeweb_{symbol}_{from}_to_{to}.csv` (range comes from the file's own dates,
+  not today's). **Never clobbers**: if a target name already exists, appends `_2`, `_3`, ...
+  Tradeweb files are manually sourced and irreplaceable, so `REPLACE_EXISTING` is forbidden
+  here.
 
 **Gilt price history sources:** two independent feeds writing the same table via the same
 upsert. Either can fill or overwrite the other's day. The intraday rollup gives continuous
@@ -201,10 +239,34 @@ math for bonds).
 **Currency is stored verbatim** from Yahoo. `.L` (London) tickers report `"GBp"` (pence);
 `PortfolioAggregator.realtime` divides by 100 before producing the RT market value.
 
-**II SIPP cash field:** II's CSV export omits the cash balance; the dashboard form supplies it
-and `KeyValueStore.getBigDecimal("ii_sipp_cash_last", ZERO)` remembers it. In the Excel export
-the value lands in a yellow input cell on the Portfolio sheet, and a formula chain links the
-Portfolio Raw sheet's II SIPP CASH row back to that cell.
+**II SIPP cash field (holdings view + Excel export only):** II's holdings CSV export omits the
+cash balance, so the dashboard form supplies it as **two separate inputs** — `iiSippCash`
+(GBP) and `iiSippCashUsd` (USD). `SyncPortfolioService.combineIiCashAsGbp` converts the USD
+portion at the live FX rate it already fetched and sums into the single GBP figure that
+flows into `PortfolioMetrics` and the Excel sheet. Both inputs persist in `KeyValueStore`
+(`ii_sipp_cash_last`, `ii_sipp_cash_last_usd`). The cash-ledger view, contributions chart,
+and value-over-time chart don't use these inputs — they derive II cash from the latest
+stored `cash_balance_gbp` per `(account='II', currency)` directly.
+
+## Charts (Contributions, Value-over-time)
+
+Two read-only JSON endpoints feed Chart.js panels:
+
+- **`GET /contributions`** (`ContributionService`) — cumulative GBP per account plus Total.
+  Source: `cash_transactions WHERE type = 'CONTRIBUTION'`. RothIRA has no contribution rows;
+  the brought-forward seed (USD) is converted to GBP at the FX rate on Roth's earliest
+  ledger date and emitted as a single step.
+- **`GET /portfolio-value`** (`PortfolioValueService`) — month-end portfolio GBP value.
+  Forward-replays the full ledger once, valuing surviving positions at the most recent
+  `price_history` close ≤ each sample (with **ceil-fill to the earliest known close** as
+  fallback for samples that predate all stored prices). Bonds use the per-£100 formula;
+  `GBp` (pence) divides by 100. Roth USD seed folded in on its earliest ledger date.
+  Cash FX'd via `HistoricalFxRateProvider` (Frankfurter).
+
+`ValueTimeline.missingPrices` lists symbols ever held with zero rows in `price_history`,
+including the date range they were held. The dashboard renders them as a yellow warning
+panel above the chart; each one also logs WARN. Dropping any close for the symbol clears
+the warning and fills in the dip.
 
 **Yahoo testing:** JSON parsing is unit-tested against `yahoo-nvda-sample.json`; a live-API test
 (`YahooPriceFetcherIntegrationTest`) is `@Tag("integration")` and excluded by the surefire

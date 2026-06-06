@@ -313,12 +313,15 @@
 
 <section class="tab-panel" id="panel-value">
     <p class="muted" style="margin-top: 0">
-        Total portfolio GBP value at end of each month. Forward-replays
+        Blue area: total portfolio GBP value at end of each month. Forward-replays
         <code>cash_transactions</code> and values surviving positions at the latest
         <code>price_history</code> close ≤ that date (or the earliest available close, if
         the sample predates all stored prices). FX from Frankfurter historical rates.
         Roth IRA's $(figure redacted) USD seed is folded into Roth USD cash from its first ledger
-        date.
+        date.<br/>
+        Red dashed line: cumulative external contributions (same series as the
+        Contributions tab's Total). The vertical gap between the two lines is portfolio
+        growth above what you put in.
     </p>
     <div id="value-warnings" class="value-warnings" style="display: none;"></div>
     <div style="height: 480px; margin-top: 1rem;">
@@ -410,7 +413,12 @@
         function loadValueChart() {
             if (valueLoaded) return;
             valueLoaded = true;
-            fetch('/portfolio-value').then(function (r) { return r.json(); }).then(function (timeline) {
+            Promise.all([
+                fetch('/portfolio-value').then(function (r) { return r.json(); }),
+                fetch('/contributions').then(function (r) { return r.json(); })
+            ]).then(function (results) {
+                var timeline = results[0];
+                var contribTimeline = results[1];
                 var warn = document.getElementById('value-warnings');
                 if (timeline.missingPrices && timeline.missingPrices.length) {
                     var items = timeline.missingPrices.map(function (m) {
@@ -425,21 +433,37 @@
                 } else {
                     warn.style.display = 'none';
                 }
-                var data = timeline.points.map(function (p) {
+                var valueData = timeline.points.map(function (p) {
                     return { x: p.date, y: parseFloat(p.valueGbp) };
                 });
+                var totalLine = (contribTimeline.lines || []).find(function (l) { return l.label === 'Total'; });
+                var contribData = totalLine ? totalLine.points.map(function (p) {
+                    return { x: p.date, y: parseFloat(p.cumulativeGbp) };
+                }) : [];
                 var ctx = document.getElementById('value-chart').getContext('2d');
                 valueChart = new Chart(ctx, {
                     type: 'line',
                     data: {
                         datasets: [{
-                            label: 'Total portfolio value (£)',
-                            data: data,
+                            label: 'Portfolio value (£)',
+                            data: valueData,
                             borderColor: '#1f77b4',
-                            backgroundColor: 'rgba(31, 119, 180, 0.1)',
+                            backgroundColor: 'rgba(31, 119, 180, 0.12)',
                             fill: true,
                             pointRadius: 2,
-                            tension: 0.1
+                            tension: 0.1,
+                            order: 2
+                        }, {
+                            label: 'Cumulative contributions (£)',
+                            data: contribData,
+                            borderColor: '#d62728',
+                            backgroundColor: '#d62728',
+                            borderDash: [6, 4],
+                            fill: false,
+                            pointRadius: 0,
+                            stepped: 'before',
+                            tension: 0,
+                            order: 1
                         }]
                     },
                     options: {

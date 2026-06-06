@@ -120,6 +120,12 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public ContributionService contributionService(CashTransactionRepository cashTransactionRepository,
+                                                   KeyValueStore keyValueStore) {
+        return new ContributionService(cashTransactionRepository, keyValueStore);
+    }
+
+    @Bean
     public SyncFromCashService syncFromCashService(CashTransactionRepository cashTransactionRepository,
                                                    IntradayPriceRepository intradayPriceRepository,
                                                    FxRateProvider fxRateProvider,

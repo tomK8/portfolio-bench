@@ -1,5 +1,7 @@
 package com.portfolio.web;
 
+import com.portfolio.application.ContributionService;
+import com.portfolio.application.ContributionService.ContributionTimeline;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
 
 import java.math.BigDecimal;
 import java.time.LocalTime;
@@ -37,6 +40,7 @@ public class DashboardController {
     private final ExportExcelService exportService;
     private final ImportCashService importCashService;
     private final ImportGiltPricesService importGiltPricesService;
+    private final ContributionService contributionService;
     private final KeyValueStore settings;
 
     public DashboardController(SyncPortfolioService syncService,
@@ -44,12 +48,14 @@ public class DashboardController {
                                ExportExcelService exportService,
                                ImportCashService importCashService,
                                ImportGiltPricesService importGiltPricesService,
+                               ContributionService contributionService,
                                KeyValueStore settings) {
         this.syncService = syncService;
         this.syncFromCashService = syncFromCashService;
         this.exportService = exportService;
         this.importCashService = importCashService;
         this.importGiltPricesService = importGiltPricesService;
+        this.contributionService = contributionService;
         this.settings = settings;
     }
 
@@ -123,6 +129,12 @@ public class DashboardController {
         model.addAttribute("cashImports", importCashService.importCash());
         model.addAttribute("completedAt", now());
         return "fragments/import :: result";
+    }
+
+    @GetMapping("/contributions")
+    @ResponseBody
+    public ContributionTimeline contributions() {
+        return contributionService.timeline();
     }
 
     @PostMapping("/import-gilt-prices")

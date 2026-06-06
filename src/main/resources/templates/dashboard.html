@@ -4,6 +4,8 @@
     <meta charset="UTF-8"/>
     <title th:text="${appName}">Portfolio Bench</title>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
         body {
             font-family: system-ui, sans-serif;
@@ -242,6 +244,7 @@
 <div class="tabs" id="portfolio-tabs">
     <button class="tab active" data-panel="panel-holdings" type="button">From holdings files</button>
     <button class="tab" data-panel="panel-cash" type="button">From cash ledger</button>
+    <button class="tab" data-panel="panel-contributions" type="button">Contributions</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -263,6 +266,19 @@
         <h2>Aggregated portfolio (from broker holdings files)</h2>
         <div id="portfolio-result"></div>
     </section>
+</section>
+
+<section class="tab-panel" id="panel-contributions">
+    <p class="muted" style="margin-top: 0">
+        Cumulative cash contributions per account, replayed from <code>cash_transactions</code>
+        WHERE type = 'CONTRIBUTION'. Roth IRA is a flat line at the
+        <code>roth_balance_brought_forward</code> seed since the broker history doesn't go back
+        that far. II SIPP's "Trf from AJ Bell" rows appear as contributions here — the
+        outbound side isn't on the AJBell cash statement, so the app can't net them out.
+    </p>
+    <div style="height: 480px; margin-top: 1rem;">
+        <canvas id="contributions-chart"></canvas>
+    </div>
 </section>
 
 <section class="tab-panel" id="panel-cash">
@@ -335,8 +351,66 @@
                 document.querySelectorAll('.tab-panel').forEach(function (p) {
                     p.classList.toggle('active', p.id === btn.dataset.panel);
                 });
+                if (btn.dataset.panel === 'panel-contributions') loadContributionsChart();
             });
         });
+
+        var contributionsChart = null;
+        var contributionsLoaded = false;
+
+        function loadContributionsChart() {
+            if (contributionsLoaded) return;
+            contributionsLoaded = true;
+            fetch('/contributions').then(function (r) { return r.json(); }).then(function (timeline) {
+                var palette = ['#1f77b4', '#2ca02c', '#ff7f0e', '#d62728'];
+                var datasets = timeline.lines.map(function (line, i) {
+                    return {
+                        label: line.label,
+                        data: line.points.map(function (p) {
+                            return { x: p.date, y: parseFloat(p.cumulativeGbp) };
+                        }),
+                        borderColor: palette[i % palette.length],
+                        backgroundColor: palette[i % palette.length],
+                        stepped: line.label === 'Roth IRA' ? false : 'before',
+                        borderDash: line.label === 'Total' ? [4, 4] : [],
+                        pointRadius: 2,
+                        tension: 0
+                    };
+                });
+                var ctx = document.getElementById('contributions-chart').getContext('2d');
+                contributionsChart = new Chart(ctx, {
+                    type: 'line',
+                    data: { datasets: datasets },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' }, title: { display: false } },
+                            y: {
+                                title: { display: true, text: 'Cumulative contributions (£)' },
+                                ticks: {
+                                    callback: function (v) {
+                                        return '£' + v.toLocaleString('en-GB', { maximumFractionDigits: 0 });
+                                    }
+                                }
+                            }
+                        },
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        return ctx.dataset.label + ': £' +
+                                            ctx.parsed.y.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                    }
+                                }
+                            },
+                            legend: { position: 'bottom' }
+                        }
+                    }
+                });
+            });
+        }
     }());
 </script>
 </body>

@@ -267,6 +267,55 @@ public class CashTransactionRepository {
     }
 
     /**
+     * Every {@code CONTRIBUTION} row, oldest first — used to chart cash inflows over time.
+     * Other types (TRANSACTION, DIVIDEND, INTEREST, CHARGE) are not external contributions.
+     */
+    public List<CashTransaction> loadContributions() {
+        List<CashTransaction> rows = new ArrayList<>();
+        if (!connections.dbExists()) return rows;
+        try (Connection conn = connections.open();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT transaction_date, account, type, symbol, quantity, amount, currency, " +
+                             "fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description " +
+                             "FROM cash_transactions WHERE type = 'CONTRIBUTION' " +
+                             "ORDER BY transaction_date, rowid")) {
+            while (rs.next()) {
+                rows.add(new CashTransaction(
+                        rs.getString(1), Account.fromDbValue(rs.getString(2)),
+                        TransactionType.valueOf(rs.getString(3)), rs.getString(4),
+                        rs.getDouble(5), rs.getDouble(6), rs.getString(7), rs.getDouble(8),
+                        rs.getDouble(9), getNullableDouble(rs, 10), getNullableDouble(rs, 11),
+                        rs.getString(12)));
+            }
+        } catch (Exception e) {
+            log.warn("Could not load contribution transactions", e);
+        }
+        return rows;
+    }
+
+    /**
+     * Earliest stored transaction date for the given account, or null when the account is
+     * empty. Used to anchor the Roth IRA's brought-forward seed on the contributions chart:
+     * Roth has no CONTRIBUTION rows, but the seed entered the portfolio when the broker
+     * started feeding us cash history.
+     */
+    public String earliestTransactionDate(Account account) {
+        if (!connections.dbExists()) return null;
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT MIN(transaction_date) FROM cash_transactions WHERE account = ?")) {
+            ps.setString(1, account.dbValue());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        } catch (Exception e) {
+            log.warn("Could not query earliest transaction date for {}", account, e);
+            return null;
+        }
+    }
+
+    /**
      * Latest stored cash balance per {@code (account, currency)} — the live cash position
      * derived from the running-balance column on the most recent row of each per-currency
      * ledger. AJBell has one entry (GBP); RothIRA has one (USD); II has two (GBP, USD).

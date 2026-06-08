@@ -114,6 +114,25 @@ class IICashStatementParserTest {
     }
 
     @Test
+    void parsesUnsettledTradeWithoutDelBalMarker() throws Exception {
+        // Same-day export: trade booked today, settles tomorrow, so II omits the Del/Bal marker
+        // from the description. Must still classify as a trade, not fall through to CONTRIBUTION.
+        String csv = "Date,Settlement Date,Symbol,Sedol,Quantity,Price,Description,Reference,Debit,Credit,Running Balance\n"
+                + "15/12/2025,16/12/2025,GOOG,BYY88Y7,5,$200.00,5 ALPHABET       200.00 S Date 16/12/25,REF1,\"$1,000.00\",n/a,$1.50\n"
+                + "11/12/2025,12/12/2025,AAPL,XYZ123,5,$200.00,5 APPLE  Bal  200.00 S Date 12/12/25,REFY1,n/a,$999.00,\"$1,001.50\"\n";
+        Path file = tempDir.resolve("00000000-0000-0000-0000-000000000098.csv");
+        Files.writeString(file, csv);
+
+        List<CashTransaction> rows = new IICashStatementParser(FX).parse(file);
+
+        CashTransaction txn = findRow(rows, "2025-12-15", "TRANSACTION", "GOOG");
+        CashTransaction charge = findRow(rows, "2025-12-15", "CHARGE", "GOOG");
+        assertEquals(5, txn.quantity(), 1e-9);
+        assertEquals(-1000.0, txn.amount(), 1e-9, "gross = price × qty in file currency");
+        assertEquals(0.0, charge.amount(), 1e-9, "no markup — debit equals gross");
+    }
+
+    @Test
     void abortsOnRunningBalanceMismatch() throws Exception {
         // Same as GBP fixture, but with the final balance tampered with by +£100.
         String tampered = Files.readString(fixture(GBP_FIXTURE))

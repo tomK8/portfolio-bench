@@ -63,9 +63,10 @@ public class IICashStatementParser implements CashTransactionParser {
     private static final String COL_CREDIT = "Credit";
     private static final String COL_BALANCE = "Running Balance";
 
-    /** "10 ALPHABET  Del  359.00 S Date 03/06/26" — qty, name, Del|Bal, price, S Date. */
+    /** "10 ALPHABET  Del  359.00 S Date 03/06/26" — qty, name, optional Del|Bal, price, S Date.
+     *  Del/Bal is omitted on same-day exports of unsettled trades (trade date today, settle tomorrow). */
     private static final Pattern PAT_TRADE = Pattern.compile(
-            "^\\s*([\\d.]+)\\s+(.+?)\\s+(Del|Bal)\\s+[\\d.]+\\s+S\\s+Date\\s+\\d{1,2}/\\d{1,2}/\\d{2,4}\\s*$");
+            "^\\s*([\\d.]+)\\s+(.+?)\\s+(?:(?:Del|Bal)\\s+)?[\\d.]+\\s+S\\s+Date\\s+\\d{1,2}/\\d{1,2}/\\d{2,4}\\s*$");
 
     /** "100 POUNDS STERLING NoTf 1.32 S Date 02/04/26" — currency-exchange row. */
     private static final Pattern PAT_FX_EXCHANGE = Pattern.compile(

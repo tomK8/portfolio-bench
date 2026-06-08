@@ -360,6 +360,46 @@
             color: #fff;
             border: 1px solid #1d6ba2;
         }
+
+        .returns-stats {
+            display: flex;
+            gap: 1.5rem;
+            margin: 0.5rem 0 1rem 0;
+            flex-wrap: wrap;
+        }
+
+        .returns-stat {
+            border: 1px solid #e5e5e5;
+            border-radius: 6px;
+            padding: 0.55rem 0.9rem;
+            background: #fafafa;
+            min-width: 110px;
+        }
+
+        .returns-stat .label {
+            display: block;
+            font-size: 0.72rem;
+            color: #777;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.15rem;
+        }
+
+        .returns-stat .value {
+            font-size: 1.15rem;
+            font-weight: 600;
+        }
+
+        .returns-stat .value.pos { color: #2ca02c; }
+        .returns-stat .value.neg { color: #c0392b; }
+        .returns-stat .value.na { color: #999; font-weight: 400; }
+
+        .returns-stat .sub {
+            display: block;
+            font-size: 0.7rem;
+            color: #999;
+            margin-top: 0.1rem;
+        }
     </style>
 </head>
 <body>
@@ -402,6 +442,7 @@
     <button class="tab" data-panel="panel-cash" type="button">From cash ledger</button>
     <button class="tab" data-panel="panel-contributions" type="button">Contributions</button>
     <button class="tab" data-panel="panel-value" type="button">Value over time</button>
+    <button class="tab" data-panel="panel-returns" type="button">Returns</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
 
@@ -454,6 +495,28 @@
     <div id="value-warnings" class="value-warnings" style="display: none;"></div>
     <div style="height: 480px; margin-top: 1rem;">
         <canvas id="value-chart"></canvas>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-returns">
+    <p class="muted" style="margin-top: 0">
+        Time-weighted return (TWR) — the daily price-only return of the asset mix,
+        chain-linked, with external contributions stripped out. Comparable to a fund
+        factsheet number. Trailing 1y is the simple period return; 3y / 5y / since
+        inception are annualised. Top chart: growth of £1 invested at portfolio inception.
+        Bottom chart: cumulative external contributions on the same time axis, for context.
+    </p>
+    <div class="returns-stats" id="returns-stats">
+        <div class="returns-stat"><span class="label">1y</span><span class="value na" id="returns-1y">—</span></div>
+        <div class="returns-stat"><span class="label">3y (annualised)</span><span class="value na" id="returns-3y">—</span></div>
+        <div class="returns-stat"><span class="label">5y (annualised)</span><span class="value na" id="returns-5y">—</span></div>
+        <div class="returns-stat"><span class="label">Since inception</span><span class="value na" id="returns-since">—</span><span class="sub" id="returns-since-sub"></span></div>
+    </div>
+    <div style="height: 340px; margin-top: 0.5rem;">
+        <canvas id="returns-chart"></canvas>
+    </div>
+    <div style="height: 140px; margin-top: 0.25rem;">
+        <canvas id="returns-contrib-chart"></canvas>
     </div>
 </section>
 
@@ -575,6 +638,7 @@
                 });
                 if (btn.dataset.panel === 'panel-contributions') loadContributionsChart();
                 if (btn.dataset.panel === 'panel-value') loadValueChart();
+                if (btn.dataset.panel === 'panel-returns') loadReturnsChart();
                 if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
             });
         });
@@ -917,6 +981,136 @@
                     }
                 });
             });
+        }
+
+        var returnsLoaded = false;
+        var returnsGrowthChart = null;
+        var returnsContribChart = null;
+
+        function loadReturnsChart() {
+            if (returnsLoaded) return;
+            returnsLoaded = true;
+            fetch('/returns').then(function (r) { return r.json(); }).then(function (data) {
+                renderReturnsStats(data.summary);
+                var growthData = data.growthPoints.map(function (p) {
+                    return { x: p.date, y: parseFloat(p.growth) };
+                });
+                var contribData = data.contributionPoints.map(function (p) {
+                    return { x: p.date, y: parseFloat(p.cumulativeGbp) };
+                });
+                // Lock both x-axes to the same range so they line up visually even when the
+                // top chart's first point is later (post-warmup) than the bottom chart's.
+                var minDate = growthData.length ? growthData[0].x : null;
+                var maxDate = growthData.length ? growthData[growthData.length - 1].x : null;
+
+                var growthCtx = document.getElementById('returns-chart').getContext('2d');
+                returnsGrowthChart = new Chart(growthCtx, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Growth of £1 (TWR)',
+                            data: growthData,
+                            borderColor: '#1f77b4',
+                            backgroundColor: 'rgba(31, 119, 180, 0.12)',
+                            fill: true,
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' }, min: minDate, max: maxDate,
+                                 ticks: { display: false } },
+                            y: {
+                                title: { display: true, text: 'Growth of £1' },
+                                ticks: {
+                                    callback: function (v) { return '×' + v.toFixed(2); }
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        var g = ctx.parsed.y;
+                                        var ret = (g - 1) * 100;
+                                        return '×' + g.toFixed(4) + '  (' +
+                                            (ret >= 0 ? '+' : '') + ret.toFixed(2) + '%)';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                var contribCtx = document.getElementById('returns-contrib-chart').getContext('2d');
+                returnsContribChart = new Chart(contribCtx, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Cumulative contributions (£)',
+                            data: contribData,
+                            borderColor: '#d62728',
+                            backgroundColor: 'rgba(214, 39, 40, 0.10)',
+                            fill: true,
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            stepped: 'before'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' }, min: minDate, max: maxDate },
+                            y: {
+                                title: { display: true, text: 'Contributions (£)' },
+                                ticks: {
+                                    callback: function (v) {
+                                        return '£' + v.toLocaleString('en-GB', { maximumFractionDigits: 0 });
+                                    }
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        return '£' + ctx.parsed.y.toLocaleString('en-GB',
+                                            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+        }
+
+        function renderReturnsStats(summary) {
+            setStat('returns-1y', summary && summary.trailing1y);
+            setStat('returns-3y', summary && summary.trailing3y);
+            setStat('returns-5y', summary && summary.trailing5y);
+            setStat('returns-since', summary && summary.sinceInception);
+        }
+
+        function setStat(elId, fractional) {
+            var el = document.getElementById(elId);
+            if (fractional === null || fractional === undefined) {
+                el.textContent = '—';
+                el.className = 'value na';
+                return;
+            }
+            var pct = parseFloat(fractional) * 100;
+            el.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+            el.className = 'value ' + (pct >= 0 ? 'pos' : 'neg');
         }
 
         function loadContributionsChart() {

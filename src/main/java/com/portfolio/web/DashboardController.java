@@ -5,6 +5,8 @@ import com.portfolio.application.ContributionService.ContributionTimeline;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
+import com.portfolio.application.PortfolioReturnService;
+import com.portfolio.application.PortfolioReturnService.ReturnTimeline;
 import com.portfolio.application.PortfolioValueService;
 import com.portfolio.application.PortfolioValueService.ValueTimeline;
 import com.portfolio.application.PriceFetchJob;
@@ -49,6 +51,7 @@ public class DashboardController {
     private final ImportGiltPricesService importGiltPricesService;
     private final ContributionService contributionService;
     private final PortfolioValueService portfolioValueService;
+    private final PortfolioReturnService portfolioReturnService;
     private final WhatIfService whatIfService;
     private final PriceFetchJob priceFetchJob;
     private final KeyValueStore settings;
@@ -60,6 +63,7 @@ public class DashboardController {
                                ImportGiltPricesService importGiltPricesService,
                                ContributionService contributionService,
                                PortfolioValueService portfolioValueService,
+                               PortfolioReturnService portfolioReturnService,
                                WhatIfService whatIfService,
                                PriceFetchJob priceFetchJob,
                                KeyValueStore settings) {
@@ -70,6 +74,7 @@ public class DashboardController {
         this.importGiltPricesService = importGiltPricesService;
         this.contributionService = contributionService;
         this.portfolioValueService = portfolioValueService;
+        this.portfolioReturnService = portfolioReturnService;
         this.whatIfService = whatIfService;
         this.priceFetchJob = priceFetchJob;
         this.settings = settings;
@@ -157,6 +162,12 @@ public class DashboardController {
     @ResponseBody
     public ValueTimeline portfolioValue() {
         return portfolioValueService.timeline();
+    }
+
+    @GetMapping("/returns")
+    @ResponseBody
+    public ReturnTimeline returns() {
+        return portfolioReturnService.timeline();
     }
 
     /**

@@ -130,6 +130,15 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public PortfolioReturnService portfolioReturnService(PortfolioValueService portfolioValueService,
+                                                         CashTransactionRepository cashTransactionRepository,
+                                                         KeyValueStore keyValueStore,
+                                                         HistoricalFxRateProvider historicalFxRateProvider) {
+        return new PortfolioReturnService(portfolioValueService, cashTransactionRepository,
+                keyValueStore, historicalFxRateProvider);
+    }
+
+    @Bean
     public WhatIfService whatIfService(CashTransactionRepository cashTransactionRepository,
                                        PriceHistoryRepository priceHistoryRepository,
                                        HistoricalFxRateProvider historicalFxRateProvider,

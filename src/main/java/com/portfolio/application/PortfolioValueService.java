@@ -132,6 +132,51 @@ public class PortfolioValueService {
         return new ValueTimeline(points, missing);
     }
 
+    /**
+     * Daily GBP portfolio value from the first ledger date through today. Same replay engine
+     * as {@link #timeline()} but stepped one calendar day at a time — used by
+     * {@link PortfolioReturnService} to chain-link daily time-weighted returns. Weekends and
+     * holidays inherit the previous trading day's price via the floor-fill lookup in
+     * {@link #positionGbp}, so the series is dense and gap-free.
+     */
+    public List<DailyValue> dailyValues() {
+        List<CashTransaction> txs = cashRepo.loadAllTransactions();
+        if (txs.isEmpty()) return List.of();
+
+        LocalDate start = LocalDate.parse(txs.get(0).transactionDate());
+        LocalDate end = LocalDate.now();
+
+        Map<String, NavigableMap<LocalDate, PricePoint>> prices = loadPriceSeries(txs);
+        Map<String, NavigableMap<LocalDate, BigDecimal>> fx = preloadFx(start, end);
+
+        BigDecimal rothSeedUsd = settings.getBigDecimal(
+                CashTransactionRepository.ROTH_BROUGHT_FORWARD_KEY, BigDecimal.ZERO);
+        String rothStartStr = cashRepo.earliestTransactionDate(Account.ROTH_IRA);
+        LocalDate rothStart = rothStartStr == null ? null : LocalDate.parse(rothStartStr);
+        boolean rothSeeded = false;
+
+        Map<String, BigDecimal> qtyBySymbol = new HashMap<>();
+        Map<String, BigDecimal> cashByAccountCcy = new HashMap<>();
+
+        List<DailyValue> points = new ArrayList<>();
+        int idx = 0;
+        LocalDate sample = start;
+        while (!sample.isAfter(end)) {
+            while (idx < txs.size() && !LocalDate.parse(txs.get(idx).transactionDate()).isAfter(sample)) {
+                apply(qtyBySymbol, cashByAccountCcy, txs.get(idx));
+                idx++;
+            }
+            if (!rothSeeded && rothStart != null && !sample.isBefore(rothStart)) {
+                cashByAccountCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
+                rothSeeded = true;
+            }
+            BigDecimal v = valueAt(sample, qtyBySymbol, cashByAccountCcy, prices, fx);
+            points.add(new DailyValue(sample, v));
+            sample = sample.plusDays(1);
+        }
+        return points;
+    }
+
     /** Track the first and last sample dates at which {@code qty > 0} for each symbol. */
     private static void recordHeld(Map<String, BigDecimal> qtyBySymbol,
                                    Map<String, HeldRange> heldRange, LocalDate sample) {
@@ -273,6 +318,10 @@ public class PortfolioValueService {
     }
 
     public record DataPoint(String date, BigDecimal valueGbp) {
+    }
+
+    /** Daily sample of portfolio GBP value — keyed by date rather than ISO string for downstream math. */
+    public record DailyValue(LocalDate date, BigDecimal valueGbp) {
     }
 
     /**

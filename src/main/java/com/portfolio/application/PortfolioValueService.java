@@ -30,9 +30,10 @@ import java.util.TreeMap;
  * Builds the historical GBP value timeline of the portfolio for the chart.
  *
  * <p>Forward-replays the entire cash ledger once, maintaining running per-symbol quantity and
- * per-{@code (account, currency)} native cash. At each month-end the running state is valued:
+ * per-{@code (account, currency)} native cash. At each calendar day the running state is valued:
  * positions at the most recent close ≤ that date (forward-fill, like a finance "as-of" lookup);
- * cash at the historical USD/EUR FX. Roth IRA's $(figure redacted) USD seed is folded into Roth's USD
+ * cash at the historical USD/EUR FX. Weekends and holidays inherit the prior trading day's
+ * close via the floor-fill lookup. Roth IRA's $(figure redacted) USD seed is folded into Roth's USD
  * cash on its earliest ledger date — without it the chart would understate Roth by the seed.
  *
  * <p>Known approximations (good enough for a high-level view, not for accounting):
@@ -93,7 +94,7 @@ public class PortfolioValueService {
 
         List<DataPoint> points = new ArrayList<>();
         int idx = 0;
-        LocalDate sample = endOfMonth(start);
+        LocalDate sample = start;
         while (!sample.isAfter(end)) {
             while (idx < txs.size() && !LocalDate.parse(txs.get(idx).transactionDate()).isAfter(sample)) {
                 apply(qtyBySymbol, cashByAccountCcy, txs.get(idx));
@@ -106,17 +107,7 @@ public class PortfolioValueService {
             recordHeld(qtyBySymbol, heldRange, sample);
             BigDecimal v = valueAt(sample, qtyBySymbol, cashByAccountCcy, prices, fx);
             points.add(new DataPoint(sample.toString(), v.setScale(2, RoundingMode.HALF_UP)));
-            sample = endOfMonth(sample.plusMonths(1));
-        }
-        // Tack on a final "today" point so the chart ends current, not at last month-end.
-        if (!points.isEmpty() && !points.get(points.size() - 1).date().equals(end.toString())) {
-            while (idx < txs.size() && !LocalDate.parse(txs.get(idx).transactionDate()).isAfter(end)) {
-                apply(qtyBySymbol, cashByAccountCcy, txs.get(idx));
-                idx++;
-            }
-            recordHeld(qtyBySymbol, heldRange, end);
-            BigDecimal v = valueAt(end, qtyBySymbol, cashByAccountCcy, prices, fx);
-            points.add(new DataPoint(end.toString(), v.setScale(2, RoundingMode.HALF_UP)));
+            sample = sample.plusDays(1);
         }
 
         List<MissingPrice> missing = new ArrayList<>();
@@ -303,10 +294,6 @@ public class PortfolioValueService {
             }
         }
         return out;
-    }
-
-    private static LocalDate endOfMonth(LocalDate d) {
-        return d.withDayOfMonth(d.lengthOfMonth());
     }
 
     // ---- DTOs ------------------------------------------------------------

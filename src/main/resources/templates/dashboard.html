@@ -482,7 +482,7 @@
 
 <section class="tab-panel" id="panel-value">
     <p class="muted" style="margin-top: 0">
-        Blue area: total portfolio GBP value at end of each month. Forward-replays
+        Blue area: total portfolio GBP value, sampled daily. Forward-replays
         <code>cash_transactions</code> and values surviving positions at the latest
         <code>price_history</code> close ≤ that date (or the earliest available close, if
         the sample predates all stored prices). FX from Frankfurter historical rates.
@@ -936,7 +936,8 @@
                             borderColor: '#1f77b4',
                             backgroundColor: 'rgba(31, 119, 180, 0.12)',
                             fill: true,
-                            pointRadius: 2,
+                            pointRadius: 0,
+                            borderWidth: 1.5,
                             tension: 0.1,
                             order: 2
                         }, {

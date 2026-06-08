@@ -33,8 +33,9 @@ import java.util.TreeMap;
  * per-{@code (account, currency)} native cash. At each calendar day the running state is valued:
  * positions at the most recent close ≤ that date (forward-fill, like a finance "as-of" lookup);
  * cash at the historical USD/EUR FX. Weekends and holidays inherit the prior trading day's
- * close via the floor-fill lookup. Roth IRA's $(figure redacted) USD seed is folded into Roth's USD
- * cash on its earliest ledger date — without it the chart would understate Roth by the seed.
+ * close via the floor-fill lookup. The Roth IRA brought-forward USD seed (from the
+ * {@code roth_balance_brought_forward} KV file) is folded into Roth's USD cash on its
+ * earliest ledger date — without it the chart would understate Roth by the seed.
  *
  * <p>Known approximations (good enough for a high-level view, not for accounting):
  * <ul>

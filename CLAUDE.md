@@ -115,10 +115,10 @@ To convert native → GBP, **divide** by the rate.
   - `ii_sipp_cash_last` — last II SIPP **GBP** cash balance entered on the dashboard.
   - `ii_sipp_cash_last_usd` — last II SIPP **USD** cash balance entered on the dashboard.
     Service converts via current FX before summing into the holdings view's totals.
-  - `roth_balance_brought_forward` — RothIRA opening balance in **USD** (≈$(figure redacted)), used to
-    seed the running balance on first import. Charts must convert to GBP via historical FX
+  - `roth_balance_brought_forward` — RothIRA opening balance in **USD**, used to seed the
+    running balance on first import. Charts must convert to GBP via historical FX
     (see `ContributionService.rothSeedAsGbp`, `PortfolioValueService.timeline`) — treating
-    the file as GBP underrepresents the gap by ~£50K.
+    the file as GBP would understate the gap substantially.
 
 **Account / TransactionType persistence:** the enums map to TEXT columns via `Account.dbValue()`
 ("AJBell"/"RothIRA"/"II") and `TransactionType.name()`. The SQLite CHECK constraints use the
@@ -185,7 +185,7 @@ holdings; distinguished from II cash by header sniff), `cashstatements*.csv` (AJ
   from prior (date, balance)-keyed imports are collapsed on next load — highest-rowid wins.
 - RothIRA: `(date, symbol, quantity, type, amount)` — native USD amount, FX-stable across
   imports. Balance continues from latest stored `cash_balance`, or the
-  `roth_balance_brought_forward` KV seed (~£(figure redacted)) on first import.
+  `roth_balance_brought_forward` KV seed (USD) on first import.
 - II: `(date, type, symbol, amount, currency)` within `account='II'`. The currency component
   isolates the GBP and USD ledgers within the shared account so dividend FIFO still groups by
   `(account, symbol)` across currencies.

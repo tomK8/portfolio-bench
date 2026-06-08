@@ -15,8 +15,14 @@ public class RothIraCashImporter extends AbstractCashImporter {
     private static final String GLOB = "History*.xlsx";
     private static final String ARCHIVE_PREFIX = "History";
 
-    /** Opening balance before the earliest transaction; only used to seed an empty account. */
-    private static final BigDecimal BROUGHT_FORWARD = new BigDecimal("0");
+    /**
+     * Opening USD balance before the earliest transaction; only used to seed an empty
+     * account. The real seed is read from the {@code roth_balance_brought_forward.txt}
+     * KV file under the DB dir — see {@link CashTransactionRepository#saveRothIra}. After
+     * the first successful import the KV file holds the user's actual seed; this constant
+     * is left at zero so the source tree carries no personal balance figures.
+     */
+    private static final BigDecimal BROUGHT_FORWARD = BigDecimal.ZERO;
 
     private final RothIraCashStatementParser parser;
 

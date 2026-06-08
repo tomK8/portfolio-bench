@@ -106,7 +106,7 @@ public class SyncFromCashService {
             aggregated.add(toAggHolding(p, ip, attributed, rates));
         }
         for (CashBalance cb : cashBalances) {
-            aggregated.add(cashRow(cb));
+            aggregated.add(cashRow(cb, rates));
         }
         aggregated.sort(Comparator.comparingInt(SyncFromCashService::section)
                 .thenComparing(h -> h.securityId().equals("CASH") ? "~" : h.securityId()));
@@ -156,11 +156,26 @@ public class SyncFromCashService {
                 ccy, srcStr.toString(), latestPrice, rtNative, rtGbp);
     }
 
-    private AggHolding cashRow(CashBalance cb) {
+    /**
+     * Re-convert the ledger's native balance via the live FX rate rather than the stored
+     * {@code cash_balance_gbp} (which was frozen at the rate on the most recent ledger row).
+     * Keeps this view's totals consistent with the holdings view, which also values Roth USD
+     * cash at today's rate — otherwise a stale FX would surface as a drift on the totals row
+     * even though the cash recon panel reads zero.
+     */
+    private AggHolding cashRow(CashBalance cb, Map<String, BigDecimal> rates) {
         Currency ccy = Currency.getInstance(cb.currency());
         BigDecimal nativeAmount = cb.cashNative() != null
                 ? BigDecimal.valueOf(cb.cashNative()) : BigDecimal.valueOf(cb.cashGbp());
-        BigDecimal gbp = BigDecimal.valueOf(cb.cashGbp());
+        BigDecimal gbp;
+        if ("GBP".equals(cb.currency()) || cb.cashNative() == null) {
+            gbp = BigDecimal.valueOf(cb.cashGbp());
+        } else {
+            BigDecimal rate = rates.get(cb.currency());
+            gbp = (rate != null && rate.signum() != 0)
+                    ? nativeAmount.divide(rate, 10, RoundingMode.HALF_UP)
+                    : BigDecimal.valueOf(cb.cashGbp());
+        }
         String src = ACCOUNT_LABELS.getOrDefault(cb.accountDbValue(), cb.accountDbValue());
         return new AggHolding("CASH", nativeAmount, BigDecimal.ONE, gbp,
                 null, null, BigDecimal.ZERO, null, null,

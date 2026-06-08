@@ -139,6 +139,13 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public BenchmarkReturnService benchmarkReturnService(PortfolioValueService portfolioValueService,
+                                                         PriceHistoryRepository priceHistoryRepository,
+                                                         YahooTickerMap yahooTickerMap) {
+        return new BenchmarkReturnService(portfolioValueService, priceHistoryRepository, yahooTickerMap);
+    }
+
+    @Bean
     public WhatIfService whatIfService(CashTransactionRepository cashTransactionRepository,
                                        PriceHistoryRepository priceHistoryRepository,
                                        HistoricalFxRateProvider historicalFxRateProvider,

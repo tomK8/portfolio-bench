@@ -1,5 +1,7 @@
 package com.portfolio.web;
 
+import com.portfolio.application.BenchmarkReturnService;
+import com.portfolio.application.BenchmarkReturnService.BenchmarkTimeline;
 import com.portfolio.application.ContributionService;
 import com.portfolio.application.ContributionService.ContributionTimeline;
 import com.portfolio.application.ExportExcelService;
@@ -14,6 +16,7 @@ import com.portfolio.application.SyncFromCashService;
 import com.portfolio.application.SyncPortfolioService;
 import com.portfolio.application.WhatIfService;
 import com.portfolio.application.WhatIfService.Weight;
+import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.KeyValueStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,8 +55,10 @@ public class DashboardController {
     private final ContributionService contributionService;
     private final PortfolioValueService portfolioValueService;
     private final PortfolioReturnService portfolioReturnService;
+    private final BenchmarkReturnService benchmarkReturnService;
     private final WhatIfService whatIfService;
     private final PriceFetchJob priceFetchJob;
+    private final CashTransactionRepository cashRepo;
     private final KeyValueStore settings;
 
     public DashboardController(SyncPortfolioService syncService,
@@ -64,8 +69,10 @@ public class DashboardController {
                                ContributionService contributionService,
                                PortfolioValueService portfolioValueService,
                                PortfolioReturnService portfolioReturnService,
+                               BenchmarkReturnService benchmarkReturnService,
                                WhatIfService whatIfService,
                                PriceFetchJob priceFetchJob,
+                               CashTransactionRepository cashRepo,
                                KeyValueStore settings) {
         this.syncService = syncService;
         this.syncFromCashService = syncFromCashService;
@@ -75,8 +82,10 @@ public class DashboardController {
         this.contributionService = contributionService;
         this.portfolioValueService = portfolioValueService;
         this.portfolioReturnService = portfolioReturnService;
+        this.benchmarkReturnService = benchmarkReturnService;
         this.whatIfService = whatIfService;
         this.priceFetchJob = priceFetchJob;
+        this.cashRepo = cashRepo;
         this.settings = settings;
     }
 
@@ -168,6 +177,39 @@ public class DashboardController {
     @ResponseBody
     public ReturnTimeline returns() {
         return portfolioReturnService.timeline();
+    }
+
+    /**
+     * Cumulative return of a single benchmark ticker (any Yahoo-style symbol), anchored at the
+     * portfolio's inception date. If {@code price_history} has no rows for the symbol the
+     * response is empty with {@code missing=true}; the UI then prompts the user to confirm a
+     * background Yahoo backfill via {@link #fetchBenchmark}.
+     */
+    @GetMapping("/returns/benchmark")
+    @ResponseBody
+    public BenchmarkTimeline benchmarkReturns(@RequestParam("symbol") String symbol) {
+        return benchmarkReturnService.timeline(symbol);
+    }
+
+    /**
+     * One-shot Yahoo backfill for a benchmark ticker the user typed in. Reuses
+     * {@link PriceFetchJob#fetchSingle} — same ~10-year window, same {@code adj_close}
+     * re-derivation. Returns the number of {@code price_history} rows written.
+     */
+    @PostMapping("/returns/benchmark/fetch")
+    @ResponseBody
+    public java.util.Map<String, Object> fetchBenchmark(@RequestParam("symbol") String symbol) {
+        String sym = symbol == null ? "" : symbol.trim().toUpperCase();
+        int rows = sym.isEmpty() ? 0 : priceFetchJob.fetchSingle(sym);
+        log.info("Benchmark backfill: {} → {} rows", sym, rows);
+        return java.util.Map.of("symbol", sym, "rows", rows);
+    }
+
+    /** Held / previously-traded symbols, for the benchmark dropdown. */
+    @GetMapping("/returns/symbols")
+    @ResponseBody
+    public List<String> tradedSymbols() {
+        return cashRepo.distinctTradedSymbols();
     }
 
     /**

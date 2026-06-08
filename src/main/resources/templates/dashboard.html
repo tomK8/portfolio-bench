@@ -400,6 +400,44 @@
             color: #999;
             margin-top: 0.1rem;
         }
+
+        .whatif-summary {
+            display: flex;
+            gap: 1.5rem;
+            margin: 0.5rem 0 0.5rem 0;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #e5e5e5;
+            border-radius: 6px;
+            background: #fafafa;
+            font-size: 0.95rem;
+            flex-wrap: wrap;
+        }
+
+        .whatif-summary .item .label {
+            display: block;
+            font-size: 0.7rem;
+            color: #777;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.1rem;
+        }
+
+        .whatif-summary .item .value { font-weight: 600; font-size: 1.05rem; }
+        .whatif-summary .item .value.pos { color: #2ca02c; }
+        .whatif-summary .item .value.neg { color: #c0392b; }
+
+        .benchmark-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin: 0.5rem 0 0.75rem 0;
+            flex-wrap: wrap;
+        }
+
+        .benchmark-controls select,
+        .benchmark-controls input[type=text] {
+            padding: 0.3rem 0.4rem;
+        }
     </style>
 </head>
 <body>
@@ -505,12 +543,46 @@
         factsheet number. Trailing 1y is the simple period return; 3y / 5y / since
         inception are annualised. Top chart: growth of £1 invested at portfolio inception.
         Bottom chart: cumulative external contributions on the same time axis, for context.
+        Pick a benchmark below to overlay its total return (adj_close, dividends reinvested)
+        — native currency, no FX conversion.
     </p>
+    <div class="benchmark-controls">
+        <label>Benchmark:
+            <select id="benchmark-select">
+                <option value="">— none —</option>
+            </select>
+        </label>
+        <input id="benchmark-ticker" type="text" placeholder="e.g. EQQQ.L" size="12" style="display:none;"/>
+        <button id="benchmark-apply" type="button">Apply</button>
+        <button id="benchmark-clear" type="button">Clear</button>
+        <span id="benchmark-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+    <div id="benchmark-error" class="whatif-error"></div>
+
+    <div id="benchmark-backfill-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div class="modal-box">
+            <h3>Download price history?</h3>
+            <p>No <code>price_history</code> rows for <b id="benchmark-backfill-symbol">—</b>.</p>
+            <p>Fetch the full 10-year window from Yahoo (~2s)? Make sure the ticker is correct
+               — typos will fetch nothing.</p>
+            <div class="modal-actions">
+                <button id="benchmark-backfill-cancel" type="button">Cancel</button>
+                <button id="benchmark-backfill-ok" type="button" class="primary">Download &amp; overlay</button>
+            </div>
+        </div>
+    </div>
+
     <div class="returns-stats" id="returns-stats">
-        <div class="returns-stat"><span class="label">1y</span><span class="value na" id="returns-1y">—</span></div>
-        <div class="returns-stat"><span class="label">3y (annualised)</span><span class="value na" id="returns-3y">—</span></div>
-        <div class="returns-stat"><span class="label">5y (annualised)</span><span class="value na" id="returns-5y">—</span></div>
-        <div class="returns-stat"><span class="label">Since inception</span><span class="value na" id="returns-since">—</span><span class="sub" id="returns-since-sub"></span></div>
+        <div class="returns-stat"><span class="label">Portfolio · 1y</span><span class="value na" id="returns-1y">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio · 3y (ann.)</span><span class="value na" id="returns-3y">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio · 5y (ann.)</span><span class="value na" id="returns-5y">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio · since inception</span><span class="value na" id="returns-since">—</span><span class="sub" id="returns-since-sub"></span></div>
+    </div>
+    <div class="returns-stats" id="benchmark-stats" style="display:none;">
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-1y">Benchmark</span> · 1y</span><span class="value na" id="bench-1y">—</span></div>
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-3y">Benchmark</span> · 3y (ann.)</span><span class="value na" id="bench-3y">—</span></div>
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-5y">Benchmark</span> · 5y (ann.)</span><span class="value na" id="bench-5y">—</span></div>
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-since">Benchmark</span> · since inception</span><span class="value na" id="bench-since">—</span></div>
     </div>
     <div style="height: 340px; margin-top: 0.5rem;">
         <canvas id="returns-chart"></canvas>
@@ -545,6 +617,7 @@
     </div>
     <div id="whatif-error" class="whatif-error"></div>
     <div id="whatif-warnings" class="value-warnings" style="display: none;"></div>
+    <div id="whatif-summary" class="whatif-summary" style="display: none;"></div>
 
     <div id="whatif-backfill-modal" class="modal-backdrop" role="dialog" aria-modal="true">
         <div class="modal-box">
@@ -638,7 +711,7 @@
                 });
                 if (btn.dataset.panel === 'panel-contributions') loadContributionsChart();
                 if (btn.dataset.panel === 'panel-value') loadValueChart();
-                if (btn.dataset.panel === 'panel-returns') loadReturnsChart();
+                if (btn.dataset.panel === 'panel-returns') { loadReturnsChart(); setupBenchmark(); }
                 if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
             });
         });
@@ -687,12 +760,53 @@
             var warn = document.getElementById('whatif-warnings');
             warn.style.display = 'none';
             warn.innerHTML = '';
+            var summary = document.getElementById('whatif-summary');
+            summary.style.display = 'none';
+            summary.innerHTML = '';
             document.getElementById('whatif-status').textContent = '';
             if (whatIfChart) {
                 whatIfChart.destroy();
                 whatIfChart = null;
             }
             refreshWeightSum();
+        }
+
+        function renderWhatIfSummary(actualData, syntheticData, contribData) {
+            var box = document.getElementById('whatif-summary');
+            var actualFinal = actualData.length ? actualData[actualData.length - 1].y : null;
+            var basketFinal = syntheticData.length ? syntheticData[syntheticData.length - 1].y : null;
+            var contribFinal = contribData.length ? contribData[contribData.length - 1].y : null;
+            if (actualFinal === null && basketFinal === null) {
+                box.style.display = 'none';
+                return;
+            }
+            function fmtMoney(v) {
+                if (v === null || v === undefined || isNaN(v)) return '—';
+                return '£' + v.toLocaleString('en-GB',
+                        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
+            function fmtDelta(v) {
+                if (v === null || v === undefined || isNaN(v)) return '—';
+                var sign = v >= 0 ? '+' : '−';
+                return sign + '£' + Math.abs(v).toLocaleString('en-GB',
+                        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
+            var diff = (actualFinal !== null && basketFinal !== null) ? actualFinal - basketFinal : null;
+            var diffClass = diff === null ? '' : (diff >= 0 ? 'pos' : 'neg');
+            var rows = [
+                '<div class="item"><span class="label">Actual portfolio (today)</span>' +
+                    '<span class="value">' + fmtMoney(actualFinal) + '</span></div>',
+                '<div class="item"><span class="label">What-if basket (today)</span>' +
+                    '<span class="value">' + fmtMoney(basketFinal) + '</span></div>',
+                '<div class="item"><span class="label">Actual − basket</span>' +
+                    '<span class="value ' + diffClass + '">' + fmtDelta(diff) + '</span></div>'
+            ];
+            if (contribFinal !== null) {
+                rows.push('<div class="item"><span class="label">Cumulative contributions</span>' +
+                    '<span class="value">' + fmtMoney(contribFinal) + '</span></div>');
+            }
+            box.innerHTML = rows.join('');
+            box.style.display = 'flex';
         }
 
         function refreshWeightSum() {
@@ -822,6 +936,8 @@
             var actualData = toXY(actual.points, 'valueGbp');
             var totalLine = (contribTimeline.lines || []).find(function (l) { return l.label === 'Total'; });
             var contribData = totalLine ? toXY(totalLine.points, 'cumulativeGbp') : [];
+
+            renderWhatIfSummary(actualData, syntheticData, contribData);
 
             var ctx = document.getElementById('whatif-chart').getContext('2d');
             if (whatIfChart) whatIfChart.destroy();
@@ -1167,6 +1283,180 @@
                         }
                     }
                 });
+            });
+        }
+
+        // ---- Benchmark overlay -----------------------------------------------
+
+        var benchmarkInitialized = false;
+
+        function setupBenchmark() {
+            if (benchmarkInitialized) return;
+            benchmarkInitialized = true;
+            fetch('/returns/symbols').then(function (r) { return r.json(); }).then(function (syms) {
+                var sel = document.getElementById('benchmark-select');
+                (syms || []).forEach(function (s) {
+                    var opt = document.createElement('option');
+                    opt.value = s;
+                    opt.textContent = s;
+                    sel.appendChild(opt);
+                });
+                var other = document.createElement('option');
+                other.value = '__other__';
+                other.textContent = 'Other (Yahoo ticker)…';
+                sel.appendChild(other);
+            });
+            document.getElementById('benchmark-select').addEventListener('change', onSelectChange);
+            document.getElementById('benchmark-apply').addEventListener('click', applyBenchmark);
+            document.getElementById('benchmark-clear').addEventListener('click', clearBenchmark);
+        }
+
+        function onSelectChange() {
+            var sel = document.getElementById('benchmark-select');
+            var input = document.getElementById('benchmark-ticker');
+            input.style.display = sel.value === '__other__' ? 'inline-block' : 'none';
+            if (sel.value === '__other__') input.focus();
+        }
+
+        function chosenSymbol() {
+            var sel = document.getElementById('benchmark-select');
+            if (!sel.value) return '';
+            if (sel.value === '__other__') {
+                return (document.getElementById('benchmark-ticker').value || '').trim().toUpperCase();
+            }
+            return sel.value;
+        }
+
+        function applyBenchmark() {
+            var sym = chosenSymbol();
+            var status = document.getElementById('benchmark-status');
+            var err = document.getElementById('benchmark-error');
+            err.style.display = 'none';
+            err.textContent = '';
+            if (!sym) {
+                clearBenchmark();
+                return;
+            }
+            status.textContent = 'Loading…';
+            fetchBenchmark(sym).then(function (data) {
+                if (data.missing) {
+                    status.textContent = '';
+                    askBenchmarkBackfill(sym).then(function (ok) {
+                        if (!ok) return;
+                        status.textContent = 'Downloading ' + sym + ' from Yahoo…';
+                        fetch('/returns/benchmark/fetch?symbol=' + encodeURIComponent(sym), {
+                            method: 'POST'
+                        }).then(function (r) { return r.json(); }).then(function (res) {
+                            if (!res.rows) {
+                                err.textContent = 'Yahoo returned no rows for ' + sym +
+                                    '. Check the ticker (e.g. EQQQ.L, QQQ, VWRL.L).';
+                                err.style.display = 'block';
+                                status.textContent = '';
+                                return;
+                            }
+                            status.textContent = 'Loading…';
+                            return fetchBenchmark(sym).then(applyBenchmarkData);
+                        }).then(function () { status.textContent = ''; });
+                    });
+                    return;
+                }
+                applyBenchmarkData(data);
+                status.textContent = '';
+            }).catch(function (e) {
+                status.textContent = '';
+                err.textContent = e.message || String(e);
+                err.style.display = 'block';
+            });
+        }
+
+        function fetchBenchmark(sym) {
+            return fetch('/returns/benchmark?symbol=' + encodeURIComponent(sym))
+                    .then(function (r) {
+                        if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Request failed'); });
+                        return r.json();
+                    });
+        }
+
+        function applyBenchmarkData(data) {
+            if (!data || !data.growthPoints || !data.growthPoints.length) return;
+            var pts = data.growthPoints.map(function (p) {
+                return { x: p.date, y: parseFloat(p.growth) };
+            });
+            overlayBenchmark(data.symbol, pts);
+            renderBenchmarkStats(data.symbol, data.summary);
+        }
+
+        function overlayBenchmark(sym, pts) {
+            if (!returnsGrowthChart) return;
+            var ds = returnsGrowthChart.data.datasets;
+            var existing = ds.findIndex(function (d) { return d._benchmark; });
+            var dataset = {
+                label: sym + ' (total return)',
+                data: pts,
+                borderColor: '#ff7f0e',
+                backgroundColor: 'rgba(255, 127, 14, 0.0)',
+                fill: false,
+                pointRadius: 0,
+                borderWidth: 1.5,
+                tension: 0.1,
+                _benchmark: true
+            };
+            if (existing >= 0) ds[existing] = dataset;
+            else ds.push(dataset);
+            // Show the legend now that there's a second series.
+            returnsGrowthChart.options.plugins.legend = { display: true, position: 'bottom' };
+            returnsGrowthChart.update();
+        }
+
+        function renderBenchmarkStats(sym, summary) {
+            var box = document.getElementById('benchmark-stats');
+            box.style.display = 'flex';
+            ['1y', '3y', '5y', 'since'].forEach(function (k) {
+                document.getElementById('benchmark-label-' + k).textContent = sym;
+            });
+            setStat('bench-1y', summary && summary.trailing1y);
+            setStat('bench-3y', summary && summary.trailing3y);
+            setStat('bench-5y', summary && summary.trailing5y);
+            setStat('bench-since', summary && summary.sinceInception);
+        }
+
+        function clearBenchmark() {
+            document.getElementById('benchmark-select').value = '';
+            document.getElementById('benchmark-ticker').value = '';
+            document.getElementById('benchmark-ticker').style.display = 'none';
+            document.getElementById('benchmark-status').textContent = '';
+            var err = document.getElementById('benchmark-error');
+            err.style.display = 'none';
+            err.textContent = '';
+            document.getElementById('benchmark-stats').style.display = 'none';
+            if (returnsGrowthChart) {
+                returnsGrowthChart.data.datasets = returnsGrowthChart.data.datasets
+                        .filter(function (d) { return !d._benchmark; });
+                returnsGrowthChart.options.plugins.legend = { display: false };
+                returnsGrowthChart.update();
+            }
+        }
+
+        function askBenchmarkBackfill(sym) {
+            return new Promise(function (resolve) {
+                var modal = document.getElementById('benchmark-backfill-modal');
+                document.getElementById('benchmark-backfill-symbol').textContent = sym;
+                var ok = document.getElementById('benchmark-backfill-ok');
+                var cancel = document.getElementById('benchmark-backfill-cancel');
+                function close(v) {
+                    modal.classList.remove('open');
+                    ok.removeEventListener('click', onOk);
+                    cancel.removeEventListener('click', onCancel);
+                    modal.removeEventListener('click', onBackdrop);
+                    resolve(v);
+                }
+                function onOk() { close(true); }
+                function onCancel() { close(false); }
+                function onBackdrop(e) { if (e.target === modal) close(false); }
+                ok.addEventListener('click', onOk);
+                cancel.addEventListener('click', onCancel);
+                modal.addEventListener('click', onBackdrop);
+                modal.classList.add('open');
             });
         }
     }());

@@ -89,7 +89,7 @@ public class WhatIfService {
 
         List<PortfolioValueService.DataPoint> points = new ArrayList<>();
         int idx = 0;
-        LocalDate sample = endOfMonth(start);
+        LocalDate sample = start;
         while (!sample.isAfter(end)) {
             while (idx < events.size() && !events.get(idx).date.isAfter(sample)) {
                 residualGbp = residualGbp.add(applyContribution(events.get(idx), basket, shares, prices, fx));
@@ -97,15 +97,7 @@ public class WhatIfService {
             }
             BigDecimal v = valueAt(sample, shares, prices, fx).add(residualGbp);
             points.add(new PortfolioValueService.DataPoint(sample.toString(), v.setScale(2, RoundingMode.HALF_UP)));
-            sample = endOfMonth(sample.plusMonths(1));
-        }
-        if (points.isEmpty() || !points.get(points.size() - 1).date().equals(end.toString())) {
-            while (idx < events.size() && !events.get(idx).date.isAfter(end)) {
-                residualGbp = residualGbp.add(applyContribution(events.get(idx), basket, shares, prices, fx));
-                idx++;
-            }
-            BigDecimal v = valueAt(end, shares, prices, fx).add(residualGbp);
-            points.add(new PortfolioValueService.DataPoint(end.toString(), v.setScale(2, RoundingMode.HALF_UP)));
+            sample = sample.plusDays(1);
         }
 
         List<PortfolioValueService.MissingPrice> missing = new ArrayList<>();
@@ -304,10 +296,6 @@ public class WhatIfService {
             throw new IllegalArgumentException("Weights must sum to 100% or less (got "
                     + sum.multiply(HUNDRED).setScale(2, RoundingMode.HALF_UP) + "%).");
         }
-    }
-
-    private static LocalDate endOfMonth(LocalDate d) {
-        return d.withDayOfMonth(d.lengthOfMonth());
     }
 
     // ---- DTOs -----------------------------------------------------------

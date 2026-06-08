@@ -2,6 +2,9 @@ package com.portfolio.application;
 
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooTickerMap;
+import com.portfolio.domain.model.Account;
+import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.TransactionType;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
@@ -15,6 +18,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -50,6 +54,33 @@ class SyncPortfolioServiceTest {
         assertTrue(result.empty());
         assertTrue(result.holdings().isEmpty());
         assertEquals(0, new BigDecimal("1.25").compareTo(result.rates().get("USD")));
+    }
+
+    @Test
+    void cashReconUsesLiveFxForLedgerNativeBalance() throws IOException {
+        // Pre-insert a RothIRA ledger row with a "stored" FX baked in (1.40 USD/GBP).
+        // Today's live rate is 1.25 — if the recon used the stored cash_balance_gbp,
+        // the ledger side would read $1000 / 1.40 = £714.29; with the fix it must
+        // re-convert at the live rate: $1000 / 1.25 = £800.
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
+        KeyValueStore kv = new KeyValueStore(dbDir);
+        CashTransactionRepository cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveRothIra(List.of(new CashTransaction(
+                "2025-01-01", Account.ROTH_IRA, TransactionType.CONTRIBUTION, "USD",
+                0.0, 1000.0, "USD", 1.40, 1000.0 / 1.40,
+                null, null, "seed")), BigDecimal.ZERO);
+
+        // Need a non-empty portfolio so sync() proceeds past the empty-input early return.
+        Files.writeString(inputDir.resolve("11111111-1111-1111-1111-111111111111.csv"),
+                "Symbol,Qty,Market Value,Book Cost\nAAPL,1,$100.00,$100.00\n");
+
+        SyncResult result = service().sync(BigDecimal.ZERO, BigDecimal.ZERO);
+
+        SyncResult.CashRecon row = result.cashRecon().stream()
+                .filter(r -> "RothIRA".equals(r.account()) && "USD".equals(r.currency()))
+                .findFirst().orElseThrow();
+        assertEquals(0, new BigDecimal("800.00").compareTo(row.ledgerGbp()),
+                "ledger GBP should use live FX (1.25), not stored FX (1.40)");
     }
 
     @Test

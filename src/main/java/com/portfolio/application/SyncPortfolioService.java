@@ -213,9 +213,23 @@ public class SyncPortfolioService {
             }
         }
 
+        // Re-convert the ledger's native balance via the live FX so it lines up with the
+        // holdings side (which converts the Holdings.xlsx USD cash with today's rate). The
+        // stored cash_balance_gbp was frozen at the FX rate on the date of the most recent
+        // ledger row; using it here would produce a spurious drift whenever GBP/USD has
+        // moved since then.
         Map<String, BigDecimal> ledgerByKey = new LinkedHashMap<>();
         for (CashBalance cb : cashRepo.latestCashBalances()) {
-            ledgerByKey.put(cb.accountDbValue() + "|" + cb.currency(), BigDecimal.valueOf(cb.cashGbp()));
+            BigDecimal gbp;
+            if ("GBP".equals(cb.currency()) || cb.cashNative() == null) {
+                gbp = BigDecimal.valueOf(cb.cashGbp());
+            } else {
+                BigDecimal rate = rates.get(cb.currency());
+                gbp = (rate != null && rate.signum() != 0)
+                        ? BigDecimal.valueOf(cb.cashNative()).divide(rate, 10, RoundingMode.HALF_UP)
+                        : BigDecimal.valueOf(cb.cashGbp());
+            }
+            ledgerByKey.put(cb.accountDbValue() + "|" + cb.currency(), gbp);
         }
 
         List<SyncResult.CashRecon> recon = new ArrayList<>();

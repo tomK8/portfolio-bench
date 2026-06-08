@@ -20,7 +20,7 @@ class PriceHistoryRepositoryTest {
 
     private static PriceBar bar(String symbol, String date, double close, double adjClose, Long volume) {
         return new PriceBar(symbol, LocalDate.parse(date), close - 0.5, close + 0.5, close - 1.0,
-                close, adjClose, volume, "USD");
+                close, adjClose, 1.0, volume, "USD");
     }
 
     private static CashTransaction cash(String date, String type, String symbol, double balGbp) {
@@ -96,9 +96,9 @@ class PriceHistoryRepositoryTest {
     void upsertPriceBarsReplacesOnConflict() {
         PriceHistoryRepository repo = newPriceRepo();
         PriceBar first = new PriceBar("GILT 3.75% 2038", LocalDate.of(2024, 1, 2),
-                null, null, null, 90.0, 90.0, null, "GBP");
+                null, null, null, 90.0, 90.0, 1.0, null, "GBP");
         PriceBar second = new PriceBar("GILT 3.75% 2038", LocalDate.of(2024, 1, 2),
-                null, null, null, 91.5, 91.5, null, "GBP");
+                null, null, null, 91.5, 91.5, 1.0, null, "GBP");
 
         assertEquals(1, repo.upsertPriceBars(List.of(first)), "fresh insert");
         assertEquals(1, repo.upsertPriceBars(List.of(second)),

@@ -39,9 +39,12 @@ import java.util.TreeMap;
  * <ul>
  *   <li>Gilts have spotty pre-Tradeweb coverage; for dates earlier than a gilt's first known
  *       close it's valued at zero rather than its cost basis.</li>
- *   <li>Splits are applied as signed quantity deltas at the row's date — adjusted-close
- *       isn't consulted, so pre-split-date prices use the pre-split share count and produce
- *       the right native value.</li>
+ *   <li>Yahoo's stored close is split-adjusted to today's basis; we multiply by each bar's
+ *       {@code split_factor} to recover the raw close so historical {@code qty × price}
+ *       matches the user's basis at the time of trade. Requires the price-fetch path to
+ *       populate {@code split_factor} (see {@code YahooPriceFetcher}); pre-migration rows
+ *       default to 1.0, meaning a "Rebuild adj_close" is needed once after deploy to
+ *       backfill split factors for any pre-split holdings.</li>
  *   <li>FX outside Frankfurter's range falls back to the nearest earlier rate.</li>
  * </ul>
  */
@@ -193,7 +196,11 @@ public class PortfolioValueService {
         Map.Entry<LocalDate, PricePoint> entry = series.floorEntry(sample);
         if (entry == null) entry = series.firstEntry();
         PricePoint pp = entry.getValue();
-        BigDecimal price = BigDecimal.valueOf(pp.close());
+        // Yahoo's stored close is split-adjusted to today's basis; the ledger's qty is in
+        // basis-at-time-of-trade. Multiply by splitFactor (cumulative ratio of splits since
+        // the bar's date) to recover the raw close, so qty × price matches what the user
+        // actually paid / received on that date.
+        BigDecimal price = BigDecimal.valueOf(pp.close() * pp.splitFactor());
         String currency = pp.currency();
         if ("GBp".equals(currency)) {
             price = price.movePointLeft(2);
@@ -233,7 +240,7 @@ public class PortfolioValueService {
             List<PriceBar> bars = priceRepo.getPriceHistory(ticker, earliest, latest);
             if (bars.isEmpty()) continue;
             NavigableMap<LocalDate, PricePoint> series = new TreeMap<>();
-            for (PriceBar b : bars) series.put(b.date(), new PricePoint(b.close(), b.currency()));
+            for (PriceBar b : bars) series.put(b.date(), new PricePoint(b.close(), b.splitFactor(), b.currency()));
             out.put(sym, series);
         }
         return out;
@@ -259,7 +266,7 @@ public class PortfolioValueService {
 
     // ---- DTOs ------------------------------------------------------------
 
-    private record PricePoint(double close, String currency) {
+    private record PricePoint(double close, double splitFactor, String currency) {
     }
 
     private record HeldRange(LocalDate from, LocalDate to) {

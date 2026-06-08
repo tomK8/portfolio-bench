@@ -27,16 +27,17 @@ public class PriceHistoryRepository {
 
     private static final String CREATE_TABLE = """
             CREATE TABLE IF NOT EXISTS price_history (
-                symbol     TEXT    NOT NULL,
-                date       TEXT    NOT NULL,
-                open       REAL,
-                high       REAL,
-                low        REAL,
-                close      REAL    NOT NULL,
-                adj_close  REAL    NOT NULL,
-                volume     INTEGER,
-                currency   TEXT    NOT NULL,
-                fetched_at TEXT    NOT NULL,
+                symbol       TEXT    NOT NULL,
+                date         TEXT    NOT NULL,
+                open         REAL,
+                high         REAL,
+                low          REAL,
+                close        REAL    NOT NULL,
+                adj_close    REAL    NOT NULL,
+                split_factor REAL    NOT NULL DEFAULT 1.0,
+                volume       INTEGER,
+                currency     TEXT    NOT NULL,
+                fetched_at   TEXT    NOT NULL,
                 PRIMARY KEY (symbol, date)
             )""";
     private static final String CREATE_INDEX = """
@@ -50,6 +51,11 @@ public class PriceHistoryRepository {
         try (Connection conn = connections.open(); Statement ddl = conn.createStatement()) {
             ddl.execute(CREATE_TABLE);
             ddl.execute(CREATE_INDEX);
+            try {
+                ddl.execute("ALTER TABLE price_history ADD COLUMN split_factor REAL NOT NULL DEFAULT 1.0");
+            } catch (SQLException alreadyMigrated) {
+                // split_factor column already present — fine
+            }
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise price_history table", e);
         }
@@ -61,8 +67,8 @@ public class PriceHistoryRepository {
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT OR IGNORE INTO price_history " +
-                             "(symbol, date, open, high, low, close, adj_close, volume, currency, fetched_at) " +
-                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                             "(symbol, date, open, high, low, close, adj_close, split_factor, volume, currency, fetched_at) " +
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             int inserted = 0;
             for (PriceBar b : bars) {
                 ps.setString(1, b.symbol());
@@ -72,10 +78,11 @@ public class PriceHistoryRepository {
                 setNullableDouble(ps, 5, b.low());
                 ps.setDouble(6, b.close());
                 ps.setDouble(7, b.adjClose());
-                if (b.volume() != null) ps.setLong(8, b.volume());
-                else ps.setNull(8, Types.INTEGER);
-                ps.setString(9, b.currency());
-                ps.setString(10, fetchedAt);
+                ps.setDouble(8, b.splitFactor());
+                if (b.volume() != null) ps.setLong(9, b.volume());
+                else ps.setNull(9, Types.INTEGER);
+                ps.setString(10, b.currency());
+                ps.setString(11, fetchedAt);
                 inserted += ps.executeUpdate();
             }
             return inserted;
@@ -99,11 +106,12 @@ public class PriceHistoryRepository {
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT INTO price_history " +
-                             "(symbol, date, open, high, low, close, adj_close, volume, currency, fetched_at) " +
-                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                             "(symbol, date, open, high, low, close, adj_close, split_factor, volume, currency, fetched_at) " +
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                              "ON CONFLICT(symbol, date) DO UPDATE SET " +
                              "open = excluded.open, high = excluded.high, low = excluded.low, " +
                              "close = excluded.close, adj_close = excluded.adj_close, " +
+                             "split_factor = excluded.split_factor, " +
                              "volume = excluded.volume, currency = excluded.currency, " +
                              "fetched_at = excluded.fetched_at")) {
             int touched = 0;
@@ -115,10 +123,11 @@ public class PriceHistoryRepository {
                 setNullableDouble(ps, 5, b.low());
                 ps.setDouble(6, b.close());
                 ps.setDouble(7, b.adjClose());
-                if (b.volume() != null) ps.setLong(8, b.volume());
-                else ps.setNull(8, Types.INTEGER);
-                ps.setString(9, b.currency());
-                ps.setString(10, fetchedAt);
+                ps.setDouble(8, b.splitFactor());
+                if (b.volume() != null) ps.setLong(9, b.volume());
+                else ps.setNull(9, Types.INTEGER);
+                ps.setString(10, b.currency());
+                ps.setString(11, fetchedAt);
                 touched += ps.executeUpdate();
             }
             return touched;
@@ -161,13 +170,13 @@ public class PriceHistoryRepository {
     }
 
     public PriceBar getPriceOn(String symbol, LocalDate date) {
-        return queryBars("SELECT symbol, date, open, high, low, close, adj_close, volume, currency " +
+        return queryBars("SELECT symbol, date, open, high, low, close, adj_close, split_factor, volume, currency " +
                         "FROM price_history WHERE symbol = ? AND date <= ? ORDER BY date DESC LIMIT 1",
                 symbol, date.toString(), null).stream().findFirst().orElse(null);
     }
 
     public List<PriceBar> getPriceHistory(String symbol, LocalDate from, LocalDate to) {
-        return queryBars("SELECT symbol, date, open, high, low, close, adj_close, volume, currency " +
+        return queryBars("SELECT symbol, date, open, high, low, close, adj_close, split_factor, volume, currency " +
                         "FROM price_history WHERE symbol = ? AND date BETWEEN ? AND ? ORDER BY date",
                 symbol, from.toString(), to.toString());
     }
@@ -189,10 +198,11 @@ public class PriceHistoryRepository {
                     Double low = getNullableDouble(rs, 5);
                     double close = rs.getDouble(6);
                     double adjClose = rs.getDouble(7);
-                    long vol = rs.getLong(8);
+                    double splitFactor = rs.getDouble(8);
+                    long vol = rs.getLong(9);
                     Long volume = rs.wasNull() ? null : vol;
                     out.add(new PriceBar(sym, d, open, high, low, close, adjClose,
-                            volume, rs.getString(9)));
+                            splitFactor, volume, rs.getString(10)));
                 }
             }
         } catch (Exception e) {

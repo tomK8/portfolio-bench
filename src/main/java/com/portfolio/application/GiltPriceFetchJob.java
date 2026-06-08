@@ -80,7 +80,7 @@ public class GiltPriceFetchJob {
         return bars.stream().map(b -> {
             LocalDate today = b.ts().atZone(LONDON).toLocalDate();
             return new PriceBar(b.symbol(), today, null, null, null,
-                    b.close(), b.close(), null, b.currency());
+                    b.close(), b.close(), 1.0, null, b.currency());
         }).toList();
     }
 }

@@ -78,7 +78,7 @@ public class TradewebGiltPriceParser {
             String symbol = "GILT " + coupon + "% " + year;
             LocalDate date = LocalDate.parse(dateRaw, US_DATE);
             double price = Double.parseDouble(priceRaw);
-            return new PriceBar(symbol, date, null, null, null, price, price, null, CURRENCY);
+            return new PriceBar(symbol, date, null, null, null, price, price, 1.0, null, CURRENCY);
         } catch (RuntimeException e) {
             log.warn("Skipping unparseable Tradeweb row: {}", r, e);
             return null;

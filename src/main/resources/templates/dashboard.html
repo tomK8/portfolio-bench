@@ -1222,27 +1222,46 @@
             });
         });
 
-        var tabs = document.querySelectorAll('#portfolio-tabs .tab');
-        tabs.forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                tabs.forEach(function (b) { b.classList.remove('active'); });
-                btn.classList.add('active');
-                document.querySelectorAll('.tab-panel').forEach(function (p) {
-                    p.classList.toggle('active', p.id === btn.dataset.panel);
-                });
-                if (btn.dataset.panel === 'panel-contributions') loadContributionsChart();
-                if (btn.dataset.panel === 'panel-value') loadValueChart();
-                if (btn.dataset.panel === 'panel-allocation') loadAllocation();
-                if (btn.dataset.panel === 'panel-returns') { loadReturnsChart(); setupBenchmark(); }
-                if (btn.dataset.panel === 'panel-risk') loadRisk();
-                if (btn.dataset.panel === 'panel-dividends') loadDividends();
-                if (btn.dataset.panel === 'panel-position') setupPosition();
-                if (btn.dataset.panel === 'panel-concentration') loadConcentration();
-                if (btn.dataset.panel === 'panel-currency') loadCurrency();
-                if (btn.dataset.panel === 'panel-attribution') setupAttribution();
-                if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
+        var TAB_KEY = 'portfolio-bench.active-tab';
+
+        function activatePanel(panelId, persist) {
+            var btn = document.querySelector('#portfolio-tabs .tab[data-panel="' + panelId + '"]');
+            if (!btn) return;
+            document.querySelectorAll('#portfolio-tabs .tab').forEach(function (b) {
+                b.classList.remove('active');
             });
+            btn.classList.add('active');
+            document.querySelectorAll('.tab-panel').forEach(function (p) {
+                p.classList.toggle('active', p.id === panelId);
+            });
+            if (panelId === 'panel-contributions') loadContributionsChart();
+            if (panelId === 'panel-value') loadValueChart();
+            if (panelId === 'panel-allocation') loadAllocation();
+            if (panelId === 'panel-returns') { loadReturnsChart(); setupBenchmark(); }
+            if (panelId === 'panel-risk') loadRisk();
+            if (panelId === 'panel-dividends') loadDividends();
+            if (panelId === 'panel-position') setupPosition();
+            if (panelId === 'panel-concentration') loadConcentration();
+            if (panelId === 'panel-currency') loadCurrency();
+            if (panelId === 'panel-attribution') setupAttribution();
+            if (panelId === 'panel-whatif') setupWhatIf();
+            if (persist) {
+                try { localStorage.setItem(TAB_KEY, panelId); } catch (e) {}
+            }
+        }
+
+        document.querySelectorAll('#portfolio-tabs .tab').forEach(function (btn) {
+            btn.addEventListener('click', function () { activatePanel(btn.dataset.panel, true); });
         });
+
+        // Restore the last-visited tab. Silent fall-through if the saved id no longer matches
+        // an existing panel (e.g. after a tab rename) — page-default Holdings stays active.
+        try {
+            var savedTab = localStorage.getItem(TAB_KEY);
+            if (savedTab && document.getElementById(savedTab)) {
+                activatePanel(savedTab, false);
+            }
+        } catch (e) {}
 
         var whatIfInitialized = false;
         var whatIfChart = null;

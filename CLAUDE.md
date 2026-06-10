@@ -58,7 +58,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 - Root — `ExcelReportWriter`, `PortfolioBenchApplication`.
 
 UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-fns`
-(CDN). Dashboard has four tabs:
+(CDN). Dashboard tabs:
 - **From holdings files** — `POST /sync` → `fragments/portfolio`. Includes a cash
   reconciliation panel comparing the holdings-side cash (parsed CASH rows + form-supplied
   II SIPP £/$) against the ledger-side latest stored cash balance, with red rows for
@@ -71,6 +71,13 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
 - **Value over time** — `GET /portfolio-value` → JSON, Chart.js. Monthly portfolio GBP
   value; yellow warning panel above the chart lists symbols that were ever held but
   have zero rows in `price_history`.
+- **Attribution** — `GET /attribution?from=YYYY-MM-DD&to=YYYY-MM-DD` → JSON, Chart.js
+  horizontal bar + sortable table. Per-symbol GBP P&L over a window via
+  `AttributionService` (formula: `end_value − start_value + window_cash_flows`). Each
+  row also reports a period return (P&L ÷ peak GBP capital deployed in the window) and
+  the same return annualised to 365.25 days. End-value uses live intraday + live FX
+  when `to == today`, daily close + historical FX otherwise — so totals reconcile with
+  the cash-ledger view.
 
 Charts load lazily on first tab click. Logging is SLF4J + Logback (`logback-spring.xml`);
 no `System.out` in production code.
@@ -84,6 +91,7 @@ no `System.out` in production code.
 | Import gilt prices    | `POST /import-gilt-prices` | `ImportGiltPricesService` |
 | Contributions chart   | `GET /contributions`       | `ContributionService`     |
 | Value-over-time chart | `GET /portfolio-value`     | `PortfolioValueService`   |
+| Attribution           | `GET /attribution`         | `AttributionService`      |
 
 ## Holding fields
 

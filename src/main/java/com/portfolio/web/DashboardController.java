@@ -1,5 +1,7 @@
 package com.portfolio.web;
 
+import com.portfolio.application.AttributionService;
+import com.portfolio.application.AttributionService.AttributionResult;
 import com.portfolio.application.BenchmarkReturnService;
 import com.portfolio.application.BenchmarkReturnService.BenchmarkTimeline;
 import com.portfolio.application.ContributionService;
@@ -29,6 +31,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -57,6 +60,7 @@ public class DashboardController {
     private final PortfolioReturnService portfolioReturnService;
     private final BenchmarkReturnService benchmarkReturnService;
     private final WhatIfService whatIfService;
+    private final AttributionService attributionService;
     private final PriceFetchJob priceFetchJob;
     private final CashTransactionRepository cashRepo;
     private final KeyValueStore settings;
@@ -71,6 +75,7 @@ public class DashboardController {
                                PortfolioReturnService portfolioReturnService,
                                BenchmarkReturnService benchmarkReturnService,
                                WhatIfService whatIfService,
+                               AttributionService attributionService,
                                PriceFetchJob priceFetchJob,
                                CashTransactionRepository cashRepo,
                                KeyValueStore settings) {
@@ -84,6 +89,7 @@ public class DashboardController {
         this.portfolioReturnService = portfolioReturnService;
         this.benchmarkReturnService = benchmarkReturnService;
         this.whatIfService = whatIfService;
+        this.attributionService = attributionService;
         this.priceFetchJob = priceFetchJob;
         this.cashRepo = cashRepo;
         this.settings = settings;
@@ -210,6 +216,19 @@ public class DashboardController {
     @ResponseBody
     public List<String> tradedSymbols() {
         return cashRepo.distinctTradedSymbols();
+    }
+
+    /**
+     * Per-symbol GBP P&amp;L over {@code [from, to]}. {@code to} defaults to today when blank.
+     * See {@link AttributionService} for the formula.
+     */
+    @GetMapping("/attribution")
+    @ResponseBody
+    public AttributionResult attribution(@RequestParam(name = "from") String from,
+                                         @RequestParam(name = "to", required = false) String to) {
+        LocalDate fromDate = LocalDate.parse(from);
+        LocalDate toDate = (to == null || to.isBlank()) ? LocalDate.now() : LocalDate.parse(to);
+        return attributionService.attribute(fromDate, toDate);
     }
 
     /**

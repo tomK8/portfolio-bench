@@ -438,6 +438,44 @@
         .benchmark-controls input[type=text] {
             padding: 0.3rem 0.4rem;
         }
+
+        .attr-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin: 0.5rem 0 0.75rem 0;
+            flex-wrap: wrap;
+        }
+
+        .attr-controls input[type=date] {
+            padding: 0.3rem 0.4rem;
+        }
+
+        .attr-presets {
+            display: flex;
+            gap: 0.25rem;
+            flex-wrap: wrap;
+        }
+
+        .attr-preset {
+            padding: 0.3rem 0.6rem;
+            font-size: 0.85rem;
+            border: 1px solid #ccc;
+            background: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            color: #444;
+        }
+
+        .attr-preset:hover { background: #f0f0f0; }
+        .attr-preset.active {
+            background: #1f77b4;
+            color: #fff;
+            border-color: #1d6ba2;
+        }
+
+        .attr-row.pos td.attr-pnl { color: #2ca02c; font-weight: 600; }
+        .attr-row.neg td.attr-pnl { color: #c0392b; font-weight: 600; }
     </style>
 </head>
 <body>
@@ -481,6 +519,7 @@
     <button class="tab" data-panel="panel-contributions" type="button">Contributions</button>
     <button class="tab" data-panel="panel-value" type="button">Value over time</button>
     <button class="tab" data-panel="panel-returns" type="button">Returns</button>
+    <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
 
@@ -590,6 +629,61 @@
     <div style="height: 140px; margin-top: 0.25rem;">
         <canvas id="returns-contrib-chart"></canvas>
     </div>
+</section>
+
+<section class="tab-panel" id="panel-attribution">
+    <p class="muted" style="margin-top: 0">
+        Per-symbol GBP P&amp;L over a date window:
+        <code>end_value − start_value + window_cash_flows</code>, where cash flows sum
+        every ledger row for that symbol (buys negative, sells positive, dividends positive,
+        FX baked in at trade date). Captures realised + unrealised gains plus dividends. Trades at
+        fair value contribute zero — only subsequent market moves and dividends do. Bonds use
+        the per-£100 nominal formula. Symbols with no <code>price_history</code> rows are
+        valued at zero on the boundaries (skewing the row).
+        End-value uses live intraday + live FX when the window ends today, daily close + historical FX otherwise.
+        <b>Return %</b> = P&amp;L ÷ peak GBP capital deployed in the window; <b>Annualised %</b>
+        grosses that up to a 365-day year (so a 2% move over a month reads as ~27%).
+    </p>
+    <div class="attr-controls">
+        <div class="attr-presets" id="attr-presets">
+            <button class="attr-preset" data-preset="1m" type="button">1m</button>
+            <button class="attr-preset" data-preset="3m" type="button">3m</button>
+            <button class="attr-preset" data-preset="6m" type="button">6m</button>
+            <button class="attr-preset active" data-preset="ytd" type="button">YTD</button>
+            <button class="attr-preset" data-preset="1y" type="button">1y</button>
+            <button class="attr-preset" data-preset="3y" type="button">3y</button>
+            <button class="attr-preset" data-preset="all" type="button">All</button>
+        </div>
+        <label>From: <input id="attr-from" type="date"/></label>
+        <label>To: <input id="attr-to" type="date"/></label>
+        <button id="attr-run" type="button">Apply</button>
+        <span id="attr-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div class="returns-stats" id="attr-stats" style="display:none;">
+        <div class="returns-stat"><span class="label">Total P&amp;L</span><span class="value na" id="attr-total-pnl">—</span></div>
+        <div class="returns-stat"><span class="label">Start value</span><span class="value" id="attr-total-start">—</span></div>
+        <div class="returns-stat"><span class="label">End value</span><span class="value" id="attr-total-end">—</span></div>
+        <div class="returns-stat"><span class="label">Net cash flows</span><span class="value" id="attr-total-cash">—</span></div>
+    </div>
+
+    <div style="height: 360px; margin-top: 0.5rem;">
+        <canvas id="attr-chart"></canvas>
+    </div>
+
+    <table style="margin-top: 1rem;" id="attr-table">
+        <thead><tr>
+            <th class="txt" data-sort="str">Symbol</th>
+            <th data-sort="num">Start £</th>
+            <th data-sort="num">End £</th>
+            <th data-sort="num">Cash flows £</th>
+            <th data-sort="num" data-sort-dir="desc">P&amp;L £</th>
+            <th data-sort="num">% of total</th>
+            <th data-sort="num" title="P&L ÷ peak capital deployed in the window">Return %</th>
+            <th data-sort="num" title="Period return annualised to 365.25 days">Annualised %</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
 </section>
 
 <section class="tab-panel" id="panel-whatif">
@@ -712,6 +806,7 @@
                 if (btn.dataset.panel === 'panel-contributions') loadContributionsChart();
                 if (btn.dataset.panel === 'panel-value') loadValueChart();
                 if (btn.dataset.panel === 'panel-returns') { loadReturnsChart(); setupBenchmark(); }
+                if (btn.dataset.panel === 'panel-attribution') setupAttribution();
                 if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
             });
         });
@@ -1458,6 +1553,191 @@
                 modal.addEventListener('click', onBackdrop);
                 modal.classList.add('open');
             });
+        }
+
+        // ---- Attribution -----------------------------------------------------
+
+        var attrInitialized = false;
+        var attrChart = null;
+        var attrTableSortAttached = false;
+
+        function setupAttribution() {
+            if (attrInitialized) return;
+            attrInitialized = true;
+            document.querySelectorAll('#attr-presets .attr-preset').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    document.querySelectorAll('#attr-presets .attr-preset').forEach(function (b) {
+                        b.classList.remove('active');
+                    });
+                    btn.classList.add('active');
+                    applyPreset(btn.dataset.preset);
+                    runAttribution();
+                });
+            });
+            document.getElementById('attr-run').addEventListener('click', function () {
+                document.querySelectorAll('#attr-presets .attr-preset').forEach(function (b) {
+                    b.classList.remove('active');
+                });
+                runAttribution();
+            });
+            applyPreset('ytd');
+            runAttribution();
+        }
+
+        function isoDate(d) {
+            var y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'),
+                day = String(d.getDate()).padStart(2, '0');
+            return y + '-' + m + '-' + day;
+        }
+
+        function applyPreset(preset) {
+            var to = new Date();
+            var from = new Date();
+            switch (preset) {
+                case '1m': from.setMonth(from.getMonth() - 1); break;
+                case '3m': from.setMonth(from.getMonth() - 3); break;
+                case '6m': from.setMonth(from.getMonth() - 6); break;
+                case 'ytd': from = new Date(to.getFullYear(), 0, 1); break;
+                case '1y': from.setFullYear(from.getFullYear() - 1); break;
+                case '3y': from.setFullYear(from.getFullYear() - 3); break;
+                case 'all': from = new Date(2000, 0, 1); break;
+            }
+            document.getElementById('attr-from').value = isoDate(from);
+            document.getElementById('attr-to').value = isoDate(to);
+        }
+
+        function runAttribution() {
+            var from = document.getElementById('attr-from').value;
+            var to = document.getElementById('attr-to').value;
+            if (!from) return;
+            var status = document.getElementById('attr-status');
+            status.textContent = 'Working…';
+            var url = '/attribution?from=' + encodeURIComponent(from) +
+                    (to ? '&to=' + encodeURIComponent(to) : '');
+            fetch(url).then(function (r) {
+                if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Request failed'); });
+                return r.json();
+            }).then(function (data) {
+                renderAttribution(data);
+                status.textContent = '';
+            }).catch(function (err) {
+                status.textContent = 'Error: ' + (err.message || String(err));
+            });
+        }
+
+        // ASCII minus (not the typographic '−') so the table sort's parseFloat works on these cells.
+        function fmtMoney(v) {
+            return (v < 0 ? '-£' : '£') + Math.abs(v).toLocaleString('en-GB',
+                    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function fmtPct(frac) {
+            if (frac === null || frac === undefined) return '—';
+            var v = parseFloat(frac) * 100;
+            return (v >= 0 ? '' : '-') + Math.abs(v).toFixed(1) + '%';
+        }
+
+        function setMoneyStat(elId, v) {
+            var el = document.getElementById(elId);
+            el.textContent = fmtMoney(v);
+            el.className = 'value ' + (v > 0 ? 'pos' : v < 0 ? 'neg' : '');
+        }
+
+        function renderAttribution(data) {
+            document.getElementById('attr-stats').style.display = 'flex';
+            setMoneyStat('attr-total-pnl', parseFloat(data.totalPnlGbp));
+            setMoneyStat('attr-total-start', parseFloat(data.totalStartValueGbp));
+            setMoneyStat('attr-total-end', parseFloat(data.totalEndValueGbp));
+            setMoneyStat('attr-total-cash', parseFloat(data.totalCashFlowGbp));
+            // Strip the colour class off these three — only P&L gets the win/loss colour.
+            ['attr-total-start', 'attr-total-end', 'attr-total-cash'].forEach(function (id) {
+                document.getElementById(id).className = 'value';
+            });
+
+            renderAttributionChart(data.rows);
+            renderAttributionTable(data.rows, parseFloat(data.totalPnlGbp));
+        }
+
+        function renderAttributionChart(rows) {
+            // Top 8 contributors + bottom 8 detractors, smallest in the middle so the bars
+            // read winners-on-top / losers-on-bottom in a single horizontal bar chart.
+            var top = rows.slice(0, 8);
+            var bottom = rows.slice(-8).filter(function (r) {
+                return parseFloat(r.pnlGbp) < 0;
+            }).reverse();
+            var combined = top.concat(bottom);
+            var labels = combined.map(function (r) { return r.symbol; });
+            var values = combined.map(function (r) { return parseFloat(r.pnlGbp); });
+            var colors = values.map(function (v) {
+                return v >= 0 ? 'rgba(44, 160, 44, 0.85)' : 'rgba(192, 57, 43, 0.85)';
+            });
+
+            var ctx = document.getElementById('attr-chart').getContext('2d');
+            if (attrChart) attrChart.destroy();
+            attrChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'P&L (£)',
+                        data: values,
+                        backgroundColor: colors,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'P&L (£)' },
+                            ticks: {
+                                callback: function (v) {
+                                    return (v < 0 ? '−£' : '£') +
+                                        Math.abs(v).toLocaleString('en-GB', { maximumFractionDigits: 0 });
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (ctx) { return fmtMoney(ctx.parsed.x); }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderAttributionTable(rows, totalPnl) {
+            var tbody = document.querySelector('#attr-table tbody');
+            tbody.innerHTML = '';
+            // Use abs(totalPnl) as the denominator so winners and losers both report a positive
+            // share of the magnitude of the net P&L — easier to read than signed percentages.
+            var denom = Math.abs(totalPnl) > 0.005 ? Math.abs(totalPnl) : null;
+            rows.forEach(function (r) {
+                var tr = document.createElement('tr');
+                var pnl = parseFloat(r.pnlGbp);
+                tr.className = 'attr-row ' + (pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '');
+                tr.innerHTML =
+                    '<td class="txt">' + r.symbol + '</td>' +
+                    '<td>' + fmtMoney(parseFloat(r.startValueGbp)) + '</td>' +
+                    '<td>' + fmtMoney(parseFloat(r.endValueGbp)) + '</td>' +
+                    '<td>' + fmtMoney(parseFloat(r.cashFlowGbp)) + '</td>' +
+                    '<td class="attr-pnl">' + fmtMoney(pnl) + '</td>' +
+                    '<td>' + (denom === null ? '—' :
+                        (pnl / denom * 100).toFixed(1) + '%') + '</td>' +
+                    '<td>' + fmtPct(r.periodReturn) + '</td>' +
+                    '<td>' + fmtPct(r.annualizedReturn) + '</td>';
+                tbody.appendChild(tr);
+            });
+            if (!attrTableSortAttached) {
+                attrTableSortAttached = true;
+                attachSort(document.getElementById('attr-table'));
+            }
         }
     }());
 </script>

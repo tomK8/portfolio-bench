@@ -157,6 +157,17 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public AttributionService attributionService(CashTransactionRepository cashTransactionRepository,
+                                                 PriceHistoryRepository priceHistoryRepository,
+                                                 IntradayPriceRepository intradayPriceRepository,
+                                                 HistoricalFxRateProvider historicalFxRateProvider,
+                                                 FxRateProvider fxRateProvider,
+                                                 YahooTickerMap yahooTickerMap) {
+        return new AttributionService(cashTransactionRepository, priceHistoryRepository,
+                intradayPriceRepository, historicalFxRateProvider, fxRateProvider, yahooTickerMap);
+    }
+
+    @Bean
     public ContributionService contributionService(CashTransactionRepository cashTransactionRepository,
                                                    KeyValueStore keyValueStore,
                                                    HistoricalFxRateProvider historicalFxRateProvider) {

@@ -642,6 +642,7 @@
     <button class="tab" data-panel="panel-position" type="button">Position</button>
     <button class="tab" data-panel="panel-concentration" type="button">Concentration</button>
     <button class="tab" data-panel="panel-currency" type="button">Currency</button>
+    <button class="tab" data-panel="panel-snapshots" type="button">Snapshots</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
@@ -1154,6 +1155,49 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-snapshots">
+    <p class="muted" style="margin-top: 0">
+        Diff any two saved snapshots from <code>portfolio_snapshots</code>. Snapshots are
+        written each time you run "Aggregated Portfolio" on the holdings tab — the row
+        captures total value, gain, cash, return%, and FX. Per-symbol breakdown isn't
+        stored, so the delta here is portfolio-level only.
+    </p>
+    <div class="benchmark-controls">
+        <label>From:
+            <select id="snap-from"></select>
+        </label>
+        <label>To:
+            <select id="snap-to"></select>
+        </label>
+        <button id="snap-apply" type="button">Diff</button>
+        <span id="snap-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+    <div id="snap-empty" class="muted" style="margin-top: 1rem;">
+        Loading snapshots…
+    </div>
+    <div id="snap-content" style="display: none;">
+        <div class="returns-stats" id="snap-stats">
+            <div class="returns-stat"><span class="label">Span (days)</span><span class="value na" id="snap-days">—</span></div>
+            <div class="returns-stat"><span class="label">Total value Δ</span><span class="value na" id="snap-value">—</span><span class="sub" id="snap-value-pct"></span></div>
+            <div class="returns-stat"><span class="label">Total gain Δ</span><span class="value na" id="snap-gain">—</span></div>
+            <div class="returns-stat"><span class="label">Cash Δ</span><span class="value na" id="snap-cash">—</span></div>
+            <div class="returns-stat"><span class="label">Return % Δ</span><span class="value na" id="snap-return">—</span></div>
+            <div class="returns-stat"><span class="label">GBP/USD Δ</span><span class="value na" id="snap-usd">—</span></div>
+            <div class="returns-stat"><span class="label">GBP/EUR Δ</span><span class="value na" id="snap-eur">—</span></div>
+        </div>
+
+        <table id="snap-table" class="annual-table" style="margin-top: 1rem;">
+            <thead><tr>
+                <th class="txt">Metric</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Delta</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-attribution">
     <p class="muted" style="margin-top: 0">
         Per-symbol GBP P&amp;L over a date window:
@@ -1339,6 +1383,7 @@
             if (panelId === 'panel-position') setupPosition();
             if (panelId === 'panel-concentration') loadConcentration();
             if (panelId === 'panel-currency') loadCurrency();
+            if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-attribution') setupAttribution();
             if (panelId === 'panel-whatif') setupWhatIf();
             if (persist) {
@@ -3828,6 +3873,127 @@
                         plugins: { legend: { position: 'bottom' } }
                     }
                 });
+        }
+
+        var snapshotsInitialized = false;
+        var snapshotsAll = [];
+
+        function setupSnapshots() {
+            if (snapshotsInitialized) return;
+            snapshotsInitialized = true;
+            document.getElementById('snap-apply').addEventListener('click', applySnapshotDelta);
+            fetch('/snapshots').then(function (r) { return r.json(); }).then(function (snaps) {
+                snapshotsAll = snaps || [];
+                var fromSel = document.getElementById('snap-from');
+                var toSel = document.getElementById('snap-to');
+                if (!snapshotsAll.length) {
+                    document.getElementById('snap-empty').textContent =
+                            'No snapshots saved yet. Run "Aggregated Portfolio" on the Holdings tab to capture one.';
+                    return;
+                }
+                snapshotsAll.forEach(function (s) {
+                    var opt1 = document.createElement('option');
+                    opt1.value = s.date;
+                    opt1.textContent = s.date + '  (£' +
+                            parseFloat(s.totalValueGbp).toLocaleString('en-GB',
+                                    { maximumFractionDigits: 0 }) + ')';
+                    var opt2 = opt1.cloneNode(true);
+                    fromSel.appendChild(opt1);
+                    toSel.appendChild(opt2);
+                });
+                // Defaults: earliest → latest.
+                fromSel.value = snapshotsAll[0].date;
+                toSel.value = snapshotsAll[snapshotsAll.length - 1].date;
+                applySnapshotDelta();
+            });
+        }
+
+        function applySnapshotDelta() {
+            var from = document.getElementById('snap-from').value;
+            var to = document.getElementById('snap-to').value;
+            var status = document.getElementById('snap-status');
+            status.textContent = 'Loading…';
+            var url = '/snapshots/delta?from=' + encodeURIComponent(from) +
+                    '&to=' + encodeURIComponent(to);
+            fetch(url).then(function (r) {
+                if (!r.ok) return r.text().then(function (m) { throw new Error(m); });
+                return r.json();
+            }).then(function (data) {
+                status.textContent = '';
+                document.getElementById('snap-empty').style.display = 'none';
+                document.getElementById('snap-content').style.display = '';
+                renderSnapshotDelta(data);
+            }).catch(function (e) {
+                status.textContent = 'Error: ' + e.message;
+            });
+        }
+
+        function renderSnapshotDelta(data) {
+            var d = data.delta || {};
+            document.getElementById('snap-days').textContent = data.spanDays != null ? data.spanDays : '—';
+            setSignedMoney('snap-value', d.totalValueGbp);
+            // Percent change against the from-value for context.
+            var fromV = parseFloat(data.from.totalValueGbp);
+            var deltaV = parseFloat(d.totalValueGbp);
+            var pct = fromV ? ((deltaV / fromV) * 100) : null;
+            document.getElementById('snap-value-pct').textContent =
+                    pct != null ? ((pct >= 0 ? '+' : '') + pct.toFixed(2) + '%') : '';
+            setSignedMoney('snap-gain', d.totalGainGbp);
+            setSignedMoney('snap-cash', d.totalCashGbp);
+            var ret = document.getElementById('snap-return');
+            if (d.returnPct != null) {
+                var rp = parseFloat(d.returnPct) * 100;
+                ret.textContent = (rp >= 0 ? '+' : '') + rp.toFixed(2) + 'pp';
+                ret.className = 'value' + (rp >= 0 ? ' pos' : ' neg');
+            } else { ret.textContent = '—'; ret.className = 'value na'; }
+            setFxDelta('snap-usd', d.gbpusd);
+            setFxDelta('snap-eur', d.gbpeur);
+
+            var rows = [
+                ['Total value £', data.from.totalValueGbp, data.to.totalValueGbp, d.totalValueGbp],
+                ['Total gain £', data.from.totalGainGbp, data.to.totalGainGbp, d.totalGainGbp],
+                ['Cash £', data.from.totalCashGbp, data.to.totalCashGbp, d.totalCashGbp],
+                ['Return %', toPct(data.from.returnPct), toPct(data.to.returnPct), toPct(d.returnPct)],
+                ['GBP/USD', data.from.gbpusd, data.to.gbpusd, d.gbpusd],
+                ['GBP/EUR', data.from.gbpeur, data.to.gbpeur, d.gbpeur]
+            ];
+            var tbody = document.querySelector('#snap-table tbody');
+            tbody.innerHTML = '';
+            rows.forEach(function (r) {
+                var tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td class="txt">' + r[0] + '</td>' +
+                    '<td>' + fmtAny(r[1]) + '</td>' +
+                    '<td>' + fmtAny(r[2]) + '</td>' +
+                    '<td>' + fmtAnyDelta(r[3]) + '</td>';
+                tbody.appendChild(tr);
+            });
+        }
+
+        function setFxDelta(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            var n = parseFloat(v);
+            el.textContent = (n >= 0 ? '+' : '') + n.toFixed(4);
+            el.className = 'value';
+        }
+
+        function toPct(v) {
+            return v == null ? null : parseFloat(v) * 100;
+        }
+
+        function fmtAny(v) {
+            if (v == null) return '—';
+            return parseFloat(v).toLocaleString('en-GB',
+                    { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        }
+
+        function fmtAnyDelta(v) {
+            if (v == null) return '—';
+            var n = parseFloat(v);
+            var sign = n >= 0 ? '+' : '−';
+            return sign + Math.abs(n).toLocaleString('en-GB',
+                    { minimumFractionDigits: 2, maximumFractionDigits: 4 });
         }
     }());
 </script>

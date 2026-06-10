@@ -175,6 +175,11 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public HealthService healthService(JdbcConnectionFactory jdbcConnectionFactory) {
+        return new HealthService(jdbcConnectionFactory);
+    }
+
+    @Bean
     public CurrencyExposureService currencyExposureService(AllocationService allocationService,
                                                            CashTransactionRepository cashTransactionRepository,
                                                            IntradayPriceRepository intradayPriceRepository,

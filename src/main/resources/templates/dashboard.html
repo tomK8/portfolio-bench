@@ -582,6 +582,7 @@
     <button class="tab" data-panel="panel-dividends" type="button">Dividends</button>
     <button class="tab" data-panel="panel-position" type="button">Position</button>
     <button class="tab" data-panel="panel-concentration" type="button">Concentration</button>
+    <button class="tab" data-panel="panel-currency" type="button">Currency</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
@@ -1006,6 +1007,57 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-currency">
+    <p class="muted" style="margin-top: 0">
+        Currency exposure by <b>listing currency</b> (.L tickers report GBp / pence — both
+        normalise to GBP for bucketing). Each position is converted to GBP at the live FX rate,
+        then summed by currency. <b>12-month FX impact</b> is a what-if: holding today's non-GBP
+        book at 12-month-ago FX would have produced a different GBP value; the signed difference
+        is FX's contribution to your GBP value over the year, assuming the current book was
+        held all 12 months.
+    </p>
+    <div class="returns-stats" id="cur-stats">
+        <div class="returns-stat"><span class="label">Total exposure</span><span class="value na" id="cur-total">—</span></div>
+        <div class="returns-stat"><span class="label">GBP exposure</span><span class="value na" id="cur-gbp">—</span></div>
+        <div class="returns-stat"><span class="label">Non-GBP exposure</span><span class="value na" id="cur-nongbp">—</span></div>
+        <div class="returns-stat"><span class="label">Non-GBP share</span><span class="value na" id="cur-nongbp-share">—</span></div>
+        <div class="returns-stat" title="Net effect of last 12 months of FX moves on the current non-GBP book"><span class="label">FX impact · 12m</span><span class="value na" id="cur-fx-impact">—</span></div>
+        <div class="returns-stat"><span class="label">Currencies</span><span class="value na" id="cur-count">—</span></div>
+    </div>
+
+    <div class="annual-returns-row" style="margin-top: 1.5rem;">
+        <div class="annual-chart-wrap">
+            <h3 style="margin-top: 0; font-size: 1rem;">Composition (now)</h3>
+            <div style="height: 280px;">
+                <canvas id="cur-donut-chart"></canvas>
+            </div>
+        </div>
+        <div class="annual-chart-wrap">
+            <h3 style="margin-top: 0; font-size: 1rem;">Per-currency breakdown</h3>
+            <table id="cur-table" class="annual-table" style="margin-top: 0;">
+                <thead><tr>
+                    <th class="txt" data-sort="text">Ccy</th>
+                    <th data-sort="num">Invested £</th>
+                    <th data-sort="num">Cash £</th>
+                    <th data-sort="num">Total £</th>
+                    <th data-sort="num">Weight</th>
+                    <th data-sort="num">Positions</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Currency weight over time (invested only)</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Stacked weights of invested positions by listing currency, weekly samples. Cash is
+        excluded — would dominate the stack in early years before any positions existed.
+    </p>
+    <div style="height: 320px; margin-top: 0.25rem;">
+        <canvas id="cur-trend-chart"></canvas>
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-attribution">
     <p class="muted" style="margin-top: 0">
         Per-symbol GBP P&amp;L over a date window:
@@ -1186,6 +1238,7 @@
                 if (btn.dataset.panel === 'panel-dividends') loadDividends();
                 if (btn.dataset.panel === 'panel-position') setupPosition();
                 if (btn.dataset.panel === 'panel-concentration') loadConcentration();
+                if (btn.dataset.panel === 'panel-currency') loadCurrency();
                 if (btn.dataset.panel === 'panel-attribution') setupAttribution();
                 if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
             });
@@ -3378,6 +3431,144 @@
                                 grid: { drawOnChartArea: false },
                                 title: { display: true, text: 'HHI' }
                             }
+                        },
+                        plugins: { legend: { position: 'bottom' } }
+                    }
+                });
+        }
+
+        var currencyLoaded = false;
+        var curDonutChart = null, curTrendChart = null;
+
+        var CCY_COLOURS = {
+            'GBP': '#1f77b4',
+            'USD': '#2ca02c',
+            'EUR': '#ff7f0e',
+            'JPY': '#9467bd',
+            'CHF': '#8c564b',
+            'CAD': '#e377c2',
+            'AUD': '#17becf'
+        };
+
+        function ccyColour(ccy, fallbackIdx) {
+            return CCY_COLOURS[ccy]
+                    || CONC_PALETTE[fallbackIdx % CONC_PALETTE.length];
+        }
+
+        function loadCurrency() {
+            if (currencyLoaded) return;
+            currencyLoaded = true;
+            fetch('/currency').then(function (r) { return r.json(); })
+                    .then(renderCurrency);
+        }
+
+        function renderCurrency(d) {
+            var s = d.snapshot || {};
+            setMoney('cur-total', s.totalGbp);
+            setMoney('cur-gbp', s.gbpExposureGbp);
+            setMoney('cur-nongbp', s.nonGbpExposureGbp);
+            setDivPct('cur-nongbp-share', s.nonGbpShare);
+            setSignedMoney('cur-fx-impact', s.fxImpact12mGbp);
+            var countEl = document.getElementById('cur-count');
+            countEl.textContent = s.currencyCount != null ? s.currencyCount : '—';
+            countEl.className = 'value' + (s.currencyCount ? '' : ' na');
+
+            renderCurDonut(s.rows || []);
+            renderCurTable(s.rows || []);
+            renderCurTrend(d.trend || []);
+        }
+
+        function renderCurDonut(rows) {
+            if (curDonutChart) curDonutChart.destroy();
+            var labels = rows.map(function (r) { return r.currency; });
+            var weights = rows.map(function (r) { return parseFloat(r.weight) * 100; });
+            var gbp = rows.map(function (r) { return parseFloat(r.totalGbp); });
+            var colours = labels.map(function (c, i) { return ccyColour(c, i); });
+            curDonutChart = new Chart(
+                document.getElementById('cur-donut-chart').getContext('2d'), {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{ data: weights, backgroundColor: colours, borderWidth: 0 }]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'right' },
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        return ctx.label + ': ' + ctx.parsed.toFixed(1) +
+                                                '%  (£' + gbp[ctx.dataIndex].toLocaleString('en-GB',
+                                                        { maximumFractionDigits: 0 }) + ')';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+
+        function renderCurTable(rows) {
+            var tbody = document.querySelector('#cur-table tbody');
+            tbody.innerHTML = '';
+            rows.forEach(function (r) {
+                var tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td class="txt"><b>' + r.currency + '</b></td>' +
+                    '<td>' + fmtMoney0(r.investedGbp) + '</td>' +
+                    '<td>' + fmtMoney0(r.cashGbp) + '</td>' +
+                    '<td>' + fmtMoney0(r.totalGbp) + '</td>' +
+                    '<td>' + (parseFloat(r.weight) * 100).toFixed(2) + '%</td>' +
+                    '<td>' + r.positions + '</td>';
+                tbody.appendChild(tr);
+            });
+            attachSortOnce('cur-table');
+        }
+
+        function renderCurTrend(points) {
+            if (curTrendChart) curTrendChart.destroy();
+            // Build datasets per currency. Collect every currency seen across all points so
+            // an early sample with only GBP still gets a USD/EUR band at 0 — otherwise
+            // Chart.js would render a jagged stack.
+            var ccys = new Set();
+            points.forEach(function (p) {
+                Object.keys(p.weightByCurrency || {}).forEach(function (c) { ccys.add(c); });
+            });
+            // Preferred display order: GBP first, USD second, EUR third, rest alphabetical.
+            var orderHint = ['GBP', 'USD', 'EUR'];
+            var sorted = orderHint.filter(function (c) { return ccys.has(c); })
+                    .concat(Array.from(ccys).filter(function (c) {
+                        return orderHint.indexOf(c) < 0;
+                    }).sort());
+            var datasets = sorted.map(function (ccy, idx) {
+                return {
+                    label: ccy,
+                    data: points.map(function (p) {
+                        var w = (p.weightByCurrency || {})[ccy];
+                        return { x: p.date, y: w == null ? 0 : parseFloat(w) * 100 };
+                    }),
+                    borderColor: ccyColour(ccy, idx),
+                    backgroundColor: ccyColour(ccy, idx),
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    tension: 0.1,
+                    fill: true,
+                    stack: 'ccy'
+                };
+            });
+            curTrendChart = new Chart(
+                document.getElementById('cur-trend-chart').getContext('2d'), {
+                    type: 'line',
+                    data: { datasets: datasets },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' } },
+                            y: { stacked: true, beginAtZero: true, max: 100,
+                                 title: { display: true, text: 'Weight (%)' },
+                                 ticks: { callback: function (v) { return v.toFixed(0) + '%'; } } }
                         },
                         plugins: { legend: { position: 'bottom' } }
                     }

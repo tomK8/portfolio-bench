@@ -12,6 +12,8 @@ import com.portfolio.application.DividendIncomeService;
 import com.portfolio.application.DividendIncomeService.DividendIncome;
 import com.portfolio.application.ConcentrationService;
 import com.portfolio.application.ConcentrationService.ConcentrationMetrics;
+import com.portfolio.application.CurrencyExposureService;
+import com.portfolio.application.CurrencyExposureService.CurrencyExposure;
 import com.portfolio.application.PositionDetailService;
 import com.portfolio.application.PositionDetailService.PositionDetail;
 import com.portfolio.application.ExportExcelService;
@@ -69,6 +71,7 @@ public class DashboardController {
     private final DividendIncomeService dividendIncomeService;
     private final PositionDetailService positionDetailService;
     private final ConcentrationService concentrationService;
+    private final CurrencyExposureService currencyExposureService;
     private final PortfolioValueService portfolioValueService;
     private final PortfolioReturnService portfolioReturnService;
     private final PortfolioRiskService portfolioRiskService;
@@ -89,6 +92,7 @@ public class DashboardController {
                                DividendIncomeService dividendIncomeService,
                                PositionDetailService positionDetailService,
                                ConcentrationService concentrationService,
+                               CurrencyExposureService currencyExposureService,
                                PortfolioValueService portfolioValueService,
                                PortfolioReturnService portfolioReturnService,
                                PortfolioRiskService portfolioRiskService,
@@ -108,6 +112,7 @@ public class DashboardController {
         this.dividendIncomeService = dividendIncomeService;
         this.positionDetailService = positionDetailService;
         this.concentrationService = concentrationService;
+        this.currencyExposureService = currencyExposureService;
         this.portfolioValueService = portfolioValueService;
         this.portfolioReturnService = portfolioReturnService;
         this.portfolioRiskService = portfolioRiskService;
@@ -219,6 +224,12 @@ public class DashboardController {
     @ResponseBody
     public ConcentrationMetrics concentration() {
         return concentrationService.metrics();
+    }
+
+    @GetMapping("/currency")
+    @ResponseBody
+    public CurrencyExposure currency() {
+        return currencyExposureService.summary();
     }
 
     @GetMapping("/portfolio-value")

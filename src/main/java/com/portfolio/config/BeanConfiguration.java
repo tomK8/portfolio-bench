@@ -175,6 +175,17 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public CurrencyExposureService currencyExposureService(AllocationService allocationService,
+                                                           CashTransactionRepository cashTransactionRepository,
+                                                           IntradayPriceRepository intradayPriceRepository,
+                                                           FxRateProvider fxRateProvider,
+                                                           HistoricalFxRateProvider historicalFxRateProvider,
+                                                           YahooTickerMap yahooTickerMap) {
+        return new CurrencyExposureService(allocationService, cashTransactionRepository,
+                intradayPriceRepository, fxRateProvider, historicalFxRateProvider, yahooTickerMap);
+    }
+
+    @Bean
     public BenchmarkReturnService benchmarkReturnService(PortfolioValueService portfolioValueService,
                                                          PriceHistoryRepository priceHistoryRepository,
                                                          YahooTickerMap yahooTickerMap) {

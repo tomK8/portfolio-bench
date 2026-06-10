@@ -181,6 +181,15 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public ReconciliationService reconciliationService(CashTransactionRepository cashTransactionRepository,
+                                                       PriceHistoryRepository priceHistoryRepository,
+                                                       IntradayPriceRepository intradayPriceRepository,
+                                                       YahooTickerMap yahooTickerMap) {
+        return new ReconciliationService(cashTransactionRepository, priceHistoryRepository,
+                intradayPriceRepository, yahooTickerMap);
+    }
+
+    @Bean
     public HealthService healthService(JdbcConnectionFactory jdbcConnectionFactory) {
         return new HealthService(jdbcConnectionFactory);
     }

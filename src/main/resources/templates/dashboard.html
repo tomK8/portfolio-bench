@@ -643,6 +643,7 @@
     <button class="tab" data-panel="panel-concentration" type="button">Concentration</button>
     <button class="tab" data-panel="panel-currency" type="button">Currency</button>
     <button class="tab" data-panel="panel-snapshots" type="button">Snapshots</button>
+    <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
@@ -1204,6 +1205,26 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-recon">
+    <p class="muted" style="margin-top: 0">
+        Data-quality issues across held positions, recomputed on each request. <span class="pos">error</span>
+        = something blocks valuation; <span class="neg">warning</span> = totals will be wrong
+        but not blank; <span class="muted">info</span> = worth a look but not breaking.
+    </p>
+    <div id="recon-summary" class="muted" style="margin: 0.5rem 0; font-size: 0.85rem;">
+        Loading…
+    </div>
+    <table id="recon-table" class="annual-table">
+        <thead><tr>
+            <th class="txt" data-sort="text">Severity</th>
+            <th class="txt" data-sort="text">Symbol</th>
+            <th class="txt" data-sort="text">Code</th>
+            <th class="txt" data-sort="text">Detail</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+</section>
+
 <section class="tab-panel" id="panel-attribution">
     <p class="muted" style="margin-top: 0">
         Per-symbol GBP P&amp;L over a date window:
@@ -1390,6 +1411,7 @@
             if (panelId === 'panel-concentration') loadConcentration();
             if (panelId === 'panel-currency') loadCurrency();
             if (panelId === 'panel-snapshots') setupSnapshots();
+            if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
             if (panelId === 'panel-whatif') setupWhatIf();
             if (persist) {
@@ -4062,6 +4084,43 @@
             var sign = n >= 0 ? '+' : '−';
             return sign + Math.abs(n).toLocaleString('en-GB',
                     { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        }
+
+        var reconLoaded = false;
+        function loadReconciliation() {
+            if (reconLoaded) return;
+            reconLoaded = true;
+            fetch('/reconciliation').then(function (r) { return r.json(); }).then(renderRecon);
+        }
+
+        function renderRecon(report) {
+            var summary = document.getElementById('recon-summary');
+            var n = (report.issues || []).length;
+            if (n === 0) {
+                summary.textContent = 'All ' + report.positionsChecked + ' held positions clean — no issues.';
+            } else {
+                var errors = report.issues.filter(function (i) { return i.severity === 'error'; }).length;
+                var warns = report.issues.filter(function (i) { return i.severity === 'warning'; }).length;
+                summary.textContent = report.positionsChecked + ' positions checked — ' +
+                        errors + ' errors, ' + warns + ' warnings, ' +
+                        (n - errors - warns) + ' info notes.';
+            }
+            var tbody = document.querySelector('#recon-table tbody');
+            tbody.innerHTML = '';
+            (report.issues || []).forEach(function (it) {
+                var tr = document.createElement('tr');
+                var sevClass = it.severity === 'error' ? 'neg'
+                        : it.severity === 'warning' ? 'pos' : 'muted';
+                var icon = it.severity === 'error' ? '🔴'
+                        : it.severity === 'warning' ? '🟡' : 'ℹ️';
+                tr.innerHTML =
+                    '<td class="txt"><span class="' + sevClass + '">' + icon + ' ' + it.severity + '</span></td>' +
+                    '<td class="txt"><b>' + it.symbol + '</b></td>' +
+                    '<td class="txt"><code>' + it.code + '</code></td>' +
+                    '<td class="txt">' + it.detail + '</td>';
+                tbody.appendChild(tr);
+            });
+            attachSortOnce('recon-table');
         }
     }());
 </script>

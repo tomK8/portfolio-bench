@@ -16,6 +16,8 @@ import com.portfolio.application.CurrencyExposureService;
 import com.portfolio.application.CurrencyExposureService.CurrencyExposure;
 import com.portfolio.application.HealthService;
 import com.portfolio.application.HealthService.Health;
+import com.portfolio.application.ReconciliationService;
+import com.portfolio.application.ReconciliationService.Report;
 import com.portfolio.application.TargetAllocationService;
 import com.portfolio.application.TargetAllocationService.TargetReport;
 import com.portfolio.application.PositionDetailService;
@@ -79,6 +81,7 @@ public class DashboardController {
     private final CurrencyExposureService currencyExposureService;
     private final HealthService healthService;
     private final TargetAllocationService targetAllocationService;
+    private final ReconciliationService reconciliationService;
     private final PortfolioValueService portfolioValueService;
     private final PortfolioReturnService portfolioReturnService;
     private final PortfolioRiskService portfolioRiskService;
@@ -103,6 +106,7 @@ public class DashboardController {
                                CurrencyExposureService currencyExposureService,
                                HealthService healthService,
                                TargetAllocationService targetAllocationService,
+                               ReconciliationService reconciliationService,
                                PortfolioValueService portfolioValueService,
                                PortfolioReturnService portfolioReturnService,
                                PortfolioRiskService portfolioRiskService,
@@ -126,6 +130,7 @@ public class DashboardController {
         this.currencyExposureService = currencyExposureService;
         this.healthService = healthService;
         this.targetAllocationService = targetAllocationService;
+        this.reconciliationService = reconciliationService;
         this.portfolioValueService = portfolioValueService;
         this.portfolioReturnService = portfolioReturnService;
         this.portfolioRiskService = portfolioRiskService;
@@ -256,6 +261,12 @@ public class DashboardController {
     @ResponseBody
     public List<SnapshotRepository.Snapshot> snapshots() {
         return snapshotRepo.listAll();
+    }
+
+    @GetMapping("/reconciliation")
+    @ResponseBody
+    public Report reconciliation() {
+        return reconciliationService.report();
     }
 
     /**

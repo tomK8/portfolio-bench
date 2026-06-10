@@ -96,7 +96,8 @@ public class WhatIfService {
                 idx++;
             }
             BigDecimal v = valueAt(sample, shares, prices, fx).add(residualGbp);
-            points.add(new PortfolioValueService.DataPoint(sample.toString(), v.setScale(2, RoundingMode.HALF_UP)));
+            points.add(new PortfolioValueService.DataPoint(sample.toString(),
+                    v.setScale(2, RoundingMode.HALF_UP), null));
             sample = sample.plusDays(1);
         }
 

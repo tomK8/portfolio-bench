@@ -629,9 +629,12 @@
         the sample predates all stored prices). FX from Frankfurter historical rates.
         The Roth IRA brought-forward USD seed is folded into Roth USD cash from its first
         ledger date.<br/>
+        Green line: invested capital — running weighted-average cost basis of currently-held
+        positions. The gap between value (blue) and cost (green) is realised + unrealised
+        gains plus dividends on the held book; the gap between cost and contributions (red)
+        is sells you've made (cash recovered from positions).<br/>
         Red dashed line: cumulative external contributions (same series as the
-        Contributions tab's Total). The vertical gap between the two lines is portfolio
-        growth above what you put in.
+        Contributions tab's Total).
     </p>
     <div id="value-warnings" class="value-warnings" style="display: none;"></div>
     <div class="zoom-hint">
@@ -1587,6 +1590,11 @@
                 var valueData = timeline.points.map(function (p) {
                     return { x: p.date, y: parseFloat(p.valueGbp) };
                 });
+                var costData = timeline.points
+                        .filter(function (p) { return p.costBasisGbp != null; })
+                        .map(function (p) {
+                            return { x: p.date, y: parseFloat(p.costBasisGbp) };
+                        });
                 var totalLine = (contribTimeline.lines || []).find(function (l) { return l.label === 'Total'; });
                 var contribData = totalLine ? totalLine.points.map(function (p) {
                     return { x: p.date, y: parseFloat(p.cumulativeGbp) };
@@ -1601,6 +1609,16 @@
                             borderColor: '#1f77b4',
                             backgroundColor: 'rgba(31, 119, 180, 0.12)',
                             fill: true,
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            tension: 0.1,
+                            order: 3
+                        }, {
+                            label: 'Invested capital — cost basis (£)',
+                            data: costData,
+                            borderColor: '#2ca02c',
+                            backgroundColor: '#2ca02c',
+                            fill: false,
                             pointRadius: 0,
                             borderWidth: 1.5,
                             tension: 0.1,

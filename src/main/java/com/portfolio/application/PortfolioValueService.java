@@ -90,6 +90,7 @@ public class PortfolioValueService {
         boolean rothSeeded = false;
 
         Map<String, BigDecimal> qtyBySymbol = new HashMap<>();      // symbol → net qty
+        Map<String, BigDecimal> costBySymbol = new HashMap<>();     // symbol → running GBP cost basis (WAC)
         Map<String, BigDecimal> cashByAccountCcy = new HashMap<>(); // "account|ccy" → native cash
         Map<String, HeldRange> heldRange = new LinkedHashMap<>();   // first/last date qty > 0, per symbol
 
@@ -98,7 +99,7 @@ public class PortfolioValueService {
         LocalDate sample = start;
         while (!sample.isAfter(end)) {
             while (idx < txs.size() && !LocalDate.parse(txs.get(idx).transactionDate()).isAfter(sample)) {
-                apply(qtyBySymbol, cashByAccountCcy, txs.get(idx));
+                applyWithCost(qtyBySymbol, costBySymbol, cashByAccountCcy, txs.get(idx));
                 idx++;
             }
             if (!rothSeeded && rothStart != null && !sample.isBefore(rothStart)) {
@@ -107,7 +108,15 @@ public class PortfolioValueService {
             }
             recordHeld(qtyBySymbol, heldRange, sample);
             BigDecimal v = valueAt(sample, qtyBySymbol, cashByAccountCcy, prices, fx);
-            points.add(new DataPoint(sample.toString(), v.setScale(2, RoundingMode.HALF_UP)));
+            // Cost basis line uses weighted-average cost per symbol — simpler than FIFO and
+            // adequate for the visual "where did gains come from" read. Sells release a
+            // proportional slice of running cost; splits scale qty but leave cost basis
+            // invariant.
+            BigDecimal costBasis = BigDecimal.ZERO;
+            for (BigDecimal c : costBySymbol.values()) costBasis = costBasis.add(c);
+            points.add(new DataPoint(sample.toString(),
+                    v.setScale(2, RoundingMode.HALF_UP),
+                    costBasis.setScale(2, RoundingMode.HALF_UP)));
             sample = sample.plusDays(1);
         }
 
@@ -226,6 +235,56 @@ public class PortfolioValueService {
         qtyBySymbol.merge(sym.toUpperCase(), q, BigDecimal::add);
     }
 
+    /**
+     * Same as {@link #apply} but additionally maintains a weighted-average GBP cost basis per
+     * symbol. Buy → add the row's amountGbp to running cost; sell → release a proportional
+     * slice of running cost (so a half-sell halves the remaining cost basis); split → leave
+     * cost untouched (qty scales, total cost is invariant under splits, cost-per-share
+     * scales accordingly). Drives the cost-basis overlay on the Value-over-time chart.
+     */
+    private static void applyWithCost(Map<String, BigDecimal> qtyBySymbol,
+                                      Map<String, BigDecimal> costBySymbol,
+                                      Map<String, BigDecimal> cashByAccountCcy,
+                                      CashTransaction t) {
+        String acctCcy = t.account().dbValue() + "|" + t.currency();
+        cashByAccountCcy.merge(acctCcy, BigDecimal.valueOf(t.amount()), BigDecimal::add);
+        if (t.type() != TransactionType.TRANSACTION) return;
+        String sym = t.symbol();
+        if (sym == null || sym.isEmpty() || sym.equals("GBP") || sym.equals("CASH")) return;
+        String upper = sym.toUpperCase();
+
+        BigDecimal qtyPrior = qtyBySymbol.getOrDefault(upper, BigDecimal.ZERO);
+        BigDecimal costPrior = costBySymbol.getOrDefault(upper, BigDecimal.ZERO);
+
+        if (t.amount() < 0) {
+            // Buy: add this lot's GBP cost and shares.
+            BigDecimal qty = BigDecimal.valueOf(Math.abs(t.quantity()));
+            BigDecimal cost = BigDecimal.valueOf(Math.abs(t.amountGbp()));
+            qtyBySymbol.put(upper, qtyPrior.add(qty));
+            costBySymbol.put(upper, costPrior.add(cost));
+        } else if (t.amount() > 0) {
+            // Sell: release proportional cost. share = (sellQty / priorQty).
+            BigDecimal qty = BigDecimal.valueOf(Math.abs(t.quantity()));
+            BigDecimal newQty = qtyPrior.subtract(qty);
+            if (qtyPrior.signum() > 0) {
+                BigDecimal frac = qty.divide(qtyPrior, 10, RoundingMode.HALF_UP);
+                BigDecimal costReleased = costPrior.multiply(frac);
+                BigDecimal costRemaining = costPrior.subtract(costReleased);
+                if (newQty.signum() <= 0) {
+                    // Fully closed → drop cost regardless of FP residual.
+                    costBySymbol.remove(upper);
+                } else {
+                    costBySymbol.put(upper, costRemaining);
+                }
+            }
+            if (newQty.signum() <= 0) qtyBySymbol.remove(upper);
+            else qtyBySymbol.put(upper, newQty);
+        } else {
+            // Split: signed qty delta, cost basis invariant.
+            qtyBySymbol.put(upper, qtyPrior.add(BigDecimal.valueOf(t.quantity())));
+        }
+    }
+
     // ---- Valuation -------------------------------------------------------
 
     private static BigDecimal valueAt(LocalDate sample,
@@ -335,7 +394,12 @@ public class PortfolioValueService {
     private record HeldRange(LocalDate from, LocalDate to) {
     }
 
-    public record DataPoint(String date, BigDecimal valueGbp) {
+    /**
+     * One day's portfolio value. {@code costBasisGbp} is the running weighted-average cost
+     * basis of positions (nullable — only set by {@link #timeline()}; {@code WhatIfService}'s
+     * synthetic timeline doesn't compute it).
+     */
+    public record DataPoint(String date, BigDecimal valueGbp, BigDecimal costBasisGbp) {
     }
 
     /**

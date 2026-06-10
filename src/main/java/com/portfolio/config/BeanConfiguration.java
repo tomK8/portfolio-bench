@@ -155,6 +155,16 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public PositionDetailService positionDetailService(CashTransactionRepository cashTransactionRepository,
+                                                       PriceHistoryRepository priceHistoryRepository,
+                                                       IntradayPriceRepository intradayPriceRepository,
+                                                       FxRateProvider fxRateProvider,
+                                                       YahooTickerMap yahooTickerMap) {
+        return new PositionDetailService(cashTransactionRepository, priceHistoryRepository,
+                intradayPriceRepository, fxRateProvider, yahooTickerMap);
+    }
+
+    @Bean
     public BenchmarkReturnService benchmarkReturnService(PortfolioValueService portfolioValueService,
                                                          PriceHistoryRepository priceHistoryRepository,
                                                          YahooTickerMap yahooTickerMap) {

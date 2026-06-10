@@ -580,6 +580,7 @@
     <button class="tab" data-panel="panel-returns" type="button">Returns</button>
     <button class="tab" data-panel="panel-risk" type="button">Risk</button>
     <button class="tab" data-panel="panel-dividends" type="button">Dividends</button>
+    <button class="tab" data-panel="panel-position" type="button">Position</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
@@ -874,6 +875,84 @@
     </table>
 </section>
 
+<section class="tab-panel" id="panel-position">
+    <p class="muted" style="margin-top: 0">
+        Per-symbol drill-down. FIFO lots, dividends, total return = realized + unrealized +
+        dividends. Price chart is in the symbol's <b>listing currency</b> (raw close, undoing
+        Yahoo's split adjustment) so markers sit at the price you actually paid / sold at on
+        that day; the GBP cost / proceeds appears in the marker tooltip and tables.
+    </p>
+    <div class="benchmark-controls">
+        <label>Symbol:
+            <select id="position-select">
+                <option value="">— pick one —</option>
+            </select>
+        </label>
+        <span id="position-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="position-empty" class="muted" style="margin-top: 1rem;">
+        Pick a symbol to load its history.
+    </div>
+
+    <div id="position-content" style="display: none;">
+        <div class="returns-stats" id="position-stats">
+            <div class="returns-stat"><span class="label">Shares held</span><span class="value na" id="pos-shares">—</span></div>
+            <div class="returns-stat"><span class="label">Cost basis</span><span class="value na" id="pos-cost">—</span></div>
+            <div class="returns-stat"><span class="label">Market value</span><span class="value na" id="pos-mv">—</span></div>
+            <div class="returns-stat"><span class="label">Realized P&amp;L</span><span class="value na" id="pos-realized">—</span></div>
+            <div class="returns-stat"><span class="label">Unrealized P&amp;L</span><span class="value na" id="pos-unrealized">—</span></div>
+            <div class="returns-stat"><span class="label">Lifetime dividends</span><span class="value na" id="pos-divs">—</span></div>
+            <div class="returns-stat" title="Realized + unrealized + dividends, all GBP"><span class="label">Total return</span><span class="value na" id="pos-total">—</span></div>
+        </div>
+
+        <h3 style="margin-top: 1.5rem; font-size: 1rem;">Price chart with buys / sells / dividends</h3>
+        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+            Green ▲ = buy, red ▼ = sell, blue ● = dividend payment. Hover for shares / GBP.
+        </p>
+        <div id="position-missing-prices" class="value-warnings" style="display: none;"></div>
+        <div style="height: 380px; margin-top: 0.25rem;">
+            <canvas id="position-chart"></canvas>
+        </div>
+
+        <h3 style="margin-top: 1.5rem; font-size: 1rem;">Open lots (still owned)</h3>
+        <table id="position-open-table" class="annual-table" style="margin-top: 0.5rem;">
+            <thead><tr>
+                <th class="txt" data-sort="text">Open date</th>
+                <th data-sort="num">Shares</th>
+                <th data-sort="num">Cost / share (£)</th>
+                <th data-sort="num">Cost (£)</th>
+                <th class="txt" data-sort="text">Account</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+
+        <h3 style="margin-top: 1.5rem; font-size: 1rem;">Closed lots (realized)</h3>
+        <table id="position-closed-table" class="annual-table" style="margin-top: 0.5rem;">
+            <thead><tr>
+                <th class="txt" data-sort="text">Open date</th>
+                <th class="txt" data-sort="text">Close date</th>
+                <th data-sort="num">Shares</th>
+                <th data-sort="num">Cost (£)</th>
+                <th data-sort="num">Proceeds (£)</th>
+                <th data-sort="num">Realized (£)</th>
+                <th class="txt" data-sort="text">Account</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+
+        <h3 style="margin-top: 1.5rem; font-size: 1rem;">Dividends received</h3>
+        <table id="position-div-table" class="annual-table" style="margin-top: 0.5rem;">
+            <thead><tr>
+                <th class="txt" data-sort="text">Date</th>
+                <th data-sort="num">Amount (£)</th>
+                <th class="txt" data-sort="text">Account</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-attribution">
     <p class="muted" style="margin-top: 0">
         Per-symbol GBP P&amp;L over a date window:
@@ -1052,6 +1131,7 @@
                 if (btn.dataset.panel === 'panel-returns') { loadReturnsChart(); setupBenchmark(); }
                 if (btn.dataset.panel === 'panel-risk') loadRisk();
                 if (btn.dataset.panel === 'panel-dividends') loadDividends();
+                if (btn.dataset.panel === 'panel-position') setupPosition();
                 if (btn.dataset.panel === 'panel-attribution') setupAttribution();
                 if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
             });
@@ -2777,6 +2857,247 @@
         function fmtYield(v) {
             if (v == null) return '—';
             return (parseFloat(v) * 100).toFixed(2) + '%';
+        }
+
+        var positionInitialized = false;
+        var positionChart = null;
+
+        function setupPosition() {
+            if (positionInitialized) return;
+            positionInitialized = true;
+            // Populate dropdown from the same /returns/symbols endpoint the Returns tab uses.
+            fetch('/returns/symbols').then(function (r) { return r.json(); })
+                    .then(function (symbols) {
+                        var sel = document.getElementById('position-select');
+                        symbols.forEach(function (s) {
+                            var opt = document.createElement('option');
+                            opt.value = s;
+                            opt.textContent = s;
+                            sel.appendChild(opt);
+                        });
+                    });
+            document.getElementById('position-select')
+                    .addEventListener('change', function (ev) {
+                        var sym = ev.target.value;
+                        if (!sym) {
+                            document.getElementById('position-empty').style.display = '';
+                            document.getElementById('position-content').style.display = 'none';
+                            return;
+                        }
+                        loadPosition(sym);
+                    });
+        }
+
+        function loadPosition(symbol) {
+            var status = document.getElementById('position-status');
+            status.textContent = 'Loading…';
+            fetch('/position?symbol=' + encodeURIComponent(symbol))
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        status.textContent = '';
+                        renderPosition(data);
+                    })
+                    .catch(function (e) { status.textContent = 'Error: ' + e.message; });
+        }
+
+        function renderPosition(d) {
+            document.getElementById('position-empty').style.display = 'none';
+            document.getElementById('position-content').style.display = '';
+            var s = d.summary || {};
+            document.getElementById('pos-shares').textContent =
+                    s.shares != null ? parseFloat(s.shares).toLocaleString('en-GB',
+                            { maximumFractionDigits: 4 }) : '—';
+            setMoney('pos-cost', s.costBasisGbp);
+            setMoney('pos-mv', s.marketValueGbp);
+            setSignedMoney('pos-realized', s.realizedGbp);
+            setSignedMoney('pos-unrealized', s.unrealizedGbp);
+            setMoney('pos-divs', s.dividendsGbp);
+            setSignedMoney('pos-total', s.totalReturnGbp);
+
+            renderPositionChart(d);
+            renderPositionTables(d);
+
+            var warn = document.getElementById('position-missing-prices');
+            if (d.missingPriceHistory) {
+                warn.textContent = 'No price_history rows for this symbol — chart will be empty.';
+                warn.style.display = '';
+            } else {
+                warn.style.display = 'none';
+            }
+        }
+
+        function setSignedMoney(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            var n = parseFloat(v);
+            var sign = n >= 0 ? '+' : '−';
+            el.textContent = sign + '£' + Math.abs(n).toLocaleString('en-GB',
+                    { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+            el.className = 'value' + (n >= 0 ? ' pos' : ' neg');
+        }
+
+        function renderPositionChart(d) {
+            if (positionChart) positionChart.destroy();
+            var priceSeries = (d.priceHistory || []).map(function (p) {
+                return { x: p.date, y: parseFloat(p.price) };
+            });
+            // Split markers into 3 datasets so each gets its own colour + shape.
+            var byKind = { buy: [], sell: [], div: [] };
+            (d.markers || []).forEach(function (m) {
+                byKind[m.kind] = byKind[m.kind] || [];
+                byKind[m.kind].push({
+                    x: m.date,
+                    y: parseFloat(m.priceAtMarker),
+                    shares: parseFloat(m.shares || 0),
+                    gbp: parseFloat(m.gbpAmount || 0),
+                    account: m.account
+                });
+            });
+            var datasets = [
+                {
+                    label: 'Price',
+                    data: priceSeries,
+                    type: 'line',
+                    borderColor: '#1f77b4',
+                    backgroundColor: 'rgba(31,119,180,0.08)',
+                    borderWidth: 1.4,
+                    pointRadius: 0,
+                    tension: 0.1,
+                    fill: false,
+                    order: 1
+                },
+                markerDataset('Buy', byKind.buy, '#2ca02c', 'triangle', 8, 2),
+                markerDataset('Sell', byKind.sell, '#d62728', 'triangle', 8, 2),
+                markerDataset('Dividend', byKind.div, '#1f77b4', 'circle', 5, 2)
+            ];
+
+            positionChart = new Chart(
+                document.getElementById('position-chart').getContext('2d'), {
+                    type: 'line',
+                    data: { datasets: datasets },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' } },
+                            y: {
+                                title: { display: true, text: 'Price (' + (d.summary.currentPriceCurrency || 'native') + ')' }
+                            }
+                        },
+                        plugins: {
+                            legend: { position: 'bottom' },
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        var ds = ctx.dataset.label;
+                                        var raw = ctx.raw;
+                                        if (ds === 'Price') {
+                                            return 'Price: ' + ctx.parsed.y.toFixed(4);
+                                        }
+                                        // Marker datasets carry shares/gbp/account.
+                                        var gbpStr = '£' + raw.gbp.toLocaleString('en-GB',
+                                                { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                        if (ds === 'Dividend') {
+                                            return ds + ': ' + gbpStr + ' (' + raw.account + ')';
+                                        }
+                                        return ds + ': ' + raw.shares.toLocaleString('en-GB',
+                                                { maximumFractionDigits: 4 }) + ' shares for ' +
+                                                gbpStr + ' (' + raw.account + ')';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+
+        // Sell triangles point down by rotating Chart.js's "triangle" 180°.
+        function markerDataset(label, points, colour, style, radius, borderWidth) {
+            return {
+                label: label,
+                data: points,
+                type: 'scatter',
+                pointStyle: style,
+                pointRotation: label === 'Sell' ? 180 : 0,
+                pointRadius: radius,
+                pointHoverRadius: radius + 2,
+                borderColor: colour,
+                backgroundColor: colour,
+                borderWidth: borderWidth,
+                showLine: false,
+                order: 0
+            };
+        }
+
+        function renderPositionTables(d) {
+            var openBody = document.querySelector('#position-open-table tbody');
+            openBody.innerHTML = '';
+            (d.openLots || []).forEach(function (l) {
+                var tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td class="txt">' + l.openDate + '</td>' +
+                    '<td>' + fmtNumber(l.shares, 4) + '</td>' +
+                    '<td>' + fmtNumber(l.costPerShareGbp, 4) + '</td>' +
+                    '<td>' + fmtMoney2(l.costGbp) + '</td>' +
+                    '<td class="txt muted">' + l.account + '</td>';
+                openBody.appendChild(tr);
+            });
+            attachSortOnce('position-open-table');
+
+            var closedBody = document.querySelector('#position-closed-table tbody');
+            closedBody.innerHTML = '';
+            (d.closedLots || []).forEach(function (l) {
+                var tr = document.createElement('tr');
+                var realized = parseFloat(l.realizedGbp);
+                tr.innerHTML =
+                    '<td class="txt">' + l.openDate + '</td>' +
+                    '<td class="txt">' + l.closeDate + '</td>' +
+                    '<td>' + fmtNumber(l.shares, 4) + '</td>' +
+                    '<td>' + fmtMoney2(l.costGbp) + '</td>' +
+                    '<td>' + fmtMoney2(l.proceedsGbp) + '</td>' +
+                    '<td class="' + (realized >= 0 ? 'pos' : 'neg') + '">' + fmtSignedMoney(realized) + '</td>' +
+                    '<td class="txt muted">' + l.account + '</td>';
+                closedBody.appendChild(tr);
+            });
+            attachSortOnce('position-closed-table');
+
+            var divBody = document.querySelector('#position-div-table tbody');
+            divBody.innerHTML = '';
+            (d.dividends || []).forEach(function (p) {
+                var tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td class="txt">' + p.date + '</td>' +
+                    '<td>' + fmtMoney2(p.amountGbp) + '</td>' +
+                    '<td class="txt muted">' + p.account + '</td>';
+                divBody.appendChild(tr);
+            });
+            attachSortOnce('position-div-table');
+        }
+
+        function attachSortOnce(id) {
+            var t = document.getElementById(id);
+            if (t.dataset.sortAttached) return;
+            t.dataset.sortAttached = '1';
+            attachSort(t);
+        }
+
+        function fmtNumber(v, digits) {
+            if (v == null) return '—';
+            return parseFloat(v).toLocaleString('en-GB',
+                    { minimumFractionDigits: 0, maximumFractionDigits: digits });
+        }
+
+        function fmtMoney2(v) {
+            if (v == null) return '—';
+            return '£' + parseFloat(v).toLocaleString('en-GB',
+                    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function fmtSignedMoney(n) {
+            if (n == null || isNaN(n)) return '—';
+            var sign = n >= 0 ? '+' : '−';
+            return sign + '£' + Math.abs(n).toLocaleString('en-GB',
+                    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         }
     }());
 </script>

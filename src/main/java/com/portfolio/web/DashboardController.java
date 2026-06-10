@@ -10,6 +10,8 @@ import com.portfolio.application.ContributionService;
 import com.portfolio.application.ContributionService.ContributionTimeline;
 import com.portfolio.application.DividendIncomeService;
 import com.portfolio.application.DividendIncomeService.DividendIncome;
+import com.portfolio.application.PositionDetailService;
+import com.portfolio.application.PositionDetailService.PositionDetail;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
@@ -63,6 +65,7 @@ public class DashboardController {
     private final ImportGiltPricesService importGiltPricesService;
     private final ContributionService contributionService;
     private final DividendIncomeService dividendIncomeService;
+    private final PositionDetailService positionDetailService;
     private final PortfolioValueService portfolioValueService;
     private final PortfolioReturnService portfolioReturnService;
     private final PortfolioRiskService portfolioRiskService;
@@ -81,6 +84,7 @@ public class DashboardController {
                                ImportGiltPricesService importGiltPricesService,
                                ContributionService contributionService,
                                DividendIncomeService dividendIncomeService,
+                               PositionDetailService positionDetailService,
                                PortfolioValueService portfolioValueService,
                                PortfolioReturnService portfolioReturnService,
                                PortfolioRiskService portfolioRiskService,
@@ -98,6 +102,7 @@ public class DashboardController {
         this.importGiltPricesService = importGiltPricesService;
         this.contributionService = contributionService;
         this.dividendIncomeService = dividendIncomeService;
+        this.positionDetailService = positionDetailService;
         this.portfolioValueService = portfolioValueService;
         this.portfolioReturnService = portfolioReturnService;
         this.portfolioRiskService = portfolioRiskService;
@@ -192,6 +197,17 @@ public class DashboardController {
     @ResponseBody
     public DividendIncome dividends() {
         return dividendIncomeService.summary();
+    }
+
+    /**
+     * Per-symbol drill-down: FIFO open + closed lots, dividends, total return and price chart
+     * data. Empty/unknown symbols return an empty payload (not an error) so the tab can
+     * render the "pick a symbol" prompt.
+     */
+    @GetMapping("/position")
+    @ResponseBody
+    public PositionDetail position(@RequestParam(name = "symbol", required = false) String symbol) {
+        return positionDetailService.detail(symbol == null ? "" : symbol);
     }
 
     @GetMapping("/portfolio-value")

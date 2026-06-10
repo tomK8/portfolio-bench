@@ -71,6 +71,11 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
 - **Value over time** — `GET /portfolio-value` → JSON, Chart.js. Monthly portfolio GBP
   value; yellow warning panel above the chart lists symbols that were ever held but
   have zero rows in `price_history`.
+- **Allocation** — `GET /allocation` → JSON, three Chart.js panels: cash-vs-invested
+  stacked area, per-symbol stacked area (top 12 + "Other"), and a date-picker
+  snapshot of the full breakdown on any chosen day. Weekly cadence (~550 samples
+  over a 10-year history) via `AllocationService`; latest sample always pinned to
+  today so the snapshot reflects current state even mid-week.
 - **Attribution** — `GET /attribution?from=YYYY-MM-DD&to=YYYY-MM-DD` → JSON, Chart.js
   horizontal bar + sortable table. Per-symbol GBP P&L over a window via
   `AttributionService` (formula: `end_value − start_value + window_cash_flows`). Each
@@ -91,6 +96,7 @@ no `System.out` in production code.
 | Import gilt prices    | `POST /import-gilt-prices` | `ImportGiltPricesService` |
 | Contributions chart   | `GET /contributions`       | `ContributionService`     |
 | Value-over-time chart | `GET /portfolio-value`     | `PortfolioValueService`   |
+| Allocation            | `GET /allocation`          | `AllocationService`       |
 | Attribution           | `GET /attribution`         | `AttributionService`      |
 
 ## Holding fields

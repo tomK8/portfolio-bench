@@ -1,5 +1,7 @@
 package com.portfolio.web;
 
+import com.portfolio.application.AllocationService;
+import com.portfolio.application.AllocationService.AllocationTimeline;
 import com.portfolio.application.AttributionService;
 import com.portfolio.application.AttributionService.AttributionResult;
 import com.portfolio.application.BenchmarkReturnService;
@@ -60,6 +62,7 @@ public class DashboardController {
     private final PortfolioReturnService portfolioReturnService;
     private final BenchmarkReturnService benchmarkReturnService;
     private final WhatIfService whatIfService;
+    private final AllocationService allocationService;
     private final AttributionService attributionService;
     private final PriceFetchJob priceFetchJob;
     private final CashTransactionRepository cashRepo;
@@ -75,6 +78,7 @@ public class DashboardController {
                                PortfolioReturnService portfolioReturnService,
                                BenchmarkReturnService benchmarkReturnService,
                                WhatIfService whatIfService,
+                               AllocationService allocationService,
                                AttributionService attributionService,
                                PriceFetchJob priceFetchJob,
                                CashTransactionRepository cashRepo,
@@ -89,6 +93,7 @@ public class DashboardController {
         this.portfolioReturnService = portfolioReturnService;
         this.benchmarkReturnService = benchmarkReturnService;
         this.whatIfService = whatIfService;
+        this.allocationService = allocationService;
         this.attributionService = attributionService;
         this.priceFetchJob = priceFetchJob;
         this.cashRepo = cashRepo;
@@ -216,6 +221,17 @@ public class DashboardController {
     @ResponseBody
     public List<String> tradedSymbols() {
         return cashRepo.distinctTradedSymbols();
+    }
+
+    /**
+     * Weekly allocation timeline: per-symbol GBP value + aggregated cash at each sample.
+     * Feeds the Allocation tab's three views (cash-vs-invested, per-symbol stacked,
+     * date-picker snapshot).
+     */
+    @GetMapping("/allocation")
+    @ResponseBody
+    public AllocationTimeline allocation() {
+        return allocationService.timeline();
     }
 
     /**

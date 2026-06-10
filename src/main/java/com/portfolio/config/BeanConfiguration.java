@@ -157,6 +157,16 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public AllocationService allocationService(CashTransactionRepository cashTransactionRepository,
+                                               PriceHistoryRepository priceHistoryRepository,
+                                               HistoricalFxRateProvider historicalFxRateProvider,
+                                               YahooTickerMap yahooTickerMap,
+                                               KeyValueStore keyValueStore) {
+        return new AllocationService(cashTransactionRepository, priceHistoryRepository,
+                historicalFxRateProvider, yahooTickerMap, keyValueStore);
+    }
+
+    @Bean
     public AttributionService attributionService(CashTransactionRepository cashTransactionRepository,
                                                  PriceHistoryRepository priceHistoryRepository,
                                                  IntradayPriceRepository intradayPriceRepository,

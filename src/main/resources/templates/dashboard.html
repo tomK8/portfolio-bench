@@ -540,6 +540,7 @@
     <button class="tab" data-panel="panel-cash" type="button">From cash ledger</button>
     <button class="tab" data-panel="panel-contributions" type="button">Contributions</button>
     <button class="tab" data-panel="panel-value" type="button">Value over time</button>
+    <button class="tab" data-panel="panel-allocation" type="button">Allocation</button>
     <button class="tab" data-panel="panel-returns" type="button">Returns</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
@@ -598,6 +599,44 @@
     </div>
     <div style="height: 480px; margin-top: 0.25rem;">
         <canvas id="value-chart"></canvas>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-allocation">
+    <p class="muted" style="margin-top: 0">
+        Weekly snapshots from the first ledger date through today, derived from the same
+        forward-replay as the value chart. Three views below: cash vs invested (the
+        headline "how much was uninvested"), per-symbol composition over time (top 12 by
+        latest value, the long tail bucketed into "Other"), and a date-picker snapshot
+        showing the full breakdown on any chosen day.
+    </p>
+
+    <h3 style="margin-top: 1rem; font-size: 1rem;">Cash vs invested</h3>
+    <div class="zoom-hint">
+        <span class="muted" style="font-size: 0.8rem;">Drag to zoom.</span>
+        <button id="alloc-cash-zoom-reset" type="button" class="link-btn">Reset zoom</button>
+    </div>
+    <div style="height: 320px; margin-top: 0.25rem;">
+        <canvas id="alloc-cash-chart"></canvas>
+    </div>
+
+    <h3 style="margin-top: 2rem; font-size: 1rem;">Composition over time</h3>
+    <div class="zoom-hint">
+        <span class="muted" style="font-size: 0.8rem;">Click a legend entry to hide/show that band.</span>
+        <button id="alloc-symbols-zoom-reset" type="button" class="link-btn">Reset zoom</button>
+    </div>
+    <div style="height: 460px; margin-top: 0.25rem;">
+        <canvas id="alloc-symbols-chart"></canvas>
+    </div>
+
+    <h3 style="margin-top: 2rem; font-size: 1rem;">Snapshot on date</h3>
+    <div class="attr-controls">
+        <label>Date: <input id="alloc-snapshot-date" type="date"/></label>
+        <span class="muted" style="font-size: 0.85rem;">Picks the nearest weekly sample on or before this date.</span>
+        <span id="alloc-snapshot-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+    <div style="height: 520px; margin-top: 0.25rem;">
+        <canvas id="alloc-snapshot-chart"></canvas>
     </div>
 </section>
 
@@ -845,6 +884,7 @@
                 });
                 if (btn.dataset.panel === 'panel-contributions') loadContributionsChart();
                 if (btn.dataset.panel === 'panel-value') loadValueChart();
+                if (btn.dataset.panel === 'panel-allocation') loadAllocation();
                 if (btn.dataset.panel === 'panel-returns') { loadReturnsChart(); setupBenchmark(); }
                 if (btn.dataset.panel === 'panel-attribution') setupAttribution();
                 if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
@@ -1705,6 +1745,241 @@
                 cancel.addEventListener('click', onCancel);
                 modal.addEventListener('click', onBackdrop);
                 modal.classList.add('open');
+            });
+        }
+
+        // ---- Allocation ------------------------------------------------------
+
+        var allocLoaded = false;
+        var allocData = null;
+        var allocCashChart = null;
+        var allocSymbolsChart = null;
+        var allocSnapshotChart = null;
+        // 13-entry palette (12 top symbols + Other). Tableau-derived; distinct enough at
+        // stacked-area thickness, with grey reserved for "Other" so it visually recedes.
+        var ALLOC_COLORS = [
+            '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+            '#8c564b', '#e377c2', '#17becf', '#bcbd22', '#7f7f7f',
+            '#aec7e8', '#ffbb78', '#c5b0d5'
+        ];
+        var ALLOC_OTHER_COLOR = '#cccccc';
+        var ALLOC_TOP_N = 12;
+
+        function loadAllocation() {
+            if (allocLoaded) return;
+            allocLoaded = true;
+            fetch('/allocation').then(function (r) { return r.json(); }).then(function (data) {
+                allocData = data;
+                if (!data.points || !data.points.length) return;
+                renderAllocCashChart(data.points);
+                renderAllocSymbolsChart(data.points);
+                initAllocSnapshot(data.points);
+                document.getElementById('alloc-cash-zoom-reset').addEventListener('click', function () {
+                    if (allocCashChart) allocCashChart.resetZoom();
+                });
+                document.getElementById('alloc-symbols-zoom-reset').addEventListener('click', function () {
+                    if (allocSymbolsChart) allocSymbolsChart.resetZoom();
+                });
+            });
+        }
+
+        function renderAllocCashChart(points) {
+            var ctx = document.getElementById('alloc-cash-chart').getContext('2d');
+            var cashData = points.map(function (p) {
+                return { x: p.date, y: parseFloat(p.cashGbp) };
+            });
+            var investedData = points.map(function (p) {
+                return { x: p.date, y: parseFloat(p.investedGbp) };
+            });
+            allocCashChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [
+                        { label: 'Invested', data: investedData,
+                          borderColor: '#1f77b4', backgroundColor: 'rgba(31, 119, 180, 0.55)',
+                          fill: true, pointRadius: 0, borderWidth: 1, tension: 0.1 },
+                        { label: 'Cash', data: cashData,
+                          borderColor: '#7f7f7f', backgroundColor: 'rgba(127, 127, 127, 0.55)',
+                          fill: true, pointRadius: 0, borderWidth: 1, tension: 0.1 }
+                    ]
+                },
+                options: stackedAreaOptions('Value (£)')
+            });
+        }
+
+        function renderAllocSymbolsChart(points) {
+            // Rank by latest GBP value, take top N, bucket the rest as "Other". A position
+            // recently exited still appears in the "Other" band for prior dates — its band
+            // simply goes to zero on the date the qty went to 0.
+            var latest = points[points.length - 1].symbolGbp || {};
+            var ranked = Object.keys(latest).sort(function (a, b) {
+                return parseFloat(latest[b]) - parseFloat(latest[a]);
+            });
+            var top = ranked.slice(0, ALLOC_TOP_N);
+            var topSet = new Set(top);
+
+            var datasets = top.map(function (sym, i) {
+                return {
+                    label: sym,
+                    data: points.map(function (p) {
+                        var v = (p.symbolGbp || {})[sym];
+                        return { x: p.date, y: v != null ? parseFloat(v) : 0 };
+                    }),
+                    borderColor: ALLOC_COLORS[i % ALLOC_COLORS.length],
+                    backgroundColor: ALLOC_COLORS[i % ALLOC_COLORS.length] + 'cc',
+                    fill: true, pointRadius: 0, borderWidth: 0
+                };
+            });
+            // Cash sits at the top of the stack — same hatched grey as the cash band above.
+            datasets.push({
+                label: 'Cash',
+                data: points.map(function (p) { return { x: p.date, y: parseFloat(p.cashGbp) }; }),
+                borderColor: '#999', backgroundColor: 'rgba(127, 127, 127, 0.45)',
+                fill: true, pointRadius: 0, borderWidth: 0
+            });
+            // "Other" = invested − sum of top-N for each sample. Always non-negative.
+            datasets.push({
+                label: 'Other (' + Math.max(0, Object.keys(latest).length - top.length) + ')',
+                data: points.map(function (p) {
+                    var others = 0;
+                    var syms = p.symbolGbp || {};
+                    Object.keys(syms).forEach(function (k) {
+                        if (!topSet.has(k)) others += parseFloat(syms[k]);
+                    });
+                    return { x: p.date, y: others };
+                }),
+                borderColor: ALLOC_OTHER_COLOR, backgroundColor: ALLOC_OTHER_COLOR + 'cc',
+                fill: true, pointRadius: 0, borderWidth: 0
+            });
+
+            var ctx = document.getElementById('alloc-symbols-chart').getContext('2d');
+            allocSymbolsChart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets: datasets },
+                options: stackedAreaOptions('Value (£)')
+            });
+        }
+
+        function stackedAreaOptions(yLabel) {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                scales: {
+                    x: { type: 'time', time: { unit: 'year' } },
+                    y: {
+                        stacked: true,
+                        title: { display: true, text: yLabel },
+                        ticks: {
+                            callback: function (v) {
+                                return '£' + v.toLocaleString('en-GB', { maximumFractionDigits: 0 });
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: { position: 'bottom', labels: { boxWidth: 12 } },
+                    tooltip: {
+                        callbacks: {
+                            label: function (ctx) {
+                                return ctx.dataset.label + ': £' +
+                                    ctx.parsed.y.toLocaleString('en-GB',
+                                        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                            }
+                        }
+                    },
+                    zoom: {
+                        pan: { enabled: true, mode: 'x' },
+                        zoom: {
+                            mode: 'x',
+                            drag: { enabled: true, backgroundColor: 'rgba(31, 119, 180, 0.12)' },
+                            pinch: { enabled: true }
+                        }
+                    }
+                }
+            };
+        }
+
+        function initAllocSnapshot(points) {
+            var input = document.getElementById('alloc-snapshot-date');
+            input.max = points[points.length - 1].date;
+            input.min = points[0].date;
+            input.value = points[points.length - 1].date;
+            input.addEventListener('change', function () { renderAllocSnapshot(input.value); });
+            renderAllocSnapshot(input.value);
+        }
+
+        function renderAllocSnapshot(targetDate) {
+            if (!allocData || !allocData.points || !allocData.points.length) return;
+            // Find the latest sample on or before targetDate.
+            var picked = null;
+            for (var i = 0; i < allocData.points.length; i++) {
+                if (allocData.points[i].date <= targetDate) picked = allocData.points[i];
+                else break;
+            }
+            if (!picked) picked = allocData.points[0];
+
+            var status = document.getElementById('alloc-snapshot-status');
+            status.textContent = 'Sample: ' + picked.date +
+                ' · Total £' + parseFloat(picked.totalGbp).toLocaleString('en-GB',
+                    { maximumFractionDigits: 0 });
+
+            // Build sorted list: every held symbol + Cash. Larger entries on top.
+            var entries = Object.keys(picked.symbolGbp || {}).map(function (k) {
+                return { label: k, value: parseFloat(picked.symbolGbp[k]) };
+            });
+            entries.push({ label: 'Cash', value: parseFloat(picked.cashGbp), isCash: true });
+            entries.sort(function (a, b) { return b.value - a.value; });
+
+            var labels = entries.map(function (e) { return e.label; });
+            var values = entries.map(function (e) { return e.value; });
+            var colors = entries.map(function (e) {
+                return e.isCash ? '#7f7f7f' : ALLOC_COLORS[0];
+            });
+
+            var ctx = document.getElementById('alloc-snapshot-chart').getContext('2d');
+            if (allocSnapshotChart) allocSnapshotChart.destroy();
+            allocSnapshotChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Value (£)',
+                        data: values,
+                        backgroundColor: colors,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Value (£)' },
+                            ticks: {
+                                callback: function (v) {
+                                    return '£' + v.toLocaleString('en-GB', { maximumFractionDigits: 0 });
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (ctx) {
+                                    var v = ctx.parsed.x;
+                                    var total = parseFloat(picked.totalGbp);
+                                    var pct = total > 0 ? (v / total * 100).toFixed(1) : '—';
+                                    return '£' + v.toLocaleString('en-GB',
+                                            { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+                                        '  (' + pct + '%)';
+                                }
+                            }
+                        }
+                    }
+                }
             });
         }
 

@@ -44,7 +44,7 @@ class SyncPortfolioServiceTest {
         IntradayPriceRepository intraday = new IntradayPriceRepository(cf);
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
         return new SyncPortfolioService(gatherer, snapshots, intraday,
-                new DividendService(cashRepo), new YahooTickerMap(), cashRepo);
+                new DividendService(cashRepo), new YahooTickerMap(), cashRepo, kv);
     }
 
     @Test

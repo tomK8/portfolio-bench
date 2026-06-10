@@ -7,6 +7,9 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * Tiny file-backed key/value store for scalar settings (last II SIPP cash balance,
@@ -39,6 +42,32 @@ public class KeyValueStore {
         try {
             Files.createDirectories(dir);
             Files.writeString(dir.resolve(key + ".txt"), value.toPlainString());
+        } catch (IOException e) {
+            log.warn("Could not write setting {}", key, e);
+        }
+    }
+
+    /** Newline-separated string set; blanks dropped. Returns an empty set if the file is missing. */
+    public Set<String> getStringSet(String key) {
+        Path file = dir.resolve(key + ".txt");
+        if (!Files.exists(file)) return Set.of();
+        try {
+            Set<String> out = new LinkedHashSet<>();
+            for (String line : Files.readAllLines(file)) {
+                String trimmed = line.trim();
+                if (!trimmed.isEmpty()) out.add(trimmed);
+            }
+            return out;
+        } catch (IOException e) {
+            log.warn("Could not read setting {}", key, e);
+            return Set.of();
+        }
+    }
+
+    public void putStringSet(String key, Collection<String> values) {
+        try {
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve(key + ".txt"), String.join("\n", values));
         } catch (IOException e) {
             log.warn("Could not write setting {}", key, e);
         }

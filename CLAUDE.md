@@ -119,6 +119,10 @@ To convert native → GBP, **divide** by the rate.
     running balance on first import. Charts must convert to GBP via historical FX
     (see `ContributionService.rothSeedAsGbp`, `PortfolioValueService.timeline`) — treating
     the file as GBP would understate the gap substantially.
+  - `held_symbols` — newline-separated set of currently-held symbols, written by
+    `SyncPortfolioService` after each `/sync`. Unioned with the cash-ledger symbol set in
+    `PriceFetchSupport.tickersToFetch` so freshly bought names get an intraday quote before
+    their cash statement is imported.
 
 **Account / TransactionType persistence:** the enums map to TEXT columns via `Account.dbValue()`
 ("AJBell"/"RothIRA"/"II") and `TransactionType.name()`. The SQLite CHECK constraints use the
@@ -218,8 +222,11 @@ coverage while the app runs; Tradeweb batch imports give authoritative closes fo
 range the user downloads — typically the source of truth when both are present.
 
 `PriceFetchSupport.tickersToFetch` builds the universe: every symbol from
-`CashTransactionRepository.distinctTradedSymbols()`, minus bonds (`Instruments.isBond`), mapped to
-Yahoo tickers via `YahooTickerMap`. 500ms throttle between requests (`PriceFetchSupport.sleep`).
+`CashTransactionRepository.distinctTradedSymbols()` plus the `held_symbols` KV set persisted by
+the most recent `/sync` (covers freshly bought names whose cash statement isn't imported yet —
+otherwise their first intraday quote would wait until import). Minus bonds (`Instruments.isBond`),
+mapped to Yahoo tickers via `YahooTickerMap`. 500ms throttle between requests
+(`PriceFetchSupport.sleep`).
 
 `PriceFetchScheduler` is the only Spring class in the price layer; `@EnableScheduling` is on
 `PortfolioBenchApplication`. Startup runs are on daemon threads so first-run backfill doesn't

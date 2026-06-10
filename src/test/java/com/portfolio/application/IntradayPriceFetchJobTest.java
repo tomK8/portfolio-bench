@@ -70,7 +70,7 @@ class IntradayPriceFetchJobTest {
                 new IntradayBar("AAPL", t0, 190.10, 1000L, "USD"),
                 new IntradayBar("AAPL", t0.plusSeconds(60), 190.25, 900L, "USD")));
 
-        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir)).run();
 
         assertEquals(List.of("AAPL"), fetcher.requested, "gilt was filtered out before the fetch loop");
         Map<String, IntradayPrice> latest = intraday.loadLatestIntradayPrices(Set.of("AAPL"));
@@ -87,7 +87,7 @@ class IntradayPriceFetchJobTest {
         intraday.saveIntradayBars(List.of(new IntradayBar("AAPL", lastSeen, 100.0, null, "USD")));
 
         FakeFetcher fetcher = new FakeFetcher();
-        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir)).run();
 
         assertEquals(lastSeen.plusSeconds(60), fetcher.requestedFrom.get("AAPL"),
                 "incremental fetch starts from the bar immediately after the last stored one");
@@ -101,7 +101,7 @@ class IntradayPriceFetchJobTest {
 
         FakeFetcher fetcher = new FakeFetcher();
         Instant before = Instant.now();
-        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir)).run();
         Instant after = Instant.now();
 
         Instant from = fetcher.requestedFrom.get("AAPL");
@@ -113,6 +113,23 @@ class IntradayPriceFetchJobTest {
                 "first-run fetch starts after the prune cutoff (was " + from + ")");
         assertTrue(from.isBefore(after.minus(java.time.Duration.ofDays(6))),
                 "first-run fetch covers most of the retention window (was " + from + ")");
+    }
+
+    @Test
+    void includesSymbolsPersistedBySyncEvenIfNotYetInCashLedger() {
+        // Freshly bought name whose cash statement hasn't been imported yet — would otherwise
+        // be invisible to the intraday job until the next cash import.
+        CashTransactionRepository cash = cashRepo();
+        IntradayPriceRepository intraday = intradayRepo();
+        cash.saveAjBell(List.of(tx("2024-01-01", "TRANSACTION", "AAPL")));
+        KeyValueStore kv = new KeyValueStore(dbDir);
+        kv.putStringSet("held_symbols", List.of("AAPL", "MU"));
+
+        FakeFetcher fetcher = new FakeFetcher();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), kv).run();
+
+        assertTrue(fetcher.requested.contains("MU"),
+                "MU from the synced holdings set should be in the fetch universe even with no MU ledger row");
     }
 
     @Test
@@ -128,7 +145,7 @@ class IntradayPriceFetchJobTest {
                 new IntradayBar("AAPL", fresh, 2.0, null, "USD")));
 
         FakeFetcher fetcher = new FakeFetcher();   // no new bars
-        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir)).run();
 
         Instant remaining = intraday.getLatestIntradayTs("AAPL");
         assertEquals(fresh, remaining, "fresh row remains");

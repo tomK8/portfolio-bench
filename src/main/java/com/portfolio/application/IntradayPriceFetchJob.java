@@ -5,6 +5,7 @@ import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.KeyValueStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,17 +36,19 @@ public class IntradayPriceFetchJob {
     private final IntradayPriceRepository intradayRepo;
     private final YahooPriceFetcher fetcher;
     private final YahooTickerMap tickers;
+    private final KeyValueStore kv;
 
     public IntradayPriceFetchJob(CashTransactionRepository cashRepo, IntradayPriceRepository intradayRepo,
-                                 YahooPriceFetcher fetcher, YahooTickerMap tickers) {
+                                 YahooPriceFetcher fetcher, YahooTickerMap tickers, KeyValueStore kv) {
         this.cashRepo = cashRepo;
         this.intradayRepo = intradayRepo;
         this.fetcher = fetcher;
         this.tickers = tickers;
+        this.kv = kv;
     }
 
     public void run() {
-        Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers);
+        Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
 
         Instant now = Instant.now();
         Instant earliest = now.minus(LOOKBACK);

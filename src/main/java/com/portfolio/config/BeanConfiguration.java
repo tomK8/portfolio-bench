@@ -114,9 +114,10 @@ public class BeanConfiguration {
                                                      IntradayPriceRepository intradayPriceRepository,
                                                      DividendService dividendService,
                                                      YahooTickerMap yahooTickerMap,
-                                                     CashTransactionRepository cashTransactionRepository) {
+                                                     CashTransactionRepository cashTransactionRepository,
+                                                     KeyValueStore keyValueStore) {
         return new SyncPortfolioService(portfolioGatherer, snapshotRepository, intradayPriceRepository,
-                dividendService, yahooTickerMap, cashTransactionRepository);
+                dividendService, yahooTickerMap, cashTransactionRepository, keyValueStore);
     }
 
     @Bean
@@ -225,18 +226,20 @@ public class BeanConfiguration {
     public PriceFetchJob priceFetchJob(CashTransactionRepository cashTransactionRepository,
                                        PriceHistoryRepository priceHistoryRepository,
                                        YahooPriceFetcher yahooPriceFetcher,
-                                       YahooTickerMap yahooTickerMap) {
+                                       YahooTickerMap yahooTickerMap,
+                                       KeyValueStore keyValueStore) {
         return new PriceFetchJob(cashTransactionRepository, priceHistoryRepository,
-                yahooPriceFetcher, yahooTickerMap);
+                yahooPriceFetcher, yahooTickerMap, keyValueStore);
     }
 
     @Bean
     public IntradayPriceFetchJob intradayPriceFetchJob(CashTransactionRepository cashTransactionRepository,
                                                        IntradayPriceRepository intradayPriceRepository,
                                                        YahooPriceFetcher yahooPriceFetcher,
-                                                       YahooTickerMap yahooTickerMap) {
+                                                       YahooTickerMap yahooTickerMap,
+                                                       KeyValueStore keyValueStore) {
         return new IntradayPriceFetchJob(cashTransactionRepository, intradayPriceRepository,
-                yahooPriceFetcher, yahooTickerMap);
+                yahooPriceFetcher, yahooTickerMap, keyValueStore);
     }
 
     @Bean

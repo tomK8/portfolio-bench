@@ -4,6 +4,7 @@ import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,18 +33,20 @@ public class PriceFetchJob {
     private final PriceHistoryRepository priceRepo;
     private final YahooPriceFetcher fetcher;
     private final YahooTickerMap tickers;
+    private final KeyValueStore kv;
 
     public PriceFetchJob(CashTransactionRepository cashRepo, PriceHistoryRepository priceRepo,
-                         YahooPriceFetcher fetcher, YahooTickerMap tickers) {
+                         YahooPriceFetcher fetcher, YahooTickerMap tickers, KeyValueStore kv) {
         this.cashRepo = cashRepo;
         this.priceRepo = priceRepo;
         this.fetcher = fetcher;
         this.tickers = tickers;
+        this.kv = kv;
     }
 
     public void run() {
         LocalDate today = LocalDate.now();
-        Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers);
+        Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
 
         for (String ticker : tickerSet) {
             LocalDate latest = priceRepo.getLatestPriceDate(ticker);
@@ -73,7 +76,7 @@ public class PriceFetchJob {
     public int runFullRebuild() {
         LocalDate today = LocalDate.now();
         LocalDate defaultFrom = today.minusYears(LOOKBACK_YEARS);
-        Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers);
+        Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
         int refreshed = 0;
         for (String ticker : tickerSet) {
             // Cover anything already stored. If we have rows older than the 10-year cutoff

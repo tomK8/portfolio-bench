@@ -13,6 +13,7 @@ import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.CashTransactionRepository.CashBalance;
 import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.SnapshotRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,19 +46,22 @@ public class SyncPortfolioService {
     private final DividendService dividendService;
     private final YahooTickerMap tickerMap;
     private final CashTransactionRepository cashRepo;
+    private final KeyValueStore kv;
 
     public SyncPortfolioService(PortfolioGatherer gatherer,
                                 SnapshotRepository snapshots,
                                 IntradayPriceRepository intraday,
                                 DividendService dividendService,
                                 YahooTickerMap tickerMap,
-                                CashTransactionRepository cashRepo) {
+                                CashTransactionRepository cashRepo,
+                                KeyValueStore kv) {
         this.gatherer = gatherer;
         this.snapshots = snapshots;
         this.intraday = intraday;
         this.dividendService = dividendService;
         this.tickerMap = tickerMap;
         this.cashRepo = cashRepo;
+        this.kv = kv;
     }
 
     public SyncResult sync(BigDecimal iiSippCashGbp, BigDecimal iiSippCashUsd) {
@@ -78,6 +82,14 @@ public class SyncPortfolioService {
 
         snapshots.saveSnapshot(totals.totalGbp(), totals.totalGainGbp(), totals.totalCashGbp(),
                 totals.returnPct(), totals.totalReturn(), gathered.rates());
+
+        // Tell the price-fetch jobs about freshly bought names whose cash statement may not be
+        // imported yet (otherwise their first intraday quote waits for the next cash import).
+        Set<String> heldSymbols = new LinkedHashSet<>();
+        for (AggHolding h : aggregated) {
+            if (!"CASH".equals(h.securityId())) heldSymbols.add(h.securityId());
+        }
+        kv.putStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY, heldSymbols);
 
         List<String> sources = new ArrayList<>(gathered.sources().keySet());
         List<SyncResult.CashRecon> recon = reconcileCash(

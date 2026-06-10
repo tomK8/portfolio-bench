@@ -1885,6 +1885,16 @@
             var investedValues = years.map(function (y) {
                 return y.investedReturnPct != null ? parseFloat(y.investedReturnPct) * 100 : null;
             });
+            // Cumulative TWR: compound the year-by-year portfolio (with-cash) returns into a
+            // growth-of-£1 line on a second axis. Partial years are still folded in so the
+            // last point reflects current YTD.
+            var cumGrowth = [];
+            var running = 1.0;
+            years.forEach(function (y) {
+                running = running * (1 + parseFloat(y.returnPct));
+                cumGrowth.push(running);
+            });
+
             // Partial-period bars (inception year, current YTD) render lighter so they visually
             // recede from full calendar-year bars. Blue = whole portfolio (cash drag included);
             // amber = invested-only (cash drag stripped) — the gap reads as opportunity cost.
@@ -1903,9 +1913,22 @@
                     labels: labels,
                     datasets: [
                         { label: 'Portfolio (with cash)',
-                          data: totalValues, backgroundColor: totalColors, borderWidth: 0 },
+                          data: totalValues, backgroundColor: totalColors, borderWidth: 0,
+                          yAxisID: 'yPct', order: 2 },
                         { label: 'Invested only (no cash drag)',
-                          data: investedValues, backgroundColor: investedColors, borderWidth: 0 }
+                          data: investedValues, backgroundColor: investedColors, borderWidth: 0,
+                          yAxisID: 'yPct', order: 2 },
+                        { type: 'line', label: 'Cumulative TWR (×£1)',
+                          data: cumGrowth,
+                          borderColor: '#2ca02c',
+                          backgroundColor: '#2ca02c',
+                          fill: false,
+                          pointRadius: 3,
+                          pointBackgroundColor: '#2ca02c',
+                          borderWidth: 2,
+                          tension: 0.15,
+                          yAxisID: 'yCum',
+                          order: 1 }
                     ]
                 },
                 options: {
@@ -1913,12 +1936,21 @@
                     maintainAspectRatio: false,
                     scales: {
                         x: { grid: { display: false } },
-                        y: {
-                            title: { display: true, text: 'Return (%)' },
+                        yPct: {
+                            type: 'linear', position: 'left',
+                            title: { display: true, text: 'Annual return (%)' },
                             ticks: {
                                 callback: function (v) {
                                     return (v >= 0 ? '+' : '') + v.toFixed(0) + '%';
                                 }
+                            }
+                        },
+                        yCum: {
+                            type: 'linear', position: 'right',
+                            title: { display: true, text: 'Cumulative ×£1 (TWR)' },
+                            grid: { drawOnChartArea: false },
+                            ticks: {
+                                callback: function (v) { return '×' + v.toFixed(2); }
                             }
                         }
                     },
@@ -1929,6 +1961,11 @@
                                 label: function (ctx) {
                                     var v = ctx.parsed.y;
                                     if (v == null) return ctx.dataset.label + ': —';
+                                    if (ctx.dataset.label === 'Cumulative TWR (×£1)') {
+                                        return ctx.dataset.label + ': ×' + v.toFixed(4)
+                                            + '  (' + ((v - 1) * 100 >= 0 ? '+' : '')
+                                            + ((v - 1) * 100).toFixed(2) + '%)';
+                                    }
                                     return ctx.dataset.label + ': ' +
                                         (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
                                 },

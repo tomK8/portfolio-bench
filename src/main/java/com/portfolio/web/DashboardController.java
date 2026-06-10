@@ -8,6 +8,8 @@ import com.portfolio.application.BenchmarkReturnService;
 import com.portfolio.application.BenchmarkReturnService.BenchmarkTimeline;
 import com.portfolio.application.ContributionService;
 import com.portfolio.application.ContributionService.ContributionTimeline;
+import com.portfolio.application.DividendIncomeService;
+import com.portfolio.application.DividendIncomeService.DividendIncome;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
@@ -60,6 +62,7 @@ public class DashboardController {
     private final ImportCashService importCashService;
     private final ImportGiltPricesService importGiltPricesService;
     private final ContributionService contributionService;
+    private final DividendIncomeService dividendIncomeService;
     private final PortfolioValueService portfolioValueService;
     private final PortfolioReturnService portfolioReturnService;
     private final PortfolioRiskService portfolioRiskService;
@@ -77,6 +80,7 @@ public class DashboardController {
                                ImportCashService importCashService,
                                ImportGiltPricesService importGiltPricesService,
                                ContributionService contributionService,
+                               DividendIncomeService dividendIncomeService,
                                PortfolioValueService portfolioValueService,
                                PortfolioReturnService portfolioReturnService,
                                PortfolioRiskService portfolioRiskService,
@@ -93,6 +97,7 @@ public class DashboardController {
         this.importCashService = importCashService;
         this.importGiltPricesService = importGiltPricesService;
         this.contributionService = contributionService;
+        this.dividendIncomeService = dividendIncomeService;
         this.portfolioValueService = portfolioValueService;
         this.portfolioReturnService = portfolioReturnService;
         this.portfolioRiskService = portfolioRiskService;
@@ -181,6 +186,12 @@ public class DashboardController {
     @ResponseBody
     public ContributionTimeline contributions() {
         return contributionService.timeline();
+    }
+
+    @GetMapping("/dividends")
+    @ResponseBody
+    public DividendIncome dividends() {
+        return dividendIncomeService.summary();
     }
 
     @GetMapping("/portfolio-value")

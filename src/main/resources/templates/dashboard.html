@@ -579,6 +579,7 @@
     <button class="tab" data-panel="panel-allocation" type="button">Allocation</button>
     <button class="tab" data-panel="panel-returns" type="button">Returns</button>
     <button class="tab" data-panel="panel-risk" type="button">Risk</button>
+    <button class="tab" data-panel="panel-dividends" type="button">Dividends</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
@@ -823,6 +824,56 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-dividends">
+    <p class="muted" style="margin-top: 0">
+        Dividend income from <code>cash_transactions WHERE type='DIVIDEND'</code>. Two yields
+        per symbol: <b>Yield-on-cost</b> = trailing 12-month dividends ÷ cost basis (what
+        you're earning against what you paid — independent of today's price), and
+        <b>Trailing yield</b> = trailing 12-month dividends ÷ current market value (the
+        thing comparable to a broker's headline yield). <b>Forward income</b> is the
+        trailing 12-month total carried forward as the simplest assumption-free estimate.
+    </p>
+    <div class="returns-stats" id="div-stats">
+        <div class="returns-stat"><span class="label">Lifetime income</span><span class="value na" id="div-lifetime">—</span></div>
+        <div class="returns-stat"><span class="label">Trailing 12m income</span><span class="value na" id="div-trailing">—</span></div>
+        <div class="returns-stat" title="Trailing 12m carried forward as a flat estimate">
+            <span class="label">Forward (next 12m est.)</span>
+            <span class="value na" id="div-forward">—</span>
+        </div>
+        <div class="returns-stat"><span class="label">Portfolio YoC</span><span class="value na" id="div-yoc">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio trailing yield</span><span class="value na" id="div-yield">—</span></div>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Annual income (top contributors stacked)</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Top symbols by lifetime income get their own band; the long tail bucketed into
+        "Other".
+    </p>
+    <div style="height: 320px; margin-top: 0.25rem;">
+        <canvas id="div-annual-chart"></canvas>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Per-symbol breakdown</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Currently held positions first (sorted by trailing income), then closed positions
+        with historical dividends. Click a column to sort.
+    </p>
+    <table id="div-table" class="annual-table" style="margin-top: 0.5rem;">
+        <thead><tr>
+            <th class="txt" data-sort="text">Symbol</th>
+            <th data-sort="num">Shares</th>
+            <th data-sort="num">Cost £</th>
+            <th data-sort="num">Market £</th>
+            <th data-sort="num">Lifetime £</th>
+            <th data-sort="num">Trailing 12m £</th>
+            <th data-sort="num">YoC</th>
+            <th data-sort="num">Trailing yield</th>
+            <th class="txt" data-sort="text">Accounts</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+</section>
+
 <section class="tab-panel" id="panel-attribution">
     <p class="muted" style="margin-top: 0">
         Per-symbol GBP P&amp;L over a date window:
@@ -1000,6 +1051,7 @@
                 if (btn.dataset.panel === 'panel-allocation') loadAllocation();
                 if (btn.dataset.panel === 'panel-returns') { loadReturnsChart(); setupBenchmark(); }
                 if (btn.dataset.panel === 'panel-risk') loadRisk();
+                if (btn.dataset.panel === 'panel-dividends') loadDividends();
                 if (btn.dataset.panel === 'panel-attribution') setupAttribution();
                 if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
             });
@@ -2577,6 +2629,154 @@
                         plugins: { legend: { display: false } }
                     }
                 });
+        }
+
+        var dividendsLoaded = false;
+        var divAnnualChart = null;
+
+        function loadDividends() {
+            if (dividendsLoaded) return;
+            dividendsLoaded = true;
+            fetch('/dividends').then(function (r) { return r.json(); }).then(renderDividends);
+        }
+
+        function renderDividends(data) {
+            var s = data.summary || {};
+            setMoney('div-lifetime', s.lifetimeIncomeGbp);
+            setMoney('div-trailing', s.trailing12mIncomeGbp);
+            setMoney('div-forward', s.forwardIncomeGbp);
+            setDivPct('div-yoc', s.portfolioYieldOnCost);
+            setDivPct('div-yield', s.portfolioTrailingYield);
+
+            renderDivAnnualChart(data.annual || [], data.stackedSymbolOrder || []);
+            renderDivTable(data.rows || []);
+        }
+
+        function setMoney(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            var n = parseFloat(v);
+            el.textContent = '£' + n.toLocaleString('en-GB',
+                    { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+            el.className = 'value';
+        }
+
+        function setDivPct(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            el.textContent = (parseFloat(v) * 100).toFixed(2) + '%';
+            el.className = 'value';
+        }
+
+        // Palette mirrors Chart.js v4 defaults — readable, distinct, no two adjacent
+        // bands the same colour. "Other" is grey so it never out-competes a named symbol.
+        var DIV_PALETTE = [
+            '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728',
+            '#9467bd', '#8c564b', '#e377c2', '#17becf'
+        ];
+
+        function divColour(label, idx) {
+            if (label === 'Other') return 'rgba(140,140,140,0.7)';
+            return DIV_PALETTE[idx % DIV_PALETTE.length];
+        }
+
+        function renderDivAnnualChart(annual, topSymbols) {
+            if (divAnnualChart) divAnnualChart.destroy();
+            // One Chart.js dataset per band: each top symbol + "Other". Pull each year's
+            // per-symbol value out of annual[i].perSymbolGbp, defaulting to 0 so the bar
+            // segment is flat-zero rather than missing.
+            var labels = annual.map(function (a) { return String(a.year); });
+            var bands = topSymbols.slice();
+            var anyOther = annual.some(function (a) {
+                return a.perSymbolGbp && a.perSymbolGbp['Other'] != null;
+            });
+            if (anyOther) bands.push('Other');
+            var datasets = bands.map(function (sym, idx) {
+                return {
+                    label: sym,
+                    data: annual.map(function (a) {
+                        var v = a.perSymbolGbp && a.perSymbolGbp[sym];
+                        return v == null ? 0 : parseFloat(v);
+                    }),
+                    backgroundColor: divColour(sym, idx),
+                    stack: 's'
+                };
+            });
+            divAnnualChart = new Chart(
+                document.getElementById('div-annual-chart').getContext('2d'), {
+                    type: 'bar',
+                    data: { labels: labels, datasets: datasets },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        scales: {
+                            x: { stacked: true },
+                            y: { stacked: true,
+                                 title: { display: true, text: 'Dividend income (£)' },
+                                 ticks: { callback: function (v) { return '£' + v.toLocaleString('en-GB'); } } }
+                        },
+                        plugins: {
+                            legend: { position: 'right' },
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        return ctx.dataset.label + ': £' +
+                                                ctx.parsed.y.toLocaleString('en-GB',
+                                                        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                    },
+                                    footer: function (items) {
+                                        var sum = items.reduce(function (a, b) { return a + b.parsed.y; }, 0);
+                                        return 'Year total: £' + sum.toLocaleString('en-GB',
+                                                { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+
+        function renderDivTable(rows) {
+            var tbody = document.querySelector('#div-table tbody');
+            tbody.innerHTML = '';
+            rows.forEach(function (r) {
+                var tr = document.createElement('tr');
+                if (!r.currentlyHeld) tr.style.opacity = '0.55';
+                tr.innerHTML =
+                    '<td class="txt"><b>' + r.symbol + '</b>' +
+                        (r.currentlyHeld ? '' : ' <span class="muted">(closed)</span>') + '</td>' +
+                    '<td>' + (r.currentlyHeld ? fmtShares(r.shares) : '—') + '</td>' +
+                    '<td>' + (r.currentlyHeld ? fmtMoney0(r.costBasisGbp) : '—') + '</td>' +
+                    '<td>' + fmtMoney0(r.marketValueGbp) + '</td>' +
+                    '<td>' + fmtMoney0(r.lifetimeGbp) + '</td>' +
+                    '<td>' + fmtMoney0(r.trailingIncomeGbp) + '</td>' +
+                    '<td>' + fmtYield(r.yieldOnCost) + '</td>' +
+                    '<td>' + fmtYield(r.trailingYield) + '</td>' +
+                    '<td class="txt muted">' + (r.accounts || '') + '</td>';
+                tbody.appendChild(tr);
+            });
+            // attachSort exists already on the page for the other sortable tables.
+            if (!document.getElementById('div-table').dataset.sortAttached) {
+                document.getElementById('div-table').dataset.sortAttached = '1';
+                attachSort(document.getElementById('div-table'));
+            }
+        }
+
+        function fmtShares(v) {
+            if (v == null) return '—';
+            var n = parseFloat(v);
+            return n.toLocaleString('en-GB',
+                    { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+        }
+
+        function fmtMoney0(v) {
+            if (v == null) return '—';
+            return '£' + parseFloat(v).toLocaleString('en-GB',
+                    { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+        }
+
+        function fmtYield(v) {
+            if (v == null) return '—';
+            return (parseFloat(v) * 100).toFixed(2) + '%';
         }
     }());
 </script>

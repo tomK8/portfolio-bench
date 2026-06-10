@@ -146,6 +146,15 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public DividendIncomeService dividendIncomeService(CashTransactionRepository cashTransactionRepository,
+                                                       IntradayPriceRepository intradayPriceRepository,
+                                                       FxRateProvider fxRateProvider,
+                                                       YahooTickerMap yahooTickerMap) {
+        return new DividendIncomeService(cashTransactionRepository, intradayPriceRepository,
+                fxRateProvider, yahooTickerMap);
+    }
+
+    @Bean
     public BenchmarkReturnService benchmarkReturnService(PortfolioValueService portfolioValueService,
                                                          PriceHistoryRepository priceHistoryRepository,
                                                          YahooTickerMap yahooTickerMap) {

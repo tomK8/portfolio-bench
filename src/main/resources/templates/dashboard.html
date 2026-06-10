@@ -979,6 +979,29 @@
         </tr></thead>
         <tbody></tbody>
     </table>
+
+    <h3 style="margin-top: 2rem; font-size: 1rem;">Audit: raw vs attributed</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        <b>Raw</b> = sum of every <code>DIVIDEND</code> row for the symbol.
+        <b>Attributed</b> = dividends earned by shares <i>still held</i> (FIFO).
+        <b>Leak</b> = raw − attributed = income that accrued to shares since trimmed or sold —
+        not lost, just no longer driving YoC on the current position. The <i>Attributor shares</i>
+        and <i>Ledger shares</i> columns should match (within 0.01); if not the FIFO engines
+        disagree and one has a bug.
+    </p>
+    <div id="div-audit-summary" class="muted" style="margin: 0.5rem 0; font-size: 0.85rem;"></div>
+    <table id="div-audit-table" class="annual-table" style="margin-top: 0.5rem;">
+        <thead><tr>
+            <th class="txt" data-sort="text">Symbol</th>
+            <th data-sort="num">Raw £</th>
+            <th data-sort="num">Attributed £</th>
+            <th data-sort="num">Leak £</th>
+            <th data-sort="num">Attributor shares</th>
+            <th data-sort="num">Ledger shares</th>
+            <th class="txt" data-sort="text">Status</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
 </section>
 
 <section class="tab-panel" id="panel-position">
@@ -3236,6 +3259,40 @@
             if (dividendsLoaded) return;
             dividendsLoaded = true;
             fetch('/dividends').then(function (r) { return r.json(); }).then(renderDividends);
+            fetch('/dividends/audit').then(function (r) { return r.json(); }).then(renderDividendAudit);
+        }
+
+        function renderDividendAudit(report) {
+            var summary = document.getElementById('div-audit-summary');
+            summary.textContent = report.symbols + ' symbols — raw £' +
+                    parseFloat(report.totalRawGbp).toLocaleString('en-GB', { maximumFractionDigits: 0 }) +
+                    ', attributed £' +
+                    parseFloat(report.totalAttributedGbp).toLocaleString('en-GB', { maximumFractionDigits: 0 }) +
+                    ', leak £' +
+                    parseFloat(report.totalLeakGbp).toLocaleString('en-GB', { maximumFractionDigits: 0 }) +
+                    (report.sharesMismatchCount > 0
+                        ? ' — ⚠ ' + report.sharesMismatchCount + ' share-count mismatches'
+                        : ' — share counts agree across all symbols');
+            var tbody = document.querySelector('#div-audit-table tbody');
+            tbody.innerHTML = '';
+            (report.rows || []).forEach(function (r) {
+                var tr = document.createElement('tr');
+                var status = r.sharesMismatch
+                        ? '<span class="neg">⚠ mismatch</span>'
+                        : (parseFloat(r.leakGbp) > 0.01
+                            ? '<span class="muted">leak from sells</span>'
+                            : '<span class="pos">clean</span>');
+                tr.innerHTML =
+                    '<td class="txt"><b>' + r.symbol + '</b></td>' +
+                    '<td>' + fmtMoney0(r.rawGbp) + '</td>' +
+                    '<td>' + fmtMoney0(r.attributedGbp) + '</td>' +
+                    '<td>' + fmtMoney0(r.leakGbp) + '</td>' +
+                    '<td>' + fmtNumber(r.attributorShares, 4) + '</td>' +
+                    '<td>' + fmtNumber(r.ledgerShares, 4) + '</td>' +
+                    '<td class="txt">' + status + '</td>';
+                tbody.appendChild(tr);
+            });
+            attachSortOnce('div-audit-table');
         }
 
         function renderDividends(data) {

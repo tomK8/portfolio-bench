@@ -181,6 +181,11 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public DividendAuditService dividendAuditService(CashTransactionRepository cashTransactionRepository) {
+        return new DividendAuditService(cashTransactionRepository);
+    }
+
+    @Bean
     public ReconciliationService reconciliationService(CashTransactionRepository cashTransactionRepository,
                                                        PriceHistoryRepository priceHistoryRepository,
                                                        IntradayPriceRepository intradayPriceRepository,

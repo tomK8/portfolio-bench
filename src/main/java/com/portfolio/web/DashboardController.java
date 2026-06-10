@@ -8,6 +8,8 @@ import com.portfolio.application.BenchmarkReturnService;
 import com.portfolio.application.BenchmarkReturnService.BenchmarkTimeline;
 import com.portfolio.application.ContributionService;
 import com.portfolio.application.ContributionService.ContributionTimeline;
+import com.portfolio.application.DividendAuditService;
+import com.portfolio.application.DividendAuditService.AuditReport;
 import com.portfolio.application.DividendIncomeService;
 import com.portfolio.application.DividendIncomeService.DividendIncome;
 import com.portfolio.application.ConcentrationService;
@@ -77,6 +79,7 @@ public class DashboardController {
     private final ImportGiltPricesService importGiltPricesService;
     private final ContributionService contributionService;
     private final DividendIncomeService dividendIncomeService;
+    private final DividendAuditService dividendAuditService;
     private final PositionDetailService positionDetailService;
     private final ConcentrationService concentrationService;
     private final CurrencyExposureService currencyExposureService;
@@ -103,6 +106,7 @@ public class DashboardController {
                                ImportGiltPricesService importGiltPricesService,
                                ContributionService contributionService,
                                DividendIncomeService dividendIncomeService,
+                               DividendAuditService dividendAuditService,
                                PositionDetailService positionDetailService,
                                ConcentrationService concentrationService,
                                CurrencyExposureService currencyExposureService,
@@ -128,6 +132,7 @@ public class DashboardController {
         this.importGiltPricesService = importGiltPricesService;
         this.contributionService = contributionService;
         this.dividendIncomeService = dividendIncomeService;
+        this.dividendAuditService = dividendAuditService;
         this.positionDetailService = positionDetailService;
         this.concentrationService = concentrationService;
         this.currencyExposureService = currencyExposureService;
@@ -230,6 +235,12 @@ public class DashboardController {
     @ResponseBody
     public DividendIncome dividends() {
         return dividendIncomeService.summary();
+    }
+
+    @GetMapping("/dividends/audit")
+    @ResponseBody
+    public AuditReport dividendsAudit() {
+        return dividendAuditService.report();
     }
 
     /**

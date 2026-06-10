@@ -1611,7 +1611,7 @@
                                         (y.partial ? '  (partial)' : '')];
                                     if (drag != null) {
                                         lines.push('Cash drag: ' +
-                                            (drag >= 0 ? '+' : '') + drag.toFixed(2) + 'pp');
+                                            (drag >= 0 ? '+' : '') + drag.toFixed(2) + '%');
                                     }
                                     return lines;
                                 }
@@ -1640,7 +1640,7 @@
                 var invested = y.investedReturnPct != null ? parseFloat(y.investedReturnPct) : null;
                 var drag = invested != null ? (invested - portfolio) : null;
                 var dragStr = drag != null
-                    ? (drag >= 0 ? '+' : '') + (drag * 100).toFixed(2) + 'pp'
+                    ? (drag >= 0 ? '+' : '') + (drag * 100).toFixed(2) + '%'
                     : '—';
                 var tr = document.createElement('tr');
                 if (y.partial) tr.className = 'partial';

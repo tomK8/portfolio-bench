@@ -187,6 +187,30 @@ class PortfolioReturnServiceTest {
     }
 
     @Test
+    void annualReturnsBucketByCalendarYear() {
+        // 2022 starts at growth=1.0 (anchor day-1), ends at 1.20 → +20%.
+        // 2023 anchor = 1.20 (Dec 31 2022), close = 1.50 → +25%.
+        // Inception year bar is the partial 2022 because day-1 isn't Jan 1.
+        ReturnTimeline t = service(List.of(
+                dv("2022-03-01", "100"),
+                dv("2022-12-31", "120"),
+                dv("2023-12-31", "150")
+        ), List.of()).timeline();
+
+        assertEquals(2, t.annualReturns().size());
+
+        var y2022 = t.annualReturns().get(0);
+        assertEquals(2022, y2022.year());
+        assertEquals(0.20, y2022.returnPct().doubleValue(), 1e-6);
+        assertTrue(y2022.partial(), "inception year started mid-year → partial");
+
+        var y2023 = t.annualReturns().get(1);
+        assertEquals(2023, y2023.year());
+        assertEquals(0.25, y2023.returnPct().doubleValue(), 1e-6);
+        assertFalse(y2023.partial(), "full year Jan–Dec");
+    }
+
+    @Test
     void trailing1yReturnsRawPeriodForExactlyOneYear() {
         // Dense daily V = 100 from 2024-01-01 inclusive to 2025-01-01 (the last day jumps to 110).
         // Growth chain is flat at 1.0 until the last day, then ×1.10. trailing1y windowStart

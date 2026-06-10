@@ -708,6 +708,15 @@
     <div style="height: 160px; margin-top: 0.25rem;">
         <canvas id="returns-drawdown-chart"></canvas>
     </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Annual returns (TWR)</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Calendar-year returns derived from the growth-of-£1 series. Faded bars are
+        partial-period (inception year and current YTD).
+    </p>
+    <div style="height: 260px;">
+        <canvas id="returns-annual-chart"></canvas>
+    </div>
 </section>
 
 <section class="tab-panel" id="panel-attribution">
@@ -1292,6 +1301,7 @@
         var returnsGrowthChart = null;
         var returnsContribChart = null;
         var returnsDrawdownChart = null;
+        var returnsAnnualChart = null;
         var returnsZoomInitial = null;   // { min, max } captured at first render — restore here on reset
 
         function loadReturnsChart() {
@@ -1405,6 +1415,8 @@
                     }
                 });
 
+                renderAnnualReturnsChart(data.annualReturns || []);
+
                 var ddCtx = document.getElementById('returns-drawdown-chart').getContext('2d');
                 returnsDrawdownChart = new Chart(ddCtx, {
                     type: 'line',
@@ -1482,6 +1494,64 @@
                 c.options.scales.x.min = min;
                 c.options.scales.x.max = max;
                 c.update('none');
+            });
+        }
+
+        function renderAnnualReturnsChart(years) {
+            var labels = years.map(function (y) { return String(y.year); });
+            var values = years.map(function (y) { return parseFloat(y.returnPct) * 100; });
+            // Partial-period bars (inception year, current YTD) render at 60% opacity so they
+            // visually recede from the full calendar-year bars they sit next to.
+            var bgColors = years.map(function (y) {
+                var pos = parseFloat(y.returnPct) >= 0;
+                var alpha = y.partial ? 0.45 : 0.85;
+                return pos
+                    ? 'rgba(44, 160, 44, ' + alpha + ')'
+                    : 'rgba(192, 57, 43, ' + alpha + ')';
+            });
+
+            var ctx = document.getElementById('returns-annual-chart').getContext('2d');
+            if (returnsAnnualChart) returnsAnnualChart.destroy();
+            returnsAnnualChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Annual return',
+                        data: values,
+                        backgroundColor: bgColors,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { grid: { display: false } },
+                        y: {
+                            title: { display: true, text: 'Return (%)' },
+                            ticks: {
+                                callback: function (v) {
+                                    return (v >= 0 ? '+' : '') + v.toFixed(0) + '%';
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (ctx) {
+                                    var y = years[ctx.dataIndex];
+                                    var pct = parseFloat(y.returnPct) * 100;
+                                    var head = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+                                    var window = y.fromDate + ' → ' + y.toDate;
+                                    return [head, window + (y.partial ? '  (partial)' : '')];
+                                }
+                            }
+                        }
+                    }
+                }
             });
         }
 

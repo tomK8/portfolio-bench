@@ -59,7 +59,7 @@ public class PortfolioReturnService {
     public ReturnTimeline timeline() {
         List<DailyValue> values = valueService.dailyValues();
         if (values.isEmpty()) {
-            return new ReturnTimeline(List.of(), List.of(), List.of(), Summary.empty());
+            return new ReturnTimeline(List.of(), List.of(), List.of(), List.of(), Summary.empty());
         }
 
         Map<LocalDate, BigDecimal> contribByDate = contributionsByDate();
@@ -98,8 +98,47 @@ public class PortfolioReturnService {
         }
 
         List<DrawdownPoint> drawdowns = drawdowns(growthPoints);
-        return new ReturnTimeline(growthPoints, contribPoints, drawdowns,
+        List<AnnualReturn> annual = annualReturns(growthPoints);
+        return new ReturnTimeline(growthPoints, contribPoints, drawdowns, annual,
                 summarise(growthPoints, drawdowns));
+    }
+
+    /**
+     * Calendar-year returns derived from the growth series. For each year between the first
+     * and last growth dates:
+     * <ul>
+     *   <li>Anchor = growth on or before the prior Dec 31 (for the first year, the very first
+     *       growth point — so its return is partial-period).</li>
+     *   <li>Close = growth on or before Dec 31 of the year (for the current year, the latest
+     *       growth point — also partial).</li>
+     *   <li>{@code return = close / anchor − 1}.</li>
+     * </ul>
+     * {@code partial} flags the inception year and the in-progress current year so the UI can
+     * show them differently from full calendar years.
+     */
+    private static List<AnnualReturn> annualReturns(List<ReturnPoint> growth) {
+        if (growth.isEmpty()) return List.of();
+        LocalDate firstDate = LocalDate.parse(growth.get(0).date());
+        LocalDate lastDate = LocalDate.parse(growth.get(growth.size() - 1).date());
+        List<AnnualReturn> out = new ArrayList<>();
+        for (int year = firstDate.getYear(); year <= lastDate.getYear(); year++) {
+            ReturnPoint anchor = (year == firstDate.getYear())
+                    ? growth.get(0)
+                    : findOnOrBefore(growth, LocalDate.of(year - 1, 12, 31));
+            ReturnPoint close = (year == lastDate.getYear())
+                    ? growth.get(growth.size() - 1)
+                    : findOnOrBefore(growth, LocalDate.of(year, 12, 31));
+            if (anchor == null || close == null
+                    || anchor.growth().signum() <= 0
+                    || anchor.date().equals(close.date())) continue;
+            BigDecimal r = close.growth().divide(anchor.growth(), SCALE, RoundingMode.HALF_UP)
+                    .subtract(BigDecimal.ONE);
+            boolean partial = (year == firstDate.getYear() && firstDate.getDayOfYear() > 1)
+                    || (year == lastDate.getYear() && lastDate.getDayOfYear() < 365);
+            out.add(new AnnualReturn(year, r, partial,
+                    anchor.date(), close.date()));
+        }
+        return out;
     }
 
     /**
@@ -248,9 +287,19 @@ public class PortfolioReturnService {
         }
     }
 
+    /**
+     * One calendar year's TWR. {@code partial} = true for the inception year (started mid-year)
+     * and the current year (in progress). {@code fromDate}/{@code toDate} are the actual growth-
+     * series anchor and close — useful in tooltips to show the underlying window.
+     */
+    public record AnnualReturn(int year, BigDecimal returnPct, boolean partial,
+                               String fromDate, String toDate) {
+    }
+
     public record ReturnTimeline(List<ReturnPoint> growthPoints,
                                  List<ContribPoint> contributionPoints,
                                  List<DrawdownPoint> drawdownPoints,
+                                 List<AnnualReturn> annualReturns,
                                  Summary summary) {
     }
 }

@@ -28,7 +28,8 @@ class BenchmarkReturnServiceTest {
     }
 
     private static DailyValue dv(String date, String value) {
-        return new DailyValue(LocalDate.parse(date), new BigDecimal(value));
+        BigDecimal v = new BigDecimal(value);
+        return new DailyValue(LocalDate.parse(date), v, v);
     }
 
     private BenchmarkReturnService service(List<DailyValue> values, List<PriceBar> bars) {

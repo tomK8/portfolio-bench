@@ -63,16 +63,28 @@ public class PortfolioReturnService {
         }
 
         Map<LocalDate, BigDecimal> contribByDate = contributionsByDate();
+        Map<LocalDate, BigDecimal> investedFlowsByDate = investedFlowsByDate();
 
         List<ReturnPoint> growthPoints = new ArrayList<>();
         List<ContribPoint> contribPoints = new ArrayList<>();
+        // Parallel chain on the invested-only sub-portfolio: ignores cash drag. Treats every
+        // buy as a "contribution" into the invested pool and every sell / dividend as a
+        // "withdrawal" out (sign-flipped CashTransaction.amountGbp on TRANSACTION + DIVIDEND
+        // rows). With that flow correction the formula r = (V − Vprev − C) / Vprev captures
+        // pure asset-mix performance — same definition as the total TWR, just restricted to
+        // the positions side of the ledger.
+        List<ReturnPoint> investedGrowthPoints = new ArrayList<>();
         BigDecimal growth = BigDecimal.ONE.setScale(SCALE, RoundingMode.HALF_UP);
+        BigDecimal investedGrowth = BigDecimal.ONE.setScale(SCALE, RoundingMode.HALF_UP);
         BigDecimal cumContrib = BigDecimal.ZERO;
         BigDecimal prevV = null;
+        BigDecimal prevInvested = null;
         boolean chainStarted = false;
+        boolean investedChainStarted = false;
 
         for (DailyValue dv : values) {
             BigDecimal c = contribByDate.getOrDefault(dv.date(), BigDecimal.ZERO);
+            BigDecimal cInvested = investedFlowsByDate.getOrDefault(dv.date(), BigDecimal.ZERO);
             cumContrib = cumContrib.add(c);
 
             if (!chainStarted) {
@@ -83,22 +95,39 @@ public class PortfolioReturnService {
                     contribPoints.add(new ContribPoint(dv.date().toString(), cumContrib));
                     prevV = dv.valueGbp();
                 }
-                continue;
+            } else {
+                if (prevV.signum() > 0) {
+                    BigDecimal r = dv.valueGbp().subtract(prevV).subtract(c)
+                            .divide(prevV, SCALE, RoundingMode.HALF_UP);
+                    growth = growth.multiply(BigDecimal.ONE.add(r))
+                            .setScale(SCALE, RoundingMode.HALF_UP);
+                }
+                growthPoints.add(new ReturnPoint(dv.date().toString(), growth));
+                contribPoints.add(new ContribPoint(dv.date().toString(), cumContrib));
+                prevV = dv.valueGbp();
             }
 
-            if (prevV.signum() > 0) {
-                BigDecimal r = dv.valueGbp().subtract(prevV).subtract(c)
-                        .divide(prevV, SCALE, RoundingMode.HALF_UP);
-                growth = growth.multiply(BigDecimal.ONE.add(r))
-                        .setScale(SCALE, RoundingMode.HALF_UP);
+            // Invested-only chain starts the first day positions exist.
+            if (!investedChainStarted) {
+                if (dv.investedGbp().signum() > 0) {
+                    investedChainStarted = true;
+                    investedGrowthPoints.add(new ReturnPoint(dv.date().toString(), investedGrowth));
+                    prevInvested = dv.investedGbp();
+                }
+            } else {
+                if (prevInvested.signum() > 0) {
+                    BigDecimal r = dv.investedGbp().subtract(prevInvested).subtract(cInvested)
+                            .divide(prevInvested, SCALE, RoundingMode.HALF_UP);
+                    investedGrowth = investedGrowth.multiply(BigDecimal.ONE.add(r))
+                            .setScale(SCALE, RoundingMode.HALF_UP);
+                }
+                investedGrowthPoints.add(new ReturnPoint(dv.date().toString(), investedGrowth));
+                prevInvested = dv.investedGbp();
             }
-            growthPoints.add(new ReturnPoint(dv.date().toString(), growth));
-            contribPoints.add(new ContribPoint(dv.date().toString(), cumContrib));
-            prevV = dv.valueGbp();
         }
 
         List<DrawdownPoint> drawdowns = drawdowns(growthPoints);
-        List<AnnualReturn> annual = annualReturns(growthPoints);
+        List<AnnualReturn> annual = annualReturns(growthPoints, investedGrowthPoints);
         return new ReturnTimeline(growthPoints, contribPoints, drawdowns, annual,
                 summarise(growthPoints, drawdowns));
     }
@@ -113,10 +142,12 @@ public class PortfolioReturnService {
      *       growth point — also partial).</li>
      *   <li>{@code return = close / anchor − 1}.</li>
      * </ul>
-     * {@code partial} flags the inception year and the in-progress current year so the UI can
-     * show them differently from full calendar years.
+     * The same window is applied to {@code investedGrowth} to get the cash-drag-free
+     * per-year return alongside the whole-portfolio one. {@code partial} flags the inception
+     * year and the in-progress current year so the UI can render them differently.
      */
-    private static List<AnnualReturn> annualReturns(List<ReturnPoint> growth) {
+    private static List<AnnualReturn> annualReturns(List<ReturnPoint> growth,
+                                                    List<ReturnPoint> investedGrowth) {
         if (growth.isEmpty()) return List.of();
         LocalDate firstDate = LocalDate.parse(growth.get(0).date());
         LocalDate lastDate = LocalDate.parse(growth.get(growth.size() - 1).date());
@@ -133,10 +164,46 @@ public class PortfolioReturnService {
                     || anchor.date().equals(close.date())) continue;
             BigDecimal r = close.growth().divide(anchor.growth(), SCALE, RoundingMode.HALF_UP)
                     .subtract(BigDecimal.ONE);
+            BigDecimal investedR = investedReturnFor(investedGrowth, anchor.date(), close.date());
             boolean partial = (year == firstDate.getYear() && firstDate.getDayOfYear() > 1)
                     || (year == lastDate.getYear() && lastDate.getDayOfYear() < 365);
-            out.add(new AnnualReturn(year, r, partial,
+            out.add(new AnnualReturn(year, r, investedR, partial,
                     anchor.date(), close.date()));
+        }
+        return out;
+    }
+
+    /**
+     * Window the invested-only growth series to the same anchor/close dates used for the
+     * total return. The dates come from the total-growth series (one daily sample, dense),
+     * so for the invested series we re-anchor by finding the latest invested point
+     * on-or-before each. Returns {@code null} when invested anchor isn't positive yet —
+     * typical when the inception year started with cash but no positions.
+     */
+    private static BigDecimal investedReturnFor(List<ReturnPoint> investedGrowth,
+                                                String anchorDate, String closeDate) {
+        if (investedGrowth.isEmpty()) return null;
+        ReturnPoint a = findOnOrBefore(investedGrowth, LocalDate.parse(anchorDate));
+        ReturnPoint c = findOnOrBefore(investedGrowth, LocalDate.parse(closeDate));
+        if (a == null || c == null || a.growth().signum() <= 0
+                || a.date().equals(c.date())) return null;
+        return c.growth().divide(a.growth(), SCALE, RoundingMode.HALF_UP)
+                .subtract(BigDecimal.ONE);
+    }
+
+    /**
+     * Per-date GBP cash flows from / into the invested pool: TRANSACTION rows (buys =
+     * cash → invested; sells = invested → cash) and DIVIDEND rows (invested → cash, via
+     * the ex-div price drop the daily series already captures). Sign convention matches
+     * the TWR formula's {@code C} term: positive = capital ADDED to the pool, negative =
+     * capital WITHDRAWN. So we flip the cash-ledger sign (buys are cash-negative but
+     * invested-positive; sells/divs are cash-positive but invested-negative).
+     */
+    private Map<LocalDate, BigDecimal> investedFlowsByDate() {
+        Map<LocalDate, BigDecimal> out = new HashMap<>();
+        for (CashTransaction t : cashRepo.loadDividendTransactions()) {
+            BigDecimal flow = BigDecimal.valueOf(t.amountGbp()).negate();
+            out.merge(LocalDate.parse(t.transactionDate()), flow, BigDecimal::add);
         }
         return out;
     }
@@ -288,12 +355,14 @@ public class PortfolioReturnService {
     }
 
     /**
-     * One calendar year's TWR. {@code partial} = true for the inception year (started mid-year)
-     * and the current year (in progress). {@code fromDate}/{@code toDate} are the actual growth-
-     * series anchor and close — useful in tooltips to show the underlying window.
+     * One calendar year's TWR. {@code returnPct} is the whole-portfolio return (cash drag
+     * included); {@code investedReturnPct} strips cash out — the difference between them
+     * is the cash-drag opportunity cost. {@code partial} = true for the inception year and
+     * the current YTD. {@code investedReturnPct} is {@code null} when the year had no
+     * invested position to anchor against.
      */
-    public record AnnualReturn(int year, BigDecimal returnPct, boolean partial,
-                               String fromDate, String toDate) {
+    public record AnnualReturn(int year, BigDecimal returnPct, BigDecimal investedReturnPct,
+                               boolean partial, String fromDate, String toDate) {
     }
 
     public record ReturnTimeline(List<ReturnPoint> growthPoints,

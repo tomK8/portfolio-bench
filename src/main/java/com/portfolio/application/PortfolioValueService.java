@@ -162,11 +162,41 @@ public class PortfolioValueService {
                 cashByAccountCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
                 rothSeeded = true;
             }
-            BigDecimal v = valueAt(sample, qtyBySymbol, cashByAccountCcy, prices, fx);
-            points.add(new DailyValue(sample, v));
+            BigDecimal invested = investedAt(sample, qtyBySymbol, prices, fx);
+            BigDecimal cash = cashAt(sample, cashByAccountCcy, fx);
+            points.add(new DailyValue(sample, invested.add(cash), invested));
             sample = sample.plusDays(1);
         }
         return points;
+    }
+
+    /** Position-only GBP value at {@code sample} — same formula as {@link #valueAt} minus the cash legs. */
+    private static BigDecimal investedAt(LocalDate sample,
+                                         Map<String, BigDecimal> qtyBySymbol,
+                                         Map<String, NavigableMap<LocalDate, PricePoint>> prices,
+                                         Map<String, NavigableMap<LocalDate, BigDecimal>> fx) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (Map.Entry<String, BigDecimal> e : qtyBySymbol.entrySet()) {
+            BigDecimal qty = e.getValue();
+            if (qty.signum() <= 0) continue;
+            BigDecimal v = positionGbp(e.getKey(), qty, sample, prices, fx);
+            if (v != null) total = total.add(v);
+        }
+        return total;
+    }
+
+    private static BigDecimal cashAt(LocalDate sample,
+                                     Map<String, BigDecimal> cashByAccountCcy,
+                                     Map<String, NavigableMap<LocalDate, BigDecimal>> fx) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (Map.Entry<String, BigDecimal> e : cashByAccountCcy.entrySet()) {
+            BigDecimal native_ = e.getValue();
+            if (native_.signum() == 0) continue;
+            String currency = e.getKey().substring(e.getKey().indexOf('|') + 1);
+            BigDecimal gbp = toGbp(native_, currency, sample, fx);
+            if (gbp != null) total = total.add(gbp);
+        }
+        return total;
     }
 
     /** Track the first and last sample dates at which {@code qty > 0} for each symbol. */
@@ -308,8 +338,12 @@ public class PortfolioValueService {
     public record DataPoint(String date, BigDecimal valueGbp) {
     }
 
-    /** Daily sample of portfolio GBP value — keyed by date rather than ISO string for downstream math. */
-    public record DailyValue(LocalDate date, BigDecimal valueGbp) {
+    /**
+     * Daily sample of portfolio GBP value. {@code valueGbp} is total (positions + cash);
+     * {@code investedGbp} is the positions-only sub-total, used by
+     * {@link PortfolioReturnService} to compute a cash-drag-free TWR.
+     */
+    public record DailyValue(LocalDate date, BigDecimal valueGbp, BigDecimal investedGbp) {
     }
 
     /**

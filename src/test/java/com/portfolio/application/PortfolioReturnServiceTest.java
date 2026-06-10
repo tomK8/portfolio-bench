@@ -53,7 +53,8 @@ class PortfolioReturnServiceTest {
     }
 
     private static DailyValue dv(String date, String value) {
-        return new DailyValue(LocalDate.parse(date), new BigDecimal(value));
+        BigDecimal v = new BigDecimal(value);
+        return new DailyValue(LocalDate.parse(date), v, v);  // existing fixtures have no cash → invested = total
     }
 
     private static CashTransaction contrib(String date, double amountGbp) {
@@ -187,6 +188,23 @@ class PortfolioReturnServiceTest {
     }
 
     @Test
+    void investedOnlyReturnIgnoresCashDrag() {
+        // Total = £500 invested + £500 cash → £1000.
+        // Day 2: invested grows to £600 (positions +20%); cash unchanged at £500 → total £1100.
+        // Whole-portfolio TWR = +10%. Invested-only TWR = +20%. The 10pp gap is cash drag.
+        List<DailyValue> values = List.of(
+                new DailyValue(LocalDate.parse("2024-01-01"),
+                        new BigDecimal("1000"), new BigDecimal("500")),
+                new DailyValue(LocalDate.parse("2024-12-31"),
+                        new BigDecimal("1100"), new BigDecimal("600"))
+        );
+        ReturnTimeline t = service(values, List.of()).timeline();
+        var year = t.annualReturns().get(0);
+        assertEquals(0.10, year.returnPct().doubleValue(), 1e-6);
+        assertEquals(0.20, year.investedReturnPct().doubleValue(), 1e-6);
+    }
+
+    @Test
     void annualReturnsBucketByCalendarYear() {
         // 2022 starts at growth=1.0 (anchor day-1), ends at 1.20 → +20%.
         // 2023 anchor = 1.20 (Dec 31 2022), close = 1.50 → +25%.
@@ -219,7 +237,8 @@ class PortfolioReturnServiceTest {
         LocalDate start = LocalDate.parse("2024-01-01");
         LocalDate end = LocalDate.parse("2025-01-01");
         for (LocalDate d = start; !d.isAfter(end); d = d.plusDays(1)) {
-            values.add(new DailyValue(d, d.equals(end) ? new BigDecimal("110") : new BigDecimal("100")));
+            BigDecimal vv = d.equals(end) ? new BigDecimal("110") : new BigDecimal("100");
+            values.add(new DailyValue(d, vv, vv));
         }
 
         ReturnTimeline t = service(values, List.of()).timeline();

@@ -711,10 +711,11 @@
 
     <h3 style="margin-top: 1.5rem; font-size: 1rem;">Annual returns (TWR)</h3>
     <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
-        Calendar-year returns derived from the growth-of-£1 series. Faded bars are
-        partial-period (inception year and current YTD).
+        For each calendar year: <b>Portfolio</b> (cash drag included) vs <b>Invested-only</b>
+        (return of the asset mix as if you'd been fully invested). The gap between the two
+        is the cash-drag opportunity cost. Faded bars are partial-period (inception year and current YTD).
     </p>
-    <div style="height: 260px;">
+    <div style="height: 320px;">
         <canvas id="returns-annual-chart"></canvas>
     </div>
 </section>
@@ -1499,15 +1500,18 @@
 
         function renderAnnualReturnsChart(years) {
             var labels = years.map(function (y) { return String(y.year); });
-            var values = years.map(function (y) { return parseFloat(y.returnPct) * 100; });
-            // Partial-period bars (inception year, current YTD) render at 60% opacity so they
-            // visually recede from the full calendar-year bars they sit next to.
-            var bgColors = years.map(function (y) {
-                var pos = parseFloat(y.returnPct) >= 0;
-                var alpha = y.partial ? 0.45 : 0.85;
-                return pos
-                    ? 'rgba(44, 160, 44, ' + alpha + ')'
-                    : 'rgba(192, 57, 43, ' + alpha + ')';
+            var totalValues = years.map(function (y) { return parseFloat(y.returnPct) * 100; });
+            var investedValues = years.map(function (y) {
+                return y.investedReturnPct != null ? parseFloat(y.investedReturnPct) * 100 : null;
+            });
+            // Partial-period bars (inception year, current YTD) render lighter so they visually
+            // recede from full calendar-year bars. Blue = whole portfolio (cash drag included);
+            // amber = invested-only (cash drag stripped) — the gap reads as opportunity cost.
+            var totalColors = years.map(function (y) {
+                return y.partial ? 'rgba(31, 119, 180, 0.45)' : 'rgba(31, 119, 180, 0.85)';
+            });
+            var investedColors = years.map(function (y) {
+                return y.partial ? 'rgba(255, 127, 14, 0.45)' : 'rgba(255, 127, 14, 0.85)';
             });
 
             var ctx = document.getElementById('returns-annual-chart').getContext('2d');
@@ -1516,12 +1520,12 @@
                 type: 'bar',
                 data: {
                     labels: labels,
-                    datasets: [{
-                        label: 'Annual return',
-                        data: values,
-                        backgroundColor: bgColors,
-                        borderWidth: 0
-                    }]
+                    datasets: [
+                        { label: 'Portfolio (with cash)',
+                          data: totalValues, backgroundColor: totalColors, borderWidth: 0 },
+                        { label: 'Invested only (no cash drag)',
+                          data: investedValues, backgroundColor: investedColors, borderWidth: 0 }
+                    ]
                 },
                 options: {
                     responsive: true,
@@ -1538,15 +1542,29 @@
                         }
                     },
                     plugins: {
-                        legend: { display: false },
+                        legend: { position: 'bottom', labels: { boxWidth: 12 } },
                         tooltip: {
                             callbacks: {
                                 label: function (ctx) {
-                                    var y = years[ctx.dataIndex];
-                                    var pct = parseFloat(y.returnPct) * 100;
-                                    var head = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
-                                    var window = y.fromDate + ' → ' + y.toDate;
-                                    return [head, window + (y.partial ? '  (partial)' : '')];
+                                    var v = ctx.parsed.y;
+                                    if (v == null) return ctx.dataset.label + ': —';
+                                    return ctx.dataset.label + ': ' +
+                                        (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+                                },
+                                afterBody: function (items) {
+                                    if (!items.length) return '';
+                                    var y = years[items[0].dataIndex];
+                                    var t = parseFloat(y.returnPct) * 100;
+                                    var i = y.investedReturnPct != null
+                                        ? parseFloat(y.investedReturnPct) * 100 : null;
+                                    var drag = i != null ? (i - t) : null;
+                                    var lines = [y.fromDate + ' → ' + y.toDate +
+                                        (y.partial ? '  (partial)' : '')];
+                                    if (drag != null) {
+                                        lines.push('Cash drag: ' +
+                                            (drag >= 0 ? '+' : '') + drag.toFixed(2) + 'pp');
+                                    }
+                                    return lines;
                                 }
                             }
                         }

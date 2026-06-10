@@ -498,6 +498,42 @@
         }
 
         .link-btn:hover { color: #14507a; }
+
+        .annual-returns-row {
+            display: flex;
+            gap: 1rem;
+            align-items: stretch;
+            flex-wrap: wrap;
+        }
+
+        .annual-chart-wrap {
+            flex: 1 1 480px;
+            min-height: 320px;
+            position: relative;
+        }
+
+        .annual-table {
+            flex: 0 0 280px;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            align-self: flex-start;
+        }
+
+        .annual-table th, .annual-table td {
+            padding: 0.25rem 0.5rem;
+            border-bottom: 1px solid #eee;
+            white-space: nowrap;
+        }
+
+        .annual-table thead th {
+            border-bottom: 2px solid #ccc;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .annual-table tr.partial { font-style: italic; color: #888; }
+        .annual-table td.pos { color: #2ca02c; }
+        .annual-table td.neg { color: #c0392b; }
     </style>
 </head>
 <body>
@@ -713,10 +749,22 @@
     <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
         For each calendar year: <b>Portfolio</b> (cash drag included) vs <b>Invested-only</b>
         (return of the asset mix as if you'd been fully invested). The gap between the two
-        is the cash-drag opportunity cost. Faded bars are partial-period (inception year and current YTD).
+        is the cash-drag opportunity cost. Faded bars / italic rows are partial-period
+        (inception year and current YTD).
     </p>
-    <div style="height: 320px;">
-        <canvas id="returns-annual-chart"></canvas>
+    <div class="annual-returns-row">
+        <div class="annual-chart-wrap">
+            <canvas id="returns-annual-chart"></canvas>
+        </div>
+        <table id="returns-annual-table" class="annual-table">
+            <thead><tr>
+                <th class="txt">Year</th>
+                <th>Portfolio</th>
+                <th>Invested</th>
+                <th>Cash drag</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
     </div>
 </section>
 
@@ -1499,6 +1547,7 @@
         }
 
         function renderAnnualReturnsChart(years) {
+            renderAnnualReturnsTable(years);
             var labels = years.map(function (y) { return String(y.year); });
             var totalValues = years.map(function (y) { return parseFloat(y.returnPct) * 100; });
             var investedValues = years.map(function (y) {
@@ -1570,6 +1619,37 @@
                         }
                     }
                 }
+            });
+        }
+
+        function renderAnnualReturnsTable(years) {
+            var tbody = document.querySelector('#returns-annual-table tbody');
+            tbody.innerHTML = '';
+            function fmtPctSigned(v) {
+                if (v == null) return '—';
+                var n = parseFloat(v) * 100;
+                return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+            }
+            function classFor(v) {
+                if (v == null) return '';
+                var n = parseFloat(v);
+                return n > 0 ? 'pos' : n < 0 ? 'neg' : '';
+            }
+            years.forEach(function (y) {
+                var portfolio = parseFloat(y.returnPct);
+                var invested = y.investedReturnPct != null ? parseFloat(y.investedReturnPct) : null;
+                var drag = invested != null ? (invested - portfolio) : null;
+                var dragStr = drag != null
+                    ? (drag >= 0 ? '+' : '') + (drag * 100).toFixed(2) + 'pp'
+                    : '—';
+                var tr = document.createElement('tr');
+                if (y.partial) tr.className = 'partial';
+                tr.innerHTML =
+                    '<td class="txt">' + y.year + (y.partial ? '*' : '') + '</td>' +
+                    '<td class="' + classFor(y.returnPct) + '">' + fmtPctSigned(y.returnPct) + '</td>' +
+                    '<td class="' + classFor(y.investedReturnPct) + '">' + fmtPctSigned(y.investedReturnPct) + '</td>' +
+                    '<td class="' + classFor(drag) + '">' + dragStr + '</td>';
+                tbody.appendChild(tr);
             });
         }
 

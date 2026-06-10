@@ -175,6 +175,12 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public TargetAllocationService targetAllocationService(ConcentrationService concentrationService,
+                                                           KeyValueStore keyValueStore) {
+        return new TargetAllocationService(concentrationService, keyValueStore);
+    }
+
+    @Bean
     public HealthService healthService(JdbcConnectionFactory jdbcConnectionFactory) {
         return new HealthService(jdbcConnectionFactory);
     }

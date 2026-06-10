@@ -16,6 +16,8 @@ import com.portfolio.application.CurrencyExposureService;
 import com.portfolio.application.CurrencyExposureService.CurrencyExposure;
 import com.portfolio.application.HealthService;
 import com.portfolio.application.HealthService.Health;
+import com.portfolio.application.TargetAllocationService;
+import com.portfolio.application.TargetAllocationService.TargetReport;
 import com.portfolio.application.PositionDetailService;
 import com.portfolio.application.PositionDetailService.PositionDetail;
 import com.portfolio.application.ExportExcelService;
@@ -75,6 +77,7 @@ public class DashboardController {
     private final ConcentrationService concentrationService;
     private final CurrencyExposureService currencyExposureService;
     private final HealthService healthService;
+    private final TargetAllocationService targetAllocationService;
     private final PortfolioValueService portfolioValueService;
     private final PortfolioReturnService portfolioReturnService;
     private final PortfolioRiskService portfolioRiskService;
@@ -97,6 +100,7 @@ public class DashboardController {
                                ConcentrationService concentrationService,
                                CurrencyExposureService currencyExposureService,
                                HealthService healthService,
+                               TargetAllocationService targetAllocationService,
                                PortfolioValueService portfolioValueService,
                                PortfolioReturnService portfolioReturnService,
                                PortfolioRiskService portfolioRiskService,
@@ -118,6 +122,7 @@ public class DashboardController {
         this.concentrationService = concentrationService;
         this.currencyExposureService = currencyExposureService;
         this.healthService = healthService;
+        this.targetAllocationService = targetAllocationService;
         this.portfolioValueService = portfolioValueService;
         this.portfolioReturnService = portfolioReturnService;
         this.portfolioRiskService = portfolioRiskService;
@@ -241,6 +246,51 @@ public class DashboardController {
     @ResponseBody
     public Health health() {
         return healthService.status();
+    }
+
+    @GetMapping("/allocation/targets")
+    @ResponseBody
+    public TargetReport allocationTargets() {
+        return targetAllocationService.report();
+    }
+
+    /**
+     * Save target weights. Body is a single textarea field {@code targets} containing one
+     * {@code SYMBOL=PERCENT} entry per line. Empty lines and lines without {@code =} are
+     * skipped; bad numbers throw {@code IllegalArgumentException} which the existing
+     * handler renders as a 400.
+     */
+    @PostMapping("/allocation/targets")
+    @ResponseBody
+    public TargetReport saveAllocationTargets(@RequestParam(name = "targets", defaultValue = "") String body) {
+        java.util.Map<String, BigDecimal> targets = new java.util.LinkedHashMap<>();
+        for (String line : body.split("\\r?\\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+            int eq = trimmed.indexOf('=');
+            if (eq < 0) {
+                throw new IllegalArgumentException(
+                        "Line '" + trimmed + "' is missing '=' — use SYMBOL=PERCENT format.");
+            }
+            String sym = trimmed.substring(0, eq).trim().toUpperCase();
+            String val = trimmed.substring(eq + 1).trim().replace("%", "");
+            if (sym.isEmpty()) {
+                throw new IllegalArgumentException("Empty symbol on line: " + trimmed);
+            }
+            BigDecimal pct;
+            try {
+                pct = new BigDecimal(val);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Bad percent for " + sym + ": '" + val + "'");
+            }
+            if (pct.signum() < 0 || pct.compareTo(new BigDecimal("100")) > 0) {
+                throw new IllegalArgumentException(sym + " weight must be 0..100, got " + pct);
+            }
+            // Save as a fraction.
+            targets.put(sym, pct.divide(new BigDecimal("100"), 6, java.math.RoundingMode.HALF_UP));
+        }
+        targetAllocationService.saveTargets(targets);
+        return targetAllocationService.report();
     }
 
     @GetMapping("/portfolio-value")

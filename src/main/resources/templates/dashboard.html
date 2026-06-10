@@ -741,6 +741,40 @@
     <div style="height: 520px; margin-top: 0.25rem;">
         <canvas id="alloc-snapshot-chart"></canvas>
     </div>
+
+    <h3 style="margin-top: 2rem; font-size: 1rem;">Target allocation &amp; rebalance</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Enter target weights per symbol (one <code>SYMBOL=PERCENT</code> per line). Drift is
+        computed against the invested base; positions outside ±5% AND ±£500 of target are
+        flagged "trim" or "add". Untargeted holdings appear at the bottom for visibility.
+    </p>
+    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start;">
+        <div style="flex: 1; min-width: 280px;">
+            <textarea id="target-input" rows="10" style="width: 100%; font-family: monospace; font-size: 0.9rem;"
+                placeholder="EQQQ=25&#10;LGEN=10&#10;GILT 4.75% 2038=5"></textarea>
+            <div style="margin-top: 0.5rem;">
+                <button id="target-save" type="button">Save targets</button>
+                <span id="target-status" class="muted" style="font-size: 0.85rem; margin-left: 0.5rem;"></span>
+            </div>
+            <div id="target-error" class="whatif-error" style="display:none; margin-top: 0.5rem;"></div>
+        </div>
+        <div style="flex: 2; min-width: 400px;">
+            <table id="target-table" class="annual-table" style="margin-top: 0;">
+                <thead><tr>
+                    <th class="txt" data-sort="text">Symbol</th>
+                    <th data-sort="num">Target</th>
+                    <th data-sort="num">Actual</th>
+                    <th data-sort="num">Target £</th>
+                    <th data-sort="num">Actual £</th>
+                    <th data-sort="num">Drift £</th>
+                    <th data-sort="num">Drift %</th>
+                    <th class="txt" data-sort="text">Action</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <div id="target-sum-warning" class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;"></div>
+        </div>
+    </div>
 </section>
 
 <section class="tab-panel" id="panel-returns">
@@ -2377,6 +2411,8 @@
         function loadAllocation() {
             if (allocLoaded) return;
             allocLoaded = true;
+            loadTargetAllocation();
+            document.getElementById('target-save').addEventListener('click', saveTargetAllocation);
             fetch('/allocation').then(function (r) { return r.json(); }).then(function (data) {
                 allocData = data;
                 if (!data.points || !data.points.length) return;
@@ -2507,6 +2543,79 @@
                     }
                 }
             };
+        }
+
+        function loadTargetAllocation() {
+            fetch('/allocation/targets').then(function (r) { return r.json(); })
+                    .then(renderTargetAllocation);
+        }
+
+        function saveTargetAllocation() {
+            var body = new URLSearchParams();
+            body.set('targets', document.getElementById('target-input').value);
+            var status = document.getElementById('target-status');
+            var err = document.getElementById('target-error');
+            status.textContent = 'Saving…';
+            err.style.display = 'none';
+            fetch('/allocation/targets', { method: 'POST', body: body })
+                    .then(function (r) {
+                        if (!r.ok) return r.text().then(function (msg) { throw new Error(msg || 'save failed'); });
+                        status.textContent = 'Saved.';
+                        return r.json().then(renderTargetAllocation);
+                    })
+                    .catch(function (e) {
+                        status.textContent = '';
+                        err.textContent = e.message;
+                        err.style.display = '';
+                    });
+        }
+
+        function renderTargetAllocation(report) {
+            // Pre-fill the textarea with current targets so the user can edit, not retype.
+            var input = document.getElementById('target-input');
+            if (document.activeElement !== input) {
+                var lines = (report.rows || [])
+                        .filter(function (r) { return r.targeted; })
+                        .map(function (r) {
+                            return r.symbol + '=' +
+                                    (parseFloat(r.targetWeight) * 100).toFixed(2);
+                        });
+                input.value = lines.join('\n');
+            }
+            var tbody = document.querySelector('#target-table tbody');
+            tbody.innerHTML = '';
+            (report.rows || []).forEach(function (r) {
+                var tr = document.createElement('tr');
+                if (!r.targeted) tr.style.opacity = '0.55';
+                var actionClass = '';
+                if (r.suggestedAction === 'trim') actionClass = 'neg';
+                else if (r.suggestedAction === 'add') actionClass = 'pos';
+                tr.innerHTML =
+                    '<td class="txt"><b>' + r.symbol + '</b>' +
+                        (r.targeted ? '' : ' <span class="muted">(no target)</span>') + '</td>' +
+                    '<td>' + (r.targetWeight != null
+                        ? (parseFloat(r.targetWeight) * 100).toFixed(2) + '%' : '—') + '</td>' +
+                    '<td>' + (parseFloat(r.actualWeight) * 100).toFixed(2) + '%</td>' +
+                    '<td>' + (r.targetGbp != null ? fmtMoney0(r.targetGbp) : '—') + '</td>' +
+                    '<td>' + fmtMoney0(r.actualGbp) + '</td>' +
+                    '<td class="' + (r.driftGbp != null && parseFloat(r.driftGbp) >= 0 ? 'pos' : 'neg') + '">' +
+                        (r.driftGbp != null ? fmtSignedMoney(parseFloat(r.driftGbp)) : '—') + '</td>' +
+                    '<td>' + (r.driftPct != null
+                        ? (parseFloat(r.driftPct) >= 0 ? '+' : '') +
+                          (parseFloat(r.driftPct) * 100).toFixed(1) + '%' : '—') + '</td>' +
+                    '<td class="' + actionClass + '">' + (r.suggestedAction || '—') + '</td>';
+                tbody.appendChild(tr);
+            });
+            attachSortOnce('target-table');
+
+            var sum = parseFloat(report.targetSum || 0) * 100;
+            var warn = document.getElementById('target-sum-warning');
+            if (sum > 0 && Math.abs(sum - 100) > 0.5) {
+                warn.textContent = 'Target weights sum to ' + sum.toFixed(2) +
+                        '% — implicit ' + (100 - sum).toFixed(2) + '% in cash / untargeted.';
+            } else {
+                warn.textContent = '';
+            }
         }
 
         function initAllocSnapshot(points) {

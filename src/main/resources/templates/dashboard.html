@@ -1214,6 +1214,27 @@
     <div id="recon-summary" class="muted" style="margin: 0.5rem 0; font-size: 0.85rem;">
         Loading…
     </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Manual price entry</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Insert a single <code>price_history</code> row for a symbol Yahoo doesn't cover.
+        open/high/low default to the close, splitFactor=1.0, no dividend adjustment.
+    </p>
+    <div class="benchmark-controls">
+        <label>Symbol: <input id="price-symbol" type="text" size="10" placeholder="LGEN" autocomplete="off"/></label>
+        <label>Date: <input id="price-date" type="date"/></label>
+        <label>Close: <input id="price-close" type="number" step="0.0001" min="0" size="10" placeholder="2.50"/></label>
+        <label>Currency:
+            <select id="price-currency">
+                <option value="GBP">GBP</option>
+                <option value="GBp">GBp (pence)</option>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+            </select>
+        </label>
+        <button id="price-save" type="button">Save</button>
+        <span id="price-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
     <table id="recon-table" class="annual-table">
         <thead><tr>
             <th class="txt" data-sort="text">Severity</th>
@@ -4090,7 +4111,28 @@
         function loadReconciliation() {
             if (reconLoaded) return;
             reconLoaded = true;
+            document.getElementById('price-save').addEventListener('click', saveManualPrice);
             fetch('/reconciliation').then(function (r) { return r.json(); }).then(renderRecon);
+        }
+
+        function saveManualPrice() {
+            var body = new URLSearchParams();
+            body.set('symbol', document.getElementById('price-symbol').value);
+            body.set('date', document.getElementById('price-date').value);
+            body.set('close', document.getElementById('price-close').value);
+            body.set('currency', document.getElementById('price-currency').value);
+            var status = document.getElementById('price-status');
+            status.textContent = 'Saving…';
+            fetch('/prices/manual', { method: 'POST', body: body })
+                    .then(function (r) {
+                        if (!r.ok) return r.text().then(function (m) { throw new Error(m); });
+                        return r.json();
+                    })
+                    .then(function (data) {
+                        status.textContent = '✓ ' + data.rowsAffected + ' row(s) written for ' +
+                                data.symbol + ' on ' + data.date;
+                    })
+                    .catch(function (e) { status.textContent = '⚠ ' + e.message; });
         }
 
         function renderRecon(report) {

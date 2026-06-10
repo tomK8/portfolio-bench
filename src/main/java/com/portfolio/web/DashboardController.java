@@ -38,6 +38,7 @@ import com.portfolio.application.WhatIfService;
 import com.portfolio.application.WhatIfService.Weight;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.KeyValueStore;
+import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.persistence.SnapshotRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -82,6 +83,7 @@ public class DashboardController {
     private final HealthService healthService;
     private final TargetAllocationService targetAllocationService;
     private final ReconciliationService reconciliationService;
+    private final PriceHistoryRepository priceHistoryRepository;
     private final PortfolioValueService portfolioValueService;
     private final PortfolioReturnService portfolioReturnService;
     private final PortfolioRiskService portfolioRiskService;
@@ -107,6 +109,7 @@ public class DashboardController {
                                HealthService healthService,
                                TargetAllocationService targetAllocationService,
                                ReconciliationService reconciliationService,
+                               PriceHistoryRepository priceHistoryRepository,
                                PortfolioValueService portfolioValueService,
                                PortfolioReturnService portfolioReturnService,
                                PortfolioRiskService portfolioRiskService,
@@ -131,6 +134,7 @@ public class DashboardController {
         this.healthService = healthService;
         this.targetAllocationService = targetAllocationService;
         this.reconciliationService = reconciliationService;
+        this.priceHistoryRepository = priceHistoryRepository;
         this.portfolioValueService = portfolioValueService;
         this.portfolioReturnService = portfolioReturnService;
         this.portfolioRiskService = portfolioRiskService;
@@ -267,6 +271,44 @@ public class DashboardController {
     @ResponseBody
     public Report reconciliation() {
         return reconciliationService.report();
+    }
+
+    /**
+     * Insert (or upsert via {@link com.portfolio.persistence.PriceHistoryRepository#upsertPriceBars})
+     * a single manually-entered price_history row. For UCITS or delisted names Yahoo doesn't
+     * cover — saves the user from hand-editing the SQLite file. open/high/low default to the
+     * close so OHLC charts still render. {@code adjClose} = close (no dividend adjustment),
+     * splitFactor = 1.0.
+     */
+    @PostMapping("/prices/manual")
+    @ResponseBody
+    public java.util.Map<String, Object> manualPrice(
+            @RequestParam("symbol") String symbolRaw,
+            @RequestParam("date") String dateRaw,
+            @RequestParam("close") String closeRaw,
+            @RequestParam(name = "currency", defaultValue = "GBP") String currency) {
+        String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase();
+        if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        java.time.LocalDate date;
+        try {
+            date = java.time.LocalDate.parse(dateRaw);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("date must be YYYY-MM-DD");
+        }
+        double close;
+        try {
+            close = Double.parseDouble(closeRaw.trim());
+        } catch (Exception e) {
+            throw new IllegalArgumentException("close must be a number");
+        }
+        if (close <= 0) throw new IllegalArgumentException("close must be positive");
+
+        com.portfolio.domain.model.PriceBar bar = new com.portfolio.domain.model.PriceBar(
+                symbol, date, close, close, close, close, close, 1.0, null, currency);
+        int rows = priceHistoryRepository.upsertPriceBars(java.util.List.of(bar));
+        log.info("Manual price entry: {} {} {} {} → {} rows", symbol, date, close, currency, rows);
+        return java.util.Map.of("symbol", symbol, "date", date.toString(),
+                "rowsAffected", rows);
     }
 
     /**

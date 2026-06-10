@@ -140,6 +140,12 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public PortfolioRiskService portfolioRiskService(PortfolioReturnService portfolioReturnService,
+                                                     KeyValueStore keyValueStore) {
+        return new PortfolioRiskService(portfolioReturnService, keyValueStore);
+    }
+
+    @Bean
     public BenchmarkReturnService benchmarkReturnService(PortfolioValueService portfolioValueService,
                                                          PriceHistoryRepository priceHistoryRepository,
                                                          YahooTickerMap yahooTickerMap) {

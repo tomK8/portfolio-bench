@@ -13,6 +13,8 @@ import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.PortfolioReturnService;
 import com.portfolio.application.PortfolioReturnService.ReturnTimeline;
+import com.portfolio.application.PortfolioRiskService;
+import com.portfolio.application.PortfolioRiskService.RiskTimeline;
 import com.portfolio.application.PortfolioValueService;
 import com.portfolio.application.PortfolioValueService.ValueTimeline;
 import com.portfolio.application.PriceFetchJob;
@@ -60,6 +62,7 @@ public class DashboardController {
     private final ContributionService contributionService;
     private final PortfolioValueService portfolioValueService;
     private final PortfolioReturnService portfolioReturnService;
+    private final PortfolioRiskService portfolioRiskService;
     private final BenchmarkReturnService benchmarkReturnService;
     private final WhatIfService whatIfService;
     private final AllocationService allocationService;
@@ -76,6 +79,7 @@ public class DashboardController {
                                ContributionService contributionService,
                                PortfolioValueService portfolioValueService,
                                PortfolioReturnService portfolioReturnService,
+                               PortfolioRiskService portfolioRiskService,
                                BenchmarkReturnService benchmarkReturnService,
                                WhatIfService whatIfService,
                                AllocationService allocationService,
@@ -91,6 +95,7 @@ public class DashboardController {
         this.contributionService = contributionService;
         this.portfolioValueService = portfolioValueService;
         this.portfolioReturnService = portfolioReturnService;
+        this.portfolioRiskService = portfolioRiskService;
         this.benchmarkReturnService = benchmarkReturnService;
         this.whatIfService = whatIfService;
         this.allocationService = allocationService;
@@ -188,6 +193,36 @@ public class DashboardController {
     @ResponseBody
     public ReturnTimeline returns() {
         return portfolioReturnService.timeline();
+    }
+
+    @GetMapping("/risk")
+    @ResponseBody
+    public RiskTimeline risk() {
+        return portfolioRiskService.timeline();
+    }
+
+    /**
+     * Persist the risk-free rate used by Sharpe / Sortino / Calmar. The form posts a
+     * percentage (e.g. "4" for 4%); we divide by 100 here and store the fraction so
+     * {@link PortfolioRiskService} reads a consistent shape regardless of how the user typed
+     * it. Clamps to [0, 1] to keep typos from poisoning the math.
+     */
+    @PostMapping("/risk/rate")
+    @ResponseBody
+    public java.util.Map<String, String> setRiskRate(@RequestParam("rate") String rate) {
+        String clean = rate == null ? "" : rate.replace("%", "").trim();
+        BigDecimal pct;
+        try {
+            pct = new BigDecimal(clean);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Risk-free rate '" + rate + "' is not a number.");
+        }
+        BigDecimal fraction = pct.divide(new BigDecimal("100"), 6, java.math.RoundingMode.HALF_UP);
+        if (fraction.signum() < 0 || fraction.compareTo(BigDecimal.ONE) > 0) {
+            throw new IllegalArgumentException("Risk-free rate must be between 0% and 100%.");
+        }
+        portfolioRiskService.setRiskFreeRate(fraction);
+        return java.util.Map.of("rate", fraction.toPlainString());
     }
 
     /**

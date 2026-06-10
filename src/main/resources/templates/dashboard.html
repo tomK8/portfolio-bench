@@ -578,6 +578,7 @@
     <button class="tab" data-panel="panel-value" type="button">Value over time</button>
     <button class="tab" data-panel="panel-allocation" type="button">Allocation</button>
     <button class="tab" data-panel="panel-returns" type="button">Returns</button>
+    <button class="tab" data-panel="panel-risk" type="button">Risk</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
@@ -768,6 +769,60 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-risk">
+    <p class="muted" style="margin-top: 0">
+        Risk metrics derived from the daily TWR series on the Returns tab. Volatility is the
+        annualised sample stdev of weekday returns × √252 (weekend rows are forward-filled
+        zeros and would compress vol if included). Sharpe = (annualised return − risk-free
+        rate) / annualised vol; Sortino swaps the denominator for downside deviation
+        (excess-return rms over loss days only); Calmar = annualised return / |max
+        drawdown|. Annualised return uses the full daily series compounded; trailing 1y
+        figures use the last 365 days.
+    </p>
+    <div class="benchmark-controls">
+        <label>Risk-free rate (%):
+            <input id="risk-rf-input" type="number" step="0.1" min="0" max="100" size="6"/>
+        </label>
+        <button id="risk-rf-apply" type="button">Apply</button>
+        <span id="risk-rf-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+    <div class="returns-stats" id="risk-stats">
+        <div class="returns-stat"><span class="label">Volatility (ann., full)</span><span class="value na" id="risk-vol">—</span></div>
+        <div class="returns-stat"><span class="label">Volatility · 1y</span><span class="value na" id="risk-vol-1y">—</span></div>
+        <div class="returns-stat"><span class="label">Sharpe (full)</span><span class="value na" id="risk-sharpe">—</span></div>
+        <div class="returns-stat"><span class="label">Sharpe · 1y</span><span class="value na" id="risk-sharpe-1y">—</span></div>
+        <div class="returns-stat"><span class="label">Sortino</span><span class="value na" id="risk-sortino">—</span></div>
+        <div class="returns-stat" title="Deepest peak-to-trough drop in the TWR series">
+            <span class="label">Max drawdown</span>
+            <span class="value na" id="risk-maxdd">—</span>
+            <span class="sub" id="risk-maxdd-date"></span>
+        </div>
+        <div class="returns-stat" title="Calendar days from the peak before the trough to the next time the series returns to that peak">
+            <span class="label">Recovery (days)</span>
+            <span class="value na" id="risk-recovery">—</span>
+        </div>
+        <div class="returns-stat"><span class="label">Calmar</span><span class="value na" id="risk-calmar">—</span></div>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Rolling volatility (63-day, annualised)</h3>
+    <div style="height: 280px; margin-top: 0.25rem;">
+        <canvas id="risk-vol-chart"></canvas>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Drawdown</h3>
+    <div style="height: 220px; margin-top: 0.25rem;">
+        <canvas id="risk-dd-chart"></canvas>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Daily return distribution</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Trading-day count per 0.5% bucket of TWR daily return. Tails are catchalls at ±5%.
+    </p>
+    <div style="height: 240px; margin-top: 0.25rem;">
+        <canvas id="risk-hist-chart"></canvas>
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-attribution">
     <p class="muted" style="margin-top: 0">
         Per-symbol GBP P&amp;L over a date window:
@@ -944,6 +999,7 @@
                 if (btn.dataset.panel === 'panel-value') loadValueChart();
                 if (btn.dataset.panel === 'panel-allocation') loadAllocation();
                 if (btn.dataset.panel === 'panel-returns') { loadReturnsChart(); setupBenchmark(); }
+                if (btn.dataset.panel === 'panel-risk') loadRisk();
                 if (btn.dataset.panel === 'panel-attribution') setupAttribution();
                 if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
             });
@@ -2334,6 +2390,193 @@
                 attrTableSortAttached = true;
                 attachSort(document.getElementById('attr-table'));
             }
+        }
+
+        var riskLoaded = false;
+        var riskVolChart = null, riskDdChart = null, riskHistChart = null;
+
+        function loadRisk() {
+            if (riskLoaded) return;
+            riskLoaded = true;
+            document.getElementById('risk-rf-apply')
+                    .addEventListener('click', applyRiskFreeRate);
+            fetchAndRenderRisk();
+        }
+
+        function fetchAndRenderRisk() {
+            fetch('/risk').then(function (r) { return r.json(); }).then(renderRisk);
+        }
+
+        function applyRiskFreeRate() {
+            var pct = document.getElementById('risk-rf-input').value;
+            var status = document.getElementById('risk-rf-status');
+            status.textContent = 'Saving…';
+            var body = new URLSearchParams();
+            body.set('rate', pct);
+            fetch('/risk/rate', { method: 'POST', body: body })
+                    .then(function (r) {
+                        if (!r.ok) return r.text().then(function (msg) {
+                            throw new Error(msg || 'save failed');
+                        });
+                        status.textContent = 'Saved.';
+                        fetchAndRenderRisk();
+                    })
+                    .catch(function (e) { status.textContent = 'Error: ' + e.message; });
+        }
+
+        function renderRisk(data) {
+            var s = data.summary || {};
+            var rfInput = document.getElementById('risk-rf-input');
+            if (s.riskFreeRate != null && document.activeElement !== rfInput) {
+                rfInput.value = (parseFloat(s.riskFreeRate) * 100).toFixed(2);
+            }
+            setRiskPct('risk-vol', s.volAnnualized);
+            setRiskPct('risk-vol-1y', s.vol1y);
+            setRiskRatio('risk-sharpe', s.sharpe);
+            setRiskRatio('risk-sharpe-1y', s.sharpe1y);
+            setRiskRatio('risk-sortino', s.sortino);
+            setRiskPct('risk-maxdd', s.maxDrawdown);
+            document.getElementById('risk-maxdd-date').textContent = s.maxDrawdownDate || '';
+            var rec = document.getElementById('risk-recovery');
+            if (s.recoveryDays != null) {
+                rec.textContent = s.recoveryDays;
+                rec.className = 'value';
+            } else {
+                rec.textContent = s.maxDrawdownDate ? 'ongoing' : '—';
+                rec.className = 'value na';
+            }
+            setRiskRatio('risk-calmar', s.calmar);
+
+            renderRiskVolChart(data.rollingVol || []);
+            renderRiskDdChart(data.drawdownPoints || []);
+            renderRiskHistChart(data.dailyReturnHistogram || []);
+        }
+
+        function setRiskPct(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            var n = parseFloat(v) * 100;
+            el.textContent = (n >= 0 ? '' : '') + n.toFixed(2) + '%';
+            el.className = 'value';
+        }
+
+        function setRiskRatio(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            el.textContent = parseFloat(v).toFixed(2);
+            el.className = 'value';
+        }
+
+        function renderRiskVolChart(points) {
+            if (riskVolChart) riskVolChart.destroy();
+            var data = points.map(function (p) {
+                return { x: p.date, y: parseFloat(p.annualizedVol) * 100 };
+            });
+            riskVolChart = new Chart(
+                document.getElementById('risk-vol-chart').getContext('2d'), {
+                    type: 'line',
+                    data: { datasets: [{
+                        label: 'Annualised vol (63d, weekday)',
+                        data: data,
+                        borderColor: '#9467bd',
+                        backgroundColor: 'rgba(148,103,189,0.12)',
+                        fill: true,
+                        pointRadius: 0,
+                        borderWidth: 1.5,
+                        tension: 0.1
+                    }]},
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' } },
+                            y: {
+                                beginAtZero: true,
+                                title: { display: true, text: 'Vol (%)' },
+                                ticks: { callback: function (v) { return v.toFixed(1) + '%'; } }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { callbacks: { label: function (c) {
+                                return c.parsed.y.toFixed(2) + '%';
+                            }}}
+                        }
+                    }
+                });
+        }
+
+        function renderRiskDdChart(points) {
+            if (riskDdChart) riskDdChart.destroy();
+            var data = points.map(function (p) {
+                return { x: p.date, y: parseFloat(p.drawdown) * 100 };
+            });
+            riskDdChart = new Chart(
+                document.getElementById('risk-dd-chart').getContext('2d'), {
+                    type: 'line',
+                    data: { datasets: [{
+                        label: 'Drawdown',
+                        data: data,
+                        borderColor: '#d62728',
+                        backgroundColor: 'rgba(214,39,40,0.18)',
+                        fill: true,
+                        pointRadius: 0,
+                        borderWidth: 1.5,
+                        tension: 0.1
+                    }]},
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' } },
+                            y: {
+                                suggestedMax: 0,
+                                title: { display: true, text: 'Drawdown (%)' },
+                                ticks: { callback: function (v) { return v.toFixed(0) + '%'; } }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { callbacks: { label: function (c) {
+                                return c.parsed.y.toFixed(2) + '%';
+                            }}}
+                        }
+                    }
+                });
+        }
+
+        function renderRiskHistChart(buckets) {
+            if (riskHistChart) riskHistChart.destroy();
+            // Colour negatives red, zero-ish grey, positives green so the skew is visible.
+            var colours = buckets.map(function (b) {
+                var label = b.label;
+                if (label.indexOf('-') === 0 || label === '≤-5%') return 'rgba(214,39,40,0.7)';
+                if (label === '+0.0%') return 'rgba(140,140,140,0.7)';
+                return 'rgba(44,160,44,0.7)';
+            });
+            riskHistChart = new Chart(
+                document.getElementById('risk-hist-chart').getContext('2d'), {
+                    type: 'bar',
+                    data: {
+                        labels: buckets.map(function (b) { return b.label; }),
+                        datasets: [{
+                            label: 'Trading days',
+                            data: buckets.map(function (b) { return b.count; }),
+                            backgroundColor: colours,
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        scales: {
+                            y: { beginAtZero: true,
+                                 title: { display: true, text: 'Trading days' } },
+                            x: { ticks: { maxRotation: 60, minRotation: 60, autoSkip: false,
+                                          font: { size: 10 } } }
+                        },
+                        plugins: { legend: { display: false } }
+                    }
+                });
         }
     }());
 </script>

@@ -148,6 +148,45 @@ class PortfolioReturnServiceTest {
     }
 
     @Test
+    void drawdownTracksUnderwaterFromRunningPeak() {
+        // V: 100 → 120 → 90 → 150. Growth chain (no contributions): 1.0, 1.2, 0.9, 1.5.
+        // Drawdown: 0% (peak=1.0), 0% (peak→1.2), (0.9-1.2)/1.2 = -25%, 0% (peak→1.5).
+        ReturnTimeline t = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "120"),
+                dv("2024-01-03", "90"),
+                dv("2024-01-04", "150")
+        ), List.of()).timeline();
+
+        assertEquals(4, t.drawdownPoints().size());
+        assertEquals(0.0, t.drawdownPoints().get(0).drawdown().doubleValue(), 1e-9);
+        assertEquals(0.0, t.drawdownPoints().get(1).drawdown().doubleValue(), 1e-9);
+        assertEquals(-0.25, t.drawdownPoints().get(2).drawdown().doubleValue(), 1e-6);
+        assertEquals(0.0, t.drawdownPoints().get(3).drawdown().doubleValue(), 1e-9);
+
+        // Summary picks the deepest underwater point and its date.
+        assertEquals(-0.25, t.summary().maxDrawdown().doubleValue(), 1e-6);
+        assertEquals("2024-01-03", t.summary().maxDrawdownDate());
+    }
+
+    @Test
+    void drawdownIgnoresContributionInflatedGains() {
+        // V: 100 → 150 entirely from a £50 contribution → growth flat at 1.0 → drawdown stays 0%.
+        // (Without TWR, a naive value-based drawdown would treat the next dip as recovered from
+        // a higher peak — this asserts we don't make that mistake.)
+        ReturnTimeline t = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "150"),
+                dv("2024-01-03", "90")
+        ), List.of(contrib("2024-01-02", 50.0))).timeline();
+
+        // Day 3: TWR = 0.9 / 1.0 → growth chain hits 0.6 (because (90−150−0)/150 = −0.4, ×1.0 = 0.6).
+        // Wait — the chain step uses prev V (150), so r = (90 − 150 − 0) / 150 = −0.4. New growth = 0.6.
+        // Peak so far = 1.0. Drawdown = (0.6 − 1.0)/1.0 = −40%.
+        assertEquals(-0.40, t.summary().maxDrawdown().doubleValue(), 1e-6);
+    }
+
+    @Test
     void trailing1yReturnsRawPeriodForExactlyOneYear() {
         // Dense daily V = 100 from 2024-01-01 inclusive to 2025-01-01 (the last day jumps to 110).
         // Growth chain is flat at 1.0 until the last day, then ×1.10. trailing1y windowStart

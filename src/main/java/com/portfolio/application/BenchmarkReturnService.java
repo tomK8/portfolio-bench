@@ -104,7 +104,8 @@ public class BenchmarkReturnService {
                 trailing(points, now.minusYears(1), gNow),
                 trailing(points, now.minusYears(3), gNow),
                 trailing(points, now.minusYears(5), gNow),
-                trailing(points, LocalDate.parse(points.get(0).date()), gNow));
+                trailing(points, LocalDate.parse(points.get(0).date()), gNow),
+                null, null);   // benchmarks don't track drawdown — same series, separate question
     }
 
     private static BigDecimal trailing(List<ReturnPoint> points, LocalDate windowStart, BigDecimal gNow) {

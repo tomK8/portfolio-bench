@@ -59,7 +59,7 @@ public class PortfolioReturnService {
     public ReturnTimeline timeline() {
         List<DailyValue> values = valueService.dailyValues();
         if (values.isEmpty()) {
-            return new ReturnTimeline(List.of(), List.of(), Summary.empty());
+            return new ReturnTimeline(List.of(), List.of(), List.of(), Summary.empty());
         }
 
         Map<LocalDate, BigDecimal> contribByDate = contributionsByDate();
@@ -97,7 +97,27 @@ public class PortfolioReturnService {
             prevV = dv.valueGbp();
         }
 
-        return new ReturnTimeline(growthPoints, contribPoints, summarise(growthPoints));
+        List<DrawdownPoint> drawdowns = drawdowns(growthPoints);
+        return new ReturnTimeline(growthPoints, contribPoints, drawdowns,
+                summarise(growthPoints, drawdowns));
+    }
+
+    /**
+     * Underwater curve: for each growth point, {@code (growth − running_peak) / running_peak}
+     * — always in {@code [-1, 0]}, with 0 meaning "at all-time-high". Computed on the
+     * growth-of-£1 series (TWR), so contributions don't masquerade as drawdown recoveries.
+     */
+    private static List<DrawdownPoint> drawdowns(List<ReturnPoint> growth) {
+        List<DrawdownPoint> out = new ArrayList<>();
+        BigDecimal peak = BigDecimal.ZERO;
+        for (ReturnPoint p : growth) {
+            if (p.growth().compareTo(peak) > 0) peak = p.growth();
+            BigDecimal dd = peak.signum() > 0
+                    ? p.growth().subtract(peak).divide(peak, SCALE, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+            out.add(new DrawdownPoint(p.date(), dd));
+        }
+        return out;
     }
 
     /**
@@ -136,16 +156,25 @@ public class PortfolioReturnService {
         }
     }
 
-    private static Summary summarise(List<ReturnPoint> points) {
+    private static Summary summarise(List<ReturnPoint> points, List<DrawdownPoint> drawdowns) {
         if (points.isEmpty()) return Summary.empty();
         ReturnPoint last = points.get(points.size() - 1);
         LocalDate now = LocalDate.parse(last.date());
         BigDecimal gNow = last.growth();
+        BigDecimal maxDD = BigDecimal.ZERO;
+        String maxDDDate = null;
+        for (DrawdownPoint d : drawdowns) {
+            if (d.drawdown().compareTo(maxDD) < 0) {
+                maxDD = d.drawdown();
+                maxDDDate = d.date();
+            }
+        }
         return new Summary(
                 trailing(points, now.minusYears(1), gNow),
                 trailing(points, now.minusYears(3), gNow),
                 trailing(points, now.minusYears(5), gNow),
-                trailing(points, LocalDate.parse(points.get(0).date()), gNow));
+                trailing(points, LocalDate.parse(points.get(0).date()), gNow),
+                maxDD, maxDDDate);
     }
 
     /**
@@ -198,19 +227,30 @@ public class PortfolioReturnService {
     }
 
     /**
+     * Underwater point: {@code drawdown} is a non-positive fraction (e.g. −0.15 = 15% below
+     * the running TWR peak); 0 means the portfolio is at all-time-high on that day.
+     */
+    public record DrawdownPoint(String date, BigDecimal drawdown) {
+    }
+
+    /**
      * Trailing returns as fractional GBP gains (0.07 = +7%). 1y is the raw period return;
-     * 3y/5y/since are annualised. Any field is {@code null} when the portfolio history is
-     * shorter than the corresponding window.
+     * 3y/5y/since are annualised. {@code maxDrawdown} is the deepest underwater fraction
+     * across the entire history (negative, e.g. −0.25 = a 25% peak-to-trough drop), and
+     * {@code maxDrawdownDate} is the day it bottomed. Any field is {@code null} when the
+     * portfolio history is shorter than the corresponding window.
      */
     public record Summary(BigDecimal trailing1y, BigDecimal trailing3y,
-                          BigDecimal trailing5y, BigDecimal sinceInception) {
+                          BigDecimal trailing5y, BigDecimal sinceInception,
+                          BigDecimal maxDrawdown, String maxDrawdownDate) {
         public static Summary empty() {
-            return new Summary(null, null, null, null);
+            return new Summary(null, null, null, null, null, null);
         }
     }
 
     public record ReturnTimeline(List<ReturnPoint> growthPoints,
                                  List<ContribPoint> contributionPoints,
+                                 List<DrawdownPoint> drawdownPoints,
                                  Summary summary) {
     }
 }

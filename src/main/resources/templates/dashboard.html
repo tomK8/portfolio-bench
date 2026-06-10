@@ -6,6 +6,8 @@
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
     <style>
         body {
             font-family: system-ui, sans-serif;
@@ -476,6 +478,26 @@
 
         .attr-row.pos td.attr-pnl { color: #2ca02c; font-weight: 600; }
         .attr-row.neg td.attr-pnl { color: #c0392b; font-weight: 600; }
+
+        .zoom-hint {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            justify-content: flex-end;
+            margin-top: 0.25rem;
+        }
+
+        .link-btn {
+            background: none;
+            border: none;
+            color: #1f77b4;
+            cursor: pointer;
+            font-size: 0.85rem;
+            padding: 0;
+            text-decoration: underline;
+        }
+
+        .link-btn:hover { color: #14507a; }
     </style>
 </head>
 <body>
@@ -570,7 +592,11 @@
         growth above what you put in.
     </p>
     <div id="value-warnings" class="value-warnings" style="display: none;"></div>
-    <div style="height: 480px; margin-top: 1rem;">
+    <div class="zoom-hint">
+        <span class="muted" style="font-size: 0.8rem;">Drag across the chart to zoom into a window.</span>
+        <button id="value-zoom-reset" type="button" class="link-btn">Reset zoom</button>
+    </div>
+    <div style="height: 480px; margin-top: 0.25rem;">
         <canvas id="value-chart"></canvas>
     </div>
 </section>
@@ -581,7 +607,9 @@
         chain-linked, with external contributions stripped out. Comparable to a fund
         factsheet number. Trailing 1y is the simple period return; 3y / 5y / since
         inception are annualised. Top chart: growth of £1 invested at portfolio inception.
-        Bottom chart: cumulative external contributions on the same time axis, for context.
+        Middle chart: cumulative external contributions on the same time axis, for context.
+        Bottom chart: underwater curve (drawdown from the running TWR peak) — flat at 0%
+        when you're at all-time-high, dips deeper as the portfolio falls below it.
         Pick a benchmark below to overlay its total return (adj_close, dividends reinvested)
         — native currency, no FX conversion.
     </p>
@@ -616,6 +644,11 @@
         <div class="returns-stat"><span class="label">Portfolio · 3y (ann.)</span><span class="value na" id="returns-3y">—</span></div>
         <div class="returns-stat"><span class="label">Portfolio · 5y (ann.)</span><span class="value na" id="returns-5y">—</span></div>
         <div class="returns-stat"><span class="label">Portfolio · since inception</span><span class="value na" id="returns-since">—</span><span class="sub" id="returns-since-sub"></span></div>
+        <div class="returns-stat" title="Deepest peak-to-trough drop in the TWR series">
+            <span class="label">Max drawdown</span>
+            <span class="value na" id="returns-maxdd">—</span>
+            <span class="sub" id="returns-maxdd-date"></span>
+        </div>
     </div>
     <div class="returns-stats" id="benchmark-stats" style="display:none;">
         <div class="returns-stat"><span class="label"><span id="benchmark-label-1y">Benchmark</span> · 1y</span><span class="value na" id="bench-1y">—</span></div>
@@ -623,11 +656,18 @@
         <div class="returns-stat"><span class="label"><span id="benchmark-label-5y">Benchmark</span> · 5y (ann.)</span><span class="value na" id="bench-5y">—</span></div>
         <div class="returns-stat"><span class="label"><span id="benchmark-label-since">Benchmark</span> · since inception</span><span class="value na" id="bench-since">—</span></div>
     </div>
-    <div style="height: 340px; margin-top: 0.5rem;">
+    <div class="zoom-hint">
+        <span class="muted" style="font-size: 0.8rem;">Drag across the chart to zoom; double-click or hit reset to clear.</span>
+        <button id="returns-zoom-reset" type="button" class="link-btn">Reset zoom</button>
+    </div>
+    <div style="height: 320px; margin-top: 0.5rem;">
         <canvas id="returns-chart"></canvas>
     </div>
     <div style="height: 140px; margin-top: 0.25rem;">
         <canvas id="returns-contrib-chart"></canvas>
+    </div>
+    <div style="height: 160px; margin-top: 0.25rem;">
+        <canvas id="returns-drawdown-chart"></canvas>
     </div>
 </section>
 
@@ -1190,16 +1230,29 @@
                                     }
                                 }
                             },
-                            legend: { position: 'bottom' }
+                            legend: { position: 'bottom' },
+                            zoom: {
+                                pan: { enabled: true, mode: 'x' },
+                                zoom: {
+                                    mode: 'x',
+                                    drag: { enabled: true, backgroundColor: 'rgba(31, 119, 180, 0.12)' },
+                                    pinch: { enabled: true }
+                                }
+                            }
                         }
                     }
                 });
+                document.getElementById('value-zoom-reset').onclick = function () {
+                    if (valueChart) valueChart.resetZoom();
+                };
             });
         }
 
         var returnsLoaded = false;
         var returnsGrowthChart = null;
         var returnsContribChart = null;
+        var returnsDrawdownChart = null;
+        var returnsZoomInitial = null;   // { min, max } captured at first render — restore here on reset
 
         function loadReturnsChart() {
             if (returnsLoaded) return;
@@ -1212,10 +1265,14 @@
                 var contribData = data.contributionPoints.map(function (p) {
                     return { x: p.date, y: parseFloat(p.cumulativeGbp) };
                 });
-                // Lock both x-axes to the same range so they line up visually even when the
+                var drawdownData = (data.drawdownPoints || []).map(function (p) {
+                    return { x: p.date, y: parseFloat(p.drawdown) * 100 };
+                });
+                // Lock all three x-axes to the same range so they line up visually even when the
                 // top chart's first point is later (post-warmup) than the bottom chart's.
                 var minDate = growthData.length ? growthData[0].x : null;
                 var maxDate = growthData.length ? growthData[growthData.length - 1].x : null;
+                returnsZoomInitial = { min: minDate, max: maxDate };
 
                 var growthCtx = document.getElementById('returns-chart').getContext('2d');
                 returnsGrowthChart = new Chart(growthCtx, {
@@ -1248,6 +1305,7 @@
                         },
                         plugins: {
                             legend: { display: false },
+                            zoom: returnsZoomConfig(),
                             tooltip: {
                                 callbacks: {
                                     label: function (ctx) {
@@ -1294,6 +1352,7 @@
                         },
                         plugins: {
                             legend: { display: false },
+                            zoom: returnsZoomConfig(),
                             tooltip: {
                                 callbacks: {
                                     label: function (ctx) {
@@ -1305,6 +1364,96 @@
                         }
                     }
                 });
+
+                var ddCtx = document.getElementById('returns-drawdown-chart').getContext('2d');
+                returnsDrawdownChart = new Chart(ddCtx, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Drawdown (%)',
+                            data: drawdownData,
+                            borderColor: '#c0392b',
+                            backgroundColor: 'rgba(192, 57, 43, 0.18)',
+                            fill: true,
+                            pointRadius: 0,
+                            borderWidth: 1.2,
+                            tension: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' }, min: minDate, max: maxDate },
+                            y: {
+                                title: { display: true, text: 'Underwater (%)' },
+                                // Drawdown is always <= 0; pinning max=0 keeps the "underwater" line
+                                // hugging the zero axis, which is the conventional rendering.
+                                max: 0,
+                                ticks: {
+                                    callback: function (v) { return v.toFixed(0) + '%'; }
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            zoom: returnsZoomConfig(),
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        return ctx.parsed.y.toFixed(2) + '%';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+        }
+
+        /**
+         * Drag-to-zoom + pan on the x-axis; the onComplete callbacks broadcast the chosen
+         * window to the other two charts in the trio so they all stay aligned. Without the
+         * sync the user would zoom growth and the contrib/drawdown panes would scale
+         * independently — confusing for a stacked layout where they share dates.
+         */
+        function returnsZoomConfig() {
+            return {
+                pan: { enabled: true, mode: 'x', onPanComplete: syncReturnsX },
+                zoom: {
+                    mode: 'x',
+                    drag: { enabled: true, backgroundColor: 'rgba(31, 119, 180, 0.12)' },
+                    pinch: { enabled: true },
+                    onZoomComplete: syncReturnsX
+                }
+            };
+        }
+
+        function syncReturnsX(ctx) {
+            var src = ctx.chart;
+            var xs = src.scales.x;
+            applyReturnsX(xs.min, xs.max, src);
+        }
+
+        function applyReturnsX(min, max, except) {
+            [returnsGrowthChart, returnsContribChart, returnsDrawdownChart].forEach(function (c) {
+                if (!c || c === except) return;
+                c.options.scales.x.min = min;
+                c.options.scales.x.max = max;
+                c.update('none');
+            });
+        }
+
+        function resetReturnsZoom() {
+            [returnsGrowthChart, returnsContribChart, returnsDrawdownChart].forEach(function (c) {
+                if (!c) return;
+                c.resetZoom();
+                if (returnsZoomInitial) {
+                    c.options.scales.x.min = returnsZoomInitial.min;
+                    c.options.scales.x.max = returnsZoomInitial.max;
+                    c.update('none');
+                }
             });
         }
 
@@ -1313,6 +1462,9 @@
             setStat('returns-3y', summary && summary.trailing3y);
             setStat('returns-5y', summary && summary.trailing5y);
             setStat('returns-since', summary && summary.sinceInception);
+            setStat('returns-maxdd', summary && summary.maxDrawdown);
+            var dateSub = document.getElementById('returns-maxdd-date');
+            dateSub.textContent = (summary && summary.maxDrawdownDate) ? 'on ' + summary.maxDrawdownDate : '';
         }
 
         function setStat(elId, fractional) {
@@ -1404,6 +1556,7 @@
             document.getElementById('benchmark-select').addEventListener('change', onSelectChange);
             document.getElementById('benchmark-apply').addEventListener('click', applyBenchmark);
             document.getElementById('benchmark-clear').addEventListener('click', clearBenchmark);
+            document.getElementById('returns-zoom-reset').addEventListener('click', resetReturnsZoom);
         }
 
         function onSelectChange() {

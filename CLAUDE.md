@@ -57,8 +57,8 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 - `config` — `BeanConfiguration`.
 - Root — `ExcelReportWriter`, `PortfolioBenchApplication`.
 
-UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-fns`
-(CDN). Dashboard tabs:
+UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-fns` +
+`chartjs-plugin-zoom` (CDN). Dashboard tabs:
 - **From holdings files** — `POST /sync` → `fragments/portfolio`. Includes a cash
   reconciliation panel comparing the holdings-side cash (parsed CASH rows + form-supplied
   II SIPP £/$) against the ledger-side latest stored cash balance, with red rows for

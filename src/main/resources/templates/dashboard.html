@@ -3,6 +3,13 @@
 <head>
     <meta charset="UTF-8"/>
     <title th:text="${appName}">Portfolio Bench</title>
+    <script>
+        // Apply theme BEFORE any DOM renders so dark mode doesn't flash light on load.
+        try {
+            var t = localStorage.getItem('portfolio-bench.theme');
+            if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+        } catch (e) {}
+    </script>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -534,9 +541,61 @@
         .annual-table tr.partial { font-style: italic; color: #888; }
         .annual-table td.pos { color: #2ca02c; }
         .annual-table td.neg { color: #c0392b; }
+
+        /* Dark-mode overrides. Activated by setting `data-theme="dark"` on <html>.
+           CSS variables would be a cleaner refactor, but the existing 530 lines of style
+           are dense and audited; this override block reaches every visible surface without
+           touching the light-mode rules. */
+        html[data-theme="dark"] body { background: #15171a; color: #e8e8ea; }
+        html[data-theme="dark"] h1, html[data-theme="dark"] h2, html[data-theme="dark"] h3 { color: #f4f4f6; }
+        html[data-theme="dark"] p.sub, html[data-theme="dark"] .muted,
+        html[data-theme="dark"] label,
+        html[data-theme="dark"] .result-panel h2 { color: #9aa0a6; }
+        html[data-theme="dark"] code { background: #25282d; color: #ffb86c; }
+        html[data-theme="dark"] table { border-color: #2e3137; }
+        html[data-theme="dark"] table th, html[data-theme="dark"] table td { border-bottom-color: #2e3137; }
+        html[data-theme="dark"] table thead { background: #1c1f24; }
+        html[data-theme="dark"] table tbody tr:hover { background: #1d2025; }
+        html[data-theme="dark"] input[type=text],
+        html[data-theme="dark"] input[type=number],
+        html[data-theme="dark"] input[type=date],
+        html[data-theme="dark"] select {
+            background: #1c1f24; color: #e8e8ea; border: 1px solid #2e3137;
+        }
+        html[data-theme="dark"] button {
+            background: #2a2d33; color: #e8e8ea; border: 1px solid #3a3d44;
+        }
+        html[data-theme="dark"] button:hover { background: #353841; }
+        html[data-theme="dark"] .tabs { border-bottom-color: #2e3137; }
+        html[data-theme="dark"] .tab { color: #9aa0a6; }
+        html[data-theme="dark"] .tab.active { color: #f4f4f6; border-bottom-color: #4a9eff; }
+        html[data-theme="dark"] .returns-stat { background: #1c1f24; border-color: #2e3137; }
+        html[data-theme="dark"] .returns-stat .label { color: #9aa0a6; }
+        html[data-theme="dark"] .returns-stat .value { color: #f4f4f6; }
+        html[data-theme="dark"] .returns-stat .value.na { color: #6c727b; }
+        html[data-theme="dark"] .returns-stat .sub { color: #9aa0a6; }
+        html[data-theme="dark"] .annual-table tr.partial { color: #6c727b; }
+        html[data-theme="dark"] .annual-table td.pos { color: #4ade80; }
+        html[data-theme="dark"] .annual-table td.neg { color: #f87171; }
+        html[data-theme="dark"] .value-warnings,
+        html[data-theme="dark"] .whatif-error { background: #3a2f15; color: #ffeab0; border-color: #5c4720; }
+        html[data-theme="dark"] .modal-backdrop { background: rgba(0, 0, 0, 0.6); }
+        html[data-theme="dark"] .modal-box { background: #1c1f24; color: #e8e8ea; border: 1px solid #2e3137; }
+        html[data-theme="dark"] .link-btn { color: #4a9eff; }
+        html[data-theme="dark"] .zoom-hint .muted { color: #9aa0a6; }
+
+        /* Theme toggle pinned top-right of viewport. */
+        .theme-toggle {
+            position: fixed; top: 0.75rem; right: 0.75rem;
+            padding: 0.35rem 0.6rem; font-size: 0.85rem;
+            background: transparent; border: 1px solid #d0d0d4; border-radius: 4px;
+            cursor: pointer; z-index: 1000; color: inherit;
+        }
+        html[data-theme="dark"] .theme-toggle { border-color: #3a3d44; }
     </style>
 </head>
 <body>
+<button id="theme-toggle" class="theme-toggle" type="button" title="Toggle dark mode">🌓</button>
 <h1 th:text="${appName}">Portfolio Bench</h1>
 <p class="sub">Local portfolio dashboard</p>
 
@@ -1255,6 +1314,19 @@
 
         document.querySelectorAll('#portfolio-tabs .tab').forEach(function (btn) {
             btn.addEventListener('click', function () { activatePanel(btn.dataset.panel, true); });
+        });
+
+        var THEME_KEY = 'portfolio-bench.theme';
+        document.getElementById('theme-toggle').addEventListener('click', function () {
+            var html = document.documentElement;
+            var isDark = html.getAttribute('data-theme') === 'dark';
+            if (isDark) {
+                html.removeAttribute('data-theme');
+                try { localStorage.setItem(THEME_KEY, 'light'); } catch (e) {}
+            } else {
+                html.setAttribute('data-theme', 'dark');
+                try { localStorage.setItem(THEME_KEY, 'dark'); } catch (e) {}
+            }
         });
 
         // Restore the last-visited tab. Silent fall-through if the saved id no longer matches

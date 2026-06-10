@@ -581,6 +581,7 @@
     <button class="tab" data-panel="panel-risk" type="button">Risk</button>
     <button class="tab" data-panel="panel-dividends" type="button">Dividends</button>
     <button class="tab" data-panel="panel-position" type="button">Position</button>
+    <button class="tab" data-panel="panel-concentration" type="button">Concentration</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
 </div>
@@ -953,6 +954,58 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-concentration">
+    <p class="muted" style="margin-top: 0">
+        <b>HHI</b> (Herfindahl-Hirschman Index) = Σ wᵢ² over fractional position weights —
+        range 1/N (all equal) to 1 (single name). <b>Effective N</b> = 1/HHI, the
+        equivalent count of equally-weighted positions. <b>Top-N share</b> = weight of the
+        N largest. All concentration figures use the <b>invested base</b> (cash excluded so
+        it doesn't artificially deflate HHI); cash share is reported separately.
+    </p>
+    <div class="returns-stats" id="conc-stats">
+        <div class="returns-stat"><span class="label">HHI</span><span class="value na" id="conc-hhi">—</span></div>
+        <div class="returns-stat" title="1 / HHI — equivalent number of equally-weighted positions"><span class="label">Effective N</span><span class="value na" id="conc-effn">—</span></div>
+        <div class="returns-stat"><span class="label">Positions</span><span class="value na" id="conc-count">—</span></div>
+        <div class="returns-stat"><span class="label">Top 1 share</span><span class="value na" id="conc-top1">—</span></div>
+        <div class="returns-stat"><span class="label">Top 3 share</span><span class="value na" id="conc-top3">—</span></div>
+        <div class="returns-stat"><span class="label">Top 5 share</span><span class="value na" id="conc-top5">—</span></div>
+        <div class="returns-stat"><span class="label">Top 10 share</span><span class="value na" id="conc-top10">—</span></div>
+        <div class="returns-stat"><span class="label">Cash share</span><span class="value na" id="conc-cash">—</span></div>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Per-symbol weights (invested base)</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        All positions sorted by weight. The longer the bar, the bigger the concentration risk.
+    </p>
+    <div id="conc-symbol-wrap" style="margin-top: 0.25rem;">
+        <canvas id="conc-symbol-chart"></canvas>
+    </div>
+
+    <div class="annual-returns-row" style="margin-top: 1.5rem;">
+        <div class="annual-chart-wrap">
+            <h3 style="margin-top: 0; font-size: 1rem;">By account</h3>
+            <div style="height: 240px;">
+                <canvas id="conc-account-chart"></canvas>
+            </div>
+        </div>
+        <div class="annual-chart-wrap">
+            <h3 style="margin-top: 0; font-size: 1rem;">By asset class</h3>
+            <div style="height: 240px;">
+                <canvas id="conc-class-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Concentration over time</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Effective N (left axis, blue) and HHI (right axis, orange). Rising Effective N /
+        falling HHI = increasing diversification.
+    </p>
+    <div style="height: 280px; margin-top: 0.25rem;">
+        <canvas id="conc-trend-chart"></canvas>
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-attribution">
     <p class="muted" style="margin-top: 0">
         Per-symbol GBP P&amp;L over a date window:
@@ -1132,6 +1185,7 @@
                 if (btn.dataset.panel === 'panel-risk') loadRisk();
                 if (btn.dataset.panel === 'panel-dividends') loadDividends();
                 if (btn.dataset.panel === 'panel-position') setupPosition();
+                if (btn.dataset.panel === 'panel-concentration') loadConcentration();
                 if (btn.dataset.panel === 'panel-attribution') setupAttribution();
                 if (btn.dataset.panel === 'panel-whatif') setupWhatIf();
             });
@@ -3098,6 +3152,236 @@
             var sign = n >= 0 ? '+' : '−';
             return sign + '£' + Math.abs(n).toLocaleString('en-GB',
                     { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        var concentrationLoaded = false;
+        var concSymbolChart = null, concAccountChart = null,
+                concClassChart = null, concTrendChart = null;
+
+        function loadConcentration() {
+            if (concentrationLoaded) return;
+            concentrationLoaded = true;
+            fetch('/concentration').then(function (r) { return r.json(); })
+                    .then(renderConcentration);
+        }
+
+        function renderConcentration(d) {
+            var s = d.snapshot || {};
+            setConcRatio('conc-hhi', s.hhi);
+            setConcN('conc-effn', s.effectiveN);
+            var countEl = document.getElementById('conc-count');
+            countEl.textContent = s.positionCount != null ? s.positionCount : '—';
+            countEl.className = 'value' + (s.positionCount ? '' : ' na');
+
+            setDivPct('conc-top1', s.top1Share);
+            setDivPct('conc-top3', s.top3Share);
+            setDivPct('conc-top5', s.top5Share);
+            setDivPct('conc-top10', s.top10Share);
+            setDivPct('conc-cash', s.cashShare);
+
+            renderConcSymbolChart(s.bySymbol || []);
+            renderConcSliceChart('conc-account-chart', s.byAccount || [], 'account', false);
+            renderConcSliceChart('conc-class-chart', s.byAssetClass || [], 'kind', true);
+            renderConcTrendChart(d.trend || []);
+        }
+
+        function setConcRatio(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            el.textContent = parseFloat(v).toFixed(3);
+            el.className = 'value';
+        }
+
+        function setConcN(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            el.textContent = parseFloat(v).toFixed(1);
+            el.className = 'value';
+        }
+
+        // Palette mirrors the dividends tab — keep tabs consistent so users learn the
+        // colour rotation once.
+        var CONC_PALETTE = [
+            '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728',
+            '#9467bd', '#8c564b', '#e377c2', '#17becf',
+            '#bcbd22', '#7f7f7f'
+        ];
+
+        function renderConcSymbolChart(bySymbol) {
+            if (concSymbolChart) concSymbolChart.destroy();
+            // Dynamically size the canvas height so every bar gets ~24px regardless of
+            // how many symbols there are. Without this a 50-position list squashes into
+            // an unreadable strip.
+            var wrap = document.getElementById('conc-symbol-wrap');
+            var rowHeight = 22;
+            var height = Math.max(160, 60 + bySymbol.length * rowHeight);
+            wrap.style.height = height + 'px';
+
+            var labels = bySymbol.map(function (s) { return s.symbol; });
+            var weights = bySymbol.map(function (s) {
+                return parseFloat(s.weight) * 100;
+            });
+            var gbpValues = bySymbol.map(function (s) { return parseFloat(s.gbp); });
+            concSymbolChart = new Chart(
+                document.getElementById('conc-symbol-chart').getContext('2d'), {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Weight (% of invested)',
+                            data: weights,
+                            backgroundColor: weights.map(function (w, i) {
+                                // Hottest bars get the colour palette's lead; rest fade
+                                // toward grey to draw the eye to the top concentrators.
+                                if (i < 8) return CONC_PALETTE[i];
+                                return 'rgba(140,140,140,0.55)';
+                            })
+                        }]
+                    },
+                    options: {
+                        indexAxis: 'y',
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: {
+                                title: { display: true, text: 'Weight (%)' },
+                                ticks: { callback: function (v) { return v.toFixed(1) + '%'; } }
+                            },
+                            y: { ticks: { font: { size: 11 }, autoSkip: false } }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        var gbp = gbpValues[ctx.dataIndex];
+                                        return ctx.parsed.x.toFixed(2) + '%  (£' +
+                                                gbp.toLocaleString('en-GB',
+                                                        { maximumFractionDigits: 0 }) + ')';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+
+        function renderConcSliceChart(canvasId, slices, labelKey, fixedColours) {
+            // Tiny doughnut + a separate inline legend table would be nicer, but a bar
+            // chart with a fixed colour rotation is far simpler and matches the rest of
+            // the dashboard's visual language.
+            var labels = slices.map(function (s) { return s[labelKey]; });
+            var weights = slices.map(function (s) {
+                return parseFloat(s.weight) * 100;
+            });
+            var gbp = slices.map(function (s) { return parseFloat(s.gbp); });
+            var colours;
+            if (fixedColours) {
+                // Asset class: equities green, bonds amber, cash grey — universal mental model.
+                var byKind = { 'Equities': '#2ca02c', 'Bonds': '#ff9f40', 'Cash': '#9e9e9e' };
+                colours = labels.map(function (l) { return byKind[l] || '#9467bd'; });
+            } else {
+                colours = labels.map(function (_, i) { return CONC_PALETTE[i % CONC_PALETTE.length]; });
+            }
+
+            var existing = chartByCanvas(canvasId);
+            if (existing) existing.destroy();
+            var chart = new Chart(
+                document.getElementById(canvasId).getContext('2d'), {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: weights,
+                            backgroundColor: colours,
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'right' },
+                            tooltip: {
+                                callbacks: {
+                                    label: function (ctx) {
+                                        return ctx.label + ': ' +
+                                                ctx.parsed.toFixed(1) + '%  (£' +
+                                                gbp[ctx.dataIndex].toLocaleString('en-GB',
+                                                        { maximumFractionDigits: 0 }) + ')';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            if (canvasId === 'conc-account-chart') concAccountChart = chart;
+            else if (canvasId === 'conc-class-chart') concClassChart = chart;
+        }
+
+        function chartByCanvas(id) {
+            if (id === 'conc-account-chart') return concAccountChart;
+            if (id === 'conc-class-chart') return concClassChart;
+            return null;
+        }
+
+        function renderConcTrendChart(points) {
+            if (concTrendChart) concTrendChart.destroy();
+            var effData = points.filter(function (p) { return p.effectiveN != null; })
+                    .map(function (p) {
+                        return { x: p.date, y: parseFloat(p.effectiveN) };
+                    });
+            var hhiData = points.filter(function (p) { return p.hhi != null; })
+                    .map(function (p) {
+                        return { x: p.date, y: parseFloat(p.hhi) };
+                    });
+            concTrendChart = new Chart(
+                document.getElementById('conc-trend-chart').getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Effective N',
+                                data: effData,
+                                borderColor: '#1f77b4',
+                                backgroundColor: 'rgba(31,119,180,0.10)',
+                                borderWidth: 1.5,
+                                pointRadius: 0,
+                                tension: 0.1,
+                                yAxisID: 'yLeft'
+                            },
+                            {
+                                label: 'HHI',
+                                data: hhiData,
+                                borderColor: '#ff7f0e',
+                                backgroundColor: 'rgba(255,127,14,0.08)',
+                                borderWidth: 1.5,
+                                pointRadius: 0,
+                                tension: 0.1,
+                                yAxisID: 'yRight'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' } },
+                            yLeft: {
+                                type: 'linear', position: 'left',
+                                beginAtZero: true,
+                                title: { display: true, text: 'Effective N' }
+                            },
+                            yRight: {
+                                type: 'linear', position: 'right',
+                                beginAtZero: true, max: 1,
+                                grid: { drawOnChartArea: false },
+                                title: { display: true, text: 'HHI' }
+                            }
+                        },
+                        plugins: { legend: { position: 'bottom' } }
+                    }
+                });
         }
     }());
 </script>

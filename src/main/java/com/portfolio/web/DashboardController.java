@@ -10,6 +10,8 @@ import com.portfolio.application.ContributionService;
 import com.portfolio.application.ContributionService.ContributionTimeline;
 import com.portfolio.application.DividendIncomeService;
 import com.portfolio.application.DividendIncomeService.DividendIncome;
+import com.portfolio.application.ConcentrationService;
+import com.portfolio.application.ConcentrationService.ConcentrationMetrics;
 import com.portfolio.application.PositionDetailService;
 import com.portfolio.application.PositionDetailService.PositionDetail;
 import com.portfolio.application.ExportExcelService;
@@ -66,6 +68,7 @@ public class DashboardController {
     private final ContributionService contributionService;
     private final DividendIncomeService dividendIncomeService;
     private final PositionDetailService positionDetailService;
+    private final ConcentrationService concentrationService;
     private final PortfolioValueService portfolioValueService;
     private final PortfolioReturnService portfolioReturnService;
     private final PortfolioRiskService portfolioRiskService;
@@ -85,6 +88,7 @@ public class DashboardController {
                                ContributionService contributionService,
                                DividendIncomeService dividendIncomeService,
                                PositionDetailService positionDetailService,
+                               ConcentrationService concentrationService,
                                PortfolioValueService portfolioValueService,
                                PortfolioReturnService portfolioReturnService,
                                PortfolioRiskService portfolioRiskService,
@@ -103,6 +107,7 @@ public class DashboardController {
         this.contributionService = contributionService;
         this.dividendIncomeService = dividendIncomeService;
         this.positionDetailService = positionDetailService;
+        this.concentrationService = concentrationService;
         this.portfolioValueService = portfolioValueService;
         this.portfolioReturnService = portfolioReturnService;
         this.portfolioRiskService = portfolioRiskService;
@@ -208,6 +213,12 @@ public class DashboardController {
     @ResponseBody
     public PositionDetail position(@RequestParam(name = "symbol", required = false) String symbol) {
         return positionDetailService.detail(symbol == null ? "" : symbol);
+    }
+
+    @GetMapping("/concentration")
+    @ResponseBody
+    public ConcentrationMetrics concentration() {
+        return concentrationService.metrics();
     }
 
     @GetMapping("/portfolio-value")

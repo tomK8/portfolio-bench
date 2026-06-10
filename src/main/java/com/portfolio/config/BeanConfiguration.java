@@ -165,6 +165,16 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public ConcentrationService concentrationService(AllocationService allocationService,
+                                                     CashTransactionRepository cashTransactionRepository,
+                                                     IntradayPriceRepository intradayPriceRepository,
+                                                     FxRateProvider fxRateProvider,
+                                                     YahooTickerMap yahooTickerMap) {
+        return new ConcentrationService(allocationService, cashTransactionRepository,
+                intradayPriceRepository, fxRateProvider, yahooTickerMap);
+    }
+
+    @Bean
     public BenchmarkReturnService benchmarkReturnService(PortfolioValueService portfolioValueService,
                                                          PriceHistoryRepository priceHistoryRepository,
                                                          YahooTickerMap yahooTickerMap) {

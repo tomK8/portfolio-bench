@@ -360,6 +360,12 @@ public class DashboardController {
         return portfolioReturnService.timeline();
     }
 
+    @GetMapping("/returns/mwr")
+    @ResponseBody
+    public PortfolioReturnService.MwrSummary moneyWeightedReturns() {
+        return portfolioReturnService.moneyWeightedSummary();
+    }
+
     @GetMapping("/risk")
     @ResponseBody
     public RiskTimeline risk() {

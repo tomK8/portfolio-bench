@@ -250,6 +250,116 @@ public class PortfolioReturnService {
         return out;
     }
 
+    /**
+     * Money-weighted (IRR) return summary. Trailing windows treat the portfolio's GBP value
+     * at window-start as a single outflow, every contribution during the window as a
+     * further outflow on its date, and today's value as the recovery inflow — then bisect
+     * for the annualised rate that makes the NPV of those flows zero. Since-inception
+     * mirrors the same shape but with no window-start outflow.
+     *
+     * <p>Trailing windows beyond the data are returned as {@code null}.
+     */
+    public MwrSummary moneyWeightedSummary() {
+        List<DailyValue> values = valueService.dailyValues();
+        if (values.isEmpty()) return MwrSummary.empty();
+
+        DailyValue last = values.get(values.size() - 1);
+        LocalDate today = last.date();
+        BigDecimal valueToday = last.valueGbp();
+
+        Map<LocalDate, BigDecimal> contribsByDate = contributionsByDate();
+
+        Double inception = xirrInception(contribsByDate, today, valueToday);
+        Double t1y = xirrTrailing(values, contribsByDate, today, valueToday, 1);
+        Double t3y = xirrTrailing(values, contribsByDate, today, valueToday, 3);
+        Double t5y = xirrTrailing(values, contribsByDate, today, valueToday, 5);
+
+        return new MwrSummary(bd(t1y), bd(t3y), bd(t5y), bd(inception));
+    }
+
+    private static BigDecimal bd(Double d) {
+        if (d == null || d.isNaN() || d.isInfinite()) return null;
+        return BigDecimal.valueOf(d).setScale(SCALE, RoundingMode.HALF_UP);
+    }
+
+    /** Cash flow series since the first contribution: all contributions are outflows (-),
+     *  today's value is the inflow (+). */
+    private static Double xirrInception(Map<LocalDate, BigDecimal> contribsByDate,
+                                        LocalDate today, BigDecimal valueToday) {
+        if (contribsByDate.isEmpty() || valueToday.signum() <= 0) return null;
+        List<double[]> flows = new ArrayList<>();
+        for (var e : contribsByDate.entrySet()) {
+            flows.add(new double[]{epochDay(e.getKey()), -e.getValue().doubleValue()});
+        }
+        flows.add(new double[]{epochDay(today), valueToday.doubleValue()});
+        return xirr(flows);
+    }
+
+    private static Double xirrTrailing(List<DailyValue> values,
+                                       Map<LocalDate, BigDecimal> contribsByDate,
+                                       LocalDate today, BigDecimal valueToday, int years) {
+        LocalDate windowStart = today.minusYears(years);
+        // Find the latest daily value on or before windowStart.
+        BigDecimal startValue = null;
+        for (DailyValue dv : values) {
+            if (dv.date().isAfter(windowStart)) break;
+            startValue = dv.valueGbp();
+        }
+        if (startValue == null || startValue.signum() <= 0) return null;
+
+        List<double[]> flows = new ArrayList<>();
+        flows.add(new double[]{epochDay(windowStart), -startValue.doubleValue()});
+        for (var e : contribsByDate.entrySet()) {
+            if (e.getKey().isAfter(windowStart) && !e.getKey().isAfter(today)) {
+                flows.add(new double[]{epochDay(e.getKey()), -e.getValue().doubleValue()});
+            }
+        }
+        flows.add(new double[]{epochDay(today), valueToday.doubleValue()});
+        return xirr(flows);
+    }
+
+    private static double epochDay(LocalDate d) {
+        return d.toEpochDay();
+    }
+
+    /**
+     * Bisection on the annualised IRR. NPV at rate r =
+     * Σ amount_i × (1+r)^(-(day_i − day0)/365.25). The amounts are signed (outflows
+     * negative, inflows positive). Bisects in [-0.99, 10.0] for 100 iterations — fast and
+     * robust for any return below 1000%. Returns {@code null} if NPV doesn't cross zero
+     * (e.g. all-positive or all-negative flows — pathological input).
+     */
+    private static Double xirr(List<double[]> flows) {
+        if (flows.size() < 2) return null;
+        double t0 = flows.get(0)[0];
+        for (double[] f : flows) if (f[0] < t0) t0 = f[0];
+        double lo = -0.99;
+        double hi = 10.0;
+        double npvLo = npv(flows, t0, lo);
+        double npvHi = npv(flows, t0, hi);
+        if (Double.isNaN(npvLo) || Double.isNaN(npvHi)) return null;
+        if (npvLo * npvHi > 0) return null;
+        for (int i = 0; i < 100; i++) {
+            double mid = 0.5 * (lo + hi);
+            double npvMid = npv(flows, t0, mid);
+            if (Math.abs(npvMid) < 1e-6) return mid;
+            if (npvLo * npvMid < 0) { hi = mid; npvHi = npvMid; }
+            else { lo = mid; npvLo = npvMid; }
+        }
+        return 0.5 * (lo + hi);
+    }
+
+    private static double npv(List<double[]> flows, double t0, double r) {
+        double s = 0.0;
+        double base = 1.0 + r;
+        if (base <= 0) return Double.NaN;
+        for (double[] f : flows) {
+            double dt = (f[0] - t0) / 365.25;
+            s += f[1] * Math.pow(base, -dt);
+        }
+        return s;
+    }
+
     private BigDecimal rothSeedToGbp(BigDecimal seedUsd, LocalDate rothStart) {
         try {
             Map<LocalDate, BigDecimal> series = fxProvider.fetchRateSeries(
@@ -370,5 +480,20 @@ public class PortfolioReturnService {
                                  List<DrawdownPoint> drawdownPoints,
                                  List<AnnualReturn> annualReturns,
                                  Summary summary) {
+    }
+
+    /**
+     * Money-weighted return summary. Mirror shape of {@link Summary} but with IRR-based
+     * trailing windows and since-inception — fields are annualised fractional returns,
+     * {@code null} when the window's outside the data.
+     */
+    public record MwrSummary(BigDecimal trailing1y,
+                             BigDecimal trailing3y,
+                             BigDecimal trailing5y,
+                             BigDecimal sinceInception) {
+
+        public static MwrSummary empty() {
+            return new MwrSummary(null, null, null, null);
+        }
     }
 }

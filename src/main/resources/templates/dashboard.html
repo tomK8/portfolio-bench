@@ -816,6 +816,12 @@
         </div>
     </div>
 
+    <div class="benchmark-controls" style="margin-top: 0.5rem;">
+        <span style="font-size: 0.85rem;">Return measure:</span>
+        <button id="returns-mode-twr" type="button" class="active">TWR (time-weighted)</button>
+        <button id="returns-mode-mwr" type="button">MWR (money-weighted / IRR)</button>
+        <span class="muted" style="font-size: 0.8rem;">TWR strips out contribution timing; MWR is your actual personal IRR.</span>
+    </div>
     <div class="returns-stats" id="returns-stats">
         <div class="returns-stat"><span class="label">Portfolio · 1y</span><span class="value na" id="returns-1y">—</span></div>
         <div class="returns-stat"><span class="label">Portfolio · 3y (ann.)</span><span class="value na" id="returns-3y">—</span></div>
@@ -1839,6 +1845,7 @@
         function loadReturnsChart() {
             if (returnsLoaded) return;
             returnsLoaded = true;
+            bindReturnsModeToggle();
             fetch('/returns').then(function (r) { return r.json(); }).then(function (data) {
                 renderReturnsStats(data.summary);
                 var growthData = data.growthPoints.map(function (p) {
@@ -2185,14 +2192,75 @@
             });
         }
 
+        // The TWR Summary is cached when /returns loads so the TWR/MWR toggle can swap stats
+        // without re-fetching. MWR is fetched once lazily on first toggle.
+        var cachedTwrSummary = null;
+        var cachedMwrSummary = null;
+        var returnsMode = 'twr';
+
         function renderReturnsStats(summary) {
-            setStat('returns-1y', summary && summary.trailing1y);
-            setStat('returns-3y', summary && summary.trailing3y);
-            setStat('returns-5y', summary && summary.trailing5y);
-            setStat('returns-since', summary && summary.sinceInception);
-            setStat('returns-maxdd', summary && summary.maxDrawdown);
+            cachedTwrSummary = summary;
+            if (returnsMode === 'twr') showTwr();
+            else showMwr();
+        }
+
+        function showTwr() {
+            var s = cachedTwrSummary;
+            setStat('returns-1y', s && s.trailing1y);
+            setStat('returns-3y', s && s.trailing3y);
+            setStat('returns-5y', s && s.trailing5y);
+            setStat('returns-since', s && s.sinceInception);
+            setStat('returns-maxdd', s && s.maxDrawdown);
             var dateSub = document.getElementById('returns-maxdd-date');
-            dateSub.textContent = (summary && summary.maxDrawdownDate) ? 'on ' + summary.maxDrawdownDate : '';
+            dateSub.textContent = (s && s.maxDrawdownDate) ? 'on ' + s.maxDrawdownDate : '';
+            document.getElementById('returns-mode-twr').classList.add('active');
+            document.getElementById('returns-mode-mwr').classList.remove('active');
+        }
+
+        function showMwr() {
+            if (cachedMwrSummary === null) {
+                fetch('/returns/mwr').then(function (r) { return r.json(); }).then(function (m) {
+                    cachedMwrSummary = m || {};
+                    if (returnsMode === 'mwr') paintMwr();
+                });
+                // Show "loading" state while waiting.
+                setStat('returns-1y', null);
+                setStat('returns-3y', null);
+                setStat('returns-5y', null);
+                setStat('returns-since', null);
+            } else {
+                paintMwr();
+            }
+            // Max drawdown / drawdown date are intrinsic to the TWR series — keep them.
+            var s = cachedTwrSummary;
+            setStat('returns-maxdd', s && s.maxDrawdown);
+            document.getElementById('returns-maxdd-date').textContent =
+                    (s && s.maxDrawdownDate) ? 'on ' + s.maxDrawdownDate : '';
+            document.getElementById('returns-mode-twr').classList.remove('active');
+            document.getElementById('returns-mode-mwr').classList.add('active');
+        }
+
+        function paintMwr() {
+            var m = cachedMwrSummary || {};
+            setStat('returns-1y', m.trailing1y);
+            setStat('returns-3y', m.trailing3y);
+            setStat('returns-5y', m.trailing5y);
+            setStat('returns-since', m.sinceInception);
+        }
+
+        function bindReturnsModeToggle() {
+            var t = document.getElementById('returns-mode-twr');
+            var m = document.getElementById('returns-mode-mwr');
+            if (!t || t.dataset.bound) return;
+            t.dataset.bound = '1';
+            t.addEventListener('click', function () {
+                returnsMode = 'twr';
+                showTwr();
+            });
+            m.addEventListener('click', function () {
+                returnsMode = 'mwr';
+                showMwr();
+            });
         }
 
         function setStat(elId, fractional) {

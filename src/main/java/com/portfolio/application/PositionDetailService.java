@@ -81,6 +81,7 @@ public class PositionDetailService {
             if (t.symbol() != null && symbol.equals(t.symbol().toUpperCase())) rows.add(t);
         }
         if (rows.isEmpty()) return PositionDetail.empty(symbol);
+        rows = pruneCorrections(rows);
 
         Lots lots = reconstruct(rows);
 
@@ -203,6 +204,40 @@ public class PositionDetailService {
                 : v.setScale(6, RoundingMode.HALF_UP);
     }
 
+    /**
+     * Drops broker price-correction pairs: a buy followed by a later sell at the same
+     * account/symbol with exactly opposite native {@code amount} and matching {@code |quantity|}.
+     * Brokers occasionally reverse a misbooked fill and re-enter it at the corrected price;
+     * the reversal is not a real sale, so both legs should be hidden from chart markers
+     * and excluded from FIFO. Matching uses native {@code amount} (not {@code amountGbp})
+     * because the cancellation books at the same native cash even if FX has moved.
+     * Visible for testing.
+     */
+    static List<CashTransaction> pruneCorrections(List<CashTransaction> rows) {
+        int n = rows.size();
+        boolean[] drop = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            if (drop[i]) continue;
+            CashTransaction a = rows.get(i);
+            if (a.type() != TransactionType.TRANSACTION || a.amount() >= 0) continue;
+            for (int j = i + 1; j < n; j++) {
+                if (drop[j]) continue;
+                CashTransaction b = rows.get(j);
+                if (b.type() != TransactionType.TRANSACTION || b.amount() <= 0) continue;
+                if (!a.account().equals(b.account())) continue;
+                if (a.symbol() == null || !a.symbol().equals(b.symbol())) continue;
+                if (Math.abs(a.amount() + b.amount()) > 0.01) continue;
+                if (Math.abs(Math.abs(a.quantity()) - Math.abs(b.quantity())) > 1e-6) continue;
+                drop[i] = true;
+                drop[j] = true;
+                break;
+            }
+        }
+        List<CashTransaction> kept = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) if (!drop[i]) kept.add(rows.get(i));
+        return kept;
+    }
+
     /** Visible for testing. */
     static Lots reconstruct(List<CashTransaction> rows) {
         Map<String, LotEngine> byAccount = new LinkedHashMap<>();
@@ -236,9 +271,11 @@ public class PositionDetailService {
                 return;
             }
             BigDecimal absCostGbp = BigDecimal.valueOf(Math.abs(t.amountGbp()));
+            BigDecimal absCostNative = BigDecimal.valueOf(Math.abs(t.amount()));
             if (t.amount() < 0) {
                 BigDecimal cps = absCostGbp.divide(qty, SCALE, RoundingMode.HALF_UP);
-                open.addLast(new OpenLotState(t.transactionDate(), qty, cps));
+                BigDecimal cpsNative = absCostNative.divide(qty, SCALE, RoundingMode.HALF_UP);
+                open.addLast(new OpenLotState(t.transactionDate(), qty, cps, cpsNative, t.currency()));
             } else if (t.amount() > 0) {
                 BigDecimal pps = absCostGbp.divide(qty, SCALE, RoundingMode.HALF_UP);
                 sell(t.transactionDate(), qty, pps);
@@ -277,19 +314,25 @@ public class PositionDetailService {
             for (OpenLotState l : open) {
                 l.qty = l.qty.multiply(ratio);
                 l.costPerShareGbp = l.costPerShareGbp.divide(ratio, SCALE, RoundingMode.HALF_UP);
+                l.costPerShareNative = l.costPerShareNative.divide(ratio, SCALE, RoundingMode.HALF_UP);
             }
         }
     }
 
     static final class OpenLotState {
         final String openDate;
+        final String currency;
         BigDecimal qty;
         BigDecimal costPerShareGbp;
+        BigDecimal costPerShareNative;
 
-        OpenLotState(String openDate, BigDecimal qty, BigDecimal costPerShareGbp) {
+        OpenLotState(String openDate, BigDecimal qty, BigDecimal costPerShareGbp,
+                     BigDecimal costPerShareNative, String currency) {
             this.openDate = openDate;
             this.qty = qty;
             this.costPerShareGbp = costPerShareGbp;
+            this.costPerShareNative = costPerShareNative;
+            this.currency = currency;
         }
     }
 
@@ -330,6 +373,8 @@ public class PositionDetailService {
                             l.qty.setScale(6, RoundingMode.HALF_UP),
                             l.costPerShareGbp.setScale(6, RoundingMode.HALF_UP),
                             l.qty.multiply(l.costPerShareGbp).setScale(GBP_SCALE, RoundingMode.HALF_UP),
+                            l.costPerShareNative.setScale(6, RoundingMode.HALF_UP),
+                            l.currency,
                             e.account));
                 }
             }
@@ -349,6 +394,7 @@ public class PositionDetailService {
 
     public record OpenLot(String openDate, BigDecimal shares,
                           BigDecimal costPerShareGbp, BigDecimal costGbp,
+                          BigDecimal costPerShareNative, String costCurrency,
                           String account) {
     }
 

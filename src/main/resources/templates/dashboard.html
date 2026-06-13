@@ -1049,7 +1049,7 @@
             <thead><tr>
                 <th class="txt" data-sort="text">Open date</th>
                 <th data-sort="num">Shares</th>
-                <th data-sort="num">Cost / share (£)</th>
+                <th data-sort="num">Cost / share</th>
                 <th data-sort="num">Cost (£)</th>
                 <th class="txt" data-sort="text">Account</th>
             </tr></thead>
@@ -3612,7 +3612,7 @@
                 tr.innerHTML =
                     '<td class="txt">' + l.openDate + '</td>' +
                     '<td>' + fmtNumber(l.shares, 4) + '</td>' +
-                    '<td>' + fmtNumber(l.costPerShareGbp, 4) + '</td>' +
+                    '<td>' + fmtNativePrice(l.costPerShareNative, l.costCurrency) + '</td>' +
                     '<td>' + fmtMoney2(l.costGbp) + '</td>' +
                     '<td class="txt muted">' + l.account + '</td>';
                 openBody.appendChild(tr);
@@ -3666,6 +3666,17 @@
             if (v == null) return '—';
             return '£' + parseFloat(v).toLocaleString('en-GB',
                     { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        var NATIVE_CCY_SYMBOL = { GBP: '£', USD: '$', EUR: '€' };
+
+        function fmtNativePrice(v, ccy) {
+            if (v == null) return '—';
+            var n = parseFloat(v).toLocaleString('en-GB',
+                    { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+            var sym = NATIVE_CCY_SYMBOL[ccy];
+            if (sym) return sym + n;
+            return ccy ? (n + ' ' + ccy) : n;
         }
 
         function fmtSignedMoney(n) {

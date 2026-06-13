@@ -266,6 +266,16 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public LivePricesService livePricesService(CashTransactionRepository cashTransactionRepository,
+                                               IntradayPriceRepository intradayPriceRepository,
+                                               PriceHistoryRepository priceHistoryRepository,
+                                               FxRateProvider fxRateProvider,
+                                               YahooTickerMap yahooTickerMap) {
+        return new LivePricesService(cashTransactionRepository, intradayPriceRepository,
+                priceHistoryRepository, fxRateProvider, yahooTickerMap);
+    }
+
+    @Bean
     public ExportExcelService exportExcelService(PortfolioGatherer portfolioGatherer,
                                                  DividendService dividendService,
                                                  ExcelReportWriter excelReportWriter,

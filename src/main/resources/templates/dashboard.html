@@ -542,6 +542,45 @@
         .annual-table td.pos { color: #2ca02c; }
         .annual-table td.neg { color: #c0392b; }
 
+        /* Live tab: row flash on price change + status dot + +/- color cells. */
+        @keyframes live-flash-up {
+            0% { background-color: rgba(46, 160, 67, 0.45); }
+            100% { background-color: transparent; }
+        }
+        @keyframes live-flash-down {
+            0% { background-color: rgba(207, 34, 46, 0.45); }
+            100% { background-color: transparent; }
+        }
+        .live-flash-up { animation: live-flash-up 1.2s ease-out; }
+        .live-flash-down { animation: live-flash-down 1.2s ease-out; }
+        .live-pos { color: #2ca02c; font-weight: 600; }
+        .live-neg { color: #c0392b; font-weight: 600; }
+        /* Quote-ts age: green when fresh (<5 min), amber when stale (5-30 min),
+           grey italic when old (>30 min, typically post-LSE-close). */
+        .live-ts-fresh { color: #2ca02c; }
+        .live-ts-stale { color: #b8860b; }
+        .live-ts-old { color: #999; font-style: italic; }
+        html[data-theme="dark"] .live-ts-fresh { color: #4ade80; }
+        html[data-theme="dark"] .live-ts-stale { color: #fbbf24; }
+        html[data-theme="dark"] .live-ts-old { color: #6c727b; }
+        .live-dot {
+            display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+            background: #c0392b; margin-right: 0.4rem; vertical-align: middle;
+            transition: background 200ms, box-shadow 200ms;
+        }
+        .live-dot.connected { background: #2ca02c; box-shadow: 0 0 0 3px rgba(46, 160, 67, 0.18); }
+        @keyframes live-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(46, 160, 67, 0.55); }
+            100% { box-shadow: 0 0 0 10px rgba(46, 160, 67, 0); }
+        }
+        .live-dot.tick { animation: live-pulse 0.9s ease-out; }
+        .returns-stat .value.live-pos { color: #2ca02c; }
+        .returns-stat .value.live-neg { color: #c0392b; }
+        html[data-theme="dark"] .live-pos { color: #4ade80; }
+        html[data-theme="dark"] .live-neg { color: #f87171; }
+        html[data-theme="dark"] .returns-stat .value.live-pos { color: #4ade80; }
+        html[data-theme="dark"] .returns-stat .value.live-neg { color: #f87171; }
+
         /* Dark-mode overrides. Activated by setting `data-theme="dark"` on <html>.
            CSS variables would be a cleaner refactor, but the existing 530 lines of style
            are dense and audited; this override block reaches every visible surface without
@@ -633,6 +672,7 @@
 <div class="tabs" id="portfolio-tabs">
     <button class="tab active" data-panel="panel-holdings" type="button">From holdings files</button>
     <button class="tab" data-panel="panel-cash" type="button">From cash ledger</button>
+    <button class="tab" data-panel="panel-live" type="button">Live</button>
     <button class="tab" data-panel="panel-contributions" type="button">Contributions</button>
     <button class="tab" data-panel="panel-value" type="button">Value over time</button>
     <button class="tab" data-panel="panel-allocation" type="button">Allocation</button>
@@ -1381,6 +1421,60 @@
     </section>
 </section>
 
+<section class="tab-panel" id="panel-live">
+    <p class="muted" style="margin-top: 0">
+        Live positions: latest cached intraday close × current FX, day change vs yesterday's
+        stored daily close. Quote cadence depends on Yahoo (free 1-min intraday, refetched
+        every minute) and market hours — <code>.L</code> names freeze at 16:30 BST close,
+        US names tick through 21:00 BST. Outside hours the snapshot is static. Day Δ is
+        GBP-denominated (price move + FX move on the position).
+        <span id="live-status" class="muted" style="margin-left: 0.5rem;"></span>
+        <span id="live-age" class="muted" style="margin-left: 0.4rem;"></span>
+    </p>
+
+    <div class="returns-stats" id="live-totals">
+        <div class="returns-stat">
+            <span class="label">Total value</span>
+            <span class="value" id="live-total-gbp">—</span>
+            <span class="sub" id="live-updated"></span>
+        </div>
+        <div class="returns-stat">
+            <span class="label">Positions</span>
+            <span class="value" id="live-positions-gbp">—</span>
+        </div>
+        <div class="returns-stat">
+            <span class="label">Cash</span>
+            <span class="value" id="live-cash-gbp">—</span>
+        </div>
+        <div class="returns-stat" title="Today's portfolio P&amp;L: sum of (last − yesterday's close) × qty × FX across positions">
+            <span class="label">Day change</span>
+            <span class="value" id="live-day-gbp">—</span>
+            <span class="sub" id="live-day-pct"></span>
+        </div>
+    </div>
+
+    <table id="live-table" style="margin-top: 0.5rem;">
+        <thead>
+        <tr>
+            <th class="txt" data-sort="text">Symbol</th>
+            <th class="txt" data-sort="text">Ccy</th>
+            <th data-sort="num">Quantity</th>
+            <th data-sort="num">Last</th>
+            <th data-sort="num">Day Δ %</th>
+            <th data-sort="num">Day Δ £</th>
+            <th data-sort="num">Position £</th>
+            <th class="txt" data-sort="text">Accounts</th>
+            <th class="txt">Quote ts</th>
+        </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <p class="muted" id="live-empty" style="display: none; margin-top: 1rem;">
+        No priced positions yet. Import cash statements (and wait one intraday tick) to see
+        live values here.
+    </p>
+</section>
+
 <script>
     (function () {
         function parseVal(cell, type) {
@@ -1458,6 +1552,8 @@
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
             if (panelId === 'panel-whatif') setupWhatIf();
+            if (panelId === 'panel-live') setupLive();
+            else teardownLive();
             if (persist) {
                 try { localStorage.setItem(TAB_KEY, panelId); } catch (e) {}
             }
@@ -4232,6 +4328,251 @@
             });
             attachSortOnce('recon-table');
         }
+
+        // Live tab: SSE stream of /live snapshots, with flash-on-change row updates.
+        // EventSource opens on tab activation and closes on tab change so we don't keep a
+        // server-side emitter around once the user has moved on.
+        // lastValues caches per-(symbol,column) numbers so we can detect *real* changes
+        // between snapshots. lastChangeAt only advances when a value actually moved —
+        // pulse + age counter reflect actual data movement, not the SSE heartbeat.
+        var liveState = {
+            source: null, lastValues: {}, lastChangeAt: 0,
+            ageTimer: null, sortAttached: false
+        };
+
+        function setupLive() {
+            updateLiveStatus(false);
+            if (!liveState.sortAttached) {
+                attachSort(document.getElementById('live-table'));
+                liveState.sortAttached = true;
+            }
+            // Initial JSON fetch paints something before the first SSE frame arrives.
+            fetch('/live')
+                .then(function (r) { return r.json(); })
+                .then(applyLiveSnapshot)
+                .catch(function () {});
+            openLiveStream();
+            if (liveState.ageTimer) clearInterval(liveState.ageTimer);
+            liveState.ageTimer = setInterval(renderLiveAge, 1000);
+            renderLiveAge();
+        }
+
+        function teardownLive() {
+            if (liveState.source) {
+                try { liveState.source.close(); } catch (e) {}
+                liveState.source = null;
+            }
+            if (liveState.ageTimer) {
+                clearInterval(liveState.ageTimer);
+                liveState.ageTimer = null;
+            }
+        }
+
+        function renderLiveAge() {
+            var el = document.getElementById('live-age');
+            if (!el) return;
+            if (!liveState.lastChangeAt) { el.textContent = 'awaiting data'; return; }
+            var sec = Math.max(0, Math.round((Date.now() - liveState.lastChangeAt) / 1000));
+            var pretty;
+            if (sec < 5) pretty = 'just updated';
+            else if (sec < 60) pretty = 'updated ' + sec + 's ago';
+            else if (sec < 3600) pretty = 'no move for ' + Math.floor(sec / 60) + 'm';
+            else pretty = 'no move for ' + Math.floor(sec / 3600) + 'h ' + Math.floor((sec % 3600) / 60) + 'm';
+            el.textContent = pretty;
+        }
+
+        function openLiveStream() {
+            if (liveState.source) return;
+            var es = new EventSource('/live/stream');
+            liveState.source = es;
+            es.addEventListener('open', function () { updateLiveStatus(true); });
+            es.addEventListener('error', function () { updateLiveStatus(false); });
+            es.addEventListener('snapshot', function (ev) {
+                var changed = false;
+                try { changed = applyLiveSnapshot(JSON.parse(ev.data)); } catch (e) {}
+                // First snapshot: no baseline to diff against, but we just received data
+                // so reset the age counter. Subsequent snapshots only count as "change"
+                // if at least one cell value moved.
+                if (changed || liveState.lastChangeAt === 0) {
+                    liveState.lastChangeAt = Date.now();
+                }
+                if (changed) pulseLiveDot();
+                renderLiveAge();
+            });
+        }
+
+        function pulseLiveDot() {
+            var dot = document.querySelector('#live-status .live-dot');
+            if (!dot) return;
+            dot.classList.remove('tick');
+            void dot.offsetWidth;
+            dot.classList.add('tick');
+        }
+
+        function updateLiveStatus(connected) {
+            var el = document.getElementById('live-status');
+            if (!el) return;
+            el.innerHTML = '<span class="live-dot' + (connected ? ' connected' : '') + '"></span>' +
+                (connected ? 'Live' : 'Disconnected');
+        }
+
+        function applyLiveSnapshot(snap) {
+            if (!snap) return false;
+            applyLiveTotals(snap.totals);
+            var changed = applyLiveRows(snap.rows || []);
+            var upd = document.getElementById('live-updated');
+            if (snap.latestPriceAt && upd) {
+                upd.textContent = 'latest quote ' + new Date(snap.latestPriceAt).toLocaleTimeString();
+            }
+            var empty = document.getElementById('live-empty');
+            if (empty) empty.style.display = (snap.rows && snap.rows.length) ? 'none' : '';
+            return changed;
+        }
+
+        function applyLiveTotals(t) {
+            if (!t) return;
+            setText('live-total-gbp', '£' + fmtLiveNum(t.totalGbp, 2));
+            setText('live-positions-gbp', '£' + fmtLiveNum(t.positionsGbp, 2));
+            setText('live-cash-gbp', '£' + fmtLiveNum(t.cashGbp, 2));
+            var dayEl = document.getElementById('live-day-gbp');
+            var pctEl = document.getElementById('live-day-pct');
+            var day = numOrNull(t.dayChangeGbp);
+            if (dayEl) {
+                dayEl.classList.remove('live-pos', 'live-neg');
+                if (day != null) {
+                    var sign = day >= 0 ? '+£' : '−£';
+                    dayEl.textContent = sign + fmtLiveNum(Math.abs(day), 2);
+                    dayEl.classList.add(day >= 0 ? 'live-pos' : 'live-neg');
+                } else {
+                    dayEl.textContent = '—';
+                }
+            }
+            if (pctEl) {
+                var pct = numOrNull(t.dayChangePct);
+                pctEl.textContent = pct == null ? '' : fmtLivePct(pct);
+            }
+        }
+
+        function applyLiveRows(rows) {
+            var tbody = document.querySelector('#live-table tbody');
+            if (!tbody) return;
+            // If the user clicked a column header, respect their sort and don't re-order
+            // existing rows on each snapshot — they can click again to re-sort.
+            var userSorted = !!document.querySelector('#live-table thead th[data-sort-dir]');
+            var existing = {};
+            Array.from(tbody.querySelectorAll('tr')).forEach(function (tr) {
+                existing[tr.dataset.symbol] = tr;
+            });
+            var seen = {};
+            var prevByKey = liveState.lastValues;
+            var nextByKey = {};
+            var hasPrev = Object.keys(prevByKey).length > 0;
+            var changedAny = false;
+            rows.forEach(function (row) {
+                seen[row.symbol] = true;
+                var tr = existing[row.symbol];
+                var isNew = !tr;
+                if (isNew) {
+                    tr = document.createElement('tr');
+                    tr.dataset.symbol = row.symbol;
+                    for (var i = 0; i < 9; i++) tr.appendChild(document.createElement('td'));
+                    tr.cells[0].className = 'txt';
+                    tr.cells[1].className = 'txt';
+                    tr.cells[7].className = 'txt';
+                    tr.cells[8].className = 'txt';
+                    tbody.appendChild(tr);
+                    existing[row.symbol] = tr;
+                }
+                if (renderLiveRow(tr, row, prevByKey, nextByKey)) changedAny = true;
+                if (!userSorted && !isNew) tbody.appendChild(tr);
+            });
+            Object.keys(existing).forEach(function (sym) {
+                if (!seen[sym]) existing[sym].remove();
+            });
+            liveState.lastValues = nextByKey;
+            // First snapshot has no baseline, so we can't claim "changed". Subsequent
+            // snapshots: changed = any cell value moved.
+            return hasPrev && changedAny;
+        }
+
+        function renderLiveRow(tr, row, prevByKey, nextByKey) {
+            tr.cells[0].textContent = row.symbol;
+            tr.cells[1].textContent = row.currency || '';
+            var nLast = numOrNull(row.lastPrice);
+            var nPct = numOrNull(row.dayChangePct);
+            var nDay = numOrNull(row.dayChangeGbp);
+            var nPos = numOrNull(row.positionGbp);
+            var changed = false;
+            if (setNumericCell(tr.cells[2], row.symbol + '|qty', row.quantity, fmtLiveNum(row.quantity, 2), prevByKey, nextByKey)) changed = true;
+            if (setNumericCell(tr.cells[3], row.symbol + '|last', nLast, nLast == null ? '—' : fmtLiveNum(nLast, 4), prevByKey, nextByKey)) changed = true;
+            if (setNumericCell(tr.cells[4], row.symbol + '|pct', nPct, nPct == null ? '—' : fmtLivePct(nPct), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[4], nPct);
+            if (setNumericCell(tr.cells[5], row.symbol + '|dayGbp', nDay, nDay == null ? '—' : (nDay >= 0 ? '+' : '−') + fmtLiveNum(Math.abs(nDay), 2), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[5], nDay);
+            if (setNumericCell(tr.cells[6], row.symbol + '|pos', nPos, nPos == null ? '—' : fmtLiveNum(nPos, 2), prevByKey, nextByKey)) changed = true;
+            tr.cells[7].textContent = row.accounts || '';
+            renderQuoteTs(tr.cells[8], row.priceTs);
+            return changed;
+        }
+
+        function setNumericCell(td, key, value, text, prevByKey, nextByKey) {
+            var nv = numOrNull(value);
+            if (td.textContent !== text) td.textContent = text;
+            if (nextByKey) nextByKey[key] = nv;
+            if (prevByKey && nv != null) {
+                var pv = prevByKey[key];
+                if (pv != null && pv !== nv) {
+                    td.classList.remove('live-flash-up', 'live-flash-down');
+                    void td.offsetWidth;  // restart the animation
+                    td.classList.add(nv > pv ? 'live-flash-up' : 'live-flash-down');
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function renderQuoteTs(td, iso) {
+            td.classList.remove('live-ts-fresh', 'live-ts-stale', 'live-ts-old');
+            if (!iso) { td.textContent = '—'; td.removeAttribute('title'); return; }
+            var ts = new Date(iso);
+            td.textContent = ts.toLocaleTimeString();
+            td.title = ts.toISOString();
+            var ageSec = (Date.now() - ts.getTime()) / 1000;
+            if (ageSec < 300) td.classList.add('live-ts-fresh');         // < 5 min
+            else if (ageSec < 1800) td.classList.add('live-ts-stale');   // < 30 min
+            else td.classList.add('live-ts-old');                        // older — market closed for this listing
+        }
+
+        function applyDeltaClass(td, val) {
+            td.classList.remove('live-pos', 'live-neg');
+            if (val == null) return;
+            if (val > 0) td.classList.add('live-pos');
+            else if (val < 0) td.classList.add('live-neg');
+        }
+
+        function setText(id, value) {
+            var el = document.getElementById(id);
+            if (el) el.textContent = value;
+        }
+
+        function numOrNull(v) {
+            if (v == null) return null;
+            var n = typeof v === 'string' ? parseFloat(v) : v;
+            return isNaN(n) ? null : n;
+        }
+
+        function fmtLiveNum(v, dp) {
+            var n = numOrNull(v);
+            if (n == null) return '—';
+            return n.toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+        }
+
+        function fmtLivePct(v) {
+            var n = numOrNull(v);
+            if (n == null) return '—';
+            return (n >= 0 ? '+' : '') + (n * 100).toFixed(2) + '%';
+        }
+
     }());
 </script>
 </body>

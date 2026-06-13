@@ -14,8 +14,9 @@ import org.springframework.stereotype.Component;
 /**
  * Thin Spring trigger for the framework-free price jobs. All three fire on startup (off the main
  * thread, so a first-run backfill doesn't delay the web UI). The daily Yahoo job runs each
- * evening after the US market close; the intraday Yahoo job runs every 5 minutes thereafter;
- * the gilt scrape runs hourly because dividenddata itself doesn't update faster.
+ * evening after the US market close; the intraday Yahoo job runs every minute thereafter so
+ * the Live tab feels live; the gilt scrape runs hourly because dividenddata itself doesn't
+ * update faster.
  */
 @Component
 public class PriceFetchScheduler {
@@ -49,7 +50,7 @@ public class PriceFetchScheduler {
         runQuietly();
     }
 
-    @Scheduled(fixedDelay = 5 * 60 * 1000, initialDelay = 5 * 60 * 1000)
+    @Scheduled(fixedDelay = 60 * 1000, initialDelay = 60 * 1000)
     public void intraday() {
         intradayQuietly();
     }

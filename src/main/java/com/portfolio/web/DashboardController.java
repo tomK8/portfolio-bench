@@ -14,6 +14,8 @@ import com.portfolio.application.DividendIncomeService;
 import com.portfolio.application.DividendIncomeService.DividendIncome;
 import com.portfolio.application.ConcentrationService;
 import com.portfolio.application.ConcentrationService.ConcentrationMetrics;
+import com.portfolio.application.CorrelationService;
+import com.portfolio.application.CorrelationService.CorrelationReport;
 import com.portfolio.application.CurrencyExposureService;
 import com.portfolio.application.CurrencyExposureService.CurrencyExposure;
 import com.portfolio.application.HealthService;
@@ -82,6 +84,7 @@ public class DashboardController {
     private final DividendAuditService dividendAuditService;
     private final PositionDetailService positionDetailService;
     private final ConcentrationService concentrationService;
+    private final CorrelationService correlationService;
     private final CurrencyExposureService currencyExposureService;
     private final HealthService healthService;
     private final TargetAllocationService targetAllocationService;
@@ -109,6 +112,7 @@ public class DashboardController {
                                DividendAuditService dividendAuditService,
                                PositionDetailService positionDetailService,
                                ConcentrationService concentrationService,
+                               CorrelationService correlationService,
                                CurrencyExposureService currencyExposureService,
                                HealthService healthService,
                                TargetAllocationService targetAllocationService,
@@ -135,6 +139,7 @@ public class DashboardController {
         this.dividendAuditService = dividendAuditService;
         this.positionDetailService = positionDetailService;
         this.concentrationService = concentrationService;
+        this.correlationService = correlationService;
         this.currencyExposureService = currencyExposureService;
         this.healthService = healthService;
         this.targetAllocationService = targetAllocationService;
@@ -258,6 +263,13 @@ public class DashboardController {
     @ResponseBody
     public ConcentrationMetrics concentration() {
         return concentrationService.metrics();
+    }
+
+    @GetMapping("/correlations")
+    @ResponseBody
+    public CorrelationReport correlations(@RequestParam(name = "window", required = false,
+                                                       defaultValue = "90") int window) {
+        return correlationService.compute(window);
     }
 
     @GetMapping("/currency")

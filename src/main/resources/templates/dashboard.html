@@ -581,6 +581,28 @@
         html[data-theme="dark"] .returns-stat .value.live-pos { color: #4ade80; }
         html[data-theme="dark"] .returns-stat .value.live-neg { color: #f87171; }
 
+        .corr-heatmap {
+            border-collapse: collapse;
+            font-size: 0.72rem;
+            margin-top: 0.5rem;
+        }
+        .corr-heatmap th, .corr-heatmap td {
+            border: 1px solid #e1e4e8;
+            padding: 3px 5px;
+            text-align: center;
+            min-width: 32px;
+            font-variant-numeric: tabular-nums;
+        }
+        .corr-heatmap th.corr-axis {
+            font-weight: 600;
+            background: transparent;
+            border: none;
+            color: #555;
+        }
+        html[data-theme="dark"] .corr-heatmap th,
+        html[data-theme="dark"] .corr-heatmap td { border-color: #2e3137; }
+        html[data-theme="dark"] .corr-heatmap th.corr-axis { color: #9aa0a6; }
+
         /* Dark-mode overrides. Activated by setting `data-theme="dark"` on <html>.
            CSS variables would be a cleaner refactor, but the existing 530 lines of style
            are dense and audited; this override block reaches every visible surface without
@@ -681,6 +703,7 @@
     <button class="tab" data-panel="panel-dividends" type="button">Dividends</button>
     <button class="tab" data-panel="panel-position" type="button">Position</button>
     <button class="tab" data-panel="panel-concentration" type="button">Concentration</button>
+    <button class="tab" data-panel="panel-correlations" type="button">Correlations</button>
     <button class="tab" data-panel="panel-currency" type="button">Currency</button>
     <button class="tab" data-panel="panel-snapshots" type="button">Snapshots</button>
     <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
@@ -1174,6 +1197,91 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-correlations">
+    <p class="muted" style="margin-top: 0">
+        Trailing correlation matrix + rolling vols across held names. Daily log returns
+        on native-currency total-return prices (adj_close for equities, close for bonds —
+        FX intentionally stripped so the matrix shows asset behaviour, not your GBP P&amp;L).
+        Cash is folded in as a synthetic σ=0, ρ=0 asset — it drags portfolio vol down but
+        leaves the <b>diversification ratio</b> (Σwᵢσᵢ ÷ σ_p) unchanged, so DR stays a clean
+        "how many independent bets do I really have" measure.
+    </p>
+    <div class="benchmark-controls">
+        <label>Window:
+            <select id="corr-window-select">
+                <option value="30">30 days</option>
+                <option value="60">60 days</option>
+                <option value="90" selected>90 days</option>
+                <option value="180">180 days</option>
+            </select>
+        </label>
+        <span id="corr-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div class="returns-stats" id="corr-stats" style="margin-top: 0.75rem;">
+        <div class="returns-stat" title="Portfolio annualised vol over the chosen window (cash folded in)">
+            <span class="label">Portfolio vol</span>
+            <span class="value na" id="corr-pvol">—</span>
+        </div>
+        <div class="returns-stat" title="Σ wᵢσᵢ — what vol would be with perfect correlation">
+            <span class="label">Weighted avg vol</span>
+            <span class="value na" id="corr-wavg">—</span>
+        </div>
+        <div class="returns-stat" title="Σwᵢσᵢ ÷ σ_p — 1.0 = no diversification, higher = better">
+            <span class="label">Diversification ratio</span>
+            <span class="value na" id="corr-dr">—</span>
+        </div>
+        <div class="returns-stat" title="DR² — equivalent count of independent unit-vol bets">
+            <span class="label">Effective bets</span>
+            <span class="value na" id="corr-effbets">—</span>
+        </div>
+        <div class="returns-stat" title="Number of names in the matrix (cash counted separately)">
+            <span class="label">Names</span>
+            <span class="value na" id="corr-count">—</span>
+        </div>
+    </div>
+
+    <div id="corr-missing" class="value-warnings" style="display: none;"></div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Correlation heatmap (cluster-reordered)</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Hierarchically clustered by (1−ρ) so high-correlation blocks sit on the diagonal.
+        Red = positive, blue = negative, white = uncorrelated.
+    </p>
+    <div id="corr-heatmap-wrap" style="overflow-x: auto;">
+        <table id="corr-heatmap" class="corr-heatmap"></table>
+    </div>
+
+    <div style="display: flex; gap: 2rem; margin-top: 1.5rem; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 280px;">
+            <h3 style="margin: 0 0 0.5rem 0; font-size: 1rem;">Most correlated pairs</h3>
+            <table id="corr-top-pairs" class="annual-table"><thead><tr>
+                <th class="txt">A</th><th class="txt">B</th><th>ρ</th>
+            </tr></thead><tbody></tbody></table>
+        </div>
+        <div style="flex: 1; min-width: 280px;">
+            <h3 style="margin: 0 0 0.5rem 0; font-size: 1rem;">Least correlated pairs</h3>
+            <table id="corr-bottom-pairs" class="annual-table"><thead><tr>
+                <th class="txt">A</th><th class="txt">B</th><th>ρ</th>
+            </tr></thead><tbody></tbody></table>
+        </div>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Rolling annualised vol (weekly samples)</h3>
+    <div style="height: 320px; margin-top: 0.25rem;">
+        <canvas id="corr-vol-chart"></canvas>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Diversification ratio over time</h3>
+    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+        Same window, current weights replayed across history. Dips = correlation contagion
+        (your "independent bets" temporarily collapse in selloffs).
+    </p>
+    <div style="height: 240px; margin-top: 0.25rem;">
+        <canvas id="corr-dr-chart"></canvas>
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-currency">
     <p class="muted" style="margin-top: 0">
         Currency exposure by <b>listing currency</b> (.L tickers report GBp / pence — both
@@ -1547,6 +1655,7 @@
             if (panelId === 'panel-dividends') loadDividends();
             if (panelId === 'panel-position') setupPosition();
             if (panelId === 'panel-concentration') loadConcentration();
+            if (panelId === 'panel-correlations') setupCorrelations();
             if (panelId === 'panel-currency') loadCurrency();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
@@ -2144,9 +2253,7 @@
                                 // Drawdown is always <= 0; pinning max=0 keeps the "underwater" line
                                 // hugging the zero axis, which is the conventional rendering.
                                 max: 0,
-                                ticks: {
-                                    callback: function (v) { return v.toFixed(0) + '%'; }
-                                }
+                                ticks: { callback: pctTickFormat }
                             }
                         },
                         plugins: {
@@ -2163,6 +2270,19 @@
                     }
                 });
             });
+        }
+
+        /**
+         * Percent-axis tick formatter that picks decimal places from the *step* between
+         * adjacent ticks. {@code toFixed(0)} alone collapses sub-integer ticks (e.g. -0.5,
+         * -1.5) to duplicate labels ("-1%", "-2%") when the user zooms in tight — this
+         * promotes decimals just enough to make every tick render distinctly.
+         */
+        function pctTickFormat(value, index, ticks) {
+            var step = (ticks && ticks.length > 1)
+                ? Math.abs(ticks[1].value - ticks[0].value) : 1;
+            var dp = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
+            return value.toFixed(dp) + '%';
         }
 
         /**
@@ -4028,6 +4148,230 @@
         function ccyColour(ccy, fallbackIdx) {
             return CCY_COLOURS[ccy]
                     || CONC_PALETTE[fallbackIdx % CONC_PALETTE.length];
+        }
+
+        // ---- Correlations tab ----
+
+        var corrSetupDone = false;
+        var corrVolChart = null, corrDrChart = null;
+
+        function setupCorrelations() {
+            if (!corrSetupDone) {
+                corrSetupDone = true;
+                document.getElementById('corr-window-select')
+                        .addEventListener('change', fetchCorrelations);
+            }
+            fetchCorrelations();
+        }
+
+        function fetchCorrelations() {
+            var w = document.getElementById('corr-window-select').value;
+            var status = document.getElementById('corr-status');
+            status.textContent = 'Loading…';
+            fetch('/correlations?window=' + encodeURIComponent(w))
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        status.textContent = '';
+                        renderCorrelations(d);
+                    })
+                    .catch(function (e) {
+                        status.textContent = 'Error: ' + e.message;
+                    });
+        }
+
+        function renderCorrelations(d) {
+            setCorrPct('corr-pvol', d.portfolioVol);
+            setCorrPct('corr-wavg', d.weightedAvgVol);
+            setCorrRatio('corr-dr', d.diversificationRatio);
+            setCorrRatio('corr-effbets', d.effectiveBets);
+            var nameCount = (d.symbols || []).filter(function (s) { return s !== 'Cash'; }).length;
+            var c = document.getElementById('corr-count');
+            c.textContent = nameCount || '—';
+            c.className = nameCount ? 'value' : 'value na';
+
+            var missing = document.getElementById('corr-missing');
+            if (d.missingSymbols && d.missingSymbols.length) {
+                missing.innerHTML = '<h4>Symbols excluded</h4><p>Insufficient price history' +
+                        ' in the lookback window — needs ≥ 70% coverage. Excluded: <code>' +
+                        d.missingSymbols.join(', ') + '</code></p>';
+                missing.style.display = 'block';
+            } else {
+                missing.style.display = 'none';
+            }
+
+            renderCorrHeatmap(d);
+            renderCorrPairs('corr-top-pairs', d.topPairs);
+            renderCorrPairs('corr-bottom-pairs', d.bottomPairs);
+            renderCorrVolChart(d);
+            renderCorrDrChart(d);
+        }
+
+        function renderCorrHeatmap(d) {
+            var table = document.getElementById('corr-heatmap');
+            table.innerHTML = '';
+            if (!d.symbols || !d.symbols.length) return;
+            var thead = document.createElement('thead');
+            var headRow = document.createElement('tr');
+            headRow.appendChild(document.createElement('th'));
+            d.symbols.forEach(function (s) {
+                var th = document.createElement('th');
+                th.className = 'corr-axis';
+                th.textContent = s;
+                headRow.appendChild(th);
+            });
+            thead.appendChild(headRow);
+            table.appendChild(thead);
+            var tbody = document.createElement('tbody');
+            d.matrix.forEach(function (row, i) {
+                var tr = document.createElement('tr');
+                var axisCell = document.createElement('th');
+                axisCell.className = 'corr-axis';
+                axisCell.textContent = d.symbols[i];
+                tr.appendChild(axisCell);
+                row.forEach(function (cell) {
+                    var v = parseFloat(cell);
+                    var td = document.createElement('td');
+                    td.textContent = v.toFixed(2);
+                    var bg = corrColour(v);
+                    td.style.background = bg.bg;
+                    td.style.color = bg.fg;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+        }
+
+        function corrColour(rho) {
+            // Diverging palette: red for positive, blue for negative, white at 0.
+            // Magnitude controls saturation; text flips to white once the cell is
+            // dark enough to be hard to read in black.
+            var mag = Math.min(Math.abs(rho), 1);
+            var hue = rho >= 0 ? 0 : 220;
+            var sat = Math.round(mag * 70);
+            var light = Math.round(95 - mag * 45);
+            return {
+                bg: 'hsl(' + hue + ', ' + sat + '%, ' + light + '%)',
+                fg: light < 55 ? '#fff' : '#111'
+            };
+        }
+
+        function renderCorrPairs(id, pairs) {
+            var body = document.querySelector('#' + id + ' tbody');
+            body.innerHTML = '';
+            (pairs || []).forEach(function (p) {
+                var tr = document.createElement('tr');
+                var rho = parseFloat(p.corr);
+                tr.innerHTML =
+                    '<td class="txt">' + p.a + '</td>' +
+                    '<td class="txt">' + p.b + '</td>' +
+                    '<td class="' + (rho >= 0 ? 'pos' : 'neg') + '">' + rho.toFixed(2) + '</td>';
+                body.appendChild(tr);
+            });
+        }
+
+        function renderCorrVolChart(d) {
+            if (corrVolChart) corrVolChart.destroy();
+            var pts = d.rollingVols || [];
+            if (!pts.length) return;
+            // Top 8 names by current weight, so the legend stays readable.
+            var names = (d.symbols || [])
+                    .filter(function (s) { return s !== 'Cash'; })
+                    .slice()
+                    .sort(function (a, b) {
+                        return parseFloat(d.weights[b] || 0) - parseFloat(d.weights[a] || 0);
+                    })
+                    .slice(0, 8);
+            var datasets = names.map(function (sym, i) {
+                return {
+                    label: sym,
+                    data: pts.map(function (p) {
+                        var v = p.values && p.values[sym];
+                        return { x: p.date, y: v != null ? parseFloat(v) * 100 : null };
+                    }).filter(function (pt) { return pt.y != null; }),
+                    borderColor: CONC_PALETTE[i % CONC_PALETTE.length],
+                    backgroundColor: 'transparent',
+                    borderWidth: 1.4,
+                    pointRadius: 0,
+                    tension: 0.1
+                };
+            });
+            corrVolChart = new Chart(
+                document.getElementById('corr-vol-chart').getContext('2d'), {
+                    type: 'line',
+                    data: { datasets: datasets },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' } },
+                            y: {
+                                beginAtZero: true,
+                                title: { display: true, text: 'Annualised vol (%)' },
+                                ticks: { callback: function (v) { return v.toFixed(0) + '%'; } }
+                            }
+                        },
+                        plugins: {
+                            legend: { position: 'bottom', labels: { boxWidth: 10 } },
+                            tooltip: { callbacks: { label: function (c) {
+                                return c.dataset.label + ': ' + c.parsed.y.toFixed(1) + '%';
+                            }}}
+                        }
+                    }
+                });
+        }
+
+        function renderCorrDrChart(d) {
+            if (corrDrChart) corrDrChart.destroy();
+            var pts = (d.divRatioTimeline || []).map(function (p) {
+                return { x: p.date, y: parseFloat(p.dr) };
+            });
+            if (!pts.length) return;
+            corrDrChart = new Chart(
+                document.getElementById('corr-dr-chart').getContext('2d'), {
+                    type: 'line',
+                    data: { datasets: [{
+                        label: 'Diversification ratio',
+                        data: pts,
+                        borderColor: '#2ca02c',
+                        backgroundColor: 'rgba(44,160,44,0.12)',
+                        fill: true,
+                        pointRadius: 0,
+                        borderWidth: 1.5,
+                        tension: 0.1
+                    }]},
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        scales: {
+                            x: { type: 'time', time: { unit: 'year' } },
+                            y: {
+                                beginAtZero: false,
+                                title: { display: true, text: 'DR (× independent bets)' }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { callbacks: { label: function (c) {
+                                return 'DR ' + c.parsed.y.toFixed(2);
+                            }}}
+                        }
+                    }
+                });
+        }
+
+        function setCorrPct(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            el.textContent = (parseFloat(v) * 100).toFixed(2) + '%';
+            el.className = 'value';
+        }
+
+        function setCorrRatio(id, v) {
+            var el = document.getElementById(id);
+            if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            el.textContent = parseFloat(v).toFixed(2);
+            el.className = 'value';
         }
 
         function loadCurrency() {

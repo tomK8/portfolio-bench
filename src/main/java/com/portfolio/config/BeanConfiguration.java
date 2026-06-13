@@ -165,6 +165,16 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public CorrelationService correlationService(CashTransactionRepository cashTransactionRepository,
+                                                 PriceHistoryRepository priceHistoryRepository,
+                                                 IntradayPriceRepository intradayPriceRepository,
+                                                 FxRateProvider fxRateProvider,
+                                                 YahooTickerMap yahooTickerMap) {
+        return new CorrelationService(cashTransactionRepository, priceHistoryRepository,
+                intradayPriceRepository, fxRateProvider, yahooTickerMap);
+    }
+
+    @Bean
     public ConcentrationService concentrationService(AllocationService allocationService,
                                                      CashTransactionRepository cashTransactionRepository,
                                                      IntradayPriceRepository intradayPriceRepository,

@@ -13,6 +13,7 @@ import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.persistence.SnapshotRepository;
+import com.portfolio.persistence.TradeNotesRepository;
 import com.portfolio.port.FxRateProvider;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -106,6 +107,17 @@ public class BeanConfiguration {
     @Bean
     public DividendService dividendService(CashTransactionRepository cashTransactionRepository) {
         return new DividendService(cashTransactionRepository);
+    }
+
+    @Bean
+    public TradeNotesRepository tradeNotesRepository(JdbcConnectionFactory connections) {
+        return new TradeNotesRepository(connections);
+    }
+
+    @Bean
+    public TradeNotesService tradeNotesService(CashTransactionRepository cashTransactionRepository,
+                                               TradeNotesRepository tradeNotesRepository) {
+        return new TradeNotesService(cashTransactionRepository, tradeNotesRepository);
     }
 
     @Bean

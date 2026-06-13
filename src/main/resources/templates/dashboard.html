@@ -653,6 +653,99 @@
             cursor: pointer; z-index: 1000; color: inherit;
         }
         html[data-theme="dark"] .theme-toggle { border-color: #3a3d44; }
+
+        /* Trade journal */
+        .journal-summary {
+            display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+            margin: 0.5rem 0 1rem 0;
+        }
+        .journal-summary .count {
+            color: #555; font-size: 0.9rem; margin-right: 0.5rem;
+        }
+        .tag-pill {
+            display: inline-flex; align-items: center;
+            padding: 0.15rem 0.5rem; border-radius: 12px;
+            font-size: 0.8rem; line-height: 1.4;
+            background: #f0f1f3; color: #444; border: 1px solid #d8dadc;
+        }
+        .tag-pill .n { color: #888; margin-left: 0.35rem; font-size: 0.72rem; }
+        .tag-pill[data-tag="fomo"] { background: #fef0e6; color: #9b4500; border-color: #f3c2a1; }
+        .tag-pill[data-tag="fear"] { background: #eef3fb; color: #1f4d8a; border-color: #b8cdec; }
+        .tag-pill[data-tag="greed"] { background: #fbf0e6; color: #8a5a00; border-color: #efd2a1; }
+        .tag-pill[data-tag="conviction"] { background: #e7f6ec; color: #1f6f37; border-color: #b1ddbf; }
+        .tag-pill[data-tag="rebalance"] { background: #eef0f5; color: #444; border-color: #c8ccd6; }
+        .tag-pill[data-tag="hedge"] { background: #ecf3f3; color: #2a5757; border-color: #b5d0d0; }
+        .tag-pill[data-tag="news"] { background: #f5edf6; color: #5e2e6e; border-color: #d4bcdb; }
+        .tag-pill[data-tag="thesis"] { background: #eef6f1; color: #29603f; border-color: #b6d6c2; }
+        .tag-pill[data-tag="correction"] { background: #ececec; color: #777; border-color: #c8c8c8; font-style: italic; }
+        .journal-table tr.tr-trade.is-correction td { color: #999; }
+        .journal-table tr.tr-trade.is-correction td b { color: #888; font-weight: 500; }
+        .journal-table tr.tr-trade.is-correction .journal-side-buy,
+        .journal-table tr.tr-trade.is-correction .journal-side-sell { color: #aaa; font-weight: 500; text-decoration: line-through; }
+        .journal-table td.desc-cell { color: #888; font-size: 0.82rem; font-style: italic; }
+
+        .journal-filter { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+        .journal-filter input[type=text] { padding: 0.3rem 0.4rem; width: 220px; }
+        .journal-filter select { padding: 0.3rem 0.4rem; }
+
+        .journal-table { width: 100%; }
+        .journal-table th, .journal-table td {
+            padding: 0.35rem 0.6rem; border-bottom: 1px solid #eee;
+        }
+        .journal-table td.has-note { color: #1a1a1a; }
+        .journal-table tr.tr-trade { cursor: pointer; }
+        .journal-table tr.tr-trade:hover { background: #f7f7f8; }
+        .journal-table tr.tr-trade.open { background: #eef3fb; }
+        .journal-table tr.tr-editor td { background: #fafbfd; padding: 0.6rem 0.6rem 0.8rem; }
+        .journal-table tr.tr-editor[hidden] { display: none; }
+        .journal-table .indicator { font-size: 0.72rem; color: #888; }
+        .journal-table .indicator.dot { color: #1f77b4; font-weight: 700; }
+        .journal-side-buy { color: #2ca02c; font-weight: 600; }
+        .journal-side-sell { color: #c0392b; font-weight: 600; }
+
+        .editor-row { display: flex; flex-direction: column; gap: 0.5rem; }
+        .editor-row .tags-row { display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
+        .editor-row .tag-toggle {
+            cursor: pointer; user-select: none;
+            padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.8rem;
+            background: #f0f1f3; color: #444; border: 1px solid #d8dadc;
+        }
+        .editor-row .tag-toggle.on {
+            background: #1f77b4; color: #fff; border-color: #1d6ba2;
+        }
+        .editor-row textarea {
+            width: 100%; min-height: 64px; padding: 0.4rem 0.5rem;
+            border: 1px solid #ccc; border-radius: 4px; font-family: inherit;
+            font-size: 0.92rem; resize: vertical; box-sizing: border-box;
+        }
+        .editor-row .editor-actions {
+            display: flex; gap: 0.5rem; align-items: center; font-size: 0.8rem; color: #888;
+        }
+        .editor-row .editor-actions .saved { color: #2ca02c; }
+        .editor-row .editor-actions .dirty { color: #c0392b; }
+
+        html[data-theme="dark"] .tag-pill { background: #2a2d33; color: #cfd2d6; border-color: #3a3d44; }
+        html[data-theme="dark"] .tag-pill .n { color: #8a8e94; }
+        html[data-theme="dark"] .tag-pill[data-tag="fomo"] { background: #3d2a18; color: #ffba85; border-color: #6b4a28; }
+        html[data-theme="dark"] .tag-pill[data-tag="fear"] { background: #1e2a3d; color: #9ec3ff; border-color: #314a72; }
+        html[data-theme="dark"] .tag-pill[data-tag="greed"] { background: #3a2e15; color: #ffd17a; border-color: #6b5424; }
+        html[data-theme="dark"] .tag-pill[data-tag="conviction"] { background: #1d3325; color: #8ee0a4; border-color: #2f5a3e; }
+        html[data-theme="dark"] .tag-pill[data-tag="rebalance"] { background: #262932; color: #cfd2d6; border-color: #3a3d44; }
+        html[data-theme="dark"] .tag-pill[data-tag="hedge"] { background: #1f3232; color: #95d2d2; border-color: #345555; }
+        html[data-theme="dark"] .tag-pill[data-tag="news"] { background: #2d1e34; color: #d2a3e0; border-color: #4f3158; }
+        html[data-theme="dark"] .tag-pill[data-tag="thesis"] { background: #1f3326; color: #92d0a6; border-color: #345a40; }
+        html[data-theme="dark"] .tag-pill[data-tag="correction"] { background: #2a2d33; color: #8a8e94; border-color: #3a3d44; }
+        html[data-theme="dark"] .journal-table tr.tr-trade.is-correction td { color: #6c727b; }
+        html[data-theme="dark"] .journal-table tr.tr-trade.is-correction td b { color: #8a8e94; }
+        html[data-theme="dark"] .journal-table td.desc-cell { color: #8a8e94; }
+        html[data-theme="dark"] .journal-table tr.tr-trade:hover { background: #1c1f24; }
+        html[data-theme="dark"] .journal-table tr.tr-trade.open { background: #20262e; }
+        html[data-theme="dark"] .journal-table tr.tr-editor td { background: #181b1f; }
+        html[data-theme="dark"] .editor-row textarea {
+            background: #1c1f24; color: #e8e8ea; border-color: #2e3137;
+        }
+        html[data-theme="dark"] .editor-row .tag-toggle { background: #2a2d33; color: #cfd2d6; border-color: #3a3d44; }
+        html[data-theme="dark"] .editor-row .tag-toggle.on { background: #1f77b4; color: #fff; border-color: #4a9eff; }
     </style>
 </head>
 <body>
@@ -709,6 +802,7 @@
     <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
+    <button class="tab" data-panel="panel-trades" type="button">Journal</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -1518,6 +1612,49 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-trades">
+    <p class="muted" style="margin-top: 0">
+        Annotate any trade with a few words on the reasoning — fear, FOMO, conviction,
+        rebalance, whatever — to study your own decision patterns later. Notes attach to
+        the underlying <code>cash_transactions</code> row and survive re-imports. Click a
+        row to expand its editor; click again to collapse. Saves on blur.
+    </p>
+
+    <div id="journal-summary" class="journal-summary muted">Loading…</div>
+
+    <div class="journal-filter">
+        <label>Filter:
+            <input id="journal-search" type="text" placeholder="symbol / note / tag…" autocomplete="off"/>
+        </label>
+        <label>Tag:
+            <select id="journal-tag-filter">
+                <option value="">— any —</option>
+            </select>
+        </label>
+        <label>
+            <input id="journal-only-noted" type="checkbox"/>
+            only annotated
+        </label>
+        <span id="journal-status" class="muted" style="font-size: 0.85rem; margin-left: auto;"></span>
+    </div>
+
+    <table id="journal-table" class="journal-table" style="margin-top: 0.75rem;">
+        <thead><tr>
+            <th class="txt">Date</th>
+            <th class="txt">Account</th>
+            <th class="txt">Side</th>
+            <th class="txt">Symbol</th>
+            <th>Qty</th>
+            <th>Amount £</th>
+            <th class="txt">Note / tags</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+    <div id="journal-empty" class="muted" style="display: none; margin-top: 1rem;">
+        No trades match the current filter.
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-cash">
     <form class="actions" hx-indicator="#spinner">
         <button hx-post="/sync-from-cash" hx-target="#portfolio-cash-result" type="submit">Aggregated Portfolio (from cash ledger)</button>
@@ -1661,6 +1798,7 @@
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
             if (panelId === 'panel-whatif') setupWhatIf();
+            if (panelId === 'panel-trades') setupJournal();
             if (panelId === 'panel-live') setupLive();
             else teardownLive();
             if (persist) {
@@ -4671,6 +4809,241 @@
                 tbody.appendChild(tr);
             });
             attachSortOnce('recon-table');
+        }
+
+        // --- Trade journal ---------------------------------------------------
+        // FOMO / fear / conviction / etc. — pulls /trades on first activation,
+        // renders the table and inline editor; saves via POST /trades/{rowid}/note.
+
+        var JOURNAL_TAGS = ['fomo', 'fear', 'greed', 'conviction', 'rebalance', 'hedge', 'news', 'thesis', 'correction'];
+        var journalInitialized = false;
+        var journalData = null;
+        var journalFilter = { text: '', tag: '', onlyNoted: false };
+
+        function setupJournal() {
+            if (journalInitialized) return;
+            journalInitialized = true;
+            document.getElementById('journal-search').addEventListener('input', function (e) {
+                journalFilter.text = e.target.value.trim().toLowerCase();
+                renderJournalRows();
+            });
+            document.getElementById('journal-tag-filter').addEventListener('change', function (e) {
+                journalFilter.tag = e.target.value;
+                renderJournalRows();
+            });
+            document.getElementById('journal-only-noted').addEventListener('change', function (e) {
+                journalFilter.onlyNoted = e.target.checked;
+                renderJournalRows();
+            });
+            loadJournal();
+        }
+
+        function loadJournal() {
+            document.getElementById('journal-status').textContent = 'Loading…';
+            fetch('/trades').then(function (r) { return r.json(); }).then(function (j) {
+                journalData = j;
+                document.getElementById('journal-status').textContent = '';
+                renderJournalSummary();
+                populateJournalTagOptions();
+                renderJournalRows();
+            }).catch(function () {
+                document.getElementById('journal-status').textContent = 'Failed to load';
+            });
+        }
+
+        function renderJournalSummary() {
+            var s = journalData.summary;
+            var box = document.getElementById('journal-summary');
+            var parts = ['<span class="count">' + s.annotated + ' / ' + s.total + ' trades annotated</span>'];
+            var tags = s.tagCounts || {};
+            var entries = Object.keys(tags).sort(function (a, b) { return tags[b] - tags[a]; });
+            entries.forEach(function (t) {
+                parts.push('<span class="tag-pill" data-tag="' + t + '">' +
+                    escapeHtml(t) + '<span class="n">' + tags[t] + '</span></span>');
+            });
+            if (entries.length === 0) {
+                parts.push('<span class="muted" style="font-size:0.85rem;">No tags yet — start labelling trades to see frequencies build up.</span>');
+            }
+            box.innerHTML = parts.join(' ');
+        }
+
+        function populateJournalTagOptions() {
+            var sel = document.getElementById('journal-tag-filter');
+            var current = sel.value;
+            var s = journalData.summary;
+            var keys = Object.keys(s.tagCounts || {}).sort();
+            sel.innerHTML = '<option value="">— any —</option>' +
+                keys.map(function (k) {
+                    return '<option value="' + escapeHtml(k) + '">' + escapeHtml(k) +
+                        ' (' + s.tagCounts[k] + ')</option>';
+                }).join('');
+            sel.value = current;
+        }
+
+        function renderJournalRows() {
+            var tbody = document.querySelector('#journal-table tbody');
+            tbody.innerHTML = '';
+            var trades = (journalData.trades || []).filter(function (t) {
+                if (journalFilter.onlyNoted) {
+                    if (!t.note && (!t.tags || t.tags.length === 0)) return false;
+                }
+                if (journalFilter.tag && (t.tags || []).indexOf(journalFilter.tag) < 0) return false;
+                if (journalFilter.text) {
+                    var hay = (t.symbol + ' ' + (t.note || '') + ' ' + (t.tags || []).join(' ') +
+                            ' ' + (t.description || '')).toLowerCase();
+                    if (hay.indexOf(journalFilter.text) < 0) return false;
+                }
+                return true;
+            });
+            document.getElementById('journal-empty').style.display = trades.length ? 'none' : 'block';
+            trades.forEach(function (t) {
+                tbody.appendChild(renderJournalTradeRow(t));
+                tbody.appendChild(renderJournalEditorRow(t));
+            });
+        }
+
+        function renderJournalTradeRow(t) {
+            var tr = document.createElement('tr');
+            tr.className = 'tr-trade';
+            var isCorrection = (t.tags || []).indexOf('correction') >= 0;
+            if (isCorrection) tr.classList.add('is-correction');
+            tr.dataset.rowid = t.rowid;
+            var sideClass = t.side === 'BUY' ? 'journal-side-buy' : 'journal-side-sell';
+            var amtAbs = Math.abs(t.amountGbp);
+            var amtStr = '£' + amtAbs.toLocaleString('en-GB',
+                    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            var qtyStr = t.quantity.toLocaleString('en-GB',
+                    { maximumFractionDigits: 4 });
+            var noteCell = '';
+            if (t.tags && t.tags.length) {
+                noteCell += t.tags.map(function (tag) {
+                    return '<span class="tag-pill" data-tag="' + escapeHtml(tag) + '">' +
+                        escapeHtml(tag) + '</span>';
+                }).join(' ');
+            }
+            if (t.note) {
+                var preview = t.note.length > 80 ? t.note.slice(0, 78) + '…' : t.note;
+                noteCell += (noteCell ? ' ' : '') +
+                    '<span class="indicator dot">•</span> ' + escapeHtml(preview);
+            }
+            if (!noteCell) noteCell = '<span class="indicator">click to add</span>';
+            var descPreview = t.description
+                    ? (t.description.length > 60 ? t.description.slice(0, 58) + '…' : t.description)
+                    : '';
+            tr.innerHTML =
+                '<td class="txt">' + escapeHtml(t.date) +
+                    (descPreview ? '<div class="desc-cell">' + escapeHtml(descPreview) + '</div>' : '') +
+                '</td>' +
+                '<td class="txt">' + escapeHtml(t.account) + '</td>' +
+                '<td class="txt"><span class="' + sideClass + '">' + t.side + '</span></td>' +
+                '<td class="txt"><b>' + escapeHtml(t.symbol) + '</b></td>' +
+                '<td>' + qtyStr + '</td>' +
+                '<td>' + amtStr + '</td>' +
+                '<td class="txt">' + noteCell + '</td>';
+            tr.addEventListener('click', function (e) {
+                if (e.target.tagName === 'A') return;
+                toggleJournalEditor(t.rowid);
+            });
+            return tr;
+        }
+
+        function renderJournalEditorRow(t) {
+            var tr = document.createElement('tr');
+            tr.className = 'tr-editor';
+            tr.dataset.editorFor = t.rowid;
+            tr.hidden = true;
+            var td = document.createElement('td');
+            td.colSpan = 7;
+            var tagButtons = JOURNAL_TAGS.map(function (tag) {
+                var on = (t.tags || []).indexOf(tag) >= 0;
+                return '<span class="tag-toggle' + (on ? ' on' : '') +
+                    '" data-tag="' + tag + '">' + tag + '</span>';
+            }).join(' ');
+            td.innerHTML =
+                '<div class="editor-row">' +
+                '<div class="tags-row">' + tagButtons + '</div>' +
+                '<textarea placeholder="Why did you make this trade? Conviction level? What were you reacting to?"></textarea>' +
+                '<div class="editor-actions">' +
+                '<button type="button" class="journal-save">Save</button>' +
+                '<span class="state"></span>' +
+                (t.updatedAt ? '<span style="margin-left:auto;">Last saved ' + escapeHtml(t.updatedAt) + '</span>' : '') +
+                '</div>' +
+                '</div>';
+            tr.appendChild(td);
+            var textarea = td.querySelector('textarea');
+            textarea.value = t.note || '';
+            var state = td.querySelector('.state');
+            var saveBtn = td.querySelector('.journal-save');
+            td.querySelectorAll('.tag-toggle').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    btn.classList.toggle('on');
+                    markDirty(state);
+                });
+            });
+            textarea.addEventListener('input', function () { markDirty(state); });
+            textarea.addEventListener('blur', function () { saveJournalRow(t.rowid, tr, state); });
+            saveBtn.addEventListener('click', function () { saveJournalRow(t.rowid, tr, state); });
+            return tr;
+        }
+
+        function markDirty(stateEl) {
+            stateEl.textContent = 'unsaved';
+            stateEl.className = 'state dirty';
+        }
+
+        function toggleJournalEditor(rowid) {
+            var editor = document.querySelector('tr.tr-editor[data-editor-for="' + rowid + '"]');
+            var tradeRow = document.querySelector('tr.tr-trade[data-rowid="' + rowid + '"]');
+            if (!editor) return;
+            editor.hidden = !editor.hidden;
+            tradeRow.classList.toggle('open', !editor.hidden);
+            if (!editor.hidden) {
+                var ta = editor.querySelector('textarea');
+                if (ta) ta.focus();
+            }
+        }
+
+        function saveJournalRow(rowid, editorTr, stateEl) {
+            var textarea = editorTr.querySelector('textarea');
+            var tags = Array.prototype.map.call(
+                    editorTr.querySelectorAll('.tag-toggle.on'),
+                    function (b) { return b.dataset.tag; });
+            var params = new URLSearchParams();
+            params.append('note', textarea.value);
+            params.append('tags', tags.join(','));
+            stateEl.textContent = 'saving…';
+            stateEl.className = 'state';
+            fetch('/trades/' + rowid + '/note', { method: 'POST', body: params })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('Save failed');
+                    return r.json();
+                })
+                .then(function (j) {
+                    journalData = j;
+                    stateEl.textContent = 'saved';
+                    stateEl.className = 'state saved';
+                    renderJournalSummary();
+                    populateJournalTagOptions();
+                    var openIds = Array.from(document.querySelectorAll('tr.tr-trade.open'))
+                            .map(function (r) { return r.dataset.rowid; });
+                    renderJournalRows();
+                    openIds.forEach(function (id) {
+                        var ed = document.querySelector('tr.tr-editor[data-editor-for="' + id + '"]');
+                        var tr = document.querySelector('tr.tr-trade[data-rowid="' + id + '"]');
+                        if (ed && tr) { ed.hidden = false; tr.classList.add('open'); }
+                    });
+                })
+                .catch(function () {
+                    stateEl.textContent = 'save failed';
+                    stateEl.className = 'state dirty';
+                });
+        }
+
+        function escapeHtml(s) {
+            if (s == null) return '';
+            return String(s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
         // Live tab: SSE stream of /live snapshots, with flash-on-change row updates.

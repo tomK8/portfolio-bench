@@ -24,6 +24,8 @@ import com.portfolio.application.ReconciliationService;
 import com.portfolio.application.ReconciliationService.Report;
 import com.portfolio.application.TargetAllocationService;
 import com.portfolio.application.TargetAllocationService.TargetReport;
+import com.portfolio.application.TradeNotesService;
+import com.portfolio.application.TradeNotesService.TradeJournal;
 import com.portfolio.application.PositionDetailService;
 import com.portfolio.application.PositionDetailService.PositionDetail;
 import com.portfolio.application.ExportExcelService;
@@ -50,6 +52,7 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
@@ -88,6 +91,7 @@ public class DashboardController {
     private final CurrencyExposureService currencyExposureService;
     private final HealthService healthService;
     private final TargetAllocationService targetAllocationService;
+    private final TradeNotesService tradeNotesService;
     private final ReconciliationService reconciliationService;
     private final PriceHistoryRepository priceHistoryRepository;
     private final PortfolioValueService portfolioValueService;
@@ -116,6 +120,7 @@ public class DashboardController {
                                CurrencyExposureService currencyExposureService,
                                HealthService healthService,
                                TargetAllocationService targetAllocationService,
+                               TradeNotesService tradeNotesService,
                                ReconciliationService reconciliationService,
                                PriceHistoryRepository priceHistoryRepository,
                                PortfolioValueService portfolioValueService,
@@ -143,6 +148,7 @@ public class DashboardController {
         this.currencyExposureService = currencyExposureService;
         this.healthService = healthService;
         this.targetAllocationService = targetAllocationService;
+        this.tradeNotesService = tradeNotesService;
         this.reconciliationService = reconciliationService;
         this.priceHistoryRepository = priceHistoryRepository;
         this.portfolioValueService = portfolioValueService;
@@ -288,6 +294,29 @@ public class DashboardController {
     @ResponseBody
     public List<SnapshotRepository.Snapshot> snapshots() {
         return snapshotRepo.listAll();
+    }
+
+    /**
+     * All TRANSACTION rows joined with optional notes/tags plus a tag-frequency summary.
+     * Newest first so the UI lands on recent activity without paging logic.
+     */
+    @GetMapping("/trades")
+    @ResponseBody
+    public TradeJournal trades() {
+        return tradeNotesService.journal();
+    }
+
+    /**
+     * Upsert (or delete-when-empty) a trade annotation, then return the refreshed journal so
+     * the UI's tag-frequency strip updates in the same round trip. Free text in {@code note},
+     * comma-separated lowercase tags in {@code tags}; service normalises both.
+     */
+    @PostMapping("/trades/{rowid}/note")
+    @ResponseBody
+    public TradeJournal saveTradeNote(@PathVariable("rowid") long rowid,
+                                      @RequestParam(name = "note", defaultValue = "") String note,
+                                      @RequestParam(name = "tags", defaultValue = "") String tags) {
+        return tradeNotesService.save(rowid, note, tags);
     }
 
     @GetMapping("/reconciliation")

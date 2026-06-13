@@ -294,6 +294,41 @@ public class CashTransactionRepository {
     }
 
     /**
+     * Every {@code TRANSACTION} (buy/sell) row, newest first, carrying its SQLite
+     * {@code rowid}. The rowid is the join key into {@code trade_notes} — it survives
+     * re-imports because the matching cash-import paths either UPDATE the existing row
+     * (AJBell) or skip it (II / RothIRA dedup). Dividends, interest, charges and
+     * contributions are excluded; they aren't decisions to annotate.
+     */
+    public List<TradeRow> loadTrades() {
+        List<TradeRow> rows = new ArrayList<>();
+        if (!connections.dbExists()) return rows;
+        try (Connection conn = connections.open();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT rowid, transaction_date, account, symbol, quantity, amount, " +
+                             "currency, amount_gbp, description " +
+                             "FROM cash_transactions WHERE type = 'TRANSACTION' " +
+                             "ORDER BY transaction_date DESC, rowid DESC")) {
+            while (rs.next()) {
+                rows.add(new TradeRow(
+                        rs.getLong(1), rs.getString(2),
+                        Account.fromDbValue(rs.getString(3)), rs.getString(4),
+                        rs.getDouble(5), rs.getDouble(6), rs.getString(7),
+                        rs.getDouble(8), rs.getString(9)));
+            }
+        } catch (Exception e) {
+            log.warn("Could not load trades", e);
+        }
+        return rows;
+    }
+
+    public record TradeRow(long rowid, String transactionDate, Account account, String symbol,
+                           double quantity, double amount, String currency,
+                           double amountGbp, String description) {
+    }
+
+    /**
      * Every {@code CONTRIBUTION} row, oldest first — used to chart cash inflows over time.
      * Other types (TRANSACTION, DIVIDEND, INTEREST, CHARGE) are not external contributions.
      */

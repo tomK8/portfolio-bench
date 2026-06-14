@@ -26,7 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
-class DashboardControllerTest {
+class WebEndpointsTest {
 
     static Path inputDir;
     static Path dbDir;

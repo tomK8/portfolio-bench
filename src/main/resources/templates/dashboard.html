@@ -165,6 +165,24 @@
             gap: 0;
             border-bottom: 1px solid #ccc;
             margin: 1.5rem 0 0 0;
+            flex-wrap: wrap;
+        }
+
+        .tabs-primary .tab {
+            font-size: 1rem;
+            padding: 0.6rem 1.25rem;
+        }
+
+        .tabs-secondary {
+            display: none;
+            margin: 0;
+            border-bottom: 1px solid #ddd;
+            background: #fafafa;
+        }
+        .tabs-secondary.active { display: flex; }
+        .tabs-secondary .tab {
+            font-size: 0.9rem;
+            padding: 0.4rem 0.9rem;
         }
 
         .tab {
@@ -194,6 +212,35 @@
         .tab-panel.active {
             display: block;
         }
+
+        .subview-toggle {
+            display: inline-flex;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            overflow: hidden;
+            margin: 0.5rem 0 1rem 0;
+        }
+        .subview-toggle button {
+            background: #fff;
+            border: 0;
+            padding: 0.4rem 0.9rem;
+            font-size: 0.9rem;
+            cursor: pointer;
+            color: #555;
+            border-right: 1px solid #ddd;
+        }
+        .subview-toggle button:last-child { border-right: 0; }
+        .subview-toggle button.active {
+            background: #1d6ba2;
+            color: #fff;
+            font-weight: 600;
+        }
+        .subview { display: none; }
+        .subview.active { display: block; }
+        html[data-theme="dark"] .tabs-secondary { background: #1e2024; border-bottom-color: #2e3137; }
+        html[data-theme="dark"] .subview-toggle { border-color: #3a3d44; }
+        html[data-theme="dark"] .subview-toggle button { background: #1e2024; color: #c4c7cb; border-right-color: #3a3d44; }
+        html[data-theme="dark"] .subview-toggle button.active { background: #1d6ba2; color: #fff; }
 
         .cash-recon {
             margin: 1rem 0 1.5rem 0;
@@ -808,26 +855,43 @@
     <div id="rebuild-prices-result"></div>
 </section>
 
-<div class="tabs" id="portfolio-tabs">
-    <button class="tab active" data-panel="panel-holdings" type="button">From holdings files</button>
-    <button class="tab" data-panel="panel-cash" type="button">From cash ledger</button>
+<div class="tabs tabs-primary" id="portfolio-groups">
+    <button class="tab active" data-group="group-holdings" type="button">Holdings</button>
+    <button class="tab" data-group="group-performance" type="button">Performance</button>
+    <button class="tab" data-group="group-risk" type="button">Risk</button>
+    <button class="tab" data-group="group-quality" type="button">Quality</button>
+    <button class="tab" data-group="group-tools" type="button">Tools</button>
+</div>
+
+<div class="tabs tabs-secondary active" data-group="group-holdings">
+    <button class="tab active" data-panel="panel-holdings" type="button">Files</button>
+    <button class="tab" data-panel="panel-cash" type="button">Cash ledger</button>
     <button class="tab" data-panel="panel-live" type="button">Live</button>
+    <button class="tab" data-panel="panel-position" type="button">Position</button>
+    <button class="tab" data-panel="panel-allocation" type="button">Allocation</button>
+</div>
+
+<div class="tabs tabs-secondary" data-group="group-performance">
     <button class="tab" data-panel="panel-contributions" type="button">Contributions</button>
     <button class="tab" data-panel="panel-value" type="button">Value over time</button>
-    <button class="tab" data-panel="panel-allocation" type="button">Allocation</button>
     <button class="tab" data-panel="panel-returns" type="button">Returns</button>
-    <button class="tab" data-panel="panel-risk" type="button">Risk</button>
     <button class="tab" data-panel="panel-dividends" type="button">Dividends</button>
-    <button class="tab" data-panel="panel-position" type="button">Position</button>
-    <button class="tab" data-panel="panel-concentration" type="button">Concentration</button>
-    <button class="tab" data-panel="panel-correlations" type="button">Correlations</button>
-    <button class="tab" data-panel="panel-currency" type="button">Currency</button>
-    <button class="tab" data-panel="panel-snapshots" type="button">Snapshots</button>
-    <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
+    <button class="tab" data-panel="panel-snapshots" type="button">Snapshot diff</button>
+</div>
+
+<div class="tabs tabs-secondary" data-group="group-risk">
+    <button class="tab" data-panel="panel-risk" type="button">Risk</button>
+    <button class="tab" data-panel="panel-correlations" type="button">Correlations</button>
+</div>
+
+<div class="tabs tabs-secondary" data-group="group-quality">
     <button class="tab" data-panel="panel-fundamentals" type="button">Fundamentals</button>
-    <button class="tab" data-panel="panel-snapshot" type="button">Snapshot</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
+</div>
+
+<div class="tabs tabs-secondary" data-group="group-tools">
+    <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-trades" type="button">Journal</button>
 </div>
 
@@ -891,73 +955,184 @@
 </section>
 
 <section class="tab-panel" id="panel-allocation">
-    <p class="muted" style="margin-top: 0">
-        Weekly snapshots from the first ledger date through today, derived from the same
-        forward-replay as the value chart. Three views below: cash vs invested (the
-        headline "how much was uninvested"), per-symbol composition over time (top 12 by
-        latest value, the long tail bucketed into "Other"), and a date-picker snapshot
-        showing the full breakdown on any chosen day.
-    </p>
-
-    <h3 style="margin-top: 1rem; font-size: 1rem;">Cash vs invested</h3>
-    <div class="zoom-hint">
-        <span class="muted" style="font-size: 0.8rem;">Drag to zoom.</span>
-        <button id="alloc-cash-zoom-reset" type="button" class="link-btn">Reset zoom</button>
-    </div>
-    <div style="height: 320px; margin-top: 0.25rem;">
-        <canvas id="alloc-cash-chart"></canvas>
+    <div class="subview-toggle" id="alloc-toggle">
+        <button type="button" class="active" data-subview="alloc-view-breakdown">Breakdown</button>
+        <button type="button" data-subview="alloc-view-concentration">Concentration</button>
+        <button type="button" data-subview="alloc-view-currency">Currency</button>
     </div>
 
-    <h3 style="margin-top: 2rem; font-size: 1rem;">Composition over time</h3>
-    <div class="zoom-hint">
-        <span class="muted" style="font-size: 0.8rem;">Click a legend entry to hide/show that band.</span>
-        <button id="alloc-symbols-zoom-reset" type="button" class="link-btn">Reset zoom</button>
-    </div>
-    <div style="height: 460px; margin-top: 0.25rem;">
-        <canvas id="alloc-symbols-chart"></canvas>
-    </div>
+    <div class="subview active" id="alloc-view-breakdown">
+        <p class="muted" style="margin-top: 0">
+            Weekly snapshots from the first ledger date through today, derived from the same
+            forward-replay as the value chart. Three views below: cash vs invested (the
+            headline "how much was uninvested"), per-symbol composition over time (top 12 by
+            latest value, the long tail bucketed into "Other"), and a date-picker snapshot
+            showing the full breakdown on any chosen day.
+        </p>
 
-    <h3 style="margin-top: 2rem; font-size: 1rem;">Snapshot on date</h3>
-    <div class="attr-controls">
-        <label>Date: <input id="alloc-snapshot-date" type="date"/></label>
-        <span class="muted" style="font-size: 0.85rem;">Picks the nearest weekly sample on or before this date.</span>
-        <span id="alloc-snapshot-status" class="muted" style="font-size: 0.85rem;"></span>
-    </div>
-    <div style="height: 520px; margin-top: 0.25rem;">
-        <canvas id="alloc-snapshot-chart"></canvas>
-    </div>
-
-    <h3 style="margin-top: 2rem; font-size: 1rem;">Target allocation &amp; rebalance</h3>
-    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
-        Enter target weights per symbol (one <code>SYMBOL=PERCENT</code> per line). Drift is
-        computed against the invested base; positions outside ±5% AND ±£500 of target are
-        flagged "trim" or "add". Untargeted holdings appear at the bottom for visibility.
-    </p>
-    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start;">
-        <div style="flex: 1; min-width: 280px;">
-            <textarea id="target-input" rows="10" style="width: 100%; font-family: monospace; font-size: 0.9rem;"
-                placeholder="EQQQ=25&#10;LGEN=10&#10;GILT 4.75% 2038=5"></textarea>
-            <div style="margin-top: 0.5rem;">
-                <button id="target-save" type="button">Save targets</button>
-                <span id="target-status" class="muted" style="font-size: 0.85rem; margin-left: 0.5rem;"></span>
-            </div>
-            <div id="target-error" class="whatif-error" style="display:none; margin-top: 0.5rem;"></div>
+        <h3 style="margin-top: 1rem; font-size: 1rem;">Cash vs invested</h3>
+        <div class="zoom-hint">
+            <span class="muted" style="font-size: 0.8rem;">Drag to zoom.</span>
+            <button id="alloc-cash-zoom-reset" type="button" class="link-btn">Reset zoom</button>
         </div>
-        <div style="flex: 2; min-width: 400px;">
-            <table id="target-table" class="annual-table" style="margin-top: 0;">
-                <thead><tr>
-                    <th class="txt" data-sort="text">Symbol</th>
-                    <th data-sort="num">Target</th>
-                    <th data-sort="num">Actual</th>
-                    <th data-sort="num">Target £</th>
-                    <th data-sort="num">Actual £</th>
-                    <th data-sort="num">Drift £</th>
-                    <th data-sort="num">Drift %</th>
-                    <th class="txt" data-sort="text">Action</th>
-                </tr></thead>
-                <tbody></tbody>
-            </table>
-            <div id="target-sum-warning" class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;"></div>
+        <div style="height: 320px; margin-top: 0.25rem;">
+            <canvas id="alloc-cash-chart"></canvas>
+        </div>
+
+        <h3 style="margin-top: 2rem; font-size: 1rem;">Composition over time</h3>
+        <div class="zoom-hint">
+            <span class="muted" style="font-size: 0.8rem;">Click a legend entry to hide/show that band.</span>
+            <button id="alloc-symbols-zoom-reset" type="button" class="link-btn">Reset zoom</button>
+        </div>
+        <div style="height: 460px; margin-top: 0.25rem;">
+            <canvas id="alloc-symbols-chart"></canvas>
+        </div>
+
+        <h3 style="margin-top: 2rem; font-size: 1rem;">Snapshot on date</h3>
+        <div class="attr-controls">
+            <label>Date: <input id="alloc-snapshot-date" type="date"/></label>
+            <span class="muted" style="font-size: 0.85rem;">Picks the nearest weekly sample on or before this date.</span>
+            <span id="alloc-snapshot-status" class="muted" style="font-size: 0.85rem;"></span>
+        </div>
+        <div style="height: 520px; margin-top: 0.25rem;">
+            <canvas id="alloc-snapshot-chart"></canvas>
+        </div>
+
+        <h3 style="margin-top: 2rem; font-size: 1rem;">Target allocation &amp; rebalance</h3>
+        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+            Enter target weights per symbol (one <code>SYMBOL=PERCENT</code> per line). Drift is
+            computed against the invested base; positions outside ±5% AND ±£500 of target are
+            flagged "trim" or "add". Untargeted holdings appear at the bottom for visibility.
+        </p>
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start;">
+            <div style="flex: 1; min-width: 280px;">
+                <textarea id="target-input" rows="10" style="width: 100%; font-family: monospace; font-size: 0.9rem;"
+                    placeholder="EQQQ=25&#10;LGEN=10&#10;GILT 4.75% 2038=5"></textarea>
+                <div style="margin-top: 0.5rem;">
+                    <button id="target-save" type="button">Save targets</button>
+                    <span id="target-status" class="muted" style="font-size: 0.85rem; margin-left: 0.5rem;"></span>
+                </div>
+                <div id="target-error" class="whatif-error" style="display:none; margin-top: 0.5rem;"></div>
+            </div>
+            <div style="flex: 2; min-width: 400px;">
+                <table id="target-table" class="annual-table" style="margin-top: 0;">
+                    <thead><tr>
+                        <th class="txt" data-sort="text">Symbol</th>
+                        <th data-sort="num">Target</th>
+                        <th data-sort="num">Actual</th>
+                        <th data-sort="num">Target £</th>
+                        <th data-sort="num">Actual £</th>
+                        <th data-sort="num">Drift £</th>
+                        <th data-sort="num">Drift %</th>
+                        <th class="txt" data-sort="text">Action</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+                <div id="target-sum-warning" class="muted" style="font-size: 0.85rem; margin-top: 0.5rem;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="subview" id="alloc-view-concentration">
+        <p class="muted" style="margin-top: 0">
+            <b>HHI</b> (Herfindahl-Hirschman Index) = Σ wᵢ² over fractional position weights —
+            range 1/N (all equal) to 1 (single name). <b>Effective N</b> = 1/HHI, the
+            equivalent count of equally-weighted positions. <b>Top-N share</b> = weight of the
+            N largest. All concentration figures use the <b>invested base</b> (cash excluded so
+            it doesn't artificially deflate HHI); cash share is reported separately.
+        </p>
+        <div class="returns-stats" id="conc-stats">
+            <div class="returns-stat"><span class="label">HHI</span><span class="value na" id="conc-hhi">—</span></div>
+            <div class="returns-stat" title="1 / HHI — equivalent number of equally-weighted positions"><span class="label">Effective N</span><span class="value na" id="conc-effn">—</span></div>
+            <div class="returns-stat"><span class="label">Positions</span><span class="value na" id="conc-count">—</span></div>
+            <div class="returns-stat"><span class="label">Top 1 share</span><span class="value na" id="conc-top1">—</span></div>
+            <div class="returns-stat"><span class="label">Top 3 share</span><span class="value na" id="conc-top3">—</span></div>
+            <div class="returns-stat"><span class="label">Top 5 share</span><span class="value na" id="conc-top5">—</span></div>
+            <div class="returns-stat"><span class="label">Top 10 share</span><span class="value na" id="conc-top10">—</span></div>
+            <div class="returns-stat"><span class="label">Cash share</span><span class="value na" id="conc-cash">—</span></div>
+        </div>
+
+        <h3 style="margin-top: 1.5rem; font-size: 1rem;">Per-symbol weights (invested base)</h3>
+        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+            All positions sorted by weight. The longer the bar, the bigger the concentration risk.
+        </p>
+        <div id="conc-symbol-wrap" style="margin-top: 0.25rem;">
+            <canvas id="conc-symbol-chart"></canvas>
+        </div>
+
+        <div class="annual-returns-row" style="margin-top: 1.5rem;">
+            <div class="annual-chart-wrap">
+                <h3 style="margin-top: 0; font-size: 1rem;">By account</h3>
+                <div style="height: 240px;">
+                    <canvas id="conc-account-chart"></canvas>
+                </div>
+            </div>
+            <div class="annual-chart-wrap">
+                <h3 style="margin-top: 0; font-size: 1rem;">By asset class</h3>
+                <div style="height: 240px;">
+                    <canvas id="conc-class-chart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <h3 style="margin-top: 1.5rem; font-size: 1rem;">Concentration over time</h3>
+        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+            Effective N (left axis, blue) and HHI (right axis, orange). Rising Effective N /
+            falling HHI = increasing diversification.
+        </p>
+        <div style="height: 280px; margin-top: 0.25rem;">
+            <canvas id="conc-trend-chart"></canvas>
+        </div>
+    </div>
+
+    <div class="subview" id="alloc-view-currency">
+        <p class="muted" style="margin-top: 0">
+            Currency exposure by <b>listing currency</b> (.L tickers report GBp / pence — both
+            normalise to GBP for bucketing). Each position is converted to GBP at the live FX rate,
+            then summed by currency. <b>12-month FX impact</b> is a what-if: holding today's non-GBP
+            book at 12-month-ago FX would have produced a different GBP value; the signed difference
+            is FX's contribution to your GBP value over the year, assuming the current book was
+            held all 12 months.
+        </p>
+        <div class="returns-stats" id="cur-stats">
+            <div class="returns-stat"><span class="label">Total exposure</span><span class="value na" id="cur-total">—</span></div>
+            <div class="returns-stat"><span class="label">GBP exposure</span><span class="value na" id="cur-gbp">—</span></div>
+            <div class="returns-stat"><span class="label">Non-GBP exposure</span><span class="value na" id="cur-nongbp">—</span></div>
+            <div class="returns-stat"><span class="label">Non-GBP share</span><span class="value na" id="cur-nongbp-share">—</span></div>
+            <div class="returns-stat" title="Net effect of last 12 months of FX moves on the current non-GBP book"><span class="label">FX impact · 12m</span><span class="value na" id="cur-fx-impact">—</span></div>
+            <div class="returns-stat"><span class="label">Currencies</span><span class="value na" id="cur-count">—</span></div>
+        </div>
+
+        <div class="annual-returns-row" style="margin-top: 1.5rem;">
+            <div class="annual-chart-wrap">
+                <h3 style="margin-top: 0; font-size: 1rem;">Composition (now)</h3>
+                <div style="height: 280px;">
+                    <canvas id="cur-donut-chart"></canvas>
+                </div>
+            </div>
+            <div class="annual-chart-wrap">
+                <h3 style="margin-top: 0; font-size: 1rem;">Per-currency breakdown</h3>
+                <table id="cur-table" class="annual-table" style="margin-top: 0;">
+                    <thead><tr>
+                        <th class="txt" data-sort="text">Ccy</th>
+                        <th data-sort="num">Invested £</th>
+                        <th data-sort="num">Cash £</th>
+                        <th data-sort="num">Total £</th>
+                        <th data-sort="num">Weight</th>
+                        <th data-sort="num">Positions</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <h3 style="margin-top: 1.5rem; font-size: 1rem;">Currency weight over time (invested only)</h3>
+        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+            Stacked weights of invested positions by listing currency, weekly samples. Cash is
+            excluded — would dominate the stack in early years before any positions existed.
+        </p>
+        <div style="height: 320px; margin-top: 0.25rem;">
+            <canvas id="cur-trend-chart"></canvas>
         </div>
     </div>
 </section>
@@ -1265,58 +1440,6 @@
     </div>
 </section>
 
-<section class="tab-panel" id="panel-concentration">
-    <p class="muted" style="margin-top: 0">
-        <b>HHI</b> (Herfindahl-Hirschman Index) = Σ wᵢ² over fractional position weights —
-        range 1/N (all equal) to 1 (single name). <b>Effective N</b> = 1/HHI, the
-        equivalent count of equally-weighted positions. <b>Top-N share</b> = weight of the
-        N largest. All concentration figures use the <b>invested base</b> (cash excluded so
-        it doesn't artificially deflate HHI); cash share is reported separately.
-    </p>
-    <div class="returns-stats" id="conc-stats">
-        <div class="returns-stat"><span class="label">HHI</span><span class="value na" id="conc-hhi">—</span></div>
-        <div class="returns-stat" title="1 / HHI — equivalent number of equally-weighted positions"><span class="label">Effective N</span><span class="value na" id="conc-effn">—</span></div>
-        <div class="returns-stat"><span class="label">Positions</span><span class="value na" id="conc-count">—</span></div>
-        <div class="returns-stat"><span class="label">Top 1 share</span><span class="value na" id="conc-top1">—</span></div>
-        <div class="returns-stat"><span class="label">Top 3 share</span><span class="value na" id="conc-top3">—</span></div>
-        <div class="returns-stat"><span class="label">Top 5 share</span><span class="value na" id="conc-top5">—</span></div>
-        <div class="returns-stat"><span class="label">Top 10 share</span><span class="value na" id="conc-top10">—</span></div>
-        <div class="returns-stat"><span class="label">Cash share</span><span class="value na" id="conc-cash">—</span></div>
-    </div>
-
-    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Per-symbol weights (invested base)</h3>
-    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
-        All positions sorted by weight. The longer the bar, the bigger the concentration risk.
-    </p>
-    <div id="conc-symbol-wrap" style="margin-top: 0.25rem;">
-        <canvas id="conc-symbol-chart"></canvas>
-    </div>
-
-    <div class="annual-returns-row" style="margin-top: 1.5rem;">
-        <div class="annual-chart-wrap">
-            <h3 style="margin-top: 0; font-size: 1rem;">By account</h3>
-            <div style="height: 240px;">
-                <canvas id="conc-account-chart"></canvas>
-            </div>
-        </div>
-        <div class="annual-chart-wrap">
-            <h3 style="margin-top: 0; font-size: 1rem;">By asset class</h3>
-            <div style="height: 240px;">
-                <canvas id="conc-class-chart"></canvas>
-            </div>
-        </div>
-    </div>
-
-    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Concentration over time</h3>
-    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
-        Effective N (left axis, blue) and HHI (right axis, orange). Rising Effective N /
-        falling HHI = increasing diversification.
-    </p>
-    <div style="height: 280px; margin-top: 0.25rem;">
-        <canvas id="conc-trend-chart"></canvas>
-    </div>
-</section>
-
 <section class="tab-panel" id="panel-correlations">
     <p class="muted" style="margin-top: 0">
         Trailing correlation matrix + rolling vols across held names. Daily log returns
@@ -1399,57 +1522,6 @@
     </p>
     <div style="height: 240px; margin-top: 0.25rem;">
         <canvas id="corr-dr-chart"></canvas>
-    </div>
-</section>
-
-<section class="tab-panel" id="panel-currency">
-    <p class="muted" style="margin-top: 0">
-        Currency exposure by <b>listing currency</b> (.L tickers report GBp / pence — both
-        normalise to GBP for bucketing). Each position is converted to GBP at the live FX rate,
-        then summed by currency. <b>12-month FX impact</b> is a what-if: holding today's non-GBP
-        book at 12-month-ago FX would have produced a different GBP value; the signed difference
-        is FX's contribution to your GBP value over the year, assuming the current book was
-        held all 12 months.
-    </p>
-    <div class="returns-stats" id="cur-stats">
-        <div class="returns-stat"><span class="label">Total exposure</span><span class="value na" id="cur-total">—</span></div>
-        <div class="returns-stat"><span class="label">GBP exposure</span><span class="value na" id="cur-gbp">—</span></div>
-        <div class="returns-stat"><span class="label">Non-GBP exposure</span><span class="value na" id="cur-nongbp">—</span></div>
-        <div class="returns-stat"><span class="label">Non-GBP share</span><span class="value na" id="cur-nongbp-share">—</span></div>
-        <div class="returns-stat" title="Net effect of last 12 months of FX moves on the current non-GBP book"><span class="label">FX impact · 12m</span><span class="value na" id="cur-fx-impact">—</span></div>
-        <div class="returns-stat"><span class="label">Currencies</span><span class="value na" id="cur-count">—</span></div>
-    </div>
-
-    <div class="annual-returns-row" style="margin-top: 1.5rem;">
-        <div class="annual-chart-wrap">
-            <h3 style="margin-top: 0; font-size: 1rem;">Composition (now)</h3>
-            <div style="height: 280px;">
-                <canvas id="cur-donut-chart"></canvas>
-            </div>
-        </div>
-        <div class="annual-chart-wrap">
-            <h3 style="margin-top: 0; font-size: 1rem;">Per-currency breakdown</h3>
-            <table id="cur-table" class="annual-table" style="margin-top: 0;">
-                <thead><tr>
-                    <th class="txt" data-sort="text">Ccy</th>
-                    <th data-sort="num">Invested £</th>
-                    <th data-sort="num">Cash £</th>
-                    <th data-sort="num">Total £</th>
-                    <th data-sort="num">Weight</th>
-                    <th data-sort="num">Positions</th>
-                </tr></thead>
-                <tbody></tbody>
-            </table>
-        </div>
-    </div>
-
-    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Currency weight over time (invested only)</h3>
-    <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
-        Stacked weights of invested positions by listing currency, weekly samples. Cash is
-        excluded — would dominate the stack in early years before any positions existed.
-    </p>
-    <div style="height: 320px; margin-top: 0.25rem;">
-        <canvas id="cur-trend-chart"></canvas>
     </div>
 </section>
 
@@ -1593,101 +1665,108 @@
 </section>
 
 <section class="tab-panel" id="panel-fundamentals">
-    <p class="muted" style="margin-top: 0">
-        Decomposes a stock's price growth into <b>earnings growth</b> vs <b>multiple expansion</b>.
-        TTM diluted EPS comes from SEC EDGAR (XBRL <code>EarningsPerShareDiluted</code>); price
-        from <code>price_history.close</code>. Quarterly EPS records are keyed by period end,
-        the latest filing wins (so restated values are preferred), and each value is rescaled
-        to today's per-share basis using the split factor at its filing date — so prices and
-        EPS share a consistent basis through splits. The series only uses values that were
-        already filed on each chart date. P/E gaps when TTM earnings are negative.<br/>
-        <b>Sharp drops in the chart are usually real,</b> not bugs: NVDA in mid-2023 (AI
-        revenue suddenly doubled, P/E briefly spiked then normalised); AMZN in 2022 (Rivian
-        writedown turned TTM EPS negative). Pre-2018 values for some tickers can be off
-        because XBRL coverage was thinner then. If pre-2022 GOOGL P/E looks off, click
-        <b>Rebuild adj_close</b> on the top of the dashboard — pre-split bars in
-        <code>price_history</code> may have a stale split factor.
-    </p>
-    <div class="attr-controls">
-        <label>Ticker:
-            <select id="fund-ticker"></select>
-        </label>
-        <label>Years:
-            <select id="fund-years">
-                <option value="3">3</option>
-                <option value="5">5</option>
-                <option value="10" selected>10</option>
-            </select>
-        </label>
-        <button id="fund-run" type="button">Apply</button>
-        <button id="fund-backfill" type="button" style="display: none;">Backfill prices</button>
-        <span id="fund-status" class="muted" style="font-size: 0.85rem;"></span>
+    <div class="subview-toggle" id="fund-toggle">
+        <button type="button" class="active" data-subview="fund-view-pe">P/E history (per ticker)</button>
+        <button type="button" data-subview="fund-view-holdings">Per holding (snapshot)</button>
     </div>
 
-    <div id="fund-message" class="value-warnings" style="display: none;"></div>
+    <div class="subview active" id="fund-view-pe">
+        <p class="muted" style="margin-top: 0">
+            Decomposes a stock's price growth into <b>earnings growth</b> vs <b>multiple expansion</b>.
+            TTM diluted EPS comes from SEC EDGAR (XBRL <code>EarningsPerShareDiluted</code>); price
+            from <code>price_history.close</code>. Quarterly EPS records are keyed by period end,
+            the latest filing wins (so restated values are preferred), and each value is rescaled
+            to today's per-share basis using the split factor at its filing date — so prices and
+            EPS share a consistent basis through splits. The series only uses values that were
+            already filed on each chart date. P/E gaps when TTM earnings are negative.<br/>
+            <b>Sharp drops in the chart are usually real,</b> not bugs: NVDA in mid-2023 (AI
+            revenue suddenly doubled, P/E briefly spiked then normalised); AMZN in 2022 (Rivian
+            writedown turned TTM EPS negative). Pre-2018 values for some tickers can be off
+            because XBRL coverage was thinner then. If pre-2022 GOOGL P/E looks off, click
+            <b>Rebuild adj_close</b> on the top of the dashboard — pre-split bars in
+            <code>price_history</code> may have a stale split factor.
+        </p>
+        <div class="attr-controls">
+            <label>Ticker:
+                <select id="fund-ticker"></select>
+            </label>
+            <label>Years:
+                <select id="fund-years">
+                    <option value="3">3</option>
+                    <option value="5">5</option>
+                    <option value="10" selected>10</option>
+                </select>
+            </label>
+            <button id="fund-run" type="button">Apply</button>
+            <button id="fund-backfill" type="button" style="display: none;">Backfill prices</button>
+            <span id="fund-status" class="muted" style="font-size: 0.85rem;"></span>
+        </div>
 
-    <div id="fund-summary" class="returns-stats" style="display: none;">
-        <div class="returns-stat"><span class="label">Window</span><span class="value" id="fund-window">—</span></div>
-        <div class="returns-stat"><span class="label">Price ×</span><span class="value" id="fund-price-mult">—</span></div>
-        <div class="returns-stat"><span class="label">EPS ×</span><span class="value" id="fund-eps-mult">—</span></div>
-        <div class="returns-stat"><span class="label">Multiple ×</span><span class="value" id="fund-pe-mult">—</span></div>
+        <div id="fund-message" class="value-warnings" style="display: none;"></div>
+
+        <div id="fund-summary" class="returns-stats" style="display: none;">
+            <div class="returns-stat"><span class="label">Window</span><span class="value" id="fund-window">—</span></div>
+            <div class="returns-stat"><span class="label">Price ×</span><span class="value" id="fund-price-mult">—</span></div>
+            <div class="returns-stat"><span class="label">EPS ×</span><span class="value" id="fund-eps-mult">—</span></div>
+            <div class="returns-stat"><span class="label">Multiple ×</span><span class="value" id="fund-pe-mult">—</span></div>
+        </div>
+
+        <div id="fund-explain" class="muted" style="margin-top: 0.5rem; font-size: 0.9rem; display: none;"></div>
+
+        <h3 style="margin-top: 1.25rem; font-size: 1rem;">P/E (trailing twelve months)</h3>
+        <div style="height: 320px;">
+            <canvas id="fund-pe-chart"></canvas>
+        </div>
+
+        <h3 style="margin-top: 1.5rem; font-size: 1rem;">Price &amp; TTM EPS (rebased to 1.0 at window start)</h3>
+        <div style="height: 320px;">
+            <canvas id="fund-growth-chart"></canvas>
+        </div>
     </div>
 
-    <div id="fund-explain" class="muted" style="margin-top: 0.5rem; font-size: 0.9rem; display: none;"></div>
+    <div class="subview" id="fund-view-holdings">
+        <p class="muted" style="margin-top: 0">
+            Current-state fundamentals for every currently-held symbol — P/E, forward P/E, PEG,
+            market cap, 52-week range, beta and analyst target, all from Yahoo's
+            <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Cached
+            for 6 hours; the first call after a server restart fetches ~50 tickers and takes
+            about 30 seconds (throttled to be polite). Click any row to see secondary fields
+            (dividend yield, margins, balance-sheet ratios, sector, recommendation, 52-week
+            change vs S&amp;P, …) in a popup.
+        </p>
+        <div class="actions">
+            <button id="snapshot-reload" type="button">Refresh</button>
+            <span id="snapshot-status" class="muted" style="font-size: 0.85rem;"></span>
+        </div>
 
-    <h3 style="margin-top: 1.25rem; font-size: 1rem;">P/E (trailing twelve months)</h3>
-    <div style="height: 320px;">
-        <canvas id="fund-pe-chart"></canvas>
-    </div>
+        <table id="snapshot-table" style="margin-top: 0.75rem;">
+            <thead><tr>
+                <th class="txt" data-sort="str">Symbol</th>
+                <th data-sort="num">Price</th>
+                <th data-sort="num">P/E (TTM)</th>
+                <th data-sort="num">Fwd P/E</th>
+                <th data-sort="num" title="P/E ÷ EPS growth rate — values < 1 suggest cheap growth">PEG</th>
+                <th data-sort="num">Market Cap</th>
+                <th data-sort="num">52w Low</th>
+                <th data-sort="num">52w High</th>
+                <th data-sort="num">Beta</th>
+                <th data-sort="num" title="Analyst mean target price">Target</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+        <div id="snapshot-empty" class="muted" style="display: none; margin-top: 1rem;">
+            No held symbols. Run a <b>Sync</b> from the Holdings tab first so the snapshot has
+            a universe to look up.
+        </div>
 
-    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Price &amp; TTM EPS (rebased to 1.0 at window start)</h3>
-    <div style="height: 320px;">
-        <canvas id="fund-growth-chart"></canvas>
-    </div>
-</section>
-
-<section class="tab-panel" id="panel-snapshot">
-    <p class="muted" style="margin-top: 0">
-        Current-state fundamentals for every currently-held symbol — P/E, forward P/E, PEG,
-        market cap, 52-week range, beta and analyst target, all from Yahoo's
-        <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Cached
-        for 6 hours; the first call after a server restart fetches ~50 tickers and takes
-        about 30 seconds (throttled to be polite). Click any row to see secondary fields
-        (dividend yield, margins, balance-sheet ratios, sector, recommendation, 52-week
-        change vs S&amp;P, …) in a popup.
-    </p>
-    <div class="actions">
-        <button id="snapshot-reload" type="button">Refresh</button>
-        <span id="snapshot-status" class="muted" style="font-size: 0.85rem;"></span>
-    </div>
-
-    <table id="snapshot-table" style="margin-top: 0.75rem;">
-        <thead><tr>
-            <th class="txt" data-sort="str">Symbol</th>
-            <th data-sort="num">Price</th>
-            <th data-sort="num">P/E (TTM)</th>
-            <th data-sort="num">Fwd P/E</th>
-            <th data-sort="num" title="P/E ÷ EPS growth rate — values < 1 suggest cheap growth">PEG</th>
-            <th data-sort="num">Market Cap</th>
-            <th data-sort="num">52w Low</th>
-            <th data-sort="num">52w High</th>
-            <th data-sort="num">Beta</th>
-            <th data-sort="num" title="Analyst mean target price">Target</th>
-        </tr></thead>
-        <tbody></tbody>
-    </table>
-    <div id="snapshot-empty" class="muted" style="display: none; margin-top: 1rem;">
-        No held symbols. Run a <b>Sync</b> from the Holdings tab first so the snapshot has
-        a universe to look up.
-    </div>
-
-    <div id="snapshot-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
-        <div class="modal-box" style="max-width: 540px;">
-            <h3 id="snapshot-detail-title">—</h3>
-            <div id="snapshot-detail-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;"></div>
-            <div id="snapshot-detail-body"></div>
-            <div class="modal-actions">
-                <button id="snapshot-detail-close" type="button">Close</button>
+        <div id="snapshot-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+            <div class="modal-box" style="max-width: 540px;">
+                <h3 id="snapshot-detail-title">—</h3>
+                <div id="snapshot-detail-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;"></div>
+                <div id="snapshot-detail-body"></div>
+                <div class="modal-actions">
+                    <button id="snapshot-detail-close" type="button">Close</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1900,43 +1979,76 @@
         });
 
         var TAB_KEY = 'portfolio-bench.active-tab';
+        var GROUP_KEY_PREFIX = 'portfolio-bench.last-sub.';
+
+        // Derived from the secondary tab strips below. Single source of truth so renames
+        // don't drift: each strip already lists its panels via [data-panel].
+        var PANEL_TO_GROUP = {};
+        var GROUP_DEFAULT_PANEL = {};
+        document.querySelectorAll('.tabs-secondary').forEach(function (strip) {
+            var g = strip.getAttribute('data-group');
+            var first = null;
+            strip.querySelectorAll('.tab[data-panel]').forEach(function (b) {
+                var p = b.getAttribute('data-panel');
+                PANEL_TO_GROUP[p] = g;
+                if (!first) first = p;
+            });
+            GROUP_DEFAULT_PANEL[g] = first;
+        });
 
         function activatePanel(panelId, persist) {
-            var btn = document.querySelector('#portfolio-tabs .tab[data-panel="' + panelId + '"]');
-            if (!btn) return;
-            document.querySelectorAll('#portfolio-tabs .tab').forEach(function (b) {
-                b.classList.remove('active');
+            var group = PANEL_TO_GROUP[panelId];
+            if (!group) return;
+
+            document.querySelectorAll('#portfolio-groups .tab').forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-group') === group);
             });
-            btn.classList.add('active');
+            document.querySelectorAll('.tabs-secondary').forEach(function (strip) {
+                strip.classList.toggle('active', strip.getAttribute('data-group') === group);
+            });
+            document.querySelectorAll('.tabs-secondary .tab').forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-panel') === panelId);
+            });
             document.querySelectorAll('.tab-panel').forEach(function (p) {
                 p.classList.toggle('active', p.id === panelId);
             });
+
             if (panelId === 'panel-contributions') loadContributionsChart();
             if (panelId === 'panel-value') loadValueChart();
-            if (panelId === 'panel-allocation') loadAllocation();
+            if (panelId === 'panel-allocation') setupAllocationPanel();
             if (panelId === 'panel-returns') { loadReturnsChart(); setupBenchmark(); }
             if (panelId === 'panel-risk') loadRisk();
             if (panelId === 'panel-dividends') loadDividends();
             if (panelId === 'panel-position') setupPosition();
-            if (panelId === 'panel-concentration') loadConcentration();
             if (panelId === 'panel-correlations') setupCorrelations();
-            if (panelId === 'panel-currency') loadCurrency();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
-            if (panelId === 'panel-fundamentals') setupFundamentals();
-            if (panelId === 'panel-snapshot') setupSnapshot();
+            if (panelId === 'panel-fundamentals') setupFundamentalsPanel();
             if (panelId === 'panel-whatif') setupWhatIf();
             if (panelId === 'panel-trades') setupJournal();
             if (panelId === 'panel-live') setupLive();
             else teardownLive();
             if (persist) {
-                try { localStorage.setItem(TAB_KEY, panelId); } catch (e) {}
+                try {
+                    localStorage.setItem(TAB_KEY, panelId);
+                    localStorage.setItem(GROUP_KEY_PREFIX + group, panelId);
+                } catch (e) {}
             }
         }
 
-        document.querySelectorAll('#portfolio-tabs .tab').forEach(function (btn) {
+        document.querySelectorAll('.tabs-secondary .tab').forEach(function (btn) {
             btn.addEventListener('click', function () { activatePanel(btn.dataset.panel, true); });
+        });
+
+        document.querySelectorAll('#portfolio-groups .tab').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var g = btn.dataset.group;
+                var last = null;
+                try { last = localStorage.getItem(GROUP_KEY_PREFIX + g); } catch (e) {}
+                var target = (last && PANEL_TO_GROUP[last] === g) ? last : GROUP_DEFAULT_PANEL[g];
+                activatePanel(target, true);
+            });
         });
 
         var THEME_KEY = 'portfolio-bench.theme';
@@ -1960,6 +2072,51 @@
                 activatePanel(savedTab, false);
             }
         } catch (e) {}
+
+        // Generic intra-panel subview toggle. Each .subview-toggle button carries a
+        // data-subview attribute pointing to the .subview div to show. The loader callback
+        // is invoked when its subview first becomes visible — the called function is
+        // expected to be idempotent (the existing load*/setup* functions already guard).
+        function bindSubviewToggle(toggleEl, loaders) {
+            if (!toggleEl || toggleEl.dataset.bound === '1') return;
+            toggleEl.dataset.bound = '1';
+            toggleEl.querySelectorAll('button[data-subview]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var subviewId = btn.getAttribute('data-subview');
+                    toggleEl.querySelectorAll('button').forEach(function (b) {
+                        b.classList.toggle('active', b === btn);
+                    });
+                    var container = toggleEl.parentElement;
+                    container.querySelectorAll(':scope > .subview').forEach(function (v) {
+                        v.classList.toggle('active', v.id === subviewId);
+                    });
+                    if (loaders && loaders[subviewId]) loaders[subviewId]();
+                });
+            });
+        }
+
+        var allocPanelInitialized = false;
+        function setupAllocationPanel() {
+            loadAllocation();
+            if (allocPanelInitialized) return;
+            allocPanelInitialized = true;
+            bindSubviewToggle(document.getElementById('alloc-toggle'), {
+                'alloc-view-breakdown': loadAllocation,
+                'alloc-view-concentration': loadConcentration,
+                'alloc-view-currency': loadCurrency
+            });
+        }
+
+        var fundPanelInitialized = false;
+        function setupFundamentalsPanel() {
+            setupFundamentals();
+            if (fundPanelInitialized) return;
+            fundPanelInitialized = true;
+            bindSubviewToggle(document.getElementById('fund-toggle'), {
+                'fund-view-pe': setupFundamentals,
+                'fund-view-holdings': setupSnapshot
+            });
+        }
 
         var whatIfInitialized = false;
         var whatIfChart = null;

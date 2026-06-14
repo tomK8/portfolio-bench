@@ -801,6 +801,7 @@
     <button class="tab" data-panel="panel-snapshots" type="button">Snapshots</button>
     <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
+    <button class="tab" data-panel="panel-fundamentals" type="button">Fundamentals</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
     <button class="tab" data-panel="panel-trades" type="button">Journal</button>
 </div>
@@ -1566,6 +1567,60 @@
     </table>
 </section>
 
+<section class="tab-panel" id="panel-fundamentals">
+    <p class="muted" style="margin-top: 0">
+        Decomposes a stock's price growth into <b>earnings growth</b> vs <b>multiple expansion</b>.
+        TTM diluted EPS comes from SEC EDGAR (XBRL <code>EarningsPerShareDiluted</code>); price
+        from <code>price_history.close</code>. Quarterly EPS records are keyed by period end,
+        the latest filing wins (so restated values are preferred), and each value is rescaled
+        to today's per-share basis using the split factor at its filing date — so prices and
+        EPS share a consistent basis through splits. The series only uses values that were
+        already filed on each chart date. P/E gaps when TTM earnings are negative.<br/>
+        <b>Sharp drops in the chart are usually real,</b> not bugs: NVDA in mid-2023 (AI
+        revenue suddenly doubled, P/E briefly spiked then normalised); AMZN in 2022 (Rivian
+        writedown turned TTM EPS negative). Pre-2018 values for some tickers can be off
+        because XBRL coverage was thinner then. If pre-2022 GOOGL P/E looks off, click
+        <b>Rebuild adj_close</b> on the top of the dashboard — pre-split bars in
+        <code>price_history</code> may have a stale split factor.
+    </p>
+    <div class="attr-controls">
+        <label>Ticker:
+            <select id="fund-ticker"></select>
+        </label>
+        <label>Years:
+            <select id="fund-years">
+                <option value="3">3</option>
+                <option value="5">5</option>
+                <option value="10" selected>10</option>
+            </select>
+        </label>
+        <button id="fund-run" type="button">Apply</button>
+        <button id="fund-backfill" type="button" style="display: none;">Backfill prices</button>
+        <span id="fund-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="fund-message" class="value-warnings" style="display: none;"></div>
+
+    <div id="fund-summary" class="returns-stats" style="display: none;">
+        <div class="returns-stat"><span class="label">Window</span><span class="value" id="fund-window">—</span></div>
+        <div class="returns-stat"><span class="label">Price ×</span><span class="value" id="fund-price-mult">—</span></div>
+        <div class="returns-stat"><span class="label">EPS ×</span><span class="value" id="fund-eps-mult">—</span></div>
+        <div class="returns-stat"><span class="label">Multiple ×</span><span class="value" id="fund-pe-mult">—</span></div>
+    </div>
+
+    <div id="fund-explain" class="muted" style="margin-top: 0.5rem; font-size: 0.9rem; display: none;"></div>
+
+    <h3 style="margin-top: 1.25rem; font-size: 1rem;">P/E (trailing twelve months)</h3>
+    <div style="height: 320px;">
+        <canvas id="fund-pe-chart"></canvas>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Price &amp; TTM EPS (rebased to 1.0 at window start)</h3>
+    <div style="height: 320px;">
+        <canvas id="fund-growth-chart"></canvas>
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-whatif">
     <p class="muted" style="margin-top: 0">
         Backtest a fixed basket against your actual contribution dates. On every
@@ -1797,6 +1852,7 @@
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
+            if (panelId === 'panel-fundamentals') setupFundamentals();
             if (panelId === 'panel-whatif') setupWhatIf();
             if (panelId === 'panel-trades') setupJournal();
             if (panelId === 'panel-live') setupLive();
@@ -3417,6 +3473,245 @@
                 attrTableSortAttached = true;
                 attachSort(document.getElementById('attr-table'));
             }
+        }
+
+        var fundInitialized = false;
+        var fundPeChart = null;
+        var fundGrowthChart = null;
+
+        function setupFundamentals() {
+            if (fundInitialized) return;
+            fundInitialized = true;
+            var sel = document.getElementById('fund-ticker');
+            fetch('/fundamentals/tickers').then(function (r) { return r.json(); })
+                    .then(function (tickers) {
+                        (tickers || []).forEach(function (t) {
+                            var opt = document.createElement('option');
+                            opt.value = t;
+                            opt.textContent = t;
+                            sel.appendChild(opt);
+                        });
+                        // Default to GOOGL since the user's example used Google.
+                        if (sel.querySelector('option[value="GOOGL"]')) sel.value = 'GOOGL';
+                        runFundamentals();
+                    });
+            document.getElementById('fund-run').addEventListener('click', runFundamentals);
+            document.getElementById('fund-ticker').addEventListener('change', runFundamentals);
+            document.getElementById('fund-years').addEventListener('change', runFundamentals);
+            document.getElementById('fund-backfill').addEventListener('click', backfillFundamentalsPrices);
+        }
+
+        function runFundamentals() {
+            var sym = document.getElementById('fund-ticker').value;
+            var years = document.getElementById('fund-years').value;
+            if (!sym) return;
+            var status = document.getElementById('fund-status');
+            status.textContent = 'Loading…';
+            var url = '/fundamentals?symbol=' + encodeURIComponent(sym) +
+                    '&years=' + encodeURIComponent(years);
+            fetch(url).then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        status.textContent = '';
+                        renderFundamentals(data);
+                    })
+                    .catch(function (e) {
+                        status.textContent = 'Error: ' + e.message;
+                    });
+        }
+
+        function backfillFundamentalsPrices() {
+            var sym = document.getElementById('fund-ticker').value;
+            if (!sym) return;
+            var btn = document.getElementById('fund-backfill');
+            btn.disabled = true;
+            var status = document.getElementById('fund-status');
+            status.textContent = 'Backfilling prices… (~2s)';
+            var body = new URLSearchParams();
+            body.set('symbol', sym);
+            fetch('/returns/benchmark/fetch', { method: 'POST', body: body })
+                    .then(function (r) { return r.json(); })
+                    .then(function () {
+                        btn.disabled = false;
+                        runFundamentals();
+                    })
+                    .catch(function (e) {
+                        btn.disabled = false;
+                        status.textContent = 'Backfill error: ' + e.message;
+                    });
+        }
+
+        function renderFundamentals(data) {
+            var msg = document.getElementById('fund-message');
+            var summary = document.getElementById('fund-summary');
+            var explain = document.getElementById('fund-explain');
+            var backfillBtn = document.getElementById('fund-backfill');
+
+            if (data.message) {
+                msg.textContent = data.message;
+                msg.style.display = 'block';
+            } else {
+                msg.style.display = 'none';
+            }
+            backfillBtn.style.display = data.missingPrices ? 'inline-block' : 'none';
+
+            if (!data.points || data.points.length === 0) {
+                summary.style.display = 'none';
+                explain.style.display = 'none';
+                if (fundPeChart) { fundPeChart.destroy(); fundPeChart = null; }
+                if (fundGrowthChart) { fundGrowthChart.destroy(); fundGrowthChart = null; }
+                return;
+            }
+
+            var s = data.summary;
+            if (s) {
+                summary.style.display = '';
+                document.getElementById('fund-window').textContent =
+                        s.start.date + ' → ' + s.end.date + '  (' + s.spanDays + 'd)';
+                document.getElementById('fund-price-mult').textContent = fmtMult(s.priceMult);
+                document.getElementById('fund-eps-mult').textContent = fmtMult(s.epsMult);
+                document.getElementById('fund-pe-mult').textContent = fmtMult(s.peMult);
+                explain.style.display = '';
+                // The identity priceMult ≡ epsMult × peMult lets the user read which side drove it.
+                var priceMult = parseFloat(s.priceMult);
+                var epsMult = parseFloat(s.epsMult);
+                var peMult = parseFloat(s.peMult);
+                var driver;
+                if (Math.abs(epsMult - 1) > Math.abs(peMult - 1) * 1.5) {
+                    driver = 'mostly <b>earnings growth</b> — multiple barely moved.';
+                } else if (Math.abs(peMult - 1) > Math.abs(epsMult - 1) * 1.5) {
+                    driver = 'mostly <b>multiple expansion</b> — earnings did little of the lifting.';
+                } else {
+                    driver = 'a roughly even mix of earnings growth and multiple expansion.';
+                }
+                explain.innerHTML = data.symbol + ': price ×' + fmtMult(s.priceMult) +
+                        ' = EPS ×' + fmtMult(s.epsMult) + ' × multiple ×' + fmtMult(s.peMult) +
+                        '. Drivers: ' + driver;
+            } else {
+                summary.style.display = 'none';
+                explain.style.display = 'none';
+            }
+
+            renderFundPeChart(data.points, data.symbol);
+            renderFundGrowthChart(data.points, data.symbol);
+        }
+
+        function fmtMult(s) {
+            if (s == null) return '—';
+            var n = parseFloat(s);
+            return n.toFixed(2);
+        }
+
+        function quantile(sorted, q) {
+            var idx = (sorted.length - 1) * q;
+            var lo = Math.floor(idx), hi = Math.ceil(idx);
+            return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+        }
+
+        function renderFundPeChart(points, symbol) {
+            // Cap the visible P/E range so a single near-zero-earnings quarter (e.g. AMZN's
+            // 2022 Rivian writedown, where TTM EPS dipped to ~$0.01 and P/E went to ~14,000)
+            // doesn't crush the rest of the line into a flat zero. Use Tukey's fence
+            // (Q3 + 1.5×IQR) — the standard outlier threshold. It's robust to spikes that
+            // cover up to ~25% of bars (which a 95th-percentile cap is not), and for clean
+            // tickers like MSFT/AAPL the max value sits well inside the fence so nothing
+            // gets clipped. Capped values render as gaps; we surface the count.
+            var finitePe = points.map(function (p) { return p.pe == null ? null : parseFloat(p.pe); })
+                    .filter(function (v) { return v != null && isFinite(v) && v > 0; })
+                    .sort(function (a, b) { return a - b; });
+            var maxY = null;
+            if (finitePe.length > 4) {
+                var q1 = quantile(finitePe, 0.25);
+                var q3 = quantile(finitePe, 0.75);
+                var fence = q3 + 1.5 * (q3 - q1);
+                maxY = Math.max(50, Math.ceil(fence));
+            }
+            var clipped = 0;
+            var data = points.map(function (p) {
+                if (p.pe == null) return { x: p.date, y: null };
+                var v = parseFloat(p.pe);
+                if (maxY != null && v > maxY) { clipped++; return { x: p.date, y: null }; }
+                return { x: p.date, y: v };
+            });
+
+            var status = document.getElementById('fund-status');
+            if (clipped > 0) {
+                status.textContent = clipped + ' point(s) clipped (P/E > ' + maxY +
+                        ' — near-zero TTM earnings)';
+            } else {
+                status.textContent = '';
+            }
+
+            var ctx = document.getElementById('fund-pe-chart').getContext('2d');
+            if (fundPeChart) fundPeChart.destroy();
+            fundPeChart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets: [{
+                    label: symbol + ' P/E (TTM)',
+                    data: data,
+                    borderColor: '#1f77b4',
+                    backgroundColor: 'rgba(31,119,180,0.15)',
+                    pointRadius: 0,
+                    spanGaps: false,
+                    tension: 0.1
+                }] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                    scales: {
+                        x: { type: 'time', time: { unit: 'year' } },
+                        y: {
+                            title: { display: true, text: 'Trailing P/E' },
+                            beginAtZero: true,
+                            max: maxY
+                        }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function renderFundGrowthChart(points, symbol) {
+            var firstPrice = null, firstEps = null;
+            for (var i = 0; i < points.length; i++) {
+                if (parseFloat(points[i].ttmEps) > 0) {
+                    firstPrice = parseFloat(points[i].price);
+                    firstEps = parseFloat(points[i].ttmEps);
+                    break;
+                }
+            }
+            if (firstPrice == null) return;
+            var priceData = points.map(function (p) {
+                return { x: p.date, y: parseFloat(p.price) / firstPrice };
+            });
+            var epsData = points.map(function (p) {
+                var e = parseFloat(p.ttmEps);
+                return { x: p.date, y: e > 0 ? e / firstEps : null };
+            });
+            var ctx = document.getElementById('fund-growth-chart').getContext('2d');
+            if (fundGrowthChart) fundGrowthChart.destroy();
+            fundGrowthChart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets: [
+                    { label: 'Price', data: priceData, borderColor: '#1f77b4',
+                      backgroundColor: '#1f77b4', pointRadius: 0, tension: 0.1 },
+                    { label: 'TTM EPS', data: epsData, borderColor: '#2ca02c',
+                      backgroundColor: '#2ca02c', pointRadius: 0, tension: 0.1, spanGaps: false }
+                ] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                    scales: {
+                        x: { type: 'time', time: { unit: 'year' } },
+                        y: {
+                            title: { display: true, text: 'Multiple of window start' },
+                            ticks: { callback: function (v) { return '×' + v.toFixed(2); } }
+                        }
+                    },
+                    plugins: { legend: { position: 'bottom' } }
+                }
+            });
         }
 
         var riskLoaded = false;

@@ -29,6 +29,8 @@ import com.portfolio.application.TradeNotesService.TradeJournal;
 import com.portfolio.application.PositionDetailService;
 import com.portfolio.application.PositionDetailService.PositionDetail;
 import com.portfolio.application.ExportExcelService;
+import com.portfolio.application.FundamentalsService;
+import com.portfolio.application.FundamentalsService.FundamentalsReport;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.PortfolioReturnService;
@@ -101,6 +103,7 @@ public class DashboardController {
     private final WhatIfService whatIfService;
     private final AllocationService allocationService;
     private final AttributionService attributionService;
+    private final FundamentalsService fundamentalsService;
     private final PriceFetchJob priceFetchJob;
     private final CashTransactionRepository cashRepo;
     private final SnapshotRepository snapshotRepo;
@@ -130,6 +133,7 @@ public class DashboardController {
                                WhatIfService whatIfService,
                                AllocationService allocationService,
                                AttributionService attributionService,
+                               FundamentalsService fundamentalsService,
                                PriceFetchJob priceFetchJob,
                                CashTransactionRepository cashRepo,
                                SnapshotRepository snapshotRepo,
@@ -158,6 +162,7 @@ public class DashboardController {
         this.whatIfService = whatIfService;
         this.allocationService = allocationService;
         this.attributionService = attributionService;
+        this.fundamentalsService = fundamentalsService;
         this.priceFetchJob = priceFetchJob;
         this.cashRepo = cashRepo;
         this.snapshotRepo = snapshotRepo;
@@ -601,6 +606,26 @@ public class DashboardController {
             return whatIfService.timeline(basket);
         }
         return preview;
+    }
+
+    /**
+     * Decomposes a stock's price growth into earnings growth vs multiple expansion over a
+     * window. {@code symbol} must be in the supported set (US hyperscalers for now); see
+     * {@link FundamentalsService} for the formula. {@code years} defaults to 10 — shorter
+     * windows are honoured but EDGAR coverage tails off before ~2009 so going beyond is
+     * pointless.
+     */
+    @GetMapping("/fundamentals")
+    @ResponseBody
+    public FundamentalsReport fundamentals(@RequestParam(name = "symbol") String symbol,
+                                           @RequestParam(name = "years", defaultValue = "10") int years) {
+        return fundamentalsService.report(symbol, years);
+    }
+
+    @GetMapping("/fundamentals/tickers")
+    @ResponseBody
+    public List<String> fundamentalsTickers() {
+        return fundamentalsService.supportedTickers();
     }
 
     /**

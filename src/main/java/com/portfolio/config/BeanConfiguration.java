@@ -1,6 +1,7 @@
 package com.portfolio.config;
 
 import com.portfolio.ExcelReportWriter;
+import com.portfolio.adapter.EdgarFundamentalsFetcher;
 import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.GiltPriceFetcher;
 import com.portfolio.adapter.HoldingFileLocator;
@@ -369,6 +370,17 @@ public class BeanConfiguration {
     @Bean
     public GiltPriceFetcher giltPriceFetcher() {
         return new GiltPriceFetcher();
+    }
+
+    @Bean
+    public EdgarFundamentalsFetcher edgarFundamentalsFetcher() {
+        return new EdgarFundamentalsFetcher();
+    }
+
+    @Bean
+    public FundamentalsService fundamentalsService(EdgarFundamentalsFetcher edgarFundamentalsFetcher,
+                                                   PriceHistoryRepository priceHistoryRepository) {
+        return new FundamentalsService(edgarFundamentalsFetcher, priceHistoryRepository);
     }
 
     @Bean

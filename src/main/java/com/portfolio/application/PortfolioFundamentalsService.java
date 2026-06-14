@@ -68,10 +68,12 @@ public class PortfolioFundamentalsService {
             if (cached != null) {
                 q = cached;
             } else {
+                // Throttle goes *before* each fetch except the first, so calls are spaced
+                // by THROTTLE_MS ms and the final iteration doesn't sleep needlessly.
+                if (fetched > 0) PriceFetchSupport.sleep(THROTTLE_MS);
                 q = fetcher.fetch(yahooTicker);
                 cache.put(yahooTicker, new CachedQuote(q, Instant.now().plus(CACHE_TTL)));
                 fetched++;
-                if (fetched > 1) PriceFetchSupport.sleep(THROTTLE_MS);
             }
             // Re-stamp with the user-facing internal symbol so the table doesn't suddenly
             // show "EQQQ.L" where the rest of the app shows "EQQQ".

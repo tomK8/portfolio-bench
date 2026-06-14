@@ -1,0 +1,59 @@
+{
+  "quoteSummary": {
+    "result": [
+      {
+        "price": {
+          "currency": "USD",
+          "regularMarketPrice": { "raw": 291.13, "fmt": "291.13" },
+          "marketCap": { "raw": 4471234560000, "fmt": "4.47T" }
+        },
+        "summaryDetail": {
+          "trailingPE": { "raw": 36.12, "fmt": "36.12" },
+          "forwardPE": { "raw": 32.10, "fmt": "32.10" },
+          "beta": { "raw": 1.21, "fmt": "1.21" },
+          "fiftyTwoWeekHigh": { "raw": 305.50, "fmt": "305.50" },
+          "fiftyTwoWeekLow": { "raw": 198.20, "fmt": "198.20" },
+          "dividendYield": { "raw": 0.0042, "fmt": "0.42%" },
+          "dividendRate": { "raw": 1.04, "fmt": "1.04" },
+          "payoutRatio": { "raw": 0.15, "fmt": "15.00%" },
+          "priceToSalesTrailing12Months": { "raw": 11.50, "fmt": "11.50" },
+          "fiftyDayAverage": { "raw": 280.40, "fmt": "280.40" },
+          "twoHundredDayAverage": { "raw": 245.10, "fmt": "245.10" }
+        },
+        "defaultKeyStatistics": {
+          "pegRatio": { "raw": 2.85, "fmt": "2.85" },
+          "priceToBook": { "raw": 55.10, "fmt": "55.10" },
+          "enterpriseToEbitda": { "raw": 28.4, "fmt": "28.40" },
+          "enterpriseValue": { "raw": 4500000000000, "fmt": "4.50T" },
+          "sharesOutstanding": { "raw": 15350000000, "fmt": "15.35B" },
+          "52WeekChange": { "raw": 0.245, "fmt": "24.50%" },
+          "SandP52WeekChange": { "raw": 0.183, "fmt": "18.30%" },
+          "shortPercentOfFloat": { "raw": 0.0084, "fmt": "0.84%" },
+          "heldPercentInstitutions": { "raw": 0.62, "fmt": "62.00%" }
+        },
+        "financialData": {
+          "currentPrice": { "raw": 291.13, "fmt": "291.13" },
+          "targetMeanPrice": { "raw": 305.00, "fmt": "305.00" },
+          "recommendationKey": "buy",
+          "numberOfAnalystOpinions": { "raw": 42, "fmt": "42" },
+          "profitMargins": { "raw": 0.245, "fmt": "24.50%" },
+          "operatingMargins": { "raw": 0.302, "fmt": "30.20%" },
+          "grossMargins": { "raw": 0.451, "fmt": "45.10%" },
+          "returnOnEquity": { "raw": 1.52, "fmt": "152.00%" },
+          "returnOnAssets": { "raw": 0.215, "fmt": "21.50%" },
+          "debtToEquity": { "raw": 154.5, "fmt": "154.50" },
+          "totalCash": { "raw": 65000000000, "fmt": "65.00B" },
+          "freeCashflow": { "raw": 108000000000, "fmt": "108.00B" },
+          "revenueGrowth": { "raw": 0.08, "fmt": "8.00%" },
+          "earningsGrowth": { "raw": 0.12, "fmt": "12.00%" }
+        },
+        "summaryProfile": {
+          "sector": "Technology",
+          "industry": "Consumer Electronics",
+          "country": "United States"
+        }
+      }
+    ],
+    "error": null
+  }
+}

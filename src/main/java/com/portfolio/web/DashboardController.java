@@ -31,6 +31,8 @@ import com.portfolio.application.PositionDetailService.PositionDetail;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.FundamentalsService;
 import com.portfolio.application.FundamentalsService.FundamentalsReport;
+import com.portfolio.application.PortfolioFundamentalsService;
+import com.portfolio.application.PortfolioFundamentalsService.Snapshot;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.PortfolioReturnService;
@@ -104,6 +106,7 @@ public class DashboardController {
     private final AllocationService allocationService;
     private final AttributionService attributionService;
     private final FundamentalsService fundamentalsService;
+    private final PortfolioFundamentalsService portfolioFundamentalsService;
     private final PriceFetchJob priceFetchJob;
     private final CashTransactionRepository cashRepo;
     private final SnapshotRepository snapshotRepo;
@@ -134,6 +137,7 @@ public class DashboardController {
                                AllocationService allocationService,
                                AttributionService attributionService,
                                FundamentalsService fundamentalsService,
+                               PortfolioFundamentalsService portfolioFundamentalsService,
                                PriceFetchJob priceFetchJob,
                                CashTransactionRepository cashRepo,
                                SnapshotRepository snapshotRepo,
@@ -163,6 +167,7 @@ public class DashboardController {
         this.allocationService = allocationService;
         this.attributionService = attributionService;
         this.fundamentalsService = fundamentalsService;
+        this.portfolioFundamentalsService = portfolioFundamentalsService;
         this.priceFetchJob = priceFetchJob;
         this.cashRepo = cashRepo;
         this.snapshotRepo = snapshotRepo;
@@ -626,6 +631,17 @@ public class DashboardController {
     @ResponseBody
     public List<String> fundamentalsTickers() {
         return fundamentalsService.supportedTickers();
+    }
+
+    /**
+     * Current-state fundamentals snapshot (P/E, market cap, beta, …) for every held symbol.
+     * First call after server restart fetches ~50 tickers from Yahoo and takes ~30s; later
+     * calls within {@code CACHE_TTL} (6h) are instant.
+     */
+    @GetMapping("/portfolio-fundamentals")
+    @ResponseBody
+    public Snapshot portfolioFundamentals() {
+        return portfolioFundamentalsService.snapshot();
     }
 
     /**

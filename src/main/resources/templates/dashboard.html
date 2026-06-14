@@ -370,6 +370,30 @@
             border: 1px solid #1d6ba2;
         }
 
+        .snap-group {
+            margin: 0.6rem 0 0.8rem 0;
+        }
+        .snap-group-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #888;
+            margin-bottom: 0.25rem;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 0.15rem;
+        }
+        .snap-kv {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            padding: 0.15rem 0;
+        }
+        .snap-kv .k { color: #555; }
+        .snap-kv .v { font-variant-numeric: tabular-nums; font-weight: 500; }
+        html[data-theme="dark"] .snap-group-title { color: #999; border-bottom-color: #2e3137; }
+        html[data-theme="dark"] .snap-kv .k { color: #b4b4b4; }
+
         .returns-stats {
             display: flex;
             gap: 1.5rem;
@@ -802,6 +826,7 @@
     <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
     <button class="tab" data-panel="panel-fundamentals" type="button">Fundamentals</button>
+    <button class="tab" data-panel="panel-snapshot" type="button">Snapshot</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
     <button class="tab" data-panel="panel-trades" type="button">Journal</button>
 </div>
@@ -1621,6 +1646,53 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-snapshot">
+    <p class="muted" style="margin-top: 0">
+        Current-state fundamentals for every currently-held symbol — P/E, forward P/E, PEG,
+        market cap, 52-week range, beta and analyst target, all from Yahoo's
+        <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Cached
+        for 6 hours; the first call after a server restart fetches ~50 tickers and takes
+        about 30 seconds (throttled to be polite). Click any row to see secondary fields
+        (dividend yield, margins, balance-sheet ratios, sector, recommendation, 52-week
+        change vs S&amp;P, …) in a popup.
+    </p>
+    <div class="actions">
+        <button id="snapshot-reload" type="button">Refresh</button>
+        <span id="snapshot-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <table id="snapshot-table" style="margin-top: 0.75rem;">
+        <thead><tr>
+            <th class="txt" data-sort="str">Symbol</th>
+            <th data-sort="num">Price</th>
+            <th data-sort="num">P/E (TTM)</th>
+            <th data-sort="num">Fwd P/E</th>
+            <th data-sort="num" title="P/E ÷ EPS growth rate — values < 1 suggest cheap growth">PEG</th>
+            <th data-sort="num">Market Cap</th>
+            <th data-sort="num">52w Low</th>
+            <th data-sort="num">52w High</th>
+            <th data-sort="num">Beta</th>
+            <th data-sort="num" title="Analyst mean target price">Target</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+    <div id="snapshot-empty" class="muted" style="display: none; margin-top: 1rem;">
+        No held symbols. Run a <b>Sync</b> from the Holdings tab first so the snapshot has
+        a universe to look up.
+    </div>
+
+    <div id="snapshot-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div class="modal-box" style="max-width: 540px;">
+            <h3 id="snapshot-detail-title">—</h3>
+            <div id="snapshot-detail-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;"></div>
+            <div id="snapshot-detail-body"></div>
+            <div class="modal-actions">
+                <button id="snapshot-detail-close" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-whatif">
     <p class="muted" style="margin-top: 0">
         Backtest a fixed basket against your actual contribution dates. On every
@@ -1853,6 +1925,7 @@
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
             if (panelId === 'panel-fundamentals') setupFundamentals();
+            if (panelId === 'panel-snapshot') setupSnapshot();
             if (panelId === 'panel-whatif') setupWhatIf();
             if (panelId === 'panel-trades') setupJournal();
             if (panelId === 'panel-live') setupLive();
@@ -3712,6 +3785,198 @@
                     plugins: { legend: { position: 'bottom' } }
                 }
             });
+        }
+
+        var snapshotInitialized = false;
+        var snapshotRowsCache = [];
+
+        function setupSnapshot() {
+            if (snapshotInitialized) return;
+            snapshotInitialized = true;
+            document.getElementById('snapshot-reload').addEventListener('click', loadSnapshot);
+            document.getElementById('snapshot-detail-close').addEventListener('click', closeSnapshotDetail);
+            document.getElementById('snapshot-detail-modal').addEventListener('click', function (e) {
+                if (e.target.id === 'snapshot-detail-modal') closeSnapshotDetail();
+            });
+            attachSort(document.getElementById('snapshot-table'));
+            loadSnapshot();
+        }
+
+        function loadSnapshot() {
+            var status = document.getElementById('snapshot-status');
+            status.textContent = 'Loading… (first call after restart fetches ~50 tickers, ~30s)';
+            fetch('/portfolio-fundamentals').then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        status.textContent = '';
+                        renderSnapshot(data.rows || []);
+                    })
+                    .catch(function (e) { status.textContent = 'Error: ' + e.message; });
+        }
+
+        function renderSnapshot(rows) {
+            snapshotRowsCache = rows;
+            var tbody = document.querySelector('#snapshot-table tbody');
+            tbody.innerHTML = '';
+            var empty = document.getElementById('snapshot-empty');
+            if (rows.length === 0) {
+                empty.style.display = '';
+                return;
+            }
+            empty.style.display = 'none';
+            rows.forEach(function (row, idx) {
+                var tr = document.createElement('tr');
+                tr.style.cursor = 'pointer';
+                tr.dataset.idx = idx;
+                tr.appendChild(td(row.symbol, 'txt'));
+                tr.appendChild(td(fmtPrice(row.price, row.currency)));
+                tr.appendChild(td(fmtRatio(row.trailingPe)));
+                tr.appendChild(td(fmtRatio(row.forwardPe)));
+                tr.appendChild(td(fmtRatio(row.pegRatio)));
+                tr.appendChild(td(fmtMarketCap(row.marketCap, row.currency)));
+                tr.appendChild(td(fmtPrice(row.week52Low, row.currency)));
+                tr.appendChild(td(fmtPrice(row.week52High, row.currency)));
+                tr.appendChild(td(fmtRatio(row.beta)));
+                tr.appendChild(td(fmtPrice(row.targetMeanPrice, row.currency)));
+                tr.addEventListener('click', function () { openSnapshotDetail(idx); });
+                tbody.appendChild(tr);
+            });
+        }
+
+        function td(text, cls) {
+            var c = document.createElement('td');
+            if (cls) c.className = cls;
+            c.textContent = text == null ? '—' : text;
+            if (text == null) c.classList.add('na');
+            return c;
+        }
+
+        function fmtRatio(v) {
+            if (v == null) return null;
+            var n = parseFloat(v);
+            if (!isFinite(n)) return null;
+            return n.toFixed(2);
+        }
+
+        function fmtPrice(v, ccy) {
+            if (v == null) return null;
+            var n = parseFloat(v);
+            if (!isFinite(n)) return null;
+            var sym = currencySymbol(ccy);
+            return sym + n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function fmtMarketCap(v, ccy) {
+            if (v == null) return null;
+            var n = parseFloat(v);
+            if (!isFinite(n)) return null;
+            var sym = currencySymbol(ccy);
+            // Yahoo's marketCap is in the listing currency in absolute units. Compact view.
+            if (n >= 1e12) return sym + (n / 1e12).toFixed(2) + 'T';
+            if (n >= 1e9)  return sym + (n / 1e9).toFixed(2) + 'B';
+            if (n >= 1e6)  return sym + (n / 1e6).toFixed(1) + 'M';
+            return sym + n.toLocaleString('en-GB');
+        }
+
+        function currencySymbol(ccy) {
+            if (ccy === 'USD') return '$';
+            if (ccy === 'GBP') return '£';
+            if (ccy === 'GBp') return 'p';       // London pence quote
+            if (ccy === 'EUR') return '€';
+            return '';
+        }
+
+        function openSnapshotDetail(idx) {
+            var row = snapshotRowsCache[idx];
+            if (!row) return;
+            document.getElementById('snapshot-detail-title').textContent =
+                    row.symbol + ' — fundamentals';
+            var sector = (row.labels && row.labels.sector) || '';
+            var industry = (row.labels && row.labels.industry) || '';
+            var rec = (row.labels && row.labels.recommendationKey) || '';
+            var subParts = [];
+            if (sector) subParts.push(sector);
+            if (industry) subParts.push(industry);
+            if (rec) subParts.push('Analyst consensus: ' + rec);
+            document.getElementById('snapshot-detail-sub').textContent = subParts.join(' · ');
+
+            // Group secondary fields by theme so the modal reads as a compact summary, not a
+            // wall of key=value pairs. Each group's rows are skipped entirely when every
+            // field is null — so an ETF without dividends or analyst coverage doesn't get
+            // empty "—" boxes.
+            var groups = [
+                { title: 'Valuation', fields: [
+                    ['priceToBook', 'P/B', 'ratio'],
+                    ['priceToSalesTrailing12Months', 'P/S (TTM)', 'ratio'],
+                    ['enterpriseToEbitda', 'EV/EBITDA', 'ratio'],
+                    ['enterpriseValue', 'Enterprise Value', 'cap']
+                ]},
+                { title: 'Income', fields: [
+                    ['dividendYield', 'Dividend Yield', 'pct'],
+                    ['dividendRate', 'Dividend Rate', 'price'],
+                    ['payoutRatio', 'Payout Ratio', 'pct']
+                ]},
+                { title: 'Quality & Margins', fields: [
+                    ['profitMargins', 'Profit Margin', 'pct'],
+                    ['operatingMargins', 'Operating Margin', 'pct'],
+                    ['grossMargins', 'Gross Margin', 'pct'],
+                    ['returnOnEquity', 'Return on Equity', 'pct'],
+                    ['returnOnAssets', 'Return on Assets', 'pct']
+                ]},
+                { title: 'Balance Sheet', fields: [
+                    ['debtToEquity', 'Debt / Equity', 'ratio'],
+                    ['totalCash', 'Total Cash', 'cap'],
+                    ['freeCashflow', 'Free Cashflow', 'cap']
+                ]},
+                { title: 'Growth (YoY)', fields: [
+                    ['revenueGrowth', 'Revenue Growth', 'pct'],
+                    ['earningsGrowth', 'Earnings Growth', 'pct']
+                ]},
+                { title: 'Performance & Technicals', fields: [
+                    ['52WeekChange', '52w Change', 'pct'],
+                    ['SandP52WeekChange', 'S&P 52w Change', 'pct'],
+                    ['fiftyDayAverage', '50d MA', 'price'],
+                    ['twoHundredDayAverage', '200d MA', 'price']
+                ]},
+                { title: 'Sentiment / Float', fields: [
+                    ['shortPercentOfFloat', 'Short % of Float', 'pct'],
+                    ['heldPercentInstitutions', '% Held by Institutions', 'pct'],
+                    ['numberOfAnalystOpinions', '# Analyst Opinions', 'count'],
+                    ['sharesOutstanding', 'Shares Outstanding', 'cap']
+                ]}
+            ];
+            var html = '';
+            groups.forEach(function (g) {
+                var inner = '';
+                g.fields.forEach(function (f) {
+                    var key = f[0], label = f[1], type = f[2];
+                    var v = row.extra ? row.extra[key] : null;
+                    if (v == null) return;
+                    inner += '<div class="snap-kv"><span class="k">' + label + '</span>' +
+                            '<span class="v">' + fmtSnapValue(v, type, row.currency) + '</span></div>';
+                });
+                if (inner) {
+                    html += '<div class="snap-group"><div class="snap-group-title">' + g.title +
+                            '</div>' + inner + '</div>';
+                }
+            });
+            if (!html) html = '<p class="muted">No secondary fields available for this ticker.</p>';
+            document.getElementById('snapshot-detail-body').innerHTML = html;
+            document.getElementById('snapshot-detail-modal').classList.add('open');
+        }
+
+        function fmtSnapValue(v, type, ccy) {
+            var n = parseFloat(v);
+            if (!isFinite(n)) return '—';
+            if (type === 'pct') return (n * 100).toFixed(2) + '%';
+            if (type === 'ratio') return n.toFixed(2);
+            if (type === 'count') return n.toFixed(0);
+            if (type === 'price') return fmtPrice(v, ccy);
+            if (type === 'cap') return fmtMarketCap(v, ccy);
+            return n.toString();
+        }
+
+        function closeSnapshotDetail() {
+            document.getElementById('snapshot-detail-modal').classList.remove('open');
         }
 
         var riskLoaded = false;

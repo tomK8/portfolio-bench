@@ -6,6 +6,7 @@ import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.GiltPriceFetcher;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooPriceFetcher;
+import com.portfolio.adapter.YahooQuoteSummaryFetcher;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.*;
 import com.portfolio.persistence.CashTransactionRepository;
@@ -381,6 +382,19 @@ public class BeanConfiguration {
     public FundamentalsService fundamentalsService(EdgarFundamentalsFetcher edgarFundamentalsFetcher,
                                                    PriceHistoryRepository priceHistoryRepository) {
         return new FundamentalsService(edgarFundamentalsFetcher, priceHistoryRepository);
+    }
+
+    @Bean
+    public YahooQuoteSummaryFetcher yahooQuoteSummaryFetcher() {
+        return new YahooQuoteSummaryFetcher();
+    }
+
+    @Bean
+    public PortfolioFundamentalsService portfolioFundamentalsService(
+            YahooQuoteSummaryFetcher yahooQuoteSummaryFetcher,
+            YahooTickerMap yahooTickerMap,
+            KeyValueStore keyValueStore) {
+        return new PortfolioFundamentalsService(yahooQuoteSummaryFetcher, yahooTickerMap, keyValueStore);
     }
 
     @Bean

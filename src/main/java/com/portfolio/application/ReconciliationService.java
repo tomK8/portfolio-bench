@@ -35,9 +35,11 @@ public class ReconciliationService {
 
     private static final Logger log = LoggerFactory.getLogger(ReconciliationService.class);
 
-    /** Intraday rows older than this are considered stale. Cron is every 5 min, so anything
-     *  older than an hour means the fetcher has been failing for that symbol. */
-    private static final long INTRADAY_STALE_HOURS = 24;
+    /** Intraday rows older than this are considered stale. Set wide enough to span a normal
+     *  Fri-close → Mon-open weekend gap (~64h for US, ~67h for LSE) so the rule doesn't
+     *  warn on every held symbol on Sunday afternoon — still tight enough to catch a
+     *  fetcher that has actually been failing for multiple sessions. */
+    private static final long INTRADAY_STALE_HOURS = 72;
 
     private final CashTransactionRepository cashRepo;
     private final PriceHistoryRepository priceRepo;

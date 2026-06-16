@@ -31,4 +31,9 @@ public class RootController {
                 settings.getBigDecimal(WebSupport.II_SIPP_CASH_USD_KEY, BigDecimal.ZERO).toPlainString());
         return "dashboard";
     }
+
+    @GetMapping("/reference")
+    public String reference() {
+        return "reference";
+    }
 }

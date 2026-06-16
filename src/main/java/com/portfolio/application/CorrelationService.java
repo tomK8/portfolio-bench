@@ -54,7 +54,7 @@ public class CorrelationService {
     private static final Logger log = LoggerFactory.getLogger(CorrelationService.class);
     private static final int DEFAULT_WINDOW = 90;
     private static final int MIN_WINDOW = 20;
-    private static final int MAX_WINDOW = 252;
+    private static final int MAX_WINDOW = 800;
     private static final double TRADING_DAYS_PER_YEAR = 252.0;
     private static final BigDecimal HUNDRED = new BigDecimal("100");
     private static final int SCALE = 10;

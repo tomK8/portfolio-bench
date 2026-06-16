@@ -822,7 +822,7 @@
 <body>
 <button id="theme-toggle" class="theme-toggle" type="button" title="Toggle dark mode">🌓</button>
 <h1 th:text="${appName}">Portfolio Bench</h1>
-<p class="sub">Local portfolio dashboard</p>
+<p class="sub">Local portfolio dashboard · <a href="/reference" style="color: #1f77b4;">Reference</a></p>
 
 <form class="actions" hx-indicator="#spinner">
     <button hx-post="/import-cash" hx-target="#import-result" type="submit">Import cash statement</button>
@@ -1456,6 +1456,8 @@
                 <option value="60">60 days</option>
                 <option value="90" selected>90 days</option>
                 <option value="180">180 days</option>
+                <option value="252">1 year</option>
+                <option value="756">3 years</option>
             </select>
         </label>
         <span id="corr-status" class="muted" style="font-size: 0.85rem;"></span>
@@ -1743,14 +1745,14 @@
             <thead><tr>
                 <th class="txt" data-sort="str">Symbol</th>
                 <th data-sort="num">Price</th>
+                <th data-sort="num" title="Analyst mean target price">Target</th>
                 <th data-sort="num">P/E (TTM)</th>
                 <th data-sort="num">Fwd P/E</th>
                 <th data-sort="num" title="P/E ÷ EPS growth rate — values < 1 suggest cheap growth">PEG</th>
+                <th data-sort="num">Beta</th>
                 <th data-sort="num">Market Cap</th>
                 <th data-sort="num">52w Low</th>
                 <th data-sort="num">52w High</th>
-                <th data-sort="num">Beta</th>
-                <th data-sort="num" title="Analyst mean target price">Target</th>
             </tr></thead>
             <tbody></tbody>
         </table>

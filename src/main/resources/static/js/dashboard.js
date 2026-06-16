@@ -2057,14 +2057,14 @@
                 tr.dataset.idx = idx;
                 tr.appendChild(td(row.symbol, 'txt'));
                 tr.appendChild(td(fmtPrice(row.price, row.currency)));
+                tr.appendChild(td(fmtPrice(row.targetMeanPrice, row.currency)));
                 tr.appendChild(td(fmtRatio(row.trailingPe)));
                 tr.appendChild(td(fmtRatio(row.forwardPe)));
                 tr.appendChild(td(fmtRatio(row.pegRatio)));
+                tr.appendChild(td(fmtRatio(row.beta)));
                 tr.appendChild(td(fmtMarketCap(row.marketCap, row.currency)));
                 tr.appendChild(td(fmtPrice(row.week52Low, row.currency)));
                 tr.appendChild(td(fmtPrice(row.week52High, row.currency)));
-                tr.appendChild(td(fmtRatio(row.beta)));
-                tr.appendChild(td(fmtPrice(row.targetMeanPrice, row.currency)));
                 tr.addEventListener('click', function () { openSnapshotDetail(idx); });
                 tbody.appendChild(tr);
             });

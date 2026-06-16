@@ -1730,11 +1730,12 @@
         <p class="muted" style="margin-top: 0">
             Current-state fundamentals for every currently-held symbol — P/E, forward P/E, PEG,
             market cap, 52-week range, beta and analyst target, all from Yahoo's
-            <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Cached
-            for 6 hours; the first call after a server restart fetches ~50 tickers and takes
-            about 30 seconds (throttled to be polite). Click any row to see secondary fields
-            (dividend yield, margins, balance-sheet ratios, sector, recommendation, 52-week
-            change vs S&amp;P, …) in a popup.
+            <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Data is
+            cached in SQLite and refreshed by a background job on startup and every 6 hours, so
+            the table renders instantly. Click <b>Refresh</b> to force an immediate
+            background re-fetch (the table updates as rows come in, ~30s for a full portfolio).
+            Click any row to see secondary fields (dividend yield, margins, balance-sheet
+            ratios, sector, recommendation, 52-week change vs S&amp;P, …) in a popup.
         </p>
         <div class="actions">
             <button id="snapshot-reload" type="button">Refresh</button>

@@ -1,5 +1,6 @@
 package com.portfolio.web;
 
+import com.portfolio.application.FundamentalsFetchJob;
 import com.portfolio.application.GiltPriceFetchJob;
 import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.IntradayPriceFetchJob;
@@ -27,14 +28,17 @@ public class PriceFetchScheduler {
     private final IntradayPriceFetchJob intradayJob;
     private final GiltPriceFetchJob giltJob;
     private final ImportGiltPricesService giltImportService;
+    private final FundamentalsFetchJob fundamentalsJob;
 
     public PriceFetchScheduler(PriceFetchJob job, IntradayPriceFetchJob intradayJob,
                                GiltPriceFetchJob giltJob,
-                               ImportGiltPricesService giltImportService) {
+                               ImportGiltPricesService giltImportService,
+                               FundamentalsFetchJob fundamentalsJob) {
         this.job = job;
         this.intradayJob = intradayJob;
         this.giltJob = giltJob;
         this.giltImportService = giltImportService;
+        this.fundamentalsJob = fundamentalsJob;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -43,6 +47,7 @@ public class PriceFetchScheduler {
         startDaemon("price-fetch-intraday-startup", this::intradayQuietly);
         startDaemon("price-fetch-gilt-startup", this::giltQuietly);
         startDaemon("gilt-prices-import-startup", this::giltImportQuietly);
+        startDaemon("fundamentals-refresh-startup", fundamentalsJob::run);
     }
 
     @Scheduled(cron = "0 0 22 * * *", zone = "Europe/London")
@@ -58,6 +63,11 @@ public class PriceFetchScheduler {
     @Scheduled(fixedDelay = 60 * 60 * 1000, initialDelay = 60 * 60 * 1000)
     public void gilt() {
         giltQuietly();
+    }
+
+    @Scheduled(fixedDelay = 6 * 60 * 60 * 1000, initialDelay = 6 * 60 * 60 * 1000)
+    public void fundamentals() {
+        fundamentalsJob.run();
     }
 
     private static void startDaemon(String name, Runnable r) {

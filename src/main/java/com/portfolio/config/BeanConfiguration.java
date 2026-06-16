@@ -10,6 +10,7 @@ import com.portfolio.adapter.YahooQuoteSummaryFetcher;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.*;
 import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
@@ -88,6 +89,11 @@ public class BeanConfiguration {
     @Bean
     public IntradayPriceRepository intradayPriceRepository(JdbcConnectionFactory connections) {
         return new IntradayPriceRepository(connections);
+    }
+
+    @Bean
+    public FundamentalsRepository fundamentalsRepository(JdbcConnectionFactory connections) {
+        return new FundamentalsRepository(connections);
     }
 
     @Bean
@@ -393,8 +399,15 @@ public class BeanConfiguration {
     public PortfolioFundamentalsService portfolioFundamentalsService(
             YahooQuoteSummaryFetcher yahooQuoteSummaryFetcher,
             YahooTickerMap yahooTickerMap,
-            KeyValueStore keyValueStore) {
-        return new PortfolioFundamentalsService(yahooQuoteSummaryFetcher, yahooTickerMap, keyValueStore);
+            KeyValueStore keyValueStore,
+            FundamentalsRepository fundamentalsRepository) {
+        return new PortfolioFundamentalsService(yahooQuoteSummaryFetcher, yahooTickerMap,
+                keyValueStore, fundamentalsRepository);
+    }
+
+    @Bean
+    public FundamentalsFetchJob fundamentalsFetchJob(PortfolioFundamentalsService portfolioFundamentalsService) {
+        return new FundamentalsFetchJob(portfolioFundamentalsService);
     }
 
     @Bean

@@ -2017,11 +2017,12 @@
 
         var snapshotInitialized = false;
         var snapshotRowsCache = [];
+        var snapshotPollTimer = null;
 
         function setupSnapshot() {
             if (snapshotInitialized) return;
             snapshotInitialized = true;
-            document.getElementById('snapshot-reload').addEventListener('click', loadSnapshot);
+            document.getElementById('snapshot-reload').addEventListener('click', triggerSnapshotRefresh);
             document.getElementById('snapshot-detail-close').addEventListener('click', closeSnapshotDetail);
             document.getElementById('snapshot-detail-modal').addEventListener('click', function (e) {
                 if (e.target.id === 'snapshot-detail-modal') closeSnapshotDetail();
@@ -2032,13 +2033,53 @@
 
         function loadSnapshot() {
             var status = document.getElementById('snapshot-status');
-            status.textContent = 'Loading… (first call after restart fetches ~50 tickers, ~30s)';
             fetch('/portfolio-fundamentals').then(function (r) { return r.json(); })
                     .then(function (data) {
-                        status.textContent = '';
                         renderSnapshot(data.rows || []);
+                        status.textContent = formatLastUpdated(data.lastUpdatedAt);
                     })
                     .catch(function (e) { status.textContent = 'Error: ' + e.message; });
+        }
+
+        function triggerSnapshotRefresh() {
+            var status = document.getElementById('snapshot-status');
+            var btn = document.getElementById('snapshot-reload');
+            btn.disabled = true;
+            status.textContent = 'Refreshing in the background…';
+            fetch('/portfolio-fundamentals/refresh', { method: 'POST' })
+                    .then(function (r) { return r.json(); })
+                    .then(function () {
+                        // Background refresh takes ~30s for a ~50-ticker portfolio. Re-poll
+                        // every 5s so rows update as the job upserts them; stop after 2 min.
+                        var elapsed = 0;
+                        if (snapshotPollTimer) clearInterval(snapshotPollTimer);
+                        snapshotPollTimer = setInterval(function () {
+                            loadSnapshot();
+                            elapsed += 5;
+                            if (elapsed >= 120) {
+                                clearInterval(snapshotPollTimer);
+                                snapshotPollTimer = null;
+                                btn.disabled = false;
+                            }
+                        }, 5000);
+                        // Re-enable the button after one cycle so the user can re-trigger if needed.
+                        setTimeout(function () { btn.disabled = false; }, 35000);
+                    })
+                    .catch(function (e) {
+                        status.textContent = 'Error: ' + e.message;
+                        btn.disabled = false;
+                    });
+        }
+
+        function formatLastUpdated(iso) {
+            if (!iso) return 'No data yet — background refresh starting';
+            var when = new Date(iso);
+            var mins = Math.round((Date.now() - when.getTime()) / 60000);
+            if (mins < 1) return 'Last updated: just now';
+            if (mins < 60) return 'Last updated: ' + mins + ' min ago';
+            var hours = Math.round(mins / 60);
+            if (hours < 24) return 'Last updated: ' + hours + 'h ago';
+            return 'Last updated: ' + when.toLocaleString('en-GB');
         }
 
         function renderSnapshot(rows) {

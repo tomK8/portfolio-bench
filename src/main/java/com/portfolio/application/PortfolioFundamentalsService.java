@@ -4,6 +4,8 @@ import com.portfolio.adapter.YahooQuoteSummaryFetcher;
 import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
+import com.portfolio.persistence.FundamentalsRepository;
+import com.portfolio.persistence.FundamentalsRepository.Cached;
 import com.portfolio.persistence.KeyValueStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,85 +14,100 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.TreeSet;
 
 /**
  * Snapshot of current-state fundamentals for every currently-held symbol — what powers
- * the Snapshot tab.
+ * the per-holding Snapshot tab.
+ *
+ * <p>Reads are now DB-backed: {@link #snapshot()} returns whatever {@link FundamentalsRepository}
+ * has cached and never blocks on Yahoo. The {@link FundamentalsFetchJob} runs on startup and
+ * a 6-hour cron to refresh the cache in the background, so the tab is instant after the
+ * first run regardless of server restarts.
  *
  * <p>"Currently held" comes from {@link PriceFetchSupport#HELD_SYMBOLS_KEY}, written by
- * the most recent {@code /sync}. Bonds are skipped (Yahoo doesn't cover gilts at all).
- * Each symbol is resolved to its Yahoo ticker via {@link YahooTickerMap} so {@code EQQQ}
- * becomes {@code EQQQ.L} before the network call.
+ * the most recent {@code /sync}. Bonds are skipped (Yahoo doesn't cover gilts). Each
+ * symbol is resolved to its Yahoo ticker via {@link YahooTickerMap} so {@code EQQQ} becomes
+ * {@code EQQQ.L} before the network call, then re-stamped to {@code EQQQ} for display.
  *
- * <p>One HTTP round-trip per ticker is unavoidable — Yahoo doesn't accept comma-separated
- * tickers on this endpoint — but a 6-hour in-memory cache keeps repeat tab visits free.
- * Throttle between requests is the same 500ms used by the price-fetch jobs to stay polite.
- * A full ~50-ticker refresh is therefore ~30s end-to-end; the cache pays back from the
- * second visit onward.
+ * <p>Throttle is the same 500ms used by the price-fetch jobs; a full ~50-ticker refresh is
+ * ~30s end-to-end, which is fine in the background.
  */
 public class PortfolioFundamentalsService {
 
     private static final Logger log = LoggerFactory.getLogger(PortfolioFundamentalsService.class);
 
-    private static final java.time.Duration CACHE_TTL = java.time.Duration.ofHours(6);
     private static final long THROTTLE_MS = 500;
 
     private final YahooQuoteSummaryFetcher fetcher;
     private final YahooTickerMap tickerMap;
     private final KeyValueStore keyValueStore;
-
-    private final java.util.Map<String, CachedQuote> cache = new ConcurrentHashMap<>();
+    private final FundamentalsRepository repo;
 
     public PortfolioFundamentalsService(YahooQuoteSummaryFetcher fetcher,
                                         YahooTickerMap tickerMap,
-                                        KeyValueStore keyValueStore) {
+                                        KeyValueStore keyValueStore,
+                                        FundamentalsRepository repo) {
         this.fetcher = fetcher;
         this.tickerMap = tickerMap;
         this.keyValueStore = keyValueStore;
+        this.repo = repo;
     }
 
+    /**
+     * Build the response from the DB cache. Held symbols without a cached row appear as
+     * placeholder {@code missing=true} entries so the table can still list them while the
+     * background job catches up.
+     */
     public Snapshot snapshot() {
-        Set<String> held = keyValueStore.getStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY);
-        List<String> internalSymbols = new ArrayList<>();
-        for (String s : held) {
-            if (!Instruments.isBond(s) && !"CASH".equals(s)) internalSymbols.add(s);
-        }
-        internalSymbols.sort(Comparator.naturalOrder());
+        List<String> heldSorted = heldInternalSymbols();
+        Map<String, Cached> cached = repo.loadAll();
 
-        List<QuoteSummary> rows = new ArrayList<>(internalSymbols.size());
-        int fetched = 0;
-        for (String internal : internalSymbols) {
-            String yahooTicker = tickerMap.tickerFor(internal);
-            QuoteSummary cached = fromCache(yahooTicker);
-            QuoteSummary q;
-            if (cached != null) {
-                q = cached;
+        List<QuoteSummary> rows = new ArrayList<>(heldSorted.size());
+        Instant latest = null;
+        for (String internal : heldSorted) {
+            Cached c = cached.get(internal);
+            if (c == null) {
+                rows.add(QuoteSummary.empty(internal));
             } else {
-                // Throttle goes *before* each fetch except the first, so calls are spaced
-                // by THROTTLE_MS ms and the final iteration doesn't sleep needlessly.
-                if (fetched > 0) PriceFetchSupport.sleep(THROTTLE_MS);
-                q = fetcher.fetch(yahooTicker);
-                cache.put(yahooTicker, new CachedQuote(q, Instant.now().plus(CACHE_TTL)));
-                fetched++;
+                rows.add(withSymbol(c.quote(), internal));
+                if (latest == null || c.fetchedAt().isAfter(latest)) latest = c.fetchedAt();
             }
-            // Re-stamp with the user-facing internal symbol so the table doesn't suddenly
-            // show "EQQQ.L" where the rest of the app shows "EQQQ".
-            rows.add(withSymbol(q, internal));
         }
-        if (fetched > 0) {
-            log.info("Snapshot: fetched {} ticker(s), reused {} from cache",
-                    fetched, internalSymbols.size() - fetched);
-        }
-        return new Snapshot(rows);
+        return new Snapshot(rows, latest);
     }
 
-    private QuoteSummary fromCache(String yahooTicker) {
-        CachedQuote c = cache.get(yahooTicker);
-        if (c == null) return null;
-        if (Instant.now().isAfter(c.expiresAt)) return null;
-        return c.quote;
+    /**
+     * Refresh every held symbol's row from Yahoo, upserting to the DB as each fetch
+     * completes. Throttled to stay polite. Safe to invoke from a background thread —
+     * callers are the {@link FundamentalsFetchJob} startup hook, the cron, and the
+     * manual {@code POST /portfolio-fundamentals/refresh} button.
+     */
+    public RefreshResult refresh() {
+        List<String> heldSorted = heldInternalSymbols();
+        int fetched = 0;
+        long start = System.currentTimeMillis();
+        for (String internal : heldSorted) {
+            if (fetched > 0) PriceFetchSupport.sleep(THROTTLE_MS);
+            String yahooTicker = tickerMap.tickerFor(internal);
+            QuoteSummary q = fetcher.fetch(yahooTicker);
+            repo.save(internal, q, Instant.now());
+            fetched++;
+        }
+        long elapsedMs = System.currentTimeMillis() - start;
+        log.info("Fundamentals refresh: {} ticker(s) in {} ms", fetched, elapsedMs);
+        return new RefreshResult(fetched, elapsedMs);
+    }
+
+    private List<String> heldInternalSymbols() {
+        Set<String> held = keyValueStore.getStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY);
+        Set<String> filtered = new TreeSet<>(Comparator.naturalOrder());
+        for (String s : held) {
+            if (!Instruments.isBond(s) && !"CASH".equals(s)) filtered.add(s);
+        }
+        return new ArrayList<>(filtered);
     }
 
     private static QuoteSummary withSymbol(QuoteSummary q, String displaySymbol) {
@@ -100,7 +117,7 @@ public class PortfolioFundamentalsService {
                 q.extra(), q.labels(), q.missing());
     }
 
-    private record CachedQuote(QuoteSummary quote, Instant expiresAt) {}
+    public record Snapshot(List<QuoteSummary> rows, Instant lastUpdatedAt) {}
 
-    public record Snapshot(List<QuoteSummary> rows) {}
+    public record RefreshResult(int fetched, long elapsedMs) {}
 }

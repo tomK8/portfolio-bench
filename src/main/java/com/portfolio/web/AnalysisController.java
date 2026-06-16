@@ -1,5 +1,6 @@
 package com.portfolio.web;
 
+import com.portfolio.application.FundamentalsFetchJob;
 import com.portfolio.application.FundamentalsService;
 import com.portfolio.application.FundamentalsService.FundamentalsReport;
 import com.portfolio.application.HealthService;
@@ -49,6 +50,7 @@ public class AnalysisController {
 
     private final FundamentalsService fundamentalsService;
     private final PortfolioFundamentalsService portfolioFundamentalsService;
+    private final FundamentalsFetchJob fundamentalsFetchJob;
     private final WhatIfService whatIfService;
     private final TradeNotesService tradeNotesService;
     private final SnapshotRepository snapshotRepo;
@@ -58,6 +60,7 @@ public class AnalysisController {
 
     public AnalysisController(FundamentalsService fundamentalsService,
                               PortfolioFundamentalsService portfolioFundamentalsService,
+                              FundamentalsFetchJob fundamentalsFetchJob,
                               WhatIfService whatIfService,
                               TradeNotesService tradeNotesService,
                               SnapshotRepository snapshotRepo,
@@ -66,6 +69,7 @@ public class AnalysisController {
                               PriceFetchJob priceFetchJob) {
         this.fundamentalsService = fundamentalsService;
         this.portfolioFundamentalsService = portfolioFundamentalsService;
+        this.fundamentalsFetchJob = fundamentalsFetchJob;
         this.whatIfService = whatIfService;
         this.tradeNotesService = tradeNotesService;
         this.snapshotRepo = snapshotRepo;
@@ -96,13 +100,33 @@ public class AnalysisController {
 
     /**
      * Current-state fundamentals snapshot (P/E, market cap, beta, …) for every held symbol.
-     * First call after server restart fetches ~50 tickers from Yahoo and takes ~30s; later
-     * calls within the service's CACHE_TTL (6h) are instant.
+     * Always returns instantly from the SQLite cache — a background job refreshes rows on
+     * startup and every 6h. Held symbols without a cached row appear as placeholder rows.
      */
     @GetMapping("/portfolio-fundamentals")
     @ResponseBody
     public Snapshot portfolioFundamentals() {
         return portfolioFundamentalsService.snapshot();
+    }
+
+    /**
+     * Kick off a background refresh of the fundamentals cache. Returns immediately with
+     * {@code running} indicating whether a refresh started (false means one was already in
+     * flight). The browser polls {@code /portfolio-fundamentals} to pick up updates.
+     */
+    @PostMapping("/portfolio-fundamentals/refresh")
+    @ResponseBody
+    public Map<String, Object> refreshPortfolioFundamentals() {
+        boolean wasRunning = fundamentalsFetchJob.isRunning();
+        if (!wasRunning) {
+            Thread t = new Thread(fundamentalsFetchJob::run, "fundamentals-refresh-manual");
+            t.setDaemon(true);
+            t.start();
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("started", !wasRunning);
+        out.put("alreadyRunning", wasRunning);
+        return out;
     }
 
     /**

@@ -72,7 +72,9 @@ class IntradayPriceFetchJobTest {
 
         new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir)).run();
 
-        assertEquals(List.of("AAPL"), fetcher.requested, "gilt was filtered out before the fetch loop");
+        assertTrue(fetcher.requested.contains("AAPL"), "AAPL was fetched");
+        assertTrue(fetcher.requested.stream().noneMatch(t -> t.toUpperCase().startsWith("GILT")),
+                "gilt was filtered out before the fetch loop");
         Map<String, IntradayPrice> latest = intraday.loadLatestIntradayPrices(Set.of("AAPL"));
         assertEquals(190.25, latest.get("AAPL").close());
     }

@@ -26,16 +26,26 @@ final class PriceFetchSupport {
      * in a stable sequence. Tickers that resolve to the same Yahoo symbol (e.g. multiple internal
      * share-class spellings) are deduplicated.
      *
-     * <p>Union of two sources: every symbol ever traded (from the cash ledger) plus the symbol
-     * set persisted by the most recent dashboard /sync. The second source covers a freshly bought
-     * name whose cash statement hasn't been imported yet — without it the new ticker would be
-     * invisible to the intraday job until the user imported a cash statement, leaving the RT
-     * column blank.
+     * <p>Three sources: every symbol ever traded (from the cash ledger), the symbol set
+     * persisted by the most recent dashboard /sync, and the replacement targets used by the
+     * Scenario tab's substitute overrides. The second source covers a freshly bought name
+     * whose cash statement hasn't been imported yet. The third covers substitute targets
+     * (e.g. {@code NVDA=QQQ}) — those tickers are never traded, so without this hook the
+     * scenario engine would project them with stale or missing history. The default
+     * substitute {@link HistoricalScenarioService#DEFAULT_SUBSTITUTE} is always included
+     * so the fallback symbol stays current too.
      */
     static Set<String> tickersToFetch(CashTransactionRepository cashRepo, YahooTickerMap tickers,
                                       KeyValueStore kv) {
         Set<String> symbols = new LinkedHashSet<>(cashRepo.distinctTradedSymbols());
         symbols.addAll(kv.getStringSet(HELD_SYMBOLS_KEY));
+        for (String line : kv.getStringSet(HistoricalScenarioService.SUBSTITUTES_KEY)) {
+            int eq = line.indexOf('=');
+            if (eq <= 0 || eq >= line.length() - 1) continue;
+            String v = line.substring(eq + 1).trim().toUpperCase();
+            if (!v.isEmpty()) symbols.add(v);
+        }
+        symbols.add(HistoricalScenarioService.DEFAULT_SUBSTITUTE);
         Set<String> out = new LinkedHashSet<>();
         for (String symbol : symbols) {
             if (Instruments.isBond(symbol)) continue;

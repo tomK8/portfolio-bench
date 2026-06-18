@@ -16,7 +16,7 @@ import java.util.Set;
 /**
  * Maintains the local {@code price_history} table from Yahoo Finance. Driven by every symbol
  * ever traded (not just current holdings); gilts are skipped (broker price stays source of truth).
- * Idempotent: the first run backfills ~10 years per ticker, later runs re-fetch from the latest
+ * Idempotent: the first run backfills ~30 years per ticker, later runs re-fetch from the latest
  * stored day through today and upsert. Re-fetching the latest day matters because Yahoo's daily
  * bar for an in-progress session reports the current trading price as {@code close} — if the job
  * ran mid-session (e.g. a startup tick), the day's stored close is wrong until it's overwritten.
@@ -26,7 +26,7 @@ public class PriceFetchJob {
 
     private static final Logger log = LoggerFactory.getLogger(PriceFetchJob.class);
 
-    private static final int LOOKBACK_YEARS = 10;
+    private static final int LOOKBACK_YEARS = 30;
     private static final long THROTTLE_MS = 500;   // be polite to Yahoo: ≤1 request / 500ms
 
     private final CashTransactionRepository cashRepo;
@@ -79,7 +79,7 @@ public class PriceFetchJob {
         Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
         int refreshed = 0;
         for (String ticker : tickerSet) {
-            // Cover anything already stored. If we have rows older than the 10-year cutoff
+            // Cover anything already stored. If we have rows older than the lookback cutoff
             // (early portfolio history that the first backfill caught), we must refetch them
             // too — otherwise their stale adj_close survives the rebuild and pollutes
             // total-return math at the start of the timeline.

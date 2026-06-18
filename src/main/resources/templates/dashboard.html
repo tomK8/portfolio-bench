@@ -837,7 +837,7 @@
 
 <form class="actions" hx-indicator="#spinner">
     <button hx-post="/rebuild-prices" hx-target="#rebuild-prices-result" type="submit">Rebuild adj_close</button>
-    <span class="muted">re-fetches the full 10-year history per ticker; re-run after a notable dividend or split (takes 30–60s)</span>
+    <span class="muted">re-fetches the full 30-year history per ticker; re-run after a notable dividend or split (takes 1–2 min)</span>
 </form>
 
 <section class="result-panel">
@@ -1167,7 +1167,7 @@
         <div class="modal-box">
             <h3>Download price history?</h3>
             <p>No <code>price_history</code> rows for <b id="benchmark-backfill-symbol">—</b>.</p>
-            <p>Fetch the full 10-year window from Yahoo (~2s)? Make sure the ticker is correct
+            <p>Fetch the full 30-year window from Yahoo (~3s)? Make sure the ticker is correct
                — typos will fetch nothing.</p>
             <div class="modal-actions">
                 <button id="benchmark-backfill-cancel" type="button">Cancel</button>
@@ -1812,8 +1812,8 @@
             <h3>Download price history?</h3>
             <p>We have no <code>price_history</code> rows for the following ticker(s):</p>
             <p><b id="whatif-backfill-list">—</b></p>
-            <p>Fetch the full 10-year window from Yahoo and re-run the backtest?
-               Takes ~2s per ticker. Choosing <i>Cancel</i> leaves a partial chart
+            <p>Fetch the full 30-year window from Yahoo and re-run the backtest?
+               Takes ~3s per ticker. Choosing <i>Cancel</i> leaves a partial chart
                where the missing allocations stay as GBP cash.</p>
             <div class="modal-actions">
                 <button id="whatif-backfill-cancel" type="button">Cancel</button>

@@ -5,7 +5,7 @@
 <div th:fragment="result">
     <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>
     <div class="note">
-        Rebuilt <b th:text="${rebuildCount}">N</b> ticker(s). The full 10-year window was
+        Rebuilt <b th:text="${rebuildCount}">N</b> ticker(s). The full 30-year window was
         re-fetched and <code>adj_close</code> re-derived from Yahoo's dividend &amp; split
         events. Re-run after a notable dividend or split for the what-if simulator to stay
         accurate.

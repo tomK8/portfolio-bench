@@ -102,9 +102,9 @@ public class OperationsController {
     }
 
     /**
-     * Re-fetches the full 10-year window for every traded symbol and re-derives
-     * {@code adj_close} from Yahoo's dividend + split events. Long-running (~50 tickers ×
-     * throttle ≈ 25–60s), so the UI shows a spinner.
+     * Re-fetches the full 30-year window for every traded symbol and re-derives
+     * {@code adj_close} from Yahoo's dividend + split events. Long-running (~110 tickers ×
+     * throttle ≈ 1–2 min), so the UI shows a spinner.
      */
     @PostMapping("/rebuild-prices")
     public String rebuildPrices(Model model) {
@@ -151,7 +151,7 @@ public class OperationsController {
 
     /**
      * One-shot Yahoo backfill for a benchmark ticker the user typed in. Reuses
-     * {@link PriceFetchJob#fetchSingle} — same ~10-year window, same {@code adj_close}
+     * {@link PriceFetchJob#fetchSingle} — same 30-year window, same {@code adj_close}
      * re-derivation. Returns the number of {@code price_history} rows written.
      */
     @PostMapping("/returns/benchmark/fetch")

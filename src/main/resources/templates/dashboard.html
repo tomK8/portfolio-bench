@@ -888,6 +888,7 @@
 <div class="tabs tabs-secondary" data-group="group-quality">
     <button class="tab" data-panel="panel-fundamentals" type="button">Fundamentals</button>
     <button class="tab" data-panel="panel-whatif" type="button">What-if</button>
+    <button class="tab" data-panel="panel-scenario" type="button">Scenario</button>
 </div>
 
 <div class="tabs tabs-secondary" data-group="group-tools">
@@ -1716,6 +1717,10 @@
         <div id="fund-explain" class="muted" style="margin-top: 0.5rem; font-size: 0.9rem; display: none;"></div>
 
         <h3 style="margin-top: 1.25rem; font-size: 1rem;">P/E (trailing twelve months)</h3>
+        <div class="zoom-hint">
+            <span class="muted" style="font-size: 0.8rem;">Drag across the chart to zoom into a window.</span>
+            <button id="fund-pe-zoom-reset" type="button" class="link-btn">Reset zoom</button>
+        </div>
         <div style="height: 320px;">
             <canvas id="fund-pe-chart"></canvas>
         </div>
@@ -1819,6 +1824,83 @@
     <div style="height: 480px; margin-top: 1rem;">
         <canvas id="whatif-chart"></canvas>
     </div>
+</section>
+
+<section class="tab-panel" id="panel-scenario">
+    <p class="muted" style="margin-top: 0">
+        Replay a historical window's per-symbol returns onto <i>today's</i> GBP-valued
+        portfolio: e.g. "what if the next year looks like 2022?" Each position's GBP value is
+        scaled day by day by <code>price(d) / price(from)</code> from <code>price_history</code>
+        (equities use <code>adj_close</code> — total return — bonds use clean close plus their
+        parsed coupon). FX is folded in by pre-converting prices to GBP at the historical rate.
+        Cash compounds at the supplied GBP/USD yields.
+        Any symbol with no data in the window — and any per-symbol override you've saved below
+        (e.g. <code>NVDA=EQQQ</code>) — gets its return curve from the substitute instead.
+        Default fallback when nothing else has data: <code>EQQQ</code>.
+    </p>
+    <div class="attr-controls">
+        <div class="attr-presets" id="scenario-presets">
+            <button class="attr-preset" data-preset="2020" type="button">2020</button>
+            <button class="attr-preset" data-preset="2021" type="button">2021</button>
+            <button class="attr-preset active" data-preset="2022" type="button">2022</button>
+            <button class="attr-preset" data-preset="2023" type="button">2023</button>
+            <button class="attr-preset" data-preset="2024" type="button">2024</button>
+            <button class="attr-preset" data-preset="last3y" type="button">Last 3y</button>
+        </div>
+        <label>From: <input id="scenario-from" type="date"/></label>
+        <label>To: <input id="scenario-to" type="date"/></label>
+        <label title="Annual yield on GBP cash, percent">GBP cash %: <input id="scenario-gbp-rate" type="number" step="0.1" min="0" max="20" style="width: 5rem;" value="5"/></label>
+        <label title="Annual yield on USD cash, percent">USD cash %: <input id="scenario-usd-rate" type="number" step="0.1" min="0" max="20" style="width: 5rem;" value="4"/></label>
+        <button id="scenario-run" type="button">Run scenario</button>
+        <span id="scenario-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="scenario-error" class="whatif-error" style="display: none;"></div>
+
+    <div class="returns-stats" id="scenario-stats" style="display: none;">
+        <div class="returns-stat"><span class="label">Period return</span><span class="value" id="scenario-return">—</span></div>
+        <div class="returns-stat"><span class="label">Start value</span><span class="value" id="scenario-start">—</span></div>
+        <div class="returns-stat"><span class="label">End value</span><span class="value" id="scenario-end">—</span></div>
+        <div class="returns-stat"><span class="label">P&amp;L</span><span class="value" id="scenario-pnl">—</span></div>
+    </div>
+
+    <div style="height: 360px; margin-top: 0.75rem;">
+        <canvas id="scenario-value-chart"></canvas>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">Main contributors</h3>
+    <div style="height: 340px;">
+        <canvas id="scenario-contributors-chart"></canvas>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">Per-symbol breakdown</h3>
+    <table id="scenario-table" style="margin-top: 0.25rem;">
+        <thead><tr>
+            <th class="txt" data-sort="str">Symbol</th>
+            <th class="txt" data-sort="str">Applied curve</th>
+            <th data-sort="num">Start £</th>
+            <th data-sort="num">End £</th>
+            <th data-sort="num" data-sort-dir="desc">P&amp;L £</th>
+            <th data-sort="num">Return %</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+
+    <details style="margin-top: 1.25rem;">
+        <summary style="cursor: pointer; font-weight: 600;">Substitute overrides</summary>
+        <p class="muted" style="margin-top: 0.5rem;">
+            One <code>SYMBOL=REPLACEMENT</code> per line. Replaces that symbol's return curve
+            with the replacement's — useful when extrapolating a single name's past
+            (NVDA's last decade say) onto the next would be unrealistic. Saved overrides
+            apply to every run until you remove them. <code>EQQQ</code> is the automatic
+            fallback for any position whose own symbol has no price data in the window.
+        </p>
+        <textarea id="scenario-subs" rows="6" style="width: 100%; font-family: monospace; font-size: 0.9rem;" placeholder="NVDA=EQQQ&#10;TSLA=VWRP"></textarea>
+        <div style="margin-top: 0.5rem;">
+            <button id="scenario-subs-save" type="button">Save substitutes</button>
+            <span id="scenario-subs-status" class="muted" style="margin-left: 0.5rem; font-size: 0.85rem;"></span>
+        </div>
+    </details>
 </section>
 
 <section class="tab-panel" id="panel-trades">

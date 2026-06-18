@@ -97,6 +97,7 @@
             if (panelId === 'panel-attribution') setupAttribution();
             if (panelId === 'panel-fundamentals') setupFundamentalsPanel();
             if (panelId === 'panel-whatif') setupWhatIf();
+            if (panelId === 'panel-scenario') setupScenario();
             if (panelId === 'panel-trades') setupJournal();
             if (panelId === 'panel-live') setupLive();
             else teardownLive();
@@ -1800,6 +1801,9 @@
             document.getElementById('fund-ticker').addEventListener('change', runFundamentals);
             document.getElementById('fund-years').addEventListener('change', runFundamentals);
             document.getElementById('fund-backfill').addEventListener('click', backfillFundamentalsPrices);
+            document.getElementById('fund-pe-zoom-reset').addEventListener('click', function () {
+                if (fundPeChart) fundPeChart.resetZoom();
+            });
         }
 
         function runFundamentals() {
@@ -1951,23 +1955,34 @@
                     data: data,
                     borderColor: '#1f77b4',
                     backgroundColor: 'rgba(31,119,180,0.15)',
+                    borderWidth: 1,
                     pointRadius: 0,
                     spanGaps: false,
-                    tension: 0.1
+                    tension: 0
                 }] },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     interaction: { mode: 'nearest', axis: 'x', intersect: false },
                     scales: {
-                        x: { type: 'time', time: { unit: 'year' } },
+                        x: { type: 'time' },
                         y: {
                             title: { display: true, text: 'Trailing P/E' },
                             beginAtZero: true,
                             max: maxY
                         }
                     },
-                    plugins: { legend: { display: false } }
+                    plugins: {
+                        legend: { display: false },
+                        zoom: {
+                            pan: { enabled: true, mode: 'x' },
+                            zoom: {
+                                mode: 'x',
+                                drag: { enabled: true, backgroundColor: 'rgba(31, 119, 180, 0.12)' },
+                                pinch: { enabled: true }
+                            }
+                        }
+                    }
                 }
             });
         }
@@ -2017,7 +2032,7 @@
 
         var snapshotInitialized = false;
         var snapshotRowsCache = [];
-        var snapshotPollTimer = null;
+        var snapshotRefreshTimer = null;
 
         function setupSnapshot() {
             if (snapshotInitialized) return;
@@ -2049,21 +2064,16 @@
             fetch('/portfolio-fundamentals/refresh', { method: 'POST' })
                     .then(function (r) { return r.json(); })
                     .then(function () {
-                        // Background refresh takes ~30s for a ~50-ticker portfolio. Re-poll
-                        // every 5s so rows update as the job upserts them; stop after 2 min.
-                        var elapsed = 0;
-                        if (snapshotPollTimer) clearInterval(snapshotPollTimer);
-                        snapshotPollTimer = setInterval(function () {
+                        // Background refresh takes ~30s for a ~50-ticker portfolio. Schedule a
+                        // single refetch once the job is expected to be done — re-rendering
+                        // mid-job clobbered the user's active sort. Manual re-trigger via the
+                        // Refresh button if rows look stale.
+                        if (snapshotRefreshTimer) clearTimeout(snapshotRefreshTimer);
+                        snapshotRefreshTimer = setTimeout(function () {
                             loadSnapshot();
-                            elapsed += 5;
-                            if (elapsed >= 120) {
-                                clearInterval(snapshotPollTimer);
-                                snapshotPollTimer = null;
-                                btn.disabled = false;
-                            }
-                        }, 5000);
-                        // Re-enable the button after one cycle so the user can re-trigger if needed.
-                        setTimeout(function () { btn.disabled = false; }, 35000);
+                            snapshotRefreshTimer = null;
+                            btn.disabled = false;
+                        }, 45000);
                     })
                     .catch(function (e) {
                         status.textContent = 'Error: ' + e.message;
@@ -2084,7 +2094,8 @@
 
         function renderSnapshot(rows) {
             snapshotRowsCache = rows;
-            var tbody = document.querySelector('#snapshot-table tbody');
+            var table = document.getElementById('snapshot-table');
+            var tbody = table.querySelector('tbody');
             tbody.innerHTML = '';
             var empty = document.getElementById('snapshot-empty');
             if (rows.length === 0) {
@@ -2109,6 +2120,36 @@
                 tr.addEventListener('click', function () { openSnapshotDetail(idx); });
                 tbody.appendChild(tr);
             });
+            reapplyActiveSort(table);
+        }
+
+        // Re-sort tbody rows according to the THEAD's current dataset.sortDir indicator.
+        // attachSort writes that marker on user click; calling this after a re-render keeps
+        // the user's chosen ordering across background refreshes.
+        function reapplyActiveSort(table) {
+            var ths = Array.from(table.querySelectorAll('thead th[data-sort]'));
+            var sortIdx = -1, sortAsc = true, sortType = 'txt';
+            for (var i = 0; i < ths.length; i++) {
+                if (ths[i].dataset.sortDir) {
+                    sortIdx = i;
+                    sortAsc = ths[i].dataset.sortDir === 'asc';
+                    sortType = ths[i].dataset.sort;
+                    break;
+                }
+            }
+            if (sortIdx < 0) return;
+            var tbody = table.querySelector('tbody');
+            var rows = Array.from(tbody.querySelectorAll('tr'));
+            rows.sort(function (a, b) {
+                var av = parseVal(a.cells[sortIdx], sortType);
+                var bv = parseVal(b.cells[sortIdx], sortType);
+                if (av === null && bv === null) return 0;
+                if (av === null) return 1;
+                if (bv === null) return -1;
+                var cmp = sortType === 'num' ? av - bv : av < bv ? -1 : av > bv ? 1 : 0;
+                return sortAsc ? cmp : -cmp;
+            });
+            rows.forEach(function (r) { tbody.appendChild(r); });
         }
 
         function td(text, cls) {
@@ -4117,6 +4158,237 @@
             var n = numOrNull(v);
             if (n == null) return '—';
             return (n >= 0 ? '+' : '') + (n * 100).toFixed(2) + '%';
+        }
+
+        // ---- Scenario tab --------------------------------------------------
+        var scenarioInitialized = false;
+        var scenarioValueChart = null;
+        var scenarioContribChart = null;
+        var scenarioTableSortAttached = false;
+
+        function setupScenario() {
+            if (scenarioInitialized) return;
+            scenarioInitialized = true;
+            document.querySelectorAll('#scenario-presets .attr-preset').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    document.querySelectorAll('#scenario-presets .attr-preset').forEach(function (b) {
+                        b.classList.remove('active');
+                    });
+                    btn.classList.add('active');
+                    applyScenarioPreset(btn.dataset.preset);
+                    runScenario();
+                });
+            });
+            document.getElementById('scenario-run').addEventListener('click', function () {
+                document.querySelectorAll('#scenario-presets .attr-preset').forEach(function (b) {
+                    b.classList.remove('active');
+                });
+                runScenario();
+            });
+            document.getElementById('scenario-subs-save').addEventListener('click', saveScenarioSubs);
+            applyScenarioPreset('2022');
+            loadScenarioSubs();
+            runScenario();
+        }
+
+        function applyScenarioPreset(preset) {
+            var from, to;
+            if (preset === 'last3y') {
+                to = new Date();
+                from = new Date();
+                from.setFullYear(from.getFullYear() - 3);
+            } else {
+                var year = parseInt(preset, 10);
+                from = new Date(year, 0, 1);
+                to = new Date(year, 11, 31);
+            }
+            document.getElementById('scenario-from').value = isoDate(from);
+            document.getElementById('scenario-to').value = isoDate(to);
+        }
+
+        function loadScenarioSubs() {
+            fetch('/scenario/substitutes').then(function (r) { return r.json(); }).then(function (m) {
+                var lines = Object.keys(m).map(function (k) { return k + '=' + m[k]; });
+                document.getElementById('scenario-subs').value = lines.join('\n');
+            }).catch(function () { /* leave textarea empty */ });
+        }
+
+        function saveScenarioSubs() {
+            var body = document.getElementById('scenario-subs').value || '';
+            var status = document.getElementById('scenario-subs-status');
+            status.textContent = 'Saving…';
+            var form = new URLSearchParams();
+            form.set('body', body);
+            fetch('/scenario/substitutes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: form.toString()
+            }).then(function (r) {
+                if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Save failed'); });
+                return r.json();
+            }).then(function (m) {
+                var lines = Object.keys(m).map(function (k) { return k + '=' + m[k]; });
+                document.getElementById('scenario-subs').value = lines.join('\n');
+                status.textContent = 'Saved (' + lines.length + ').';
+            }).catch(function (err) {
+                status.textContent = 'Error: ' + (err.message || String(err));
+            });
+        }
+
+        function runScenario() {
+            var from = document.getElementById('scenario-from').value;
+            var to = document.getElementById('scenario-to').value;
+            if (!from || !to) return;
+            var gbpRate = document.getElementById('scenario-gbp-rate').value || '0';
+            var usdRate = document.getElementById('scenario-usd-rate').value || '0';
+            var status = document.getElementById('scenario-status');
+            var errorBox = document.getElementById('scenario-error');
+            errorBox.style.display = 'none';
+            status.textContent = 'Working…';
+            var url = '/scenario?from=' + encodeURIComponent(from) +
+                    '&to=' + encodeURIComponent(to) +
+                    '&gbpRate=' + encodeURIComponent(gbpRate) +
+                    '&usdRate=' + encodeURIComponent(usdRate);
+            fetch(url).then(function (r) {
+                if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Request failed'); });
+                return r.json();
+            }).then(function (data) {
+                renderScenario(data);
+                status.textContent = '';
+            }).catch(function (err) {
+                status.textContent = '';
+                errorBox.style.display = '';
+                errorBox.textContent = err.message || String(err);
+            });
+        }
+
+        function renderScenario(data) {
+            document.getElementById('scenario-stats').style.display = 'flex';
+            var pnl = parseFloat(data.pnlGbp);
+            setMoneyStat('scenario-pnl', pnl);
+            document.getElementById('scenario-return').textContent = fmtPct(data.periodReturn);
+            document.getElementById('scenario-return').className = 'value ' +
+                    (pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '');
+            document.getElementById('scenario-start').textContent = fmtMoney(parseFloat(data.startTotalGbp));
+            document.getElementById('scenario-start').className = 'value';
+            document.getElementById('scenario-end').textContent = fmtMoney(parseFloat(data.endTotalGbp));
+            document.getElementById('scenario-end').className = 'value';
+
+            renderScenarioValueChart(data.timeline);
+            renderScenarioContributorsChart(data.perSymbol);
+            renderScenarioTable(data.perSymbol);
+        }
+
+        function renderScenarioValueChart(timeline) {
+            var labels = timeline.map(function (p) { return p.date; });
+            var values = timeline.map(function (p) { return parseFloat(p.totalValueGbp); });
+            var ctx = document.getElementById('scenario-value-chart').getContext('2d');
+            if (scenarioValueChart) scenarioValueChart.destroy();
+            scenarioValueChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Portfolio value (£)',
+                        data: values,
+                        borderColor: '#1f77b4',
+                        backgroundColor: 'rgba(31, 119, 180, 0.10)',
+                        borderWidth: 2,
+                        fill: true,
+                        pointRadius: 0,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'time', time: { unit: 'month' } },
+                        y: {
+                            title: { display: true, text: 'GBP' },
+                            ticks: {
+                                callback: function (v) {
+                                    return '£' + Math.abs(v).toLocaleString('en-GB', { maximumFractionDigits: 0 });
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: { label: function (c) { return fmtMoney(c.parsed.y); } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderScenarioContributorsChart(rows) {
+            // perSymbol is already sorted by |P&L| desc. Top 12 keeps the chart readable.
+            var top = rows.slice(0, 12);
+            var labels = top.map(function (r) {
+                return r.substituted ? (r.symbol + ' → ' + r.effectiveSymbol) : r.symbol;
+            });
+            var values = top.map(function (r) { return parseFloat(r.pnlGbp); });
+            var colors = values.map(function (v) {
+                return v >= 0 ? 'rgba(44, 160, 44, 0.85)' : 'rgba(192, 57, 43, 0.85)';
+            });
+            var ctx = document.getElementById('scenario-contributors-chart').getContext('2d');
+            if (scenarioContribChart) scenarioContribChart.destroy();
+            scenarioContribChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{ label: 'P&L (£)', data: values, backgroundColor: colors, borderWidth: 0 }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'P&L (£)' },
+                            ticks: {
+                                callback: function (v) {
+                                    return (v < 0 ? '−£' : '£') +
+                                        Math.abs(v).toLocaleString('en-GB', { maximumFractionDigits: 0 });
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { callbacks: { label: function (c) { return fmtMoney(c.parsed.x); } } }
+                    }
+                }
+            });
+        }
+
+        function renderScenarioTable(rows) {
+            var tbody = document.querySelector('#scenario-table tbody');
+            tbody.innerHTML = '';
+            rows.forEach(function (r) {
+                var pnl = parseFloat(r.pnlGbp);
+                var applied = r.symbol;
+                if (r.missing) applied = '— no data —';
+                else if (r.substituted) {
+                    applied = r.effectiveSymbol + (r.defaultSubstitute ? ' (default)' : ' (override)');
+                }
+                var tr = document.createElement('tr');
+                tr.className = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
+                tr.innerHTML =
+                    '<td class="txt">' + r.symbol + '</td>' +
+                    '<td class="txt">' + applied + '</td>' +
+                    '<td>' + fmtMoney(parseFloat(r.startValueGbp)) + '</td>' +
+                    '<td>' + fmtMoney(parseFloat(r.endValueGbp)) + '</td>' +
+                    '<td>' + fmtMoney(pnl) + '</td>' +
+                    '<td>' + fmtPct(r.periodReturn) + '</td>';
+                tbody.appendChild(tr);
+            });
+            if (!scenarioTableSortAttached) {
+                scenarioTableSortAttached = true;
+                attachSort(document.getElementById('scenario-table'));
+            }
         }
 
     }());

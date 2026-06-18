@@ -5,6 +5,8 @@ import com.portfolio.application.FundamentalsService;
 import com.portfolio.application.FundamentalsService.FundamentalsReport;
 import com.portfolio.application.HealthService;
 import com.portfolio.application.HealthService.Health;
+import com.portfolio.application.HistoricalScenarioService;
+import com.portfolio.application.HistoricalScenarioService.ScenarioResponse;
 import com.portfolio.application.PortfolioFundamentalsService;
 import com.portfolio.application.PortfolioFundamentalsService.Snapshot;
 import com.portfolio.application.PortfolioValueService.ValueTimeline;
@@ -52,6 +54,7 @@ public class AnalysisController {
     private final PortfolioFundamentalsService portfolioFundamentalsService;
     private final FundamentalsFetchJob fundamentalsFetchJob;
     private final WhatIfService whatIfService;
+    private final HistoricalScenarioService scenarioService;
     private final TradeNotesService tradeNotesService;
     private final SnapshotRepository snapshotRepo;
     private final ReconciliationService reconciliationService;
@@ -62,6 +65,7 @@ public class AnalysisController {
                               PortfolioFundamentalsService portfolioFundamentalsService,
                               FundamentalsFetchJob fundamentalsFetchJob,
                               WhatIfService whatIfService,
+                              HistoricalScenarioService scenarioService,
                               TradeNotesService tradeNotesService,
                               SnapshotRepository snapshotRepo,
                               ReconciliationService reconciliationService,
@@ -71,6 +75,7 @@ public class AnalysisController {
         this.portfolioFundamentalsService = portfolioFundamentalsService;
         this.fundamentalsFetchJob = fundamentalsFetchJob;
         this.whatIfService = whatIfService;
+        this.scenarioService = scenarioService;
         this.tradeNotesService = tradeNotesService;
         this.snapshotRepo = snapshotRepo;
         this.reconciliationService = reconciliationService;
@@ -172,6 +177,68 @@ public class AnalysisController {
             return whatIfService.timeline(basket);
         }
         return preview;
+    }
+
+    /**
+     * Replay a historical window's per-symbol return curves onto today's GBP-valued portfolio,
+     * day by day. Equities use {@code adj_close} (total return); bonds use clean {@code close}
+     * plus the parsed coupon. {@code gbpRate}/{@code usdRate} are annual cash yields in percent
+     * (e.g. {@code 5} for 5%); both default to 0. Per-symbol substitute overrides come from the
+     * persisted set ({@link HistoricalScenarioService#SUBSTITUTES_KEY}) — manage them via the
+     * companion endpoints below.
+     */
+    @GetMapping("/scenario")
+    @ResponseBody
+    public ScenarioResponse scenario(@RequestParam("from") String from,
+                                     @RequestParam("to") String to,
+                                     @RequestParam(name = "gbpRate", defaultValue = "0") String gbpRate,
+                                     @RequestParam(name = "usdRate", defaultValue = "0") String usdRate) {
+        return scenarioService.run(
+                LocalDate.parse(from), LocalDate.parse(to),
+                parsePercent(gbpRate, "gbpRate"), parsePercent(usdRate, "usdRate"),
+                Map.of());
+    }
+
+    @GetMapping("/scenario/substitutes")
+    @ResponseBody
+    public Map<String, String> scenarioSubstitutes() {
+        return scenarioService.loadSubstitutes();
+    }
+
+    /**
+     * Save per-symbol substitute overrides. Body is a single textarea field {@code body}
+     * containing one {@code SYMBOL=REPLACEMENT} per line; same format as
+     * {@code POST /allocation/targets}. Blank lines are skipped. Returns the persisted set so
+     * the UI can re-render after save.
+     */
+    @PostMapping("/scenario/substitutes")
+    @ResponseBody
+    public Map<String, String> saveScenarioSubstitutes(
+            @RequestParam(name = "body", defaultValue = "") String body) {
+        Map<String, String> subs = new LinkedHashMap<>();
+        for (String line : body.split("\\r?\\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+            int eq = trimmed.indexOf('=');
+            if (eq <= 0) {
+                throw new IllegalArgumentException(
+                        "Line '" + trimmed + "' is missing '=' — use SYMBOL=REPLACEMENT format.");
+            }
+            String k = trimmed.substring(0, eq).trim().toUpperCase();
+            String v = trimmed.substring(eq + 1).trim().toUpperCase();
+            if (!k.isEmpty() && !v.isEmpty()) subs.put(k, v);
+        }
+        scenarioService.saveSubstitutes(subs);
+        return scenarioService.loadSubstitutes();
+    }
+
+    private static BigDecimal parsePercent(String s, String name) {
+        if (s == null || s.isBlank()) return BigDecimal.ZERO;
+        try {
+            return new BigDecimal(s.replace("%", "").trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(name + " '" + s + "' is not a number.");
+        }
     }
 
     /**

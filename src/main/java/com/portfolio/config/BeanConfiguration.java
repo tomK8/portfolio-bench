@@ -296,6 +296,16 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public HistoricalScenarioService historicalScenarioService(SyncFromCashService syncFromCashService,
+                                                               PriceHistoryRepository priceHistoryRepository,
+                                                               HistoricalFxRateProvider historicalFxRateProvider,
+                                                               YahooTickerMap yahooTickerMap,
+                                                               KeyValueStore keyValueStore) {
+        return new HistoricalScenarioService(syncFromCashService, priceHistoryRepository,
+                historicalFxRateProvider, yahooTickerMap, keyValueStore);
+    }
+
+    @Bean
     public LivePricesService livePricesService(CashTransactionRepository cashTransactionRepository,
                                                IntradayPriceRepository intradayPriceRepository,
                                                PriceHistoryRepository priceHistoryRepository,

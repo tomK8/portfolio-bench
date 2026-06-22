@@ -1,13 +1,16 @@
 # Portfolio Bench
 
 A local-first portfolio aggregator and analytics dashboard for a multi-broker retirement
-portfolio (AJ Bell SIPP, Charles Schwab Roth IRA, Interactive Investor SIPP). Parses
+portfolio (AJ Bell SIPP, City Roth IRA, Interactive Investor SIPP). Parses
 the broker exports, reconciles them against intraday Yahoo Finance prices and
 Frankfurter FX rates, persists everything to SQLite, and renders ~18 analytics tabs
 through a server-side Thymeleaf + htmx + Chart.js UI.
 
-> _Add a screenshot or two here — the Dashboard, Correlations, and Live tabs are the
-> visually strongest. e.g._ `![Dashboard](docs/dashboard.png)`
+
+## Screenshots
+
+![Correlation matrix and diversification ratio](docs/correlations.png)
+![Risk metrics — Sharpe, Sortino, Calmar, drawdown](docs/risk.png)
 
 ## TL;DR
 

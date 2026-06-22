@@ -2010,16 +2010,16 @@
                 type: 'line',
                 data: { datasets: [
                     { label: 'Price', data: priceData, borderColor: '#1f77b4',
-                      backgroundColor: '#1f77b4', pointRadius: 0, tension: 0.1 },
+                      backgroundColor: '#1f77b4', pointRadius: 0, borderWidth: 1, tension: 0.1 },
                     { label: 'TTM EPS', data: epsData, borderColor: '#2ca02c',
-                      backgroundColor: '#2ca02c', pointRadius: 0, tension: 0.1, spanGaps: false }
+                      backgroundColor: '#2ca02c', pointRadius: 0, borderWidth: 1, tension: 0.1, spanGaps: false }
                 ] },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     interaction: { mode: 'nearest', axis: 'x', intersect: false },
                     scales: {
-                        x: { type: 'time', time: { unit: 'year' } },
+                        x: { type: 'time', time: { unit: 'month' } },
                         y: {
                             title: { display: true, text: 'Multiple of window start' },
                             ticks: { callback: function (v) { return '×' + v.toFixed(2); } }

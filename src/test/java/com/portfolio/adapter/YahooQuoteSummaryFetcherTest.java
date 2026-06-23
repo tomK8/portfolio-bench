@@ -76,6 +76,43 @@ class YahooQuoteSummaryFetcherTest {
     }
 
     @Test
+    void computesCashFlowMetrics() throws Exception {
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());
+
+        // Capex = OCF (118B) - FCF (108B) = 10B
+        assertEquals(0, q.extra().get("operatingCashflow").compareTo(new BigDecimal("118000000000")));
+        assertEquals(0, q.extra().get("capexTtm").compareTo(new BigDecimal("10000000000")));
+        assertEquals(0, q.extra().get("freeCashflow").compareTo(new BigDecimal("108000000000")));
+        // FCF Margin = 108B / 400B = 0.27
+        assertEquals(0, q.extra().get("fcfMarginTtm").compareTo(new BigDecimal("0.270000")));
+        // Net Debt = 109B - 65B = 44B
+        assertEquals(0, q.extra().get("netDebt").compareTo(new BigDecimal("44000000000")));
+        // Net Debt / EBITDA = 44B / 130B ≈ 0.338462
+        assertNotNull(q.extra().get("netDebtToEbitda"));
+    }
+
+    @Test
+    void computesFcfGrowthAndRoic() throws Exception {
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());
+
+        // TTM FCF = 30+28+26+24 = 108B, prior = 22+20+18+16 = 76B, growth = (108-76)/76
+        BigDecimal fcfGrowth = q.extra().get("fcfGrowthYoy");
+        assertNotNull(fcfGrowth);
+        // (108-76)/76 ≈ 0.421053
+        assertTrue(fcfGrowth.compareTo(new BigDecimal("0.42")) > 0);
+        assertTrue(fcfGrowth.compareTo(new BigDecimal("0.43")) < 0);
+
+        // ROIC: TTM EBIT = 35+33+31+29=128B, TTM Tax = 21B, TTM Pretax = 132B
+        // taxRate = 21/132 ≈ 0.159, NOPAT = 128 * 0.841 ≈ 107.6B
+        // Invested Capital = 62 + 85 + 10 - 20 = 137B
+        // ROIC ≈ 107.6/137 ≈ 0.785
+        BigDecimal roic = q.extra().get("roic");
+        assertNotNull(roic);
+        assertTrue(roic.compareTo(new BigDecimal("0.7")) > 0);
+        assertTrue(roic.compareTo(new BigDecimal("0.9")) < 0);
+    }
+
+    @Test
     void returnsEmptyOnUnknownTickerResponse() throws Exception {
         // Yahoo returns {"result":null,"error":{...}} for unknown tickers.
         String unknown = "{\"quoteSummary\":{\"result\":null,\"error\":{\"code\":\"Not Found\"}}}";

@@ -1733,14 +1733,14 @@
 
     <div class="subview" id="fund-view-holdings">
         <p class="muted" style="margin-top: 0">
-            Current-state fundamentals for every currently-held symbol — P/E, forward P/E, PEG,
-            market cap, 52-week range, beta and analyst target, all from Yahoo's
+            Current-state fundamentals for every currently-held symbol — P/E, forward P/E,
+            EV/EBITDA, PEG, market cap, 52-week range, beta and analyst target, all from Yahoo's
             <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Data is
             cached in SQLite and refreshed by a background job on startup and every 6 hours, so
             the table renders instantly. Click <b>Refresh</b> to force an immediate
             background re-fetch (the table updates as rows come in, ~30s for a full portfolio).
-            Click any row to see secondary fields (dividend yield, margins, balance-sheet
-            ratios, sector, recommendation, 52-week change vs S&amp;P, …) in a popup.
+            Click any row to see cash flow (TTM OCF, Capex, FCF, FCF margin, FCF growth YoY),
+            ROIC, Net Debt/EBITDA, margins, balance-sheet ratios, dividends, sector and more.
         </p>
         <div class="actions">
             <button id="snapshot-reload" type="button">Refresh</button>
@@ -1754,6 +1754,7 @@
                 <th data-sort="num" title="Analyst mean target price">Target</th>
                 <th data-sort="num">P/E (TTM)</th>
                 <th data-sort="num">Fwd P/E</th>
+                <th data-sort="num" title="Enterprise Value ÷ EBITDA (TTM)">EV/EBITDA</th>
                 <th data-sort="num" title="P/E ÷ EPS growth rate — values < 1 suggest cheap growth">PEG</th>
                 <th data-sort="num">Beta</th>
                 <th data-sort="num">Market Cap</th>

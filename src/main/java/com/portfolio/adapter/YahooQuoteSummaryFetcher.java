@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.net.URI;
@@ -40,6 +41,8 @@ public class YahooQuoteSummaryFetcher {
     private static final String URL_FMT =
             "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s" +
                     "?modules=price,summaryDetail,defaultKeyStatistics,financialData,summaryProfile" +
+                    ",cashflowStatementHistoryQuarterly,incomeStatementHistoryQuarterly" +
+                    ",balanceSheetHistoryQuarterly" +
                     "&crumb=%s";
     private static final String CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb";
     private static final String COOKIE_BOOTSTRAP_URL = "https://fc.yahoo.com";
@@ -139,6 +142,9 @@ public class YahooQuoteSummaryFetcher {
         JsonNode dks = r.path("defaultKeyStatistics");
         JsonNode fin = r.path("financialData");
         JsonNode prof = r.path("summaryProfile");
+        JsonNode cfsQ = r.path("cashflowStatementHistoryQuarterly").path("cashflowStatements");
+        JsonNode issQ = r.path("incomeStatementHistoryQuarterly").path("incomeStatementHistory");
+        JsonNode bsQ = r.path("balanceSheetHistoryQuarterly").path("balanceSheetStatements");
 
         // Core columns (visible in the table)
         BigDecimal currentPrice = firstNonNull(num(price, "regularMarketPrice"), num(fin, "currentPrice"));
@@ -152,29 +158,74 @@ public class YahooQuoteSummaryFetcher {
         BigDecimal targetMeanPrice = num(fin, "targetMeanPrice");
         String currency = text(price, "currency");
 
+        // TTM cash-flow inputs from financialData
+        BigDecimal ocfTtm   = num(fin, "operatingCashflow");
+        BigDecimal fcfTtm   = num(fin, "freeCashflow");
+        BigDecimal revTtm   = num(fin, "totalRevenue");
+        BigDecimal ebitdaTtm = num(fin, "ebitda");
+        BigDecimal totalDebt = num(fin, "totalDebt");
+        BigDecimal totalCash = num(fin, "totalCash");
+
+        // Capex (TTM) = OCF − FCF (positive = cash outflow)
+        BigDecimal capexTtm = (ocfTtm != null && fcfTtm != null)
+                ? ocfTtm.subtract(fcfTtm) : null;
+        // FCF Margin = FCF / Revenue
+        BigDecimal fcfMarginTtm = (fcfTtm != null && revTtm != null && revTtm.signum() != 0)
+                ? fcfTtm.divide(revTtm, 6, RoundingMode.HALF_UP) : null;
+        // Net Debt = Total Debt − Cash
+        BigDecimal netDebt = (totalDebt != null && totalCash != null)
+                ? totalDebt.subtract(totalCash) : null;
+        // Net Debt / EBITDA
+        BigDecimal netDebtToEbitda = (netDebt != null && ebitdaTtm != null && ebitdaTtm.signum() != 0)
+                ? netDebt.divide(ebitdaTtm, 6, RoundingMode.HALF_UP) : null;
+
+        // FCF Growth YoY: compare TTM (quarters 0-3) vs prior-year TTM (quarters 4-7)
+        BigDecimal fcfGrowthYoy = fcfGrowthFromQuarterly(cfsQ);
+
+        // ROIC = NOPAT / Invested Capital, both derived from quarterly statements
+        BigDecimal roic = roicFromQuarterly(issQ, bsQ);
+
         // Secondary fields (popup detail)
         Map<String, BigDecimal> extra = new LinkedHashMap<>();
-        putIf(extra, "dividendYield", num(sd, "dividendYield"));
-        putIf(extra, "dividendRate", num(sd, "dividendRate"));
-        putIf(extra, "payoutRatio", num(sd, "payoutRatio"));
+        // Valuation
         putIf(extra, "priceToBook", num(dks, "priceToBook"));
         putIf(extra, "priceToSalesTrailing12Months", num(sd, "priceToSalesTrailing12Months"));
         putIf(extra, "enterpriseToEbitda", num(dks, "enterpriseToEbitda"));
         putIf(extra, "enterpriseValue", num(dks, "enterpriseValue"));
+        // Cash flow (TTM)
+        putIf(extra, "operatingCashflow", ocfTtm);
+        putIf(extra, "capexTtm", capexTtm);
+        putIf(extra, "freeCashflow", fcfTtm);
+        putIf(extra, "fcfMarginTtm", fcfMarginTtm);
+        putIf(extra, "fcfGrowthYoy", fcfGrowthYoy);
+        // Quality & returns
+        putIf(extra, "roic", roic);
+        putIf(extra, "returnOnEquity", num(fin, "returnOnEquity"));
+        putIf(extra, "returnOnAssets", num(fin, "returnOnAssets"));
         putIf(extra, "profitMargins", num(fin, "profitMargins"));
         putIf(extra, "operatingMargins", num(fin, "operatingMargins"));
         putIf(extra, "grossMargins", num(fin, "grossMargins"));
-        putIf(extra, "returnOnEquity", num(fin, "returnOnEquity"));
-        putIf(extra, "returnOnAssets", num(fin, "returnOnAssets"));
+        // Balance sheet / leverage
+        putIf(extra, "netDebtToEbitda", netDebtToEbitda);
+        putIf(extra, "netDebt", netDebt);
         putIf(extra, "debtToEquity", num(fin, "debtToEquity"));
-        putIf(extra, "totalCash", num(fin, "totalCash"));
-        putIf(extra, "freeCashflow", num(fin, "freeCashflow"));
+        putIf(extra, "totalCash", totalCash);
+        putIf(extra, "totalDebt", totalDebt);
+        // Income
+        putIf(extra, "totalRevenue", revTtm);
+        putIf(extra, "ebitda", ebitdaTtm);
         putIf(extra, "revenueGrowth", num(fin, "revenueGrowth"));
         putIf(extra, "earningsGrowth", num(fin, "earningsGrowth"));
+        // Dividends
+        putIf(extra, "dividendYield", num(sd, "dividendYield"));
+        putIf(extra, "dividendRate", num(sd, "dividendRate"));
+        putIf(extra, "payoutRatio", num(sd, "payoutRatio"));
+        // Performance & technicals
         putIf(extra, "52WeekChange", num(dks, "52WeekChange"));
         putIf(extra, "SandP52WeekChange", num(dks, "SandP52WeekChange"));
         putIf(extra, "fiftyDayAverage", num(sd, "fiftyDayAverage"));
         putIf(extra, "twoHundredDayAverage", num(sd, "twoHundredDayAverage"));
+        // Sentiment / float
         putIf(extra, "shortPercentOfFloat", num(dks, "shortPercentOfFloat"));
         putIf(extra, "heldPercentInstitutions", num(dks, "heldPercentInstitutions"));
         putIf(extra, "numberOfAnalystOpinions", num(fin, "numberOfAnalystOpinions"));
@@ -188,6 +239,68 @@ public class YahooQuoteSummaryFetcher {
 
         return new QuoteSummary(ticker, currency, currentPrice, marketCap, trailingPe, forwardPe,
                 pegRatio, beta, week52High, week52Low, targetMeanPrice, extra, labels, false);
+    }
+
+    /**
+     * FCF growth YoY using quarterly cashflow statements. Sums the most-recent 4 quarters
+     * (TTM) and the prior 4 quarters, then returns (ttm − prior) / |prior|. Returns null if
+     * fewer than 8 quarters are available or if any quarter's freeCashflow is missing.
+     */
+    private static BigDecimal fcfGrowthFromQuarterly(JsonNode stmts) {
+        if (!stmts.isArray() || stmts.size() < 8) return null;
+        BigDecimal ttm = BigDecimal.ZERO, prior = BigDecimal.ZERO;
+        for (int i = 0; i < 4; i++) {
+            BigDecimal v = num(stmts.get(i), "freeCashflow");
+            if (v == null) return null;
+            ttm = ttm.add(v);
+        }
+        for (int i = 4; i < 8; i++) {
+            BigDecimal v = num(stmts.get(i), "freeCashflow");
+            if (v == null) return null;
+            prior = prior.add(v);
+        }
+        if (prior.signum() == 0) return null;
+        return ttm.subtract(prior).divide(prior.abs(), 6, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * ROIC = NOPAT / Invested Capital, both on a TTM basis.
+     * NOPAT = TTM EBIT × (1 − effective tax rate from last 4 quarters).
+     * Invested Capital = most-recent-quarter (equity + total debt − cash).
+     * Effective tax rate is clamped to [0, 0.5] to avoid distortion from one-off items.
+     */
+    private static BigDecimal roicFromQuarterly(JsonNode incStmts, JsonNode bsStmts) {
+        if (!incStmts.isArray() || incStmts.size() < 4) return null;
+        if (!bsStmts.isArray() || bsStmts.isEmpty()) return null;
+
+        BigDecimal ttmEbit = BigDecimal.ZERO, ttmTax = BigDecimal.ZERO, ttmPretax = BigDecimal.ZERO;
+        for (int i = 0; i < 4; i++) {
+            BigDecimal ebit    = num(incStmts.get(i), "ebit");
+            BigDecimal tax     = num(incStmts.get(i), "incomeTaxExpense");
+            BigDecimal pretax  = num(incStmts.get(i), "incomeBeforeTax");
+            if (ebit == null || tax == null || pretax == null) return null;
+            ttmEbit   = ttmEbit.add(ebit);
+            ttmTax    = ttmTax.add(tax);
+            ttmPretax = ttmPretax.add(pretax);
+        }
+
+        JsonNode latest = bsStmts.get(0);
+        BigDecimal equity    = num(latest, "totalStockholderEquity");
+        BigDecimal ltDebt    = firstNonNull(num(latest, "longTermDebt"), BigDecimal.ZERO);
+        BigDecimal stDebt    = firstNonNull(num(latest, "shortLongTermDebt"), BigDecimal.ZERO);
+        BigDecimal bsCash    = num(latest, "cash");
+        if (equity == null || bsCash == null) return null;
+
+        BigDecimal taxRate = BigDecimal.ZERO;
+        if (ttmPretax.signum() != 0) {
+            taxRate = ttmTax.divide(ttmPretax, 6, RoundingMode.HALF_UP);
+            if (taxRate.compareTo(BigDecimal.ZERO) < 0) taxRate = BigDecimal.ZERO;
+            if (taxRate.compareTo(new BigDecimal("0.5")) > 0) taxRate = new BigDecimal("0.5");
+        }
+        BigDecimal nopat = ttmEbit.multiply(BigDecimal.ONE.subtract(taxRate));
+        BigDecimal investedCapital = equity.add(ltDebt).add(stDebt).subtract(bsCash);
+        if (investedCapital.signum() == 0) return null;
+        return nopat.divide(investedCapital, 6, RoundingMode.HALF_UP);
     }
 
     /**

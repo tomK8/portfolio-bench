@@ -2112,6 +2112,7 @@
                 tr.appendChild(td(fmtPrice(row.targetMeanPrice, row.currency)));
                 tr.appendChild(td(fmtRatio(row.trailingPe)));
                 tr.appendChild(td(fmtRatio(row.forwardPe)));
+                tr.appendChild(td(fmtRatio(row.extra ? row.extra['enterpriseToEbitda'] : null)));
                 tr.appendChild(td(fmtRatio(row.pegRatio)));
                 tr.appendChild(td(fmtRatio(row.beta)));
                 tr.appendChild(td(fmtMarketCap(row.marketCap, row.currency)));
@@ -2215,31 +2216,43 @@
             // empty "—" boxes.
             var groups = [
                 { title: 'Valuation', fields: [
+                    ['enterpriseToEbitda', 'EV/EBITDA', 'ratio'],
                     ['priceToBook', 'P/B', 'ratio'],
                     ['priceToSalesTrailing12Months', 'P/S (TTM)', 'ratio'],
-                    ['enterpriseToEbitda', 'EV/EBITDA', 'ratio'],
                     ['enterpriseValue', 'Enterprise Value', 'cap']
                 ]},
-                { title: 'Income', fields: [
+                { title: 'Cash Flow (TTM)', fields: [
+                    ['operatingCashflow', 'Operating Cash Flow', 'cap'],
+                    ['capexTtm', 'Capex', 'cap'],
+                    ['freeCashflow', 'Free Cash Flow', 'cap'],
+                    ['fcfMarginTtm', 'FCF Margin', 'pct'],
+                    ['fcfGrowthYoy', 'FCF Growth YoY', 'pct']
+                ]},
+                { title: 'Quality & Returns', fields: [
+                    ['roic', 'ROIC', 'pct'],
+                    ['returnOnEquity', 'Return on Equity', 'pct'],
+                    ['returnOnAssets', 'Return on Assets', 'pct'],
+                    ['profitMargins', 'Profit Margin', 'pct'],
+                    ['operatingMargins', 'Operating Margin', 'pct'],
+                    ['grossMargins', 'Gross Margin', 'pct']
+                ]},
+                { title: 'Balance Sheet / Leverage', fields: [
+                    ['netDebtToEbitda', 'Net Debt / EBITDA', 'ratio'],
+                    ['netDebt', 'Net Debt', 'cap'],
+                    ['debtToEquity', 'Debt / Equity', 'ratio'],
+                    ['totalCash', 'Total Cash', 'cap'],
+                    ['totalDebt', 'Total Debt', 'cap']
+                ]},
+                { title: 'Income (TTM)', fields: [
+                    ['totalRevenue', 'Revenue', 'cap'],
+                    ['ebitda', 'EBITDA', 'cap'],
+                    ['revenueGrowth', 'Revenue Growth', 'pct'],
+                    ['earningsGrowth', 'Earnings Growth', 'pct']
+                ]},
+                { title: 'Dividends', fields: [
                     ['dividendYield', 'Dividend Yield', 'pct'],
                     ['dividendRate', 'Dividend Rate', 'price'],
                     ['payoutRatio', 'Payout Ratio', 'pct']
-                ]},
-                { title: 'Quality & Margins', fields: [
-                    ['profitMargins', 'Profit Margin', 'pct'],
-                    ['operatingMargins', 'Operating Margin', 'pct'],
-                    ['grossMargins', 'Gross Margin', 'pct'],
-                    ['returnOnEquity', 'Return on Equity', 'pct'],
-                    ['returnOnAssets', 'Return on Assets', 'pct']
-                ]},
-                { title: 'Balance Sheet', fields: [
-                    ['debtToEquity', 'Debt / Equity', 'ratio'],
-                    ['totalCash', 'Total Cash', 'cap'],
-                    ['freeCashflow', 'Free Cashflow', 'cap']
-                ]},
-                { title: 'Growth (YoY)', fields: [
-                    ['revenueGrowth', 'Revenue Growth', 'pct'],
-                    ['earningsGrowth', 'Earnings Growth', 'pct']
                 ]},
                 { title: 'Performance & Technicals', fields: [
                     ['52WeekChange', '52w Change', 'pct'],

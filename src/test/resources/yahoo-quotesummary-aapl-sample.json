@@ -43,7 +43,11 @@
           "returnOnAssets": { "raw": 0.215, "fmt": "21.50%" },
           "debtToEquity": { "raw": 154.5, "fmt": "154.50" },
           "totalCash": { "raw": 65000000000, "fmt": "65.00B" },
+          "totalDebt": { "raw": 109000000000, "fmt": "109.00B" },
           "freeCashflow": { "raw": 108000000000, "fmt": "108.00B" },
+          "operatingCashflow": { "raw": 118000000000, "fmt": "118.00B" },
+          "totalRevenue": { "raw": 400000000000, "fmt": "400.00B" },
+          "ebitda": { "raw": 130000000000, "fmt": "130.00B" },
           "revenueGrowth": { "raw": 0.08, "fmt": "8.00%" },
           "earningsGrowth": { "raw": 0.12, "fmt": "12.00%" }
         },
@@ -51,6 +55,36 @@
           "sector": "Technology",
           "industry": "Consumer Electronics",
           "country": "United States"
+        },
+        "cashflowStatementHistoryQuarterly": {
+          "cashflowStatements": [
+            { "freeCashflow": { "raw": 30000000000 } },
+            { "freeCashflow": { "raw": 28000000000 } },
+            { "freeCashflow": { "raw": 26000000000 } },
+            { "freeCashflow": { "raw": 24000000000 } },
+            { "freeCashflow": { "raw": 22000000000 } },
+            { "freeCashflow": { "raw": 20000000000 } },
+            { "freeCashflow": { "raw": 18000000000 } },
+            { "freeCashflow": { "raw": 16000000000 } }
+          ]
+        },
+        "incomeStatementHistoryQuarterly": {
+          "incomeStatementHistory": [
+            { "ebit": { "raw": 35000000000 }, "incomeTaxExpense": { "raw": 6000000000 }, "incomeBeforeTax": { "raw": 36000000000 } },
+            { "ebit": { "raw": 33000000000 }, "incomeTaxExpense": { "raw": 5500000000 }, "incomeBeforeTax": { "raw": 34000000000 } },
+            { "ebit": { "raw": 31000000000 }, "incomeTaxExpense": { "raw": 5000000000 }, "incomeBeforeTax": { "raw": 32000000000 } },
+            { "ebit": { "raw": 29000000000 }, "incomeTaxExpense": { "raw": 4500000000 }, "incomeBeforeTax": { "raw": 30000000000 } }
+          ]
+        },
+        "balanceSheetHistoryQuarterly": {
+          "balanceSheetStatements": [
+            {
+              "totalStockholderEquity": { "raw": 62000000000 },
+              "longTermDebt": { "raw": 85000000000 },
+              "shortLongTermDebt": { "raw": 10000000000 },
+              "cash": { "raw": 20000000000 }
+            }
+          ]
         }
       }
     ],

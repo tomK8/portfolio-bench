@@ -36,4 +36,9 @@ public class RootController {
     public String reference() {
         return "reference";
     }
+
+    @GetMapping("/glossary")
+    public String glossary() {
+        return "glossary";
+    }
 }

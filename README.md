@@ -14,7 +14,7 @@ through a server-side Thymeleaf + htmx + Chart.js UI.
 
 ## TL;DR
 
-Java 17 / Spring Boot 3 web app. ~18.5 kLOC, **219 unit tests**, clean
+Java 25 / Spring Boot 3 web app. ~18.5 kLOC, **219 unit tests**, clean
 ports-and-adapters layering with Spring confined to `web` + `config`. SQLite via JDBC
 (no ORM), Apache POI for Excel I/O, server-rendered UI with no frontend build
 pipeline. Single Maven module. Built solo with Claude as an AI pair programmer.
@@ -66,7 +66,7 @@ architecture document.
 
 | Layer        | Choice                                          |
 |--------------|-------------------------------------------------|
-| Language     | Java 17                                         |
+| Language     | Java 25 (LTS)                                   |
 | Framework    | Spring Boot 3 (web layer only)                  |
 | Persistence  | SQLite via JDBC, no ORM                         |
 | Excel I/O    | Apache POI                                      |

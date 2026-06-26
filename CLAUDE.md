@@ -3,6 +3,9 @@
 Guidance for Claude Code in this repository. Prefer reading the code; this file covers the
 cross-cutting bits that aren't obvious from any single file.
 
+This file is intentionally detailed. Helps remember various things we have done. Does not
+seem to be wasting too many context tokens.
+
 ## Build, test & run
 
 ```bash

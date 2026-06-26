@@ -442,46 +442,35 @@
         html[data-theme="dark"] .snap-kv .k { color: #b4b4b4; }
 
         .snap-tip {
-            position: relative;
             display: inline-block;
             border-bottom: 1px dotted #999;
             cursor: help;
         }
-        .snap-tip::after {
-            content: attr(data-tip);
-            position: absolute;
-            left: 0;
-            top: calc(100% + 6px);
-            width: 260px;
+
+        .js-tip-box {
+            position: fixed;
+            display: none;
+            width: 300px;
             background: #1c1f24;
             color: #e8e8ea;
-            font-size: 0.78rem;
-            line-height: 1.45;
-            padding: 0.5rem 0.65rem;
-            border-radius: 5px;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.35);
-            white-space: normal;
+            font-size: 0.88rem;
+            line-height: 1.55;
+            padding: 0.65rem 0.85rem 0.55rem;
+            border-radius: 6px;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.45);
             z-index: 9999;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.15s;
+            pointer-events: auto;
         }
-        .snap-tip:hover::after { opacity: 1; }
-        html[data-theme="light"] .snap-tip::after {
-            background: #2b2f36;
-        }
-
-        .glossary-link {
+        .js-tip-box p { margin: 0 0 0.45rem 0; }
+        .js-tip-box .tip-more {
             display: inline-block;
-            margin-left: 0.3em;
-            font-size: 0.65rem;
-            line-height: 1;
-            color: #999;
+            margin-top: 0.2rem;
+            color: #4a9eff;
+            font-size: 0.82rem;
             text-decoration: none;
-            vertical-align: super;
-            opacity: 0.7;
         }
-        .glossary-link:hover { color: #1f77b4; opacity: 1; }
+        .js-tip-box .tip-more:hover { text-decoration: underline; }
+        html[data-theme="light"] .js-tip-box { background: #2b2f36; }
 
         .returns-stats {
             display: flex;
@@ -1297,36 +1286,36 @@
     </div>
     <div class="returns-stats" id="risk-stats">
         <div class="returns-stat">
-            <span class="label snap-tip" data-tip="Annualised standard deviation of daily portfolio returns over the full history, scaled by √252 (trading days). Higher = wider swings. Calculated from weekday TWR returns only — weekend rows are zero-filled and excluded to avoid compressing vol.">Volatility (ann., full)<a href="/glossary#volatility" class="glossary-link" target="_blank" title="Full explanation">?</a></span>
+            <span class="label snap-tip" data-tip="Annualised standard deviation of daily portfolio returns over the full history, scaled by √252 (trading days). Higher = wider swings. Calculated from weekday TWR returns only — weekend rows are zero-filled and excluded to avoid compressing vol." data-anchor="volatility">Volatility (ann., full)</span>
             <span class="value na" id="risk-vol">—</span>
         </div>
         <div class="returns-stat">
-            <span class="label snap-tip" data-tip="Same volatility calculation but restricted to the trailing 365 calendar days. Useful for seeing whether recent market conditions have been calmer or wilder than the long-run average.">Volatility · 1y<a href="/glossary#volatility" class="glossary-link" target="_blank" title="Full explanation">?</a></span>
+            <span class="label snap-tip" data-tip="Same volatility calculation but restricted to the trailing 365 calendar days. Useful for seeing whether recent market conditions have been calmer or wilder than the long-run average." data-anchor="volatility">Volatility · 1y</span>
             <span class="value na" id="risk-vol-1y">—</span>
         </div>
         <div class="returns-stat">
-            <span class="label snap-tip" data-tip="(Annualised return − risk-free rate) ÷ annualised volatility, over the full history. Measures return earned per unit of total risk. Above 1.0 is good; above 2.0 is excellent. Adjust the risk-free rate input to match your cash yield.">Sharpe (full)<a href="/glossary#sharpe" class="glossary-link" target="_blank" title="Full explanation">?</a></span>
+            <span class="label snap-tip" data-tip="(Annualised return − risk-free rate) ÷ annualised volatility, over the full history. Measures return earned per unit of total risk. Above 1.0 is good; above 2.0 is excellent. Adjust the risk-free rate input to match your cash yield." data-anchor="sharpe">Sharpe (full)</span>
             <span class="value na" id="risk-sharpe">—</span>
         </div>
         <div class="returns-stat">
-            <span class="label snap-tip" data-tip="Sharpe ratio calculated using only the trailing 365 days of returns and volatility. Reflects whether the portfolio has been efficient recently, independently of its long-run history.">Sharpe · 1y<a href="/glossary#sharpe" class="glossary-link" target="_blank" title="Full explanation">?</a></span>
+            <span class="label snap-tip" data-tip="Sharpe ratio calculated using only the trailing 365 days of returns and volatility. Reflects whether the portfolio has been efficient recently, independently of its long-run history." data-anchor="sharpe">Sharpe · 1y</span>
             <span class="value na" id="risk-sharpe-1y">—</span>
         </div>
         <div class="returns-stat">
-            <span class="label snap-tip" data-tip="(Annualised return − risk-free rate) ÷ downside deviation. Like Sharpe but only penalises negative days — upside volatility is not counted against you. Useful when return distributions are skewed. Higher is better; compare to Sharpe: a much higher Sortino means gains are lumpy but losses are controlled.">Sortino<a href="/glossary#sortino" class="glossary-link" target="_blank" title="Full explanation">?</a></span>
+            <span class="label snap-tip" data-tip="(Annualised return − risk-free rate) ÷ downside deviation. Like Sharpe but only penalises negative days — upside volatility is not counted against you. Useful when return distributions are skewed. Higher is better; compare to Sharpe: a much higher Sortino means gains are lumpy but losses are controlled." data-anchor="sortino">Sortino</span>
             <span class="value na" id="risk-sortino">—</span>
         </div>
         <div class="returns-stat">
-            <span class="label snap-tip" data-tip="Largest peak-to-trough percentage decline in the full TWR series. The date shown is the trough (lowest point). A key measure of worst-case pain — even a high-return portfolio with a −50% drawdown requires a +100% recovery just to break even.">Max drawdown<a href="/glossary#max-drawdown" class="glossary-link" target="_blank" title="Full explanation">?</a></span>
+            <span class="label snap-tip" data-tip="Largest peak-to-trough percentage decline in the full TWR series. The date shown is the trough (lowest point). A key measure of worst-case pain — even a high-return portfolio with a −50% drawdown requires a +100% recovery just to break even." data-anchor="max-drawdown">Max drawdown</span>
             <span class="value na" id="risk-maxdd">—</span>
             <span class="sub" id="risk-maxdd-date"></span>
         </div>
         <div class="returns-stat">
-            <span class="label snap-tip" data-tip="Calendar days from the trough of the max drawdown back to the previous peak. Measures how long it took the portfolio to fully recover. Still counting (shown as '—') if the portfolio has not yet returned to that high-water mark.">Recovery (days)<a href="/glossary#recovery" class="glossary-link" target="_blank" title="Full explanation">?</a></span>
+            <span class="label snap-tip" data-tip="Calendar days from the trough of the max drawdown back to the previous peak. Measures how long it took the portfolio to fully recover. Still counting (shown as '—') if the portfolio has not yet returned to that high-water mark." data-anchor="recovery">Recovery (days)</span>
             <span class="value na" id="risk-recovery">—</span>
         </div>
         <div class="returns-stat">
-            <span class="label snap-tip" data-tip="Annualised return ÷ |max drawdown|. Measures return earned per unit of drawdown risk rather than volatility. Above 0.5 is reasonable; above 1.0 is strong. Penalises strategies with deep crashes more harshly than Sharpe does.">Calmar<a href="/glossary#calmar" class="glossary-link" target="_blank" title="Full explanation">?</a></span>
+            <span class="label snap-tip" data-tip="Annualised return ÷ |max drawdown|. Measures return earned per unit of drawdown risk rather than volatility. Above 0.5 is reasonable; above 1.0 is strong. Penalises strategies with deep crashes more harshly than Sharpe does." data-anchor="calmar">Calmar</span>
             <span class="value na" id="risk-calmar">—</span>
         </div>
     </div>

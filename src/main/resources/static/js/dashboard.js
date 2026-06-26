@@ -45,6 +45,60 @@
             });
         }
 
+        // ── JS tooltip ──────────────────────────────────────────────────────────
+        // Replaces the CSS ::after approach so the popup can contain a real link
+        // to the glossary page. Activated by [data-tip] elements; [data-anchor]
+        // adds a "→ Full explanation" link pointing to /glossary#{anchor}.
+        (function () {
+            var box = document.createElement('div');
+            box.className = 'js-tip-box';
+            document.body.appendChild(box);
+
+            var hideTimer = null;
+
+            function show(el) {
+                clearTimeout(hideTimer);
+                var tip = el.dataset.tip;
+                var anchor = el.dataset.anchor;
+                box.innerHTML = '<p>' + tip + '</p>' +
+                    (anchor ? '<a class="tip-more" href="/glossary#' + anchor +
+                              '" target="_blank">→ Full explanation with examples</a>' : '');
+                box.style.display = 'block';
+                // Position below the element, clamped to viewport width.
+                var r = el.getBoundingClientRect();
+                var top = r.bottom + 8;
+                var left = r.left;
+                box.style.top = top + 'px';
+                box.style.left = left + 'px';
+                // Clamp right edge.
+                var bw = box.offsetWidth;
+                if (left + bw > window.innerWidth - 12) {
+                    box.style.left = Math.max(8, window.innerWidth - bw - 12) + 'px';
+                }
+                // Flip above if it would go below the viewport.
+                if (top + box.offsetHeight > window.innerHeight - 8) {
+                    box.style.top = (r.top - box.offsetHeight - 6) + 'px';
+                }
+            }
+
+            function hide() { box.style.display = 'none'; }
+
+            document.addEventListener('mouseover', function (e) {
+                var el = e.target.closest('[data-tip]');
+                if (el) show(el);
+            });
+            document.addEventListener('mouseout', function (e) {
+                var el = e.target.closest('[data-tip]');
+                if (!el) return;
+                // Short delay so the user can move into the box to click the link.
+                hideTimer = setTimeout(function () {
+                    if (!box.matches(':hover')) hide();
+                }, 180);
+            });
+            box.addEventListener('mouseleave', hide);
+        }());
+        // ────────────────────────────────────────────────────────────────────────
+
         document.body.addEventListener('htmx:afterSettle', function () {
             ['#portfolio-result', '#portfolio-cash-result'].forEach(function (sel) {
                 document.querySelectorAll(sel + ' table').forEach(function (table) {
@@ -2290,12 +2344,10 @@
                     if (isFinancial && noFin) return;
                     var v = row.extra ? row.extra[key] : null;
                     if (v == null) return;
-                    var glLink = anchor
-                        ? '<a href="/glossary#' + anchor + '" class="glossary-link" target="_blank" title="Full explanation">?</a>'
-                        : '';
+                    var anchorAttr = anchor ? ' data-anchor="' + anchor + '"' : '';
                     var labelHtml = tip
-                        ? '<span class="snap-tip" data-tip="' + tip.replace(/"/g, '&quot;') + '">' + label + glLink + '</span>'
-                        : label + glLink;
+                        ? '<span class="snap-tip" data-tip="' + tip.replace(/"/g, '&quot;') + '"' + anchorAttr + '>' + label + '</span>'
+                        : label;
                     inner += '<div class="snap-kv"><span class="k">' + labelHtml + '</span>' +
                             '<span class="v">' + fmtSnapValue(v, type, row.currency) + '</span></div>';
                 });

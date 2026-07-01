@@ -87,6 +87,16 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   when `to == today`, daily close + historical FX otherwise — so totals reconcile with
   the cash-ledger view.
 
+- **Watchlist** — `GET /watchlist` → JSON, rendered as a table under the Risk group. A
+  user-maintained set of symbols (owned or not — *not* unioned with holdings, kept lean by
+  design) for volatility trading. Each row joins live price + today's move + trailing
+  momentum (5d/30d) + 30-day annualised realized vol + 52-wk high/low distances + P/E/beta
+  + position/gain (blank when not held). Two per-symbol alert triggers with editable
+  thresholds: proximity to the 52-week high, and |today's move|. Row colour = alert state
+  (green/red today-move by direction, blue near-high, pulsing when both). Click a row for a
+  popup: same fields + a price chart with a 1D/3D/5D/10D/15D (intraday) + 30D (daily) window
+  toggle + a collapsible Fundamentals section. See the Watchlist section below.
+
 Charts load lazily on first tab click. Logging is SLF4J + Logback (`logback-spring.xml`);
 no `System.out` in production code.
 
@@ -101,6 +111,9 @@ no `System.out` in production code.
 | Value-over-time chart | `GET /portfolio-value`     | `PortfolioValueService`   |
 | Allocation            | `GET /allocation`          | `AllocationService`       |
 | Attribution           | `GET /attribution`         | `AttributionService`      |
+| Watchlist             | `GET /watchlist`           | `WatchlistService`        |
+| Watchlist mutate      | `POST /watchlist/{add,remove,threshold}` | `WatchlistRepository` |
+| Watchlist popup chart | `GET /watchlist/series`    | `WatchlistService`        |
 
 ## Holding fields
 
@@ -217,8 +230,11 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
 
 - `PriceFetchJob` → `price_history` (daily). First run backfills ~10 years per ticker; later runs
   fetch the gap to today. Cron 22:00 Europe/London + startup.
-- `IntradayPriceFetchJob` → `price_intraday` (1-minute closes). 7-day retention; pruned after each
-  fetch tick. Every 5 minutes + startup.
+- `IntradayPriceFetchJob` → `price_intraday` (1-minute closes). **15-day** retention
+  (`RETENTION_DAYS`), but the per-tick fetch lookback is capped at `FETCH_LOOKBACK_DAYS` = 7 —
+  Yahoo only serves ~7 days of 1-minute history per request, so the 15-day window *accumulates*
+  as ticks append rather than backfilling in one shot. Feeds the watchlist popup's 1D–15D
+  intraday charts. Pruned after each fetch tick. Every minute + startup.
 - `GiltPriceFetchJob` → also `price_intraday`, one HTTP GET to `dividenddata.co.uk/uk-gilts-prices-yields.py`.
   Hourly + startup. Symbols are `"GILT {coupon}% {year}"` (no Yahoo ticker map). Currency `"GBP"`.
   Rides the intraday job's prune for retention. Dividenddata returns 403 to the default Java
@@ -301,3 +317,37 @@ the warning and fills in the dip.
 **Yahoo testing:** JSON parsing is unit-tested against `yahoo-nvda-sample.json`; a live-API test
 (`YahooPriceFetcherIntegrationTest`) is `@Tag("integration")` and excluded by the surefire
 `excludedGroups` property. Run with `mvn test -Dgroups=integration -DexcludedGroups=`.
+
+## Watchlist & alerts (volatility trading)
+
+Monitor-and-nudge tool for opportunistic trimming/rebuying — it emails alerts and never
+touches an order.
+
+- `WatchlistRepository` — `watchlist` table (symbol PK + two thresholds + added_at). The
+  symbol set is **mirrored** to `KeyValueStore` under `watchlist_symbols` on every mutation,
+  so `PriceFetchSupport.tickersToFetch` and `PortfolioFundamentalsService` union watchlist
+  names into their fetch universes with no constructor churn — a freshly added symbol gets
+  daily + intraday prices and a fundamentals row on the next tick. `WatchlistController.add`
+  also kicks an immediate `PriceFetchJob.fetchSingle` + fundamentals refresh in the background.
+- `WatchlistService` — assembles each row from one snapshot (single FX fetch, one bulk
+  latest-intraday lookup, one ledger read). Position/gain reuse `PositionDetailService`'s FIFO
+  engine (same package) rather than re-implementing it. Momentum is calendar-anchored via
+  `PriceStats.closeOnOrBefore`; realized vol is `PriceStats.annualizedVol` (30-session sample
+  stdev × √252, on split-adjusted `close`, same convention as the Risk tab). 52-wk high/low,
+  P/E and beta come from the fundamentals cache. `series()` serves the popup chart: intraday
+  for 1D–15D (downsampled to ~5-min beyond 5 days), daily `close×splitFactor` for 30D.
+- **Triggers** are pure domain logic (`WatchlistAlerts.evaluate` → `Flags`): (a) within
+  `highThresholdPct`% of the 52-week high (a fresh high always fires); (b) `|today's move|` ≥
+  `moveThresholdPct`%, either direction. Screen and alert job evaluate identical `Row`s so they
+  never disagree. **No 52-wk-low trigger** — the low is displayed but never alerts (watched
+  names have run up too far for it to matter).
+- `WatchlistAlertJob` — runs every 5 min (`PriceFetchScheduler`). Dedups **once per day per
+  symbol per trigger** via a KV set (`watchlist_alerts_fired`, keys `SYMBOL|TRIGGER|date`),
+  batches a tick's new firings into one email, and only persists the fired-set after a
+  successful send (so a mail failure retries). No-op unless SMTP is configured.
+- **Email:** `AlertNotifier` port + `SmtpAlertNotifier` adapter (Jakarta Mail directly, kept
+  Spring-free like the other adapters; `spring-boot-starter-mail` supplies the library).
+  Disabled by default — set `portfolio.alert.mail.*` in `application.properties` (Gmail:
+  `smtp.gmail.com:587`, STARTTLS, username + **app password**, `enabled=true`). The app must be
+  running during market hours for alerts to fire — keep the lid open + `caffeinate` (closing
+  the lid sleeps the JVM even under caffeinate).

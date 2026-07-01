@@ -27,9 +27,19 @@ public class IntradayPriceFetchJob {
 
     private static final Logger log = LoggerFactory.getLogger(IntradayPriceFetchJob.class);
 
-    static final int RETENTION_DAYS = 7;
-    /** Start the first-run fetch just inside the retention window so the prune that follows is a no-op. */
-    private static final Duration LOOKBACK = Duration.ofDays(RETENTION_DAYS).minusMinutes(5);
+    /**
+     * How long we keep 1-minute rows. Longer than {@link #FETCH_LOOKBACK_DAYS} on purpose:
+     * Yahoo only serves ~7 days of 1-minute history per request, so we can't backfill 15 days
+     * in one shot — but by pruning at 15 rather than 7 the window <em>accumulates</em> as the
+     * every-tick job keeps appending, growing from 7 to 15 days over the first week and then
+     * holding. Feeds the watchlist popup's fine-grained 1D–15D charts.
+     */
+    static final int RETENTION_DAYS = 15;
+    /** Yahoo's hard ceiling for {@code interval=1m}. Fetching further back returns nothing, so
+     *  the first-run / gap-fill lookback stops here rather than at the retention horizon. */
+    static final int FETCH_LOOKBACK_DAYS = 7;
+    /** Start the first-run fetch just inside Yahoo's serve window so the prune that follows is a no-op. */
+    private static final Duration LOOKBACK = Duration.ofDays(FETCH_LOOKBACK_DAYS).minusMinutes(5);
     private static final long THROTTLE_MS = 500;   // be polite to Yahoo
 
     private final CashTransactionRepository cashRepo;

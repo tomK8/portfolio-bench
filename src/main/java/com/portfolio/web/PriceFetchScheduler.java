@@ -5,6 +5,7 @@ import com.portfolio.application.GiltPriceFetchJob;
 import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.IntradayPriceFetchJob;
 import com.portfolio.application.PriceFetchJob;
+import com.portfolio.application.WatchlistAlertJob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -29,16 +30,19 @@ public class PriceFetchScheduler {
     private final GiltPriceFetchJob giltJob;
     private final ImportGiltPricesService giltImportService;
     private final FundamentalsFetchJob fundamentalsJob;
+    private final WatchlistAlertJob watchlistAlertJob;
 
     public PriceFetchScheduler(PriceFetchJob job, IntradayPriceFetchJob intradayJob,
                                GiltPriceFetchJob giltJob,
                                ImportGiltPricesService giltImportService,
-                               FundamentalsFetchJob fundamentalsJob) {
+                               FundamentalsFetchJob fundamentalsJob,
+                               WatchlistAlertJob watchlistAlertJob) {
         this.job = job;
         this.intradayJob = intradayJob;
         this.giltJob = giltJob;
         this.giltImportService = giltImportService;
         this.fundamentalsJob = fundamentalsJob;
+        this.watchlistAlertJob = watchlistAlertJob;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -68,6 +72,20 @@ public class PriceFetchScheduler {
     @Scheduled(fixedDelay = 4 * 60 * 60 * 1000, initialDelay = 4 * 60 * 60 * 1000)
     public void fundamentals() {
         fundamentalsJob.run();
+    }
+
+    /**
+     * Evaluate the watchlist triggers every 5 minutes. Self-throttles to one email per day per
+     * symbol per trigger, so this cadence just controls how quickly a fresh spike is caught, not
+     * how often you're mailed. No-op unless SMTP is configured.
+     */
+    @Scheduled(fixedDelay = 5 * 60 * 1000, initialDelay = 2 * 60 * 1000)
+    public void watchlistAlerts() {
+        try {
+            watchlistAlertJob.run();
+        } catch (RuntimeException e) {
+            log.warn("Watchlist alert run failed", e);
+        }
     }
 
     private static void startDaemon(String name, Runnable r) {

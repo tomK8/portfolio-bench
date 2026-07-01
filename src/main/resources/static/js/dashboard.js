@@ -153,6 +153,7 @@
             if (panelId === 'panel-dividends') loadDividends();
             if (panelId === 'panel-position') setupPosition();
             if (panelId === 'panel-correlations') setupCorrelations();
+            if (panelId === 'panel-watchlist') setupWatchlist();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
@@ -4476,6 +4477,330 @@
                 scenarioTableSortAttached = true;
                 attachSort(document.getElementById('scenario-table'));
             }
+        }
+
+        // ---- Watchlist (volatility-trading monitor) -------------------------
+
+        var watchlistInited = false;
+        var wlChart = null;
+        var wlFundamentals = null;      // symbol -> quoteSummary, cached from /portfolio-fundamentals
+        var wlSortAttached = false;
+        var wlCurrentSymbol = null;
+
+        function setupWatchlist() {
+            if (!watchlistInited) {
+                watchlistInited = true;
+                document.getElementById('wl-add-btn').addEventListener('click', addWatchlistSymbol);
+                document.getElementById('wl-add-symbol').addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') addWatchlistSymbol();
+                });
+                document.getElementById('wl-refresh-btn').addEventListener('click', loadWatchlist);
+                document.getElementById('wl-modal-close').addEventListener('click', closeWlModal);
+                document.getElementById('wl-modal').addEventListener('click', function (e) {
+                    if (e.target.id === 'wl-modal') closeWlModal();
+                });
+                document.getElementById('wl-fund-toggle').addEventListener('click', function () {
+                    var body = document.getElementById('wl-fund-body');
+                    var open = body.style.display !== 'none';
+                    body.style.display = open ? 'none' : 'block';
+                    this.classList.toggle('open', !open);
+                });
+                document.getElementById('wl-window-toggle').addEventListener('click', function (e) {
+                    var btn = e.target.closest('button[data-window]');
+                    if (!btn || !wlCurrentSymbol) return;
+                    this.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
+                    btn.classList.add('active');
+                    loadWlSeries(wlCurrentSymbol, btn.dataset.window);
+                });
+            }
+            loadWatchlist();
+        }
+
+        function wlSetStatus(msg) {
+            document.getElementById('wl-status').textContent = msg || '';
+        }
+
+        function loadWatchlist() {
+            wlSetStatus('Loading…');
+            fetch('/watchlist').then(function (r) { return r.json(); })
+                .then(function (view) { renderWatchlist(view.rows || []); wlSetStatus(''); })
+                .catch(function () { wlSetStatus('Could not load watchlist.'); });
+        }
+
+        function addWatchlistSymbol() {
+            var sym = document.getElementById('wl-add-symbol').value.trim().toUpperCase();
+            if (!sym) return;
+            var high = document.getElementById('wl-add-high').value.trim();
+            var move = document.getElementById('wl-add-move').value.trim();
+            var body = new URLSearchParams();
+            body.set('symbol', sym);
+            if (high) body.set('highPct', high);
+            if (move) body.set('movePct', move);
+            wlSetStatus('Adding ' + sym + ' — fetching prices…');
+            fetch('/watchlist/add', { method: 'POST', body: body })
+                .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+                .then(function (view) {
+                    document.getElementById('wl-add-symbol').value = '';
+                    document.getElementById('wl-add-high').value = '';
+                    document.getElementById('wl-add-move').value = '';
+                    renderWatchlist(view.rows || []);
+                    wlSetStatus(sym + ' added — data fills in as the backfill completes.');
+                    // Poll a couple of times so a freshly-added row picks up its backfilled prices.
+                    setTimeout(loadWatchlist, 8000);
+                    setTimeout(loadWatchlist, 30000);
+                })
+                .catch(function () { wlSetStatus('Could not add ' + sym + '.'); });
+        }
+
+        function removeWatchlistSymbol(sym) {
+            var body = new URLSearchParams(); body.set('symbol', sym);
+            fetch('/watchlist/remove', { method: 'POST', body: body })
+                .then(function (r) { return r.json(); })
+                .then(function (view) { renderWatchlist(view.rows || []); });
+        }
+
+        function saveWatchlistThreshold(sym, highPct, movePct) {
+            var body = new URLSearchParams();
+            body.set('symbol', sym);
+            body.set('highPct', highPct);
+            body.set('movePct', movePct);
+            fetch('/watchlist/threshold', { method: 'POST', body: body })
+                .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+                .then(function (view) { renderWatchlist(view.rows || []); })
+                .catch(function () { wlSetStatus('Could not update thresholds for ' + sym + '.'); });
+        }
+
+        function wlPctCell(frac, colour) {
+            if (frac == null) return '<td class="na">—</td>';
+            var n = parseFloat(frac) * 100;
+            var cls = colour ? (n >= 0 ? ' class="wl-pos"' : ' class="wl-neg"') : '';
+            return '<td' + cls + '>' + (n >= 0 ? '+' : '') + n.toFixed(1) + '%</td>';
+        }
+
+        function wlGbpCell(v, colour) {
+            if (v == null) return '<td class="na">—</td>';
+            var n = parseFloat(v);
+            var cls = colour ? (n >= 0 ? ' class="wl-pos"' : ' class="wl-neg"') : '';
+            var s = (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+            return '<td' + cls + '>' + s + '</td>';
+        }
+
+        function renderWatchlist(rows) {
+            var table = document.getElementById('watchlist-table');
+            var empty = document.getElementById('wl-empty');
+            var tbody = table.querySelector('tbody');
+            tbody.innerHTML = '';
+            if (!rows.length) {
+                table.style.display = 'none';
+                empty.style.display = 'block';
+                return;
+            }
+            empty.style.display = 'none';
+            table.style.display = '';
+
+            rows.forEach(function (r) {
+                var tr = document.createElement('tr');
+                tr.className = rowAlertClass(r);
+                var price = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
+                var pe = r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1);
+                var vol = wlPctCell(r.realizedVol, false);
+                var highV = r.highThresholdPct == null ? '' : parseFloat(r.highThresholdPct);
+                var moveV = r.moveThresholdPct == null ? '' : parseFloat(r.moveThresholdPct);
+                var symCell = '<td><b>' + r.symbol + '</b>' +
+                    (r.missingData ? ' <span class="muted" style="font-size:0.75rem">(fetching…)</span>' : '') +
+                    (r.held ? ' <span class="muted" title="You hold this" style="font-size:0.75rem">●</span>' : '') + '</td>';
+                tr.innerHTML = symCell +
+                    '<td>' + price + '</td>' +
+                    wlPctCell(r.todayPct, true) +
+                    wlPctCell(r.pct5d, true) +
+                    wlPctCell(r.pct30d, true) +
+                    wlPctCell(r.pctFromHigh, false) +
+                    wlPctCell(r.pctFromLow, false) +
+                    vol +
+                    '<td>' + pe + '</td>' +
+                    wlGbpCell(r.held ? r.positionValueGbp : null, false) +
+                    wlGbpCell(r.held ? r.gainGbp : null, true) +
+                    '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="high" type="text" value="' + highV + '"/></td>' +
+                    '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="move" type="text" value="' + moveV + '"/></td>' +
+                    '<td><button class="wl-remove" data-sym="' + r.symbol + '" title="Remove">×</button></td>';
+
+                // Row click opens the popup, except when interacting with inputs/buttons.
+                tr.addEventListener('click', function (e) {
+                    if (e.target.closest('input, button')) return;
+                    openWlModal(r);
+                });
+                tbody.appendChild(tr);
+            });
+
+            tbody.querySelectorAll('.wl-remove').forEach(function (btn) {
+                btn.addEventListener('click', function () { removeWatchlistSymbol(this.dataset.sym); });
+            });
+            tbody.querySelectorAll('.wl-thr-input').forEach(function (inp) {
+                inp.addEventListener('change', function () {
+                    var sym = this.dataset.sym;
+                    var row = this.closest('tr');
+                    var high = row.querySelector('.wl-thr-input[data-kind="high"]').value.trim();
+                    var move = row.querySelector('.wl-thr-input[data-kind="move"]').value.trim();
+                    saveWatchlistThreshold(sym, high, move);
+                });
+            });
+
+            if (!wlSortAttached) { wlSortAttached = true; attachSort(table); }
+        }
+
+        function rowAlertClass(r) {
+            var up = r.moveDirection >= 0;
+            if (r.nearHigh && r.bigMove) return up ? 'wl-both-up' : 'wl-both-down';
+            if (r.bigMove) return up ? 'wl-move-up' : 'wl-move-down';
+            if (r.nearHigh) return 'wl-near-high';
+            return '';
+        }
+
+        function openWlModal(r) {
+            wlCurrentSymbol = r.symbol;
+            document.getElementById('wl-modal-title').textContent = r.symbol +
+                (r.currency ? ' · ' + r.currency : '');
+            var today = r.todayPct == null ? '—' : (parseFloat(r.todayPct) * 100).toFixed(1) + '%';
+            document.getElementById('wl-modal-sub').textContent =
+                (r.currentPrice == null ? '' : fmtPrice(r.currentPrice, r.currency) + '  ·  today ' + today);
+
+            var stats = document.getElementById('wl-modal-stats');
+            stats.innerHTML = '';
+            stats.appendChild(wlStat('Today', wlPctText(r.todayPct)));
+            stats.appendChild(wlStat('3d', wlPctText(r.pct3d)));
+            stats.appendChild(wlStat('5d', wlPctText(r.pct5d)));
+            stats.appendChild(wlStat('10d', wlPctText(r.pct10d)));
+            stats.appendChild(wlStat('30d', wlPctText(r.pct30d)));
+            stats.appendChild(wlStat('Vol (30d ann.)', wlPctText(r.realizedVol)));
+            stats.appendChild(wlStat('52wk high', r.week52High == null ? '—' : fmtPrice(r.week52High, r.currency)));
+            stats.appendChild(wlStat('52wk low', r.week52Low == null ? '—' : fmtPrice(r.week52Low, r.currency)));
+            stats.appendChild(wlStat('% vs high', wlPctText(r.pctFromHigh)));
+            stats.appendChild(wlStat('P/E', r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1)));
+            stats.appendChild(wlStat('Beta', r.beta == null ? '—' : parseFloat(r.beta).toFixed(2)));
+            if (r.held) {
+                stats.appendChild(wlStat('Position', r.positionValueGbp == null ? '—' : fmtPrice(r.positionValueGbp, 'GBP')));
+                stats.appendChild(wlStat('Gain', r.gainGbp == null ? '—' : fmtPrice(r.gainGbp, 'GBP')));
+            }
+
+            // Reset fundamentals section collapsed.
+            var fbody = document.getElementById('wl-fund-body');
+            fbody.style.display = 'none';
+            document.getElementById('wl-fund-toggle').classList.remove('open');
+            renderWlFundamentals(r.symbol);
+
+            // Default window 5D.
+            document.querySelectorAll('#wl-window-toggle button').forEach(function (b) {
+                b.classList.toggle('active', b.dataset.window === '5D');
+            });
+            document.getElementById('wl-modal').classList.add('open');
+            loadWlSeries(r.symbol, '5D');
+        }
+
+        function wlStat(label, value) {
+            var d = document.createElement('div');
+            d.className = 'returns-stat';
+            d.innerHTML = '<span class="label">' + label + '</span><span class="value">' + value + '</span>';
+            return d;
+        }
+
+        function wlPctText(frac) {
+            if (frac == null) return '—';
+            var n = parseFloat(frac) * 100;
+            return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+        }
+
+        function closeWlModal() {
+            document.getElementById('wl-modal').classList.remove('open');
+            wlCurrentSymbol = null;
+            if (wlChart) { wlChart.destroy(); wlChart = null; }
+        }
+
+        function loadWlSeries(symbol, window) {
+            fetch('/watchlist/series?symbol=' + encodeURIComponent(symbol) + '&window=' + window)
+                .then(function (r) { return r.json(); })
+                .then(function (s) { renderWlChart(s); })
+                .catch(function () { /* leave prior chart */ });
+        }
+
+        function renderWlChart(s) {
+            var ctx = document.getElementById('wl-chart').getContext('2d');
+            var pts = (s.points || []).map(function (p) { return { x: p.t, y: parseFloat(p.p) }; });
+            if (wlChart) { wlChart.destroy(); }
+            wlChart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets: [{
+                    data: pts, borderColor: '#1f77b4', borderWidth: 1.2,
+                    pointRadius: 0, fill: false, tension: 0
+                }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: false,
+                    parsing: true,
+                    scales: {
+                        x: { type: 'time', ticks: { maxTicksLimit: 8, autoSkip: true } },
+                        y: { ticks: { maxTicksLimit: 6 } }
+                    },
+                    plugins: { legend: { display: false },
+                        tooltip: { callbacks: { title: function (items) { return items[0].label; } } } }
+                }
+            });
+        }
+
+        function renderWlFundamentals(symbol) {
+            var body = document.getElementById('wl-fund-body');
+            function render() {
+                var q = wlFundamentals ? wlFundamentals[symbol] : null;
+                if (!q || q.missing) {
+                    body.innerHTML = '<p class="muted">No fundamentals cached for ' + symbol +
+                        ' yet — the background refresh may still be running, or Yahoo has no data for this listing.</p>';
+                    return;
+                }
+                var html = '<div class="snap-group"><div class="snap-group-title">Valuation & Quality</div>';
+                html += wlKv('Trailing P/E', fmtNumOrDash(q.trailingPe, 1));
+                html += wlKv('Forward P/E', fmtNumOrDash(q.forwardPe, 1));
+                html += wlKv('PEG', fmtNumOrDash(q.pegRatio, 2));
+                html += wlKv('Beta', fmtNumOrDash(q.beta, 2));
+                html += wlKv('Market cap', q.marketCap == null ? '—' : fmtMarketCap(q.marketCap, q.currency));
+                html += wlKv('Target (mean)', q.targetMeanPrice == null ? '—' : fmtPrice(q.targetMeanPrice, q.currency));
+                html += '</div>';
+                if (q.extra) {
+                    var keys = Object.keys(q.extra);
+                    if (keys.length) {
+                        html += '<div class="snap-group"><div class="snap-group-title">Detail</div>';
+                        keys.forEach(function (k) {
+                            html += wlKv(k, fmtExtra(k, q.extra[k], q.currency));
+                        });
+                        html += '</div>';
+                    }
+                }
+                body.innerHTML = html;
+            }
+            if (wlFundamentals) { render(); return; }
+            body.innerHTML = '<p class="muted">Loading fundamentals…</p>';
+            fetch('/portfolio-fundamentals').then(function (r) { return r.json(); })
+                .then(function (snap) {
+                    wlFundamentals = {};
+                    (snap.rows || []).forEach(function (row) { wlFundamentals[row.symbol] = row; });
+                    render();
+                })
+                .catch(function () { body.innerHTML = '<p class="muted">Could not load fundamentals.</p>'; });
+        }
+
+        function wlKv(label, value) {
+            return '<div class="snap-kv"><span class="k">' + label + '</span><span class="v">' + value + '</span></div>';
+        }
+
+        function fmtNumOrDash(v, dp) {
+            return v == null ? '—' : parseFloat(v).toFixed(dp);
+        }
+
+        // Heuristic formatting for the fundamentals "extra" map (keys are Yahoo field names).
+        function fmtExtra(key, v, ccy) {
+            if (v == null) return '—';
+            var pctKeys = /margin|growth|yield|roic|returnon|payout|percent|change/i;
+            var capKeys = /cash|debt|revenue|ebitda|capex|enterprisevalue|shares|freecashflow|operatingcashflow/i;
+            if (pctKeys.test(key)) return (parseFloat(v) * 100).toFixed(2) + '%';
+            if (capKeys.test(key)) return fmtMarketCap(v, ccy);
+            return parseFloat(v).toFixed(2);
         }
 
     }());

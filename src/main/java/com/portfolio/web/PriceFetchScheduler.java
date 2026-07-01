@@ -65,7 +65,7 @@ public class PriceFetchScheduler {
         giltQuietly();
     }
 
-    @Scheduled(fixedDelay = 6 * 60 * 60 * 1000, initialDelay = 6 * 60 * 60 * 1000)
+    @Scheduled(fixedDelay = 4 * 60 * 60 * 1000, initialDelay = 4 * 60 * 60 * 1000)
     public void fundamentals() {
         fundamentalsJob.run();
     }

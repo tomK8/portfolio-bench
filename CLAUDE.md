@@ -112,8 +112,9 @@ no `System.out` in production code.
 | Allocation            | `GET /allocation`          | `AllocationService`       |
 | Attribution           | `GET /attribution`         | `AttributionService`      |
 | Watchlist             | `GET /watchlist`           | `WatchlistService`        |
-| Watchlist mutate      | `POST /watchlist/{add,remove,threshold}` | `WatchlistRepository` |
+| Watchlist mutate      | `POST /watchlist/{add,remove,threshold,move}` | `WatchlistRepository` |
 | Watchlist popup chart | `GET /watchlist/series`    | `WatchlistService`        |
+| Watchlist vol horizons| `GET /watchlist/vol`       | `WatchlistService`        |
 
 ## Holding fields
 
@@ -340,14 +341,29 @@ touches an order.
   `highThresholdPct`% of the 52-week high (a fresh high always fires); (b) `|today's move|` ≥
   `moveThresholdPct`%, either direction. Screen and alert job evaluate identical `Row`s so they
   never disagree. **No 52-wk-low trigger** — the low is displayed but never alerts (watched
-  names have run up too far for it to matter).
+  names have run up too far for it to matter). A **blank/0 threshold disables that trigger**
+  (`WatchlistRepository` stores 0), so a symbol can be watched with no alerts at all.
+- **Popup extras:** `GET /watchlist/vol` returns a realized-vol **term structure** (5D/10D from
+  intraday 1-min returns via `PriceStats.annualizedVolIntraday`, 30D/1Y from daily closes) shown
+  in the popup stats. `GET /watchlist/series` for `1D` returns only the latest session's bars
+  (convention: today only); the popup chart uses a **category x-axis** (evenly-spaced) so
+  overnight/weekend gaps don't draw diagonal lines — 1D labels are times, multi-day/30D labels
+  are dates. Popup fundamentals reuse the Snapshot-diff renderer (`fundamentalsHtml` /
+  `fundamentalsFieldGroups` in `dashboard.js`) laid out in columns.
+- **Manual order:** `watchlist.display_order` + `POST /watchlist/move?dir=up|down` swap
+  neighbours; rows render in that order (↑/↓ buttons per row). Add-backfills run on a
+  single-thread executor in `WatchlistController` so two quick adds queue rather than racing
+  SQLite writes.
 - `WatchlistAlertJob` — runs every 5 min (`PriceFetchScheduler`). Dedups **once per day per
   symbol per trigger** via a KV set (`watchlist_alerts_fired`, keys `SYMBOL|TRIGGER|date`),
   batches a tick's new firings into one email, and only persists the fired-set after a
   successful send (so a mail failure retries). No-op unless SMTP is configured.
 - **Email:** `AlertNotifier` port + `SmtpAlertNotifier` adapter (Jakarta Mail directly, kept
   Spring-free like the other adapters; `spring-boot-starter-mail` supplies the library).
-  Disabled by default — set `portfolio.alert.mail.*` in `application.properties` (Gmail:
-  `smtp.gmail.com:587`, STARTTLS, username + **app password**, `enabled=true`). The app must be
-  running during market hours for alerts to fire — keep the lid open + `caffeinate` (closing
-  the lid sleeps the JVM even under caffeinate).
+  Disabled by default. **Put the Gmail app password in `~/.portfolio-bench.properties`** (home
+  dir, outside the repo — `application.properties` loads it via
+  `spring.config.import=optional:file:${user.home}/.portfolio-bench.properties`, so it can never
+  be committed). Set `portfolio.alert.mail.{enabled=true,username,password,from,to}` there
+  (Gmail: `smtp.gmail.com:587`, STARTTLS). The app must be running during market hours for
+  alerts to fire — keep the lid open + `caffeinate` (closing the lid sleeps the JVM even under
+  caffeinate).

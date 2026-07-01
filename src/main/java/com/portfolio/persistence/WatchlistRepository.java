@@ -33,16 +33,21 @@ public class WatchlistRepository {
     /** KV key holding the newline-separated watchlist symbol set (mirror of this table). */
     public static final String WATCHLIST_SYMBOLS_KEY = "watchlist_symbols";
 
-    /** Sensible starting thresholds when a symbol is added without explicit values. */
-    public static final BigDecimal DEFAULT_HIGH_PCT = new BigDecimal("3");
-    public static final BigDecimal DEFAULT_MOVE_PCT = new BigDecimal("10");
+    /**
+     * Stored threshold meaning "no alert for this trigger". A blank/absent threshold is
+     * persisted as this sentinel; {@link com.portfolio.domain.WatchlistAlerts} treats any
+     * non-positive threshold as disabled. So a symbol can sit on the screen for monitoring
+     * without ever emailing.
+     */
+    private static final BigDecimal DISABLED = BigDecimal.ZERO;
 
     private static final String CREATE_TABLE = """
             CREATE TABLE IF NOT EXISTS watchlist (
                 symbol             TEXT    PRIMARY KEY,
                 high_threshold_pct REAL    NOT NULL,
                 move_threshold_pct REAL    NOT NULL,
-                added_at           TEXT    NOT NULL
+                added_at           TEXT    NOT NULL,
+                display_order      INTEGER
             )""";
 
     private final JdbcConnectionFactory connections;
@@ -53,6 +58,13 @@ public class WatchlistRepository {
         this.keyValueStore = keyValueStore;
         try (Connection conn = connections.open(); Statement ddl = conn.createStatement()) {
             ddl.execute(CREATE_TABLE);
+            try {
+                ddl.execute("ALTER TABLE watchlist ADD COLUMN display_order INTEGER");
+            } catch (java.sql.SQLException alreadyMigrated) {
+                // display_order column already present — fine
+            }
+            // Backfill any rows that predate the column so ordering is stable and non-null.
+            ddl.execute("UPDATE watchlist SET display_order = rowid WHERE display_order IS NULL");
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise watchlist table", e);
         }
@@ -64,14 +76,14 @@ public class WatchlistRepository {
         if (sym.isEmpty()) throw new IllegalStateException("Watchlist symbol must not be blank.");
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
-                     "INSERT INTO watchlist (symbol, high_threshold_pct, move_threshold_pct, added_at) " +
-                             "VALUES (?, ?, ?, ?) " +
+                     "INSERT INTO watchlist (symbol, high_threshold_pct, move_threshold_pct, added_at, display_order) " +
+                             "VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(display_order), 0) + 1 FROM watchlist)) " +
                              "ON CONFLICT(symbol) DO UPDATE SET " +
                              "high_threshold_pct = excluded.high_threshold_pct, " +
                              "move_threshold_pct = excluded.move_threshold_pct")) {
             ps.setString(1, sym);
-            ps.setDouble(2, orDefault(highPct, DEFAULT_HIGH_PCT).doubleValue());
-            ps.setDouble(3, orDefault(movePct, DEFAULT_MOVE_PCT).doubleValue());
+            ps.setDouble(2, orDisabled(highPct).doubleValue());
+            ps.setDouble(3, orDisabled(movePct).doubleValue());
             ps.setString(4, Instant.now().toString());
             ps.executeUpdate();
         } catch (Exception e) {
@@ -85,8 +97,8 @@ public class WatchlistRepository {
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "UPDATE watchlist SET high_threshold_pct = ?, move_threshold_pct = ? WHERE symbol = ?")) {
-            ps.setDouble(1, orDefault(highPct, DEFAULT_HIGH_PCT).doubleValue());
-            ps.setDouble(2, orDefault(movePct, DEFAULT_MOVE_PCT).doubleValue());
+            ps.setDouble(1, orDisabled(highPct).doubleValue());
+            ps.setDouble(2, orDisabled(movePct).doubleValue());
             ps.setString(3, sym);
             if (ps.executeUpdate() == 0) {
                 throw new IllegalStateException(sym + " is not on the watchlist.");
@@ -110,7 +122,7 @@ public class WatchlistRepository {
         mirrorKv();
     }
 
-    /** All watchlist rows, alphabetical by symbol. Degrades to empty on read failure. */
+    /** All watchlist rows, in the user's manual display order. Degrades to empty on read failure. */
     public List<Entry> loadAll() {
         List<Entry> out = new ArrayList<>();
         if (!connections.dbExists()) return out;
@@ -118,7 +130,7 @@ public class WatchlistRepository {
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
                      "SELECT symbol, high_threshold_pct, move_threshold_pct, added_at " +
-                             "FROM watchlist ORDER BY symbol")) {
+                             "FROM watchlist ORDER BY display_order, symbol")) {
             while (rs.next()) {
                 out.add(new Entry(rs.getString(1),
                         BigDecimal.valueOf(rs.getDouble(2)),
@@ -131,6 +143,44 @@ public class WatchlistRepository {
         return out;
     }
 
+    /**
+     * Move a symbol one place up or down in the manual display order by swapping its
+     * {@code display_order} with its neighbour's. No-op at the ends of the list or if the
+     * symbol isn't present. The symbol set is unchanged, so no KV re-mirror is needed.
+     */
+    public void move(String symbol, boolean up) {
+        String sym = normalise(symbol);
+        try (Connection conn = connections.open()) {
+            List<String> syms = new ArrayList<>();
+            List<Long> orders = new ArrayList<>();
+            try (Statement st = conn.createStatement();
+                 ResultSet rs = st.executeQuery(
+                         "SELECT symbol, display_order FROM watchlist ORDER BY display_order, symbol")) {
+                while (rs.next()) {
+                    syms.add(rs.getString(1));
+                    orders.add(rs.getLong(2));
+                }
+            }
+            int idx = syms.indexOf(sym);
+            if (idx < 0) return;
+            int neighbour = up ? idx - 1 : idx + 1;
+            if (neighbour < 0 || neighbour >= syms.size()) return;    // already at an end
+            setOrder(conn, syms.get(idx), orders.get(neighbour));
+            setOrder(conn, syms.get(neighbour), orders.get(idx));
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not reorder " + sym + " on the watchlist.", e);
+        }
+    }
+
+    private static void setOrder(Connection conn, String symbol, long order) throws java.sql.SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "UPDATE watchlist SET display_order = ? WHERE symbol = ?")) {
+            ps.setLong(1, order);
+            ps.setString(2, symbol);
+            ps.executeUpdate();
+        }
+    }
+
     private void mirrorKv() {
         List<String> symbols = new ArrayList<>();
         for (Entry e : loadAll()) symbols.add(e.symbol());
@@ -141,8 +191,9 @@ public class WatchlistRepository {
         return symbol == null ? "" : symbol.trim().toUpperCase();
     }
 
-    private static BigDecimal orDefault(BigDecimal v, BigDecimal dflt) {
-        return (v == null || v.signum() < 0) ? dflt : v;
+    /** Blank or negative → disabled (no alert); otherwise the value as given. */
+    private static BigDecimal orDisabled(BigDecimal v) {
+        return (v == null || v.signum() < 0) ? DISABLED : v;
     }
 
     public record Entry(String symbol, BigDecimal highThresholdPct, BigDecimal moveThresholdPct,

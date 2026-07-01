@@ -1,9 +1,11 @@
 package com.portfolio.domain;
 
+import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.PriceBar;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -69,6 +71,30 @@ class PriceStatsTest {
         assertEquals(14.0, PriceStats.closeOnOrBefore(bars, LocalDate.parse("2026-01-09")));
         // Before the series starts → null.
         assertNull(PriceStats.closeOnOrBefore(bars, LocalDate.parse("2025-12-31")));
+    }
+
+    private static IntradayBar ib(String iso, double close) {
+        return new IntradayBar("X", Instant.parse(iso), close, null, "USD");
+    }
+
+    @Test
+    void annualizedVolIntraday_positiveForMovingSeries_skipsOvernight() {
+        // Two sessions, moves within each; the overnight jump (last of day 1 → first of day 2)
+        // must be skipped, so a big overnight gap doesn't inflate the estimate.
+        List<IntradayBar> bars = List.of(
+                ib("2026-01-05T14:30:00Z", 100), ib("2026-01-05T14:31:00Z", 101), ib("2026-01-05T14:32:00Z", 100),
+                ib("2026-01-06T14:30:00Z", 130), ib("2026-01-06T14:31:00Z", 131), ib("2026-01-06T14:32:00Z", 130));
+        BigDecimal vol = PriceStats.annualizedVolIntraday(bars);
+        assertNotNull(vol);
+        assertTrue(vol.doubleValue() > 0);
+    }
+
+    @Test
+    void annualizedVolIntraday_constant_isZero_andNullWhenSparse() {
+        List<IntradayBar> flat = List.of(
+                ib("2026-01-05T14:30:00Z", 50), ib("2026-01-05T14:31:00Z", 50), ib("2026-01-05T14:32:00Z", 50));
+        assertEquals(0.0, PriceStats.annualizedVolIntraday(flat).doubleValue(), 1e-12);
+        assertNull(PriceStats.annualizedVolIntraday(List.of(ib("2026-01-05T14:30:00Z", 50))));
     }
 
     @Test

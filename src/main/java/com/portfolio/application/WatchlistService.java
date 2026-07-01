@@ -240,6 +240,7 @@ public class WatchlistService {
         };
         Instant from = Instant.now().minus(Duration.ofDays(days));
         List<IntradayBar> bars = intradayRepo.loadIntradaySeries(ticker, from);
+        if ("1D".equals(window)) bars = latestSessionOnly(bars);
         int stride = days > INTRADAY_SERIES_STRIDE_ABOVE_DAYS ? 5 : 1;
         List<Point> pts = new ArrayList<>();
         for (int i = 0; i < bars.size(); i++) {
@@ -251,10 +252,52 @@ public class WatchlistService {
         return new Series(symbol, window, "intraday", pts);
     }
 
+    /**
+     * Realized-volatility term structure for the popup. Short horizons (5D/10D) come from
+     * intraday 1-minute returns — far less noisy over a few days than the ~5–10 daily returns
+     * would give; longer horizons (30D/1Y) come from daily closes. All annualised fractions.
+     */
+    public VolTerms volatility(String symbolRaw) {
+        String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase();
+        if (symbol.isEmpty()) return new VolTerms(null, null, null, null);
+        String ticker = tickerFor(symbol);
+        Instant now = Instant.now();
+
+        List<IntradayBar> intra10 = intradayRepo.loadIntradaySeries(ticker, now.minus(Duration.ofDays(10)));
+        Instant fiveAgo = now.minus(Duration.ofDays(5));
+        List<IntradayBar> intra5 = new ArrayList<>();
+        for (IntradayBar b : intra10) if (!b.ts().isBefore(fiveAgo)) intra5.add(b);
+
+        BigDecimal vol5 = PriceStats.annualizedVolIntraday(intra5);
+        BigDecimal vol10 = PriceStats.annualizedVolIntraday(intra10);
+
+        List<PriceBar> daily = priceRepo.getPriceHistory(ticker, LocalDate.now().minusDays(500), LocalDate.now());
+        BigDecimal vol30 = PriceStats.annualizedVol(daily, 30);
+        BigDecimal vol1y = PriceStats.annualizedVol(daily, 252);
+
+        return new VolTerms(scalePct(vol5), scalePct(vol10), scalePct(vol30), scalePct(vol1y));
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private String tickerFor(String symbol) {
         return Instruments.isBond(symbol) ? symbol : tickerMap.tickerFor(symbol);
+    }
+
+    /**
+     * Keep only the most recent trading session's bars so the 1D chart shows just today,
+     * per convention — no overnight straight line back to the prior session. A session sits
+     * within a single UTC date for both the US and London listings we cover, so grouping by
+     * the latest bar's UTC date isolates it cleanly.
+     */
+    private static List<IntradayBar> latestSessionOnly(List<IntradayBar> bars) {
+        if (bars.isEmpty()) return bars;
+        java.time.LocalDate last = bars.get(bars.size() - 1).ts().atZone(java.time.ZoneOffset.UTC).toLocalDate();
+        List<IntradayBar> out = new ArrayList<>();
+        for (IntradayBar b : bars) {
+            if (b.ts().atZone(java.time.ZoneOffset.UTC).toLocalDate().equals(last)) out.add(b);
+        }
+        return out;
     }
 
     private Map<String, List<CashTransaction>> ledgerBySymbol() {
@@ -320,5 +363,9 @@ public class WatchlistService {
     }
 
     public record Series(String symbol, String window, String granularity, List<Point> points) {
+    }
+
+    /** Annualised realized-vol horizons (fractions). 5D/10D intraday-derived, 30D/1Y daily. */
+    public record VolTerms(BigDecimal vol5d, BigDecimal vol10d, BigDecimal vol30d, BigDecimal vol1y) {
     }
 }

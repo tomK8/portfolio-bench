@@ -485,7 +485,20 @@
         html[data-theme="dark"] .wl-neg { color: #f87171; }
         .wl-thr-input { width: 3.2rem; font-size: 0.8rem; padding: 1px 3px; }
         .wl-remove { color: #c0392b; cursor: pointer; border: 0; background: none; font-size: 1rem; line-height: 1; }
-        #wl-modal .modal-box { max-width: 860px; width: 92vw; max-height: 90vh; overflow-y: auto; }
+        .wl-actions { white-space: nowrap; }
+        .wl-move { border: 0; background: none; cursor: pointer; font-size: 0.95rem; line-height: 1; color: #999; padding: 0 2px; }
+        .wl-move:hover { color: #1f77b4; }
+        #wl-modal .modal-box { max-width: 1180px; width: 96vw; max-height: 92vh; overflow-y: auto; }
+        /* Fundamentals laid out in balanced columns; groups never split across a column break. */
+        .wl-fund-cols { column-width: 250px; column-gap: 2rem; }
+        .wl-fund-cols .snap-group { break-inside: avoid; -webkit-column-break-inside: avoid; margin-top: 0; margin-bottom: 0.75rem; }
+        /* Subtle Google-style stat grid inside the popup: light label left, value right,
+           thin row rules, flowing into columns. Deliberately quiet — no boxes. */
+        .wl-stats { column-width: 185px; column-gap: 2.2rem; margin: 0.5rem 0 0.25rem; }
+        .wl-stats .snap-kv { break-inside: avoid; border-bottom: 1px solid #f0f0f0; padding: 0.24rem 0; font-size: 0.8rem; }
+        .wl-stats .snap-kv .k { color: #8a8f96; font-weight: 400; }
+        .wl-stats .snap-kv .v { font-weight: 500; font-variant-numeric: tabular-nums; }
+        html[data-theme="dark"] .wl-stats .snap-kv { border-bottom-color: #23262b; }
         .wl-window-toggle { display: inline-flex; gap: 0; margin: 0.5rem 0; }
         .wl-window-toggle button { padding: 0.25rem 0.7rem; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
         .wl-window-toggle button.active { background: #1f77b4; color: #fff; border-color: #1d6ba2; }
@@ -1637,9 +1650,9 @@
         Volatility-trading watchlist. Enter any symbol — owned or not. Rows colour when an alert
         fires: <b class="wl-pos">green</b>/<b class="wl-neg">red</b> = a big move today (up/down),
         <b style="color:#1f77b4">blue</b> = near the 52-week high, pulsing = both. Set each
-        symbol's two thresholds inline (% from 52-wk high, |today's move|). Email alerts fire
-        once per day per signal when SMTP is configured. Click a row for the price chart and
-        fundamentals.
+        symbol's two thresholds inline (% from 52-wk high, |today's move|); leave a threshold
+        blank to watch a symbol without any alert. Email alerts fire once per day per signal
+        when SMTP is configured. Click a row for the price chart and fundamentals.
     </p>
     <div class="benchmark-controls">
         <label>Symbol: <input id="wl-add-symbol" type="text" size="8" placeholder="e.g. NVDA"/></label>
@@ -1676,9 +1689,11 @@
 
     <div id="wl-modal" class="modal-backdrop" role="dialog" aria-modal="true">
         <div class="modal-box">
-            <h3 id="wl-modal-title">—</h3>
+            <h3 id="wl-modal-title" style="margin-bottom: 0.15rem;">—</h3>
             <div id="wl-modal-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.5rem;"></div>
-            <div class="returns-stats" id="wl-modal-stats"></div>
+            <div style="height: 360px;">
+                <canvas id="wl-chart"></canvas>
+            </div>
             <div class="wl-window-toggle" id="wl-window-toggle">
                 <button type="button" data-window="1D">1D</button>
                 <button type="button" data-window="3D">3D</button>
@@ -1687,9 +1702,7 @@
                 <button type="button" data-window="15D">15D</button>
                 <button type="button" data-window="30D">30D</button>
             </div>
-            <div style="height: 340px;">
-                <canvas id="wl-chart"></canvas>
-            </div>
+            <div class="wl-stats" id="wl-modal-stats"></div>
             <div class="wl-fund-toggle" id="wl-fund-toggle">Fundamentals</div>
             <div id="wl-fund-body" style="display: none; margin-top: 0.5rem;"></div>
             <div class="modal-actions">

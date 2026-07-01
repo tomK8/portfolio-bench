@@ -1,11 +1,15 @@
 package com.portfolio.domain;
 
+import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.PriceBar;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Pure price-series statistics for the watchlist screen: realized volatility and
@@ -59,6 +63,39 @@ public final class PriceStats {
         double variance = sumSq / (filled - 1);           // sample variance
         double daily = Math.sqrt(variance);
         double annual = daily * Math.sqrt(TRADING_DAYS);
+        return BigDecimal.valueOf(annual).setScale(SCALE, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Annualised realized volatility from intraday (1-minute) bars — the right estimator for
+     * short horizons (5D/10D) where a handful of daily returns is too noisy. Uses the realized-
+     * variance approach: sum the squared <em>intra-session</em> log returns (overnight gaps
+     * skipped), divide by the number of distinct trading days observed to get a per-day
+     * variance, then annualise by {@code √252}. This is robust to the exchange's bars-per-day
+     * (it doesn't assume a fixed count). Returns {@code null} with fewer than two usable returns.
+     */
+    public static BigDecimal annualizedVolIntraday(List<IntradayBar> barsAscending) {
+        if (barsAscending == null || barsAscending.size() < 2) return null;
+        double rvSum = 0;
+        int usedReturns = 0;
+        Set<LocalDate> days = new HashSet<>();
+        for (int i = 1; i < barsAscending.size(); i++) {
+            IntradayBar prev = barsAscending.get(i - 1);
+            IntradayBar cur = barsAscending.get(i);
+            LocalDate dPrev = prev.ts().atZone(ZoneOffset.UTC).toLocalDate();
+            LocalDate dCur = cur.ts().atZone(ZoneOffset.UTC).toLocalDate();
+            days.add(dPrev);
+            days.add(dCur);
+            if (!dPrev.equals(dCur)) continue;        // skip the overnight gap
+            double a = prev.close(), b = cur.close();
+            if (a <= 0 || b <= 0) continue;
+            double r = Math.log(b / a);
+            rvSum += r * r;
+            usedReturns++;
+        }
+        if (usedReturns < 2 || days.isEmpty()) return null;
+        double perDayVariance = rvSum / days.size();
+        double annual = Math.sqrt(perDayVariance * TRADING_DAYS);
         return BigDecimal.valueOf(annual).setScale(SCALE, RoundingMode.HALF_UP);
     }
 

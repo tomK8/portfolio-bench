@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
 import java.math.BigDecimal;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * The volatility-trading watchlist: a user-maintained set of symbols (owned or not) with the
@@ -35,6 +37,13 @@ public class WatchlistController {
     private final WatchlistRepository watchlistRepo;
     private final PriceFetchJob priceFetchJob;
     private final FundamentalsFetchJob fundamentalsFetchJob;
+
+    // Single-thread so two quick adds queue instead of racing each other's SQLite writes.
+    private final ExecutorService backfillExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "watchlist-add-backfill");
+        t.setDaemon(true);
+        return t;
+    });
 
     public WatchlistController(WatchlistService watchlistService,
                                WatchlistRepository watchlistRepo,
@@ -88,13 +97,30 @@ public class WatchlistController {
         return watchlistService.series(symbol, window);
     }
 
+    @GetMapping("/watchlist/vol")
+    @ResponseBody
+    public WatchlistService.VolTerms vol(@RequestParam("symbol") String symbol) {
+        return watchlistService.volatility(symbol);
+    }
+
+    @PostMapping("/watchlist/move")
+    @ResponseBody
+    public WatchlistView move(@RequestParam("symbol") String symbol,
+                              @RequestParam("dir") String dir) {
+        boolean up = "up".equalsIgnoreCase(dir == null ? "" : dir.trim());
+        boolean down = "down".equalsIgnoreCase(dir == null ? "" : dir.trim());
+        if (!up && !down) throw new IllegalArgumentException("dir must be 'up' or 'down'.");
+        watchlistRepo.move(symbol, up);
+        return watchlistService.view();
+    }
+
     /**
      * Fetch daily prices for a newly added symbol and refresh the fundamentals cache, off the
      * request thread so the UI returns immediately. Intraday quotes arrive on the next scheduled
      * intraday tick (≤1 min) via the mirrored watchlist symbol set.
      */
     private void backfillInBackground(String symbol) {
-        Thread t = new Thread(() -> {
+        backfillExecutor.submit(() -> {
             try {
                 int rows = priceFetchJob.fetchSingle(symbol);
                 log.info("Watchlist add backfill: {} → {} daily rows", symbol, rows);
@@ -102,9 +128,7 @@ public class WatchlistController {
             } catch (RuntimeException e) {
                 log.warn("Watchlist add backfill failed for {}", symbol, e);
             }
-        }, "watchlist-add-backfill");
-        t.setDaemon(true);
-        t.start();
+        });
     }
 
     private static BigDecimal parsePct(String s, String name) {

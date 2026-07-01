@@ -102,9 +102,14 @@ public class PortfolioFundamentalsService {
     }
 
     private List<String> heldInternalSymbols() {
-        Set<String> held = keyValueStore.getStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY);
+        Set<String> universe = new TreeSet<>(Comparator.naturalOrder());
+        universe.addAll(keyValueStore.getStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY));
+        // Watchlist names too, so their P/E, beta and 52-week high/low populate the fundamentals
+        // cache the watchlist screen reads from.
+        universe.addAll(keyValueStore.getStringSet(
+                com.portfolio.persistence.WatchlistRepository.WATCHLIST_SYMBOLS_KEY));
         Set<String> filtered = new TreeSet<>(Comparator.naturalOrder());
-        for (String s : held) {
+        for (String s : universe) {
             if (!Instruments.isBond(s) && !"CASH".equals(s)) filtered.add(s);
         }
         return new ArrayList<>(filtered);

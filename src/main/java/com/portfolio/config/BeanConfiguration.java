@@ -5,6 +5,7 @@ import com.portfolio.adapter.EdgarFundamentalsFetcher;
 import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.GiltPriceFetcher;
 import com.portfolio.adapter.HoldingFileLocator;
+import com.portfolio.adapter.SmtpAlertNotifier;
 import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooQuoteSummaryFetcher;
 import com.portfolio.adapter.YahooTickerMap;
@@ -17,6 +18,8 @@ import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.persistence.SnapshotRepository;
 import com.portfolio.persistence.TradeNotesRepository;
+import com.portfolio.persistence.WatchlistRepository;
+import com.portfolio.port.AlertNotifier;
 import com.portfolio.port.FxRateProvider;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -433,5 +436,51 @@ public class BeanConfiguration {
                                                            PriceHistoryRepository priceHistoryRepository) {
         return new ImportGiltPricesService(inputDir(inputDir), jdbcConnectionFactory.dbDir(),
                 priceHistoryRepository);
+    }
+
+    // ---- Watchlist (volatility-trading monitor + alerts) --------------------
+
+    @Bean
+    public WatchlistRepository watchlistRepository(JdbcConnectionFactory connections,
+                                                   KeyValueStore keyValueStore) {
+        return new WatchlistRepository(connections, keyValueStore);
+    }
+
+    @Bean
+    public WatchlistService watchlistService(WatchlistRepository watchlistRepository,
+                                             PriceHistoryRepository priceHistoryRepository,
+                                             IntradayPriceRepository intradayPriceRepository,
+                                             FundamentalsRepository fundamentalsRepository,
+                                             CashTransactionRepository cashTransactionRepository,
+                                             FxRateProvider fxRateProvider,
+                                             YahooTickerMap yahooTickerMap) {
+        return new WatchlistService(watchlistRepository, priceHistoryRepository, intradayPriceRepository,
+                fundamentalsRepository, cashTransactionRepository, fxRateProvider, yahooTickerMap);
+    }
+
+    /**
+     * SMTP alert channel. Disabled by default — fill in {@code portfolio.alert.mail.*} (Gmail:
+     * host {@code smtp.gmail.com}, port {@code 587}, STARTTLS, username + app password) and set
+     * {@code enabled=true} to turn on watchlist emails.
+     */
+    @Bean
+    public AlertNotifier alertNotifier(
+            @Value("${portfolio.alert.mail.enabled:false}") boolean enabled,
+            @Value("${portfolio.alert.mail.host:smtp.gmail.com}") String host,
+            @Value("${portfolio.alert.mail.port:587}") int port,
+            @Value("${portfolio.alert.mail.starttls:true}") boolean startTls,
+            @Value("${portfolio.alert.mail.username:}") String username,
+            @Value("${portfolio.alert.mail.password:}") String password,
+            @Value("${portfolio.alert.mail.from:}") String from,
+            @Value("${portfolio.alert.mail.to:}") String to) {
+        return new SmtpAlertNotifier(new SmtpAlertNotifier.Settings(
+                enabled, host, port, startTls, username, password, from, to));
+    }
+
+    @Bean
+    public WatchlistAlertJob watchlistAlertJob(WatchlistService watchlistService,
+                                               AlertNotifier alertNotifier,
+                                               KeyValueStore keyValueStore) {
+        return new WatchlistAlertJob(watchlistService, alertNotifier, keyValueStore);
     }
 }

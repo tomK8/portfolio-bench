@@ -4,6 +4,7 @@ import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.KeyValueStore;
+import com.portfolio.persistence.WatchlistRepository;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -26,9 +27,10 @@ final class PriceFetchSupport {
      * in a stable sequence. Tickers that resolve to the same Yahoo symbol (e.g. multiple internal
      * share-class spellings) are deduplicated.
      *
-     * <p>Three sources: every symbol ever traded (from the cash ledger), the symbol set
-     * persisted by the most recent dashboard /sync, and the replacement targets used by the
-     * Scenario tab's substitute overrides. The second source covers a freshly bought name
+     * <p>Four sources: every symbol ever traded (from the cash ledger), the symbol set
+     * persisted by the most recent dashboard /sync, the watchlist symbol set, and the
+     * replacement targets used by the Scenario tab's substitute overrides. The second source
+     * covers a freshly bought name
      * whose cash statement hasn't been imported yet. The third covers substitute targets
      * (e.g. {@code NVDA=QQQ}) — those tickers are never traded, so without this hook the
      * scenario engine would project them with stale or missing history. The default
@@ -39,6 +41,9 @@ final class PriceFetchSupport {
                                       KeyValueStore kv) {
         Set<String> symbols = new LinkedHashSet<>(cashRepo.distinctTradedSymbols());
         symbols.addAll(kv.getStringSet(HELD_SYMBOLS_KEY));
+        // Watchlist names (owned or not) so freshly added symbols get daily + intraday prices
+        // on the next tick, even before any cash statement mentions them.
+        symbols.addAll(kv.getStringSet(WatchlistRepository.WATCHLIST_SYMBOLS_KEY));
         for (String line : kv.getStringSet(HistoricalScenarioService.SUBSTITUTES_KEY)) {
             int eq = line.indexOf('=');
             if (eq <= 0 || eq >= line.length() - 1) continue;

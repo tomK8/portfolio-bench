@@ -52,7 +52,8 @@ public class WatchlistService {
 
     private static final Logger log = LoggerFactory.getLogger(WatchlistService.class);
 
-    private static final int VOL_WINDOW = 30;          // sessions of returns for realized vol
+    private static final int VOL_WINDOW = 30;          // sessions of returns for 30D realized vol
+    private static final int VOL_1Y_WINDOW = 252;      // sessions of returns for 1Y realized vol
     private static final int PRICE_SCALE = 4;
     private static final int PCT_SCALE = 6;
     private static final int GBP_SCALE = 2;
@@ -136,7 +137,13 @@ public class WatchlistService {
         BigDecimal pct10d = PriceStats.pctChange(current, PriceStats.closeOnOrBefore(bars, today.minusDays(10)));
         BigDecimal pct30d = PriceStats.pctChange(current, PriceStats.closeOnOrBefore(bars, today.minusDays(30)));
 
-        BigDecimal vol = PriceStats.annualizedVol(bars, VOL_WINDOW);
+        // Realized-vol term structure, same estimators the popup uses: 5D/10D from intraday
+        // 1-minute returns (less noisy over a few days than a handful of daily returns), 30D/1Y
+        // from the daily closes already loaded above.
+        BigDecimal vol30 = PriceStats.annualizedVol(bars, VOL_WINDOW);
+        BigDecimal vol1y = PriceStats.annualizedVol(bars, VOL_1Y_WINDOW);
+        BigDecimal[] intra = intradayVols(ticker, Instant.now());
+        BigDecimal vol5 = intra[0], vol10 = intra[1];
 
         BigDecimal currentPrice = current == null ? null
                 : BigDecimal.valueOf(current).setScale(PRICE_SCALE, RoundingMode.HALF_UP);
@@ -158,7 +165,7 @@ public class WatchlistService {
         return new Row(symbol, currency, currentPrice,
                 scalePct(todayPct), scalePct(pct3d), scalePct(pct5d), scalePct(pct10d), scalePct(pct30d),
                 week52High, week52Low, scalePct(pctFromHigh), scalePct(pctFromLow),
-                scalePct(vol), trailingPe, beta,
+                scalePct(vol5), scalePct(vol10), scalePct(vol30), scalePct(vol1y), trailingPe, beta,
                 pos.held(), pos.valueGbp(), pos.gainGbp(), scalePct(pos.gainPct()),
                 e.highThresholdPct(), e.moveThresholdPct(),
                 flags.nearHigh(), flags.bigMove(), flags.moveDirection(),
@@ -261,21 +268,30 @@ public class WatchlistService {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase();
         if (symbol.isEmpty()) return new VolTerms(null, null, null, null);
         String ticker = tickerFor(symbol);
-        Instant now = Instant.now();
 
+        BigDecimal[] intra = intradayVols(ticker, Instant.now());
+
+        List<PriceBar> daily = priceRepo.getPriceHistory(ticker, LocalDate.now().minusDays(500), LocalDate.now());
+        BigDecimal vol30 = PriceStats.annualizedVol(daily, VOL_WINDOW);
+        BigDecimal vol1y = PriceStats.annualizedVol(daily, VOL_1Y_WINDOW);
+
+        return new VolTerms(scalePct(intra[0]), scalePct(intra[1]), scalePct(vol30), scalePct(vol1y));
+    }
+
+    /**
+     * Intraday-derived annualised realized vol for the 5D and 10D horizons, from a single
+     * 10-day intraday load (the 5D slice is filtered in memory). Returns {@code [vol5d, vol10d]}
+     * as raw fractions ({@code null} when too few 1-minute bars) — shared by the watchlist
+     * screen rows and the popup term structure so the two never disagree.
+     */
+    private BigDecimal[] intradayVols(String ticker, Instant now) {
         List<IntradayBar> intra10 = intradayRepo.loadIntradaySeries(ticker, now.minus(Duration.ofDays(10)));
         Instant fiveAgo = now.minus(Duration.ofDays(5));
         List<IntradayBar> intra5 = new ArrayList<>();
         for (IntradayBar b : intra10) if (!b.ts().isBefore(fiveAgo)) intra5.add(b);
-
-        BigDecimal vol5 = PriceStats.annualizedVolIntraday(intra5);
-        BigDecimal vol10 = PriceStats.annualizedVolIntraday(intra10);
-
-        List<PriceBar> daily = priceRepo.getPriceHistory(ticker, LocalDate.now().minusDays(500), LocalDate.now());
-        BigDecimal vol30 = PriceStats.annualizedVol(daily, 30);
-        BigDecimal vol1y = PriceStats.annualizedVol(daily, 252);
-
-        return new VolTerms(scalePct(vol5), scalePct(vol10), scalePct(vol30), scalePct(vol1y));
+        return new BigDecimal[]{
+                PriceStats.annualizedVolIntraday(intra5),
+                PriceStats.annualizedVolIntraday(intra10)};
     }
 
     // ---- helpers ------------------------------------------------------------
@@ -342,7 +358,8 @@ public class WatchlistService {
                       BigDecimal pct10d, BigDecimal pct30d,
                       BigDecimal week52High, BigDecimal week52Low,
                       BigDecimal pctFromHigh, BigDecimal pctFromLow,
-                      BigDecimal realizedVol, BigDecimal trailingPe, BigDecimal beta,
+                      BigDecimal vol5d, BigDecimal vol10d, BigDecimal vol30d, BigDecimal vol1y,
+                      BigDecimal trailingPe, BigDecimal beta,
                       boolean held, BigDecimal positionValueGbp, BigDecimal gainGbp, BigDecimal gainPct,
                       BigDecimal highThresholdPct, BigDecimal moveThresholdPct,
                       boolean nearHigh, boolean bigMove, int moveDirection,
@@ -350,7 +367,7 @@ public class WatchlistService {
 
         static Row missing(String symbol, BigDecimal highPct, BigDecimal movePct) {
             return new Row(symbol, null, null, null, null, null, null, null,
-                    null, null, null, null, null, null, null,
+                    null, null, null, null, null, null, null, null, null, null,
                     false, null, null, null, highPct, movePct,
                     false, false, 0, true);
         }

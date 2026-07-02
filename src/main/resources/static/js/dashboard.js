@@ -4689,6 +4689,11 @@
             return '<td' + cls + '>' + (n >= 0 ? '+' : '') + n.toFixed(1) + '%</td>';
         }
 
+        // Realized-vol cell — always positive, so no leading sign (matches the popup term structure).
+        function wlVolCell(frac) {
+            return frac == null ? '<td class="na">—</td>' : '<td>' + wlVolText(frac) + '</td>';
+        }
+
         function wlGbpCell(v, colour) {
             if (v == null) return '<td class="na">—</td>';
             var n = parseFloat(v);
@@ -4715,7 +4720,6 @@
                 tr.className = rowAlertClass(r);
                 var price = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
                 var pe = r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1);
-                var vol = wlPctCell(r.realizedVol, false);
                 // Blank (empty input) means "no alert for this trigger" — a disabled threshold
                 // is stored as 0, shown as an empty cell.
                 var highV = (r.highThresholdPct == null || parseFloat(r.highThresholdPct) <= 0) ? '' : parseFloat(r.highThresholdPct);
@@ -4730,7 +4734,10 @@
                     wlPctCell(r.pct30d, true) +
                     wlPctCell(r.pctFromHigh, false) +
                     wlPctCell(r.pctFromLow, false) +
-                    vol +
+                    wlVolCell(r.vol5d) +
+                    wlVolCell(r.vol10d) +
+                    wlVolCell(r.vol30d) +
+                    wlVolCell(r.vol1y) +
                     '<td>' + pe + '</td>' +
                     wlGbpCell(r.held ? r.positionValueGbp : null, false) +
                     wlGbpCell(r.held ? r.gainGbp : null, true) +

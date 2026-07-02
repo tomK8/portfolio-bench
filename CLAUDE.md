@@ -90,7 +90,8 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
 - **Watchlist** — `GET /watchlist` → JSON, rendered as a table under the Tools group. A
   user-maintained set of symbols (owned or not — *not* unioned with holdings, kept lean by
   design) for volatility trading. Each row joins live price + today's move + trailing
-  momentum (5d/30d) + 30-day annualised realized vol + 52-wk high/low distances + P/E/beta
+  momentum (5d/30d) + a realized-vol term structure (5D/10D/30D/1Y annualised) + 52-wk
+  high/low distances + P/E/beta
   + position/gain (blank when not held). Two per-symbol alert triggers with editable
   thresholds: proximity to the 52-week high, and |today's move|. Row colour = alert state
   (green/red today-move by direction, blue near-high, pulsing when both). Click a row for a

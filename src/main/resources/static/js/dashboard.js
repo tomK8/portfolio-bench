@@ -4736,7 +4736,9 @@
                 return;
             }
             var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            var html = '<table><thead><tr>' +
+            var html = '<label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer">' +
+                '<input type="checkbox" id="wl-cum-all"/> Show cumulative (Σ) for all rows</label>';
+            html += '<table><thead><tr>' +
                 '<th style="min-width:80px">Symbol</th>';
             data.dates.forEach(function (d) {
                 // "6/6" (day/month) — parse as UTC to avoid timezone shifts
@@ -4787,34 +4789,52 @@
             panel.innerHTML = html;
 
             var tbody = panel.querySelector('tbody');
+
+            // The cumulative row already sitting above `tr`, or null.
+            function cumRowFor(tr) {
+                var prev = tr.previousElementSibling;
+                return (prev && prev.classList.contains('wl-cum-row') &&
+                    prev.getAttribute('data-for') === tr.getAttribute('data-idx')) ? prev : null;
+            }
+            function removeCumFor(tr) {
+                var existing = cumRowFor(tr);
+                if (existing) existing.remove();
+            }
+            function insertCumFor(tr) {
+                if (cumRowFor(tr)) return;
+                var row = data.rows[+tr.getAttribute('data-idx')];
+                // Cumulative return through each column: compound the daily returns
+                // (skipping missing days), so cell i = ∏(1+r_k) for k≤i, minus 1.
+                var cum = document.createElement('tr');
+                cum.className = 'wl-cum-row';
+                cum.setAttribute('data-for', tr.getAttribute('data-idx'));
+                var factor = 1, seen = false;
+                var cells = '<td style="font-style:italic" title="Cumulative return">' + row.symbol + ' Σ</td>';
+                row.returns.forEach(function (r) {
+                    if (r == null) {
+                        cells += returnCell(seen ? (factor - 1) * 100 : null, true);
+                    } else {
+                        factor *= 1 + parseFloat(r);
+                        seen = true;
+                        cells += returnCell((factor - 1) * 100, true);
+                    }
+                });
+                cum.innerHTML = cells;
+                tbody.insertBefore(cum, tr);
+            }
+
             panel.querySelectorAll('.wl-ret-row').forEach(function (tr) {
                 tr.addEventListener('click', function () {
-                    var existing = tr.previousElementSibling;
-                    // Toggle: a cumulative row already sitting above this one collapses it.
-                    if (existing && existing.classList.contains('wl-cum-row') &&
-                        existing.getAttribute('data-for') === tr.getAttribute('data-idx')) {
-                        existing.remove();
-                        return;
-                    }
-                    var row = data.rows[+tr.getAttribute('data-idx')];
-                    // Cumulative return through each column: compound the daily returns
-                    // (skipping missing days), so cell i = ∏(1+r_k) for k≤i, minus 1.
-                    var cum = document.createElement('tr');
-                    cum.className = 'wl-cum-row';
-                    cum.setAttribute('data-for', tr.getAttribute('data-idx'));
-                    var factor = 1, seen = false;
-                    var cells = '<td style="font-style:italic" title="Cumulative return">' + row.symbol + ' Σ</td>';
-                    row.returns.forEach(function (r) {
-                        if (r == null) {
-                            cells += returnCell(seen ? (factor - 1) * 100 : null, true);
-                        } else {
-                            factor *= 1 + parseFloat(r);
-                            seen = true;
-                            cells += returnCell((factor - 1) * 100, true);
-                        }
-                    });
-                    cum.innerHTML = cells;
-                    tbody.insertBefore(cum, tr);
+                    // Toggle this row's cumulative line.
+                    if (cumRowFor(tr)) removeCumFor(tr); else insertCumFor(tr);
+                });
+            });
+
+            // Master switch: show/hide the Σ row for every ticker at once.
+            document.getElementById('wl-cum-all').addEventListener('change', function () {
+                var on = this.checked;
+                panel.querySelectorAll('.wl-ret-row').forEach(function (tr) {
+                    if (on) insertCumFor(tr); else removeCumFor(tr);
                 });
             });
         }

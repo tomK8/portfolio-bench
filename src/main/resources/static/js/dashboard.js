@@ -4754,21 +4754,22 @@
                     } else {
                         var pct = parseFloat(r) * 100;
                         var absP = Math.abs(pct);
-                        // 0% → 0 intensity, 3%+ → full intensity (linear clamp)
-                        var intensity = Math.min(absP / 3, 1);
+                        // Smooth, unbounded ramp: every return gets a distinct shade instead of
+                        // saturating at a hard cap. 1-e^(-|%|/4) rises fast near 0 (small moves
+                        // still visible) and keeps deepening for the big ±10-16% days.
+                        var intensity = 1 - Math.exp(-absP / 4);
                         var bg, fg;
+                        var hue = pct >= 0 ? 142 : 4;
                         if (isDark) {
-                            // Dark mode: use lightness 20–45% so cells read on dark backgrounds
-                            var light = Math.round(20 + intensity * 25);
-                            var sat = Math.round(40 + intensity * 55);
-                            var hue = pct >= 0 ? 142 : 4;
+                            // Dark mode: lightness 16–52% so cells read on dark backgrounds
+                            var light = Math.round(16 + intensity * 36);
+                            var sat = Math.round(38 + intensity * 57);
                             bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
-                            fg = intensity > 0.3 ? '#fff' : '#aaa';
+                            fg = intensity > 0.28 ? '#fff' : '#aaa';
                         } else {
-                            // Light mode: lightness 90–40% (pale → saturated)
-                            var light = Math.round(90 - intensity * 50);
-                            var sat = Math.round(30 + intensity * 65);
-                            var hue = pct >= 0 ? 142 : 4;
+                            // Light mode: lightness 93–38% (near-white → deep)
+                            var light = Math.round(93 - intensity * 55);
+                            var sat = Math.round(28 + intensity * 67);
                             bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
                             fg = intensity > 0.55 ? '#fff' : 'inherit';
                         }

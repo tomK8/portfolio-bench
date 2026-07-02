@@ -1044,8 +1044,19 @@
             else showMwr();
         }
 
+        // 1w–6m are simple period returns, intrinsic to the TWR series (a sub-year IRR would
+        // annualise to a misleading number). Like Max drawdown, they're kept from the TWR
+        // summary in both TWR and MWR modes.
+        function paintShortWindows(s) {
+            setStat('returns-1w', s && s.trailing1w);
+            setStat('returns-1m', s && s.trailing1m);
+            setStat('returns-3m', s && s.trailing3m);
+            setStat('returns-6m', s && s.trailing6m);
+        }
+
         function showTwr() {
             var s = cachedTwrSummary;
+            paintShortWindows(s);
             setStat('returns-1y', s && s.trailing1y);
             setStat('returns-3y', s && s.trailing3y);
             setStat('returns-5y', s && s.trailing5y);
@@ -1071,8 +1082,10 @@
             } else {
                 paintMwr();
             }
-            // Max drawdown / drawdown date are intrinsic to the TWR series — keep them.
+            // Max drawdown / drawdown date and the 1w–6m period returns are intrinsic to the
+            // TWR series — keep them from the TWR summary in MWR mode.
             var s = cachedTwrSummary;
+            paintShortWindows(s);
             setStat('returns-maxdd', s && s.maxDrawdown);
             document.getElementById('returns-maxdd-date').textContent =
                     (s && s.maxDrawdownDate) ? 'on ' + s.maxDrawdownDate : '';
@@ -1295,9 +1308,13 @@
         function renderBenchmarkStats(sym, summary) {
             var box = document.getElementById('benchmark-stats');
             box.style.display = 'flex';
-            ['1y', '3y', '5y', 'since'].forEach(function (k) {
+            ['1w', '1m', '3m', '6m', '1y', '3y', '5y', 'since'].forEach(function (k) {
                 document.getElementById('benchmark-label-' + k).textContent = sym;
             });
+            setStat('bench-1w', summary && summary.trailing1w);
+            setStat('bench-1m', summary && summary.trailing1m);
+            setStat('bench-3m', summary && summary.trailing3m);
+            setStat('bench-6m', summary && summary.trailing6m);
             setStat('bench-1y', summary && summary.trailing1y);
             setStat('bench-3y', summary && summary.trailing3y);
             setStat('bench-5y', summary && summary.trailing5y);

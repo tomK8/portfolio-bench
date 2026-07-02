@@ -101,6 +101,10 @@ public class BenchmarkReturnService {
         LocalDate now = LocalDate.parse(last.date());
         BigDecimal gNow = last.growth();
         return new Summary(
+                trailing(points, now.minusWeeks(1), gNow),
+                trailing(points, now.minusMonths(1), gNow),
+                trailing(points, now.minusMonths(3), gNow),
+                trailing(points, now.minusMonths(6), gNow),
                 trailing(points, now.minusYears(1), gNow),
                 trailing(points, now.minusYears(3), gNow),
                 trailing(points, now.minusYears(5), gNow),

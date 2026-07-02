@@ -386,6 +386,10 @@ public class PortfolioReturnService {
             }
         }
         return new Summary(
+                trailing(points, now.minusWeeks(1), gNow),
+                trailing(points, now.minusMonths(1), gNow),
+                trailing(points, now.minusMonths(3), gNow),
+                trailing(points, now.minusMonths(6), gNow),
                 trailing(points, now.minusYears(1), gNow),
                 trailing(points, now.minusYears(3), gNow),
                 trailing(points, now.minusYears(5), gNow),
@@ -450,17 +454,19 @@ public class PortfolioReturnService {
     }
 
     /**
-     * Trailing returns as fractional GBP gains (0.07 = +7%). 1y is the raw period return;
-     * 3y/5y/since are annualised. {@code maxDrawdown} is the deepest underwater fraction
-     * across the entire history (negative, e.g. −0.25 = a 25% peak-to-trough drop), and
-     * {@code maxDrawdownDate} is the day it bottomed. Any field is {@code null} when the
+     * Trailing returns as fractional GBP gains (0.07 = +7%). 1w/1m/3m/6m/1y are raw period
+     * returns; 3y/5y/since are annualised. {@code maxDrawdown} is the deepest underwater
+     * fraction across the entire history (negative, e.g. −0.25 = a 25% peak-to-trough drop),
+     * and {@code maxDrawdownDate} is the day it bottomed. Any field is {@code null} when the
      * portfolio history is shorter than the corresponding window.
      */
-    public record Summary(BigDecimal trailing1y, BigDecimal trailing3y,
+    public record Summary(BigDecimal trailing1w, BigDecimal trailing1m,
+                          BigDecimal trailing3m, BigDecimal trailing6m,
+                          BigDecimal trailing1y, BigDecimal trailing3y,
                           BigDecimal trailing5y, BigDecimal sinceInception,
                           BigDecimal maxDrawdown, String maxDrawdownDate) {
         public static Summary empty() {
-            return new Summary(null, null, null, null, null, null);
+            return new Summary(null, null, null, null, null, null, null, null, null, null);
         }
     }
 

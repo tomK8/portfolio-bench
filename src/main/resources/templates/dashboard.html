@@ -1266,7 +1266,7 @@
     <p class="muted" style="margin-top: 0">
         Time-weighted return (TWR) — the daily price-only return of the asset mix,
         chain-linked, with external contributions stripped out. Comparable to a fund
-        factsheet number. Trailing 1y is the simple period return; 3y / 5y / since
+        factsheet number. Trailing 1w–1y are simple period returns; 3y / 5y / since
         inception are annualised. Top chart: growth of £1 invested at portfolio inception.
         Middle chart: cumulative external contributions on the same time axis, for context.
         Bottom chart: underwater curve (drawdown from the running TWR peak) — flat at 0%
@@ -1307,6 +1307,10 @@
         <span class="muted" style="font-size: 0.8rem;">TWR strips out contribution timing; MWR is your actual personal IRR.</span>
     </div>
     <div class="returns-stats" id="returns-stats">
+        <div class="returns-stat"><span class="label">Portfolio · 1w</span><span class="value na" id="returns-1w">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio · 1m</span><span class="value na" id="returns-1m">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio · 3m</span><span class="value na" id="returns-3m">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio · 6m</span><span class="value na" id="returns-6m">—</span></div>
         <div class="returns-stat"><span class="label">Portfolio · 1y</span><span class="value na" id="returns-1y">—</span></div>
         <div class="returns-stat"><span class="label">Portfolio · 3y (ann.)</span><span class="value na" id="returns-3y">—</span></div>
         <div class="returns-stat"><span class="label">Portfolio · 5y (ann.)</span><span class="value na" id="returns-5y">—</span></div>
@@ -1318,6 +1322,10 @@
         </div>
     </div>
     <div class="returns-stats" id="benchmark-stats" style="display:none;">
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-1w">Benchmark</span> · 1w</span><span class="value na" id="bench-1w">—</span></div>
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-1m">Benchmark</span> · 1m</span><span class="value na" id="bench-1m">—</span></div>
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-3m">Benchmark</span> · 3m</span><span class="value na" id="bench-3m">—</span></div>
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-6m">Benchmark</span> · 6m</span><span class="value na" id="bench-6m">—</span></div>
         <div class="returns-stat"><span class="label"><span id="benchmark-label-1y">Benchmark</span> · 1y</span><span class="value na" id="bench-1y">—</span></div>
         <div class="returns-stat"><span class="label"><span id="benchmark-label-3y">Benchmark</span> · 3y (ann.)</span><span class="value na" id="bench-3y">—</span></div>
         <div class="returns-stat"><span class="label"><span id="benchmark-label-5y">Benchmark</span> · 5y (ann.)</span><span class="value na" id="bench-5y">—</span></div>

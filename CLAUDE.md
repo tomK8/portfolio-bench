@@ -87,7 +87,7 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   when `to == today`, daily close + historical FX otherwise — so totals reconcile with
   the cash-ledger view.
 
-- **Watchlist** — `GET /watchlist` → JSON, rendered as a table under the Risk group. A
+- **Watchlist** — `GET /watchlist` → JSON, rendered as a table under the Tools group. A
   user-maintained set of symbols (owned or not — *not* unioned with holdings, kept lean by
   design) for volatility trading. Each row joins live price + today's move + trailing
   momentum (5d/30d) + 30-day annualised realized vol + 52-wk high/low distances + P/E/beta

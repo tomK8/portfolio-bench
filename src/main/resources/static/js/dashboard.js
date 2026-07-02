@@ -3853,7 +3853,7 @@
         // FOMO / fear / conviction / etc. — pulls /trades on first activation,
         // renders the table and inline editor; saves via POST /trades/{rowid}/note.
 
-        var JOURNAL_TAGS = ['fomo', 'fear', 'greed', 'conviction', 'rebalance', 'hedge', 'news', 'thesis', 'correction'];
+        var JOURNAL_TAGS = ['fomo', 'fear', 'greed', 'conviction', 'rebalance', 'hedge', 'news', 'thesis', 'correction', 'voltrading'];
         var journalInitialized = false;
         var journalData = null;
         var journalFilter = { text: '', tag: '', onlyNoted: false };

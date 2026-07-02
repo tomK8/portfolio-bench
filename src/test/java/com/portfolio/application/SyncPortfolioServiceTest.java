@@ -6,6 +6,7 @@ import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.TransactionType;
 import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
@@ -42,9 +43,10 @@ class SyncPortfolioServiceTest {
         CashTransactionRepository cashRepo = new CashTransactionRepository(cf, kv);
         SnapshotRepository snapshots = new SnapshotRepository(cf);
         IntradayPriceRepository intraday = new IntradayPriceRepository(cf);
+        PriceHistoryRepository priceHistory = new PriceHistoryRepository(cf);
         PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
         return new SyncPortfolioService(gatherer, snapshots, intraday,
-                new DividendService(cashRepo), new YahooTickerMap(), cashRepo, kv);
+                new DividendService(cashRepo), new YahooTickerMap(), cashRepo, priceHistory, kv);
     }
 
     @Test

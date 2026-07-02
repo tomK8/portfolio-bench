@@ -125,6 +125,20 @@
         .sticky-head { font-size: 0.85rem; }
         .sticky-head th, .sticky-head td { padding: 0.25rem 0.5rem; }
 
+        /* Gain / total-gain cells: green/red TEXT by sign. */
+        td.val-pos { color: #2ca02c; }
+        td.val-neg { color: #c0392b; }
+        html[data-theme="dark"] td.val-pos { color: #4ade80; }
+        html[data-theme="dark"] td.val-neg { color: #f87171; }
+
+        /* Price cell: green/red BACKGROUND tint by trailing ~1-month price change — a separate
+           signal from gain/loss (a name can be up over the month yet below cost, or vice versa).
+           Same tints as the watchlist rows, and like there they hold in both light and dark. */
+        td.mom-pos { background: rgba(44, 160, 44, 0.14); }
+        td.mom-neg { background: rgba(192, 57, 43, 0.14); }
+        html[data-theme="dark"] td.mom-pos { background: rgba(74, 222, 128, 0.22); }
+        html[data-theme="dark"] td.mom-neg { background: rgba(248, 113, 113, 0.22); }
+
         .totals {
             margin-bottom: 1.5rem;
         }

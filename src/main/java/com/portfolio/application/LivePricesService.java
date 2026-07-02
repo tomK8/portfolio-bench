@@ -91,11 +91,15 @@ public class LivePricesService {
         Map<String, IntradayPrice> latestByTicker =
                 intraday.loadLatestIntradayPrices(tickerBySymbol.values());
 
-        LocalDate yesterday = LocalDate.now().minusDays(1);
+        LocalDate today = LocalDate.now();
+        LocalDate yesterday = today.minusDays(1);
         Map<String, PriceBar> prevByTicker = new HashMap<>();
+        Map<String, BigDecimal> monthChangeByTicker = new HashMap<>();
         for (String tk : new HashSet<>(tickerBySymbol.values())) {
             PriceBar bar = history.getPriceOn(tk, yesterday);
             if (bar != null) prevByTicker.put(tk, bar);
+            BigDecimal mc = PriceMomentum.monthChange(history, tk, today);
+            if (mc != null) monthChangeByTicker.put(tk, mc);
         }
 
         BigDecimal totalPosGbp = BigDecimal.ZERO;
@@ -136,7 +140,8 @@ public class LivePricesService {
                     scaleOrNull(dayChangeGbp, 2),
                     scaleOrNull(lastGbp, 2),
                     formatAccounts(p.accounts()),
-                    ip.ts()));
+                    ip.ts(),
+                    monthChangeByTicker.get(ticker)));
             if (lastGbp != null) totalPosGbp = totalPosGbp.add(lastGbp);
             if (prevGbp != null) prevPosTotalGbp = prevPosTotalGbp.add(prevGbp);
             if (dayChangeGbp != null) totalDayGbp = totalDayGbp.add(dayChangeGbp);
@@ -248,7 +253,8 @@ public class LivePricesService {
             BigDecimal dayChangeGbp,
             BigDecimal positionGbp,
             String accounts,
-            Instant priceTs) {
+            Instant priceTs,
+            BigDecimal monthChangePct) {   // trailing ~1-month price change (fraction); tints the Last cell
     }
 
     public record Totals(

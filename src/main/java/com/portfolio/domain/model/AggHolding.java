@@ -17,7 +17,9 @@ public record AggHolding(
         String sources,
         BigDecimal latestPrice,        // native ccy, post-GBp adjustment; null when no intraday data
         BigDecimal rtMarketValue,      // latestPrice * quantity (native); null when no intraday data
-        BigDecimal rtMarketValueGbp    // rtMarketValue converted to GBP; null when no intraday data
+        BigDecimal rtMarketValueGbp,   // rtMarketValue converted to GBP; null when no intraday data
+        BigDecimal monthChangePct      // trailing ~1-month price change (fraction); null when unknown.
+                                       // Price direction only — independent of cost-basis gain.
 ) {
     /**
      * ISO code (e.g. "USD") — lets views read the currency without navigating java.util.Currency.

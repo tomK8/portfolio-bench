@@ -37,21 +37,33 @@ public class PortfolioAggregator {
 
     public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
                                       Map<String, BigDecimal> dividendsBySymbol,
-                                      Map<String, IntradayPrice> latestPricesBySymbol) {
+                                      Map<String, IntradayPrice> latestPricesBySymbol,
+                                      Map<String, BigDecimal> monthChangeBySymbol) {
         Map<Key, Accumulator> accs = groupAccumulators(holdings, gbpRates);
         return accs.values().stream()
-                .map(acc -> buildAggHolding(acc, dividendsBySymbol, latestPricesBySymbol, gbpRates))
+                .map(acc -> buildAggHolding(acc, dividendsBySymbol, latestPricesBySymbol,
+                        monthChangeBySymbol, gbpRates))
                 .sorted(Comparator.comparingInt(this::section).thenComparing(this::sortKey))
                 .collect(Collectors.toList());
     }
 
     /**
+     * Convenience overload — carries intraday prices but no month-change (get null
+     * {@code monthChangePct}). Keeps callers that only need RT valuation unchanged.
+     */
+    public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
+                                      Map<String, BigDecimal> dividendsBySymbol,
+                                      Map<String, IntradayPrice> latestPricesBySymbol) {
+        return aggregate(holdings, gbpRates, dividendsBySymbol, latestPricesBySymbol, Map.of());
+    }
+
+    /**
      * Convenience overload — call sites that don't carry intraday prices (Excel export,
-     * older tests) pass nothing and get null RT fields.
+     * older tests) pass nothing and get null RT / month-change fields.
      */
     public List<AggHolding> aggregate(List<Holding> holdings, Map<String, BigDecimal> gbpRates,
                                       Map<String, BigDecimal> dividendsBySymbol) {
-        return aggregate(holdings, gbpRates, dividendsBySymbol, Map.of());
+        return aggregate(holdings, gbpRates, dividendsBySymbol, Map.of(), Map.of());
     }
 
     /** Pass 1: fold raw holdings into per-{@code (securityId, currency)} totals. */
@@ -70,6 +82,7 @@ public class PortfolioAggregator {
     private static AggHolding buildAggHolding(Accumulator acc,
                                               Map<String, BigDecimal> dividendsBySymbol,
                                               Map<String, IntradayPrice> latestPricesBySymbol,
+                                              Map<String, BigDecimal> monthChangeBySymbol,
                                               Map<String, BigDecimal> gbpRates) {
         BigDecimal avg = acc.hasCost && acc.qty.compareTo(BigDecimal.ZERO) > 0
                 ? acc.nativeCost.divide(acc.qty, 10, RoundingMode.HALF_UP) : null;
@@ -84,10 +97,11 @@ public class PortfolioAggregator {
                 ? totalGain.divide(acc.totalCostGbp, 10, RoundingMode.HALF_UP) : null;
 
         BigDecimal[] rt = realtime(acc.securityId, acc.currency, acc.qty, latestPricesBySymbol, gbpRates);
+        BigDecimal monthChange = monthChangeBySymbol.get(acc.securityId.toUpperCase());
 
         return new AggHolding(acc.securityId, acc.qty, avg, acc.mktValGbp, gain, pct,
                 dividend, totalGain, totalGainPct, acc.currency, String.join(", ", acc.srcs),
-                rt[0], rt[1], rt[2]);
+                rt[0], rt[1], rt[2], monthChange);
     }
 
     /**

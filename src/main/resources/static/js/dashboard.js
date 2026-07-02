@@ -4194,6 +4194,7 @@
             var changed = false;
             if (setNumericCell(tr.cells[2], row.symbol + '|qty', row.quantity, fmtLiveNum(row.quantity, 2), prevByKey, nextByKey)) changed = true;
             if (setNumericCell(tr.cells[3], row.symbol + '|last', nLast, nLast == null ? '—' : fmtLiveNum(nLast, 4), prevByKey, nextByKey)) changed = true;
+            applyMomClass(tr.cells[3], numOrNull(row.monthChangePct));
             if (setNumericCell(tr.cells[4], row.symbol + '|pct', nPct, nPct == null ? '—' : fmtLivePct(nPct), prevByKey, nextByKey)) changed = true;
             applyDeltaClass(tr.cells[4], nPct);
             if (setNumericCell(tr.cells[5], row.symbol + '|dayGbp', nDay, nDay == null ? '—' : (nDay >= 0 ? '+' : '−') + fmtLiveNum(Math.abs(nDay), 2), prevByKey, nextByKey)) changed = true;
@@ -4237,6 +4238,16 @@
             if (val == null) return;
             if (val > 0) td.classList.add('live-pos');
             else if (val < 0) td.classList.add('live-neg');
+        }
+
+        // Background tint on the Last-price cell by trailing ~1-month change (fraction), matching
+        // the holdings tables. Separate signal from the day's move — direction can differ.
+        function applyMomClass(td, val) {
+            td.classList.remove('mom-pos', 'mom-neg');
+            if (val == null) { td.removeAttribute('title'); return; }
+            if (val > 0) td.classList.add('mom-pos');
+            else if (val < 0) td.classList.add('mom-neg');
+            td.title = '1-month price change: ' + fmtLivePct(val);
         }
 
         function setText(id, value) {

@@ -482,6 +482,9 @@
            near-52-week-high fires blue; when both fire the row pulses between blue and the
            move's direction colour. Colours are applied as a left border + tinted background so
            the number columns stay legible. */
+        /* Compact row density for the stats table specifically */
+        #watchlist-table { font-size: 0.78rem; }
+        #watchlist-table th, #watchlist-table td { padding: 0.1rem 0.35rem; }
         #watchlist-table tbody tr { cursor: pointer; }
         #watchlist-table tbody tr.wl-move-up   { background: rgba(44, 160, 44, 0.14);  box-shadow: inset 3px 0 0 #2ca02c; }
         #watchlist-table tbody tr.wl-move-down { background: rgba(192, 57, 43, 0.14);  box-shadow: inset 3px 0 0 #c0392b; }
@@ -528,10 +531,10 @@
         html[data-theme="dark"] .wl-view-toggle button { border-color: #444; color: #ccc; }
         html[data-theme="dark"] .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
         #wl-returns-panel { overflow-x: auto; margin-top: 1rem; }
-        #wl-returns-panel table { border-collapse: collapse; white-space: nowrap; font-size: 0.8rem; width: 100%; table-layout: fixed; }
-        #wl-returns-panel th, #wl-returns-panel td { padding: 3px 4px; }
-        #wl-returns-panel thead th { font-weight: 400; font-size: 0.7rem; text-align: right; border-bottom: 1px solid #ddd; }
-        #wl-returns-panel thead th:first-child { text-align: left; width: 70px; }
+        #wl-returns-panel table { border-collapse: collapse; white-space: nowrap; font-size: 0.82rem; }
+        #wl-returns-panel th, #wl-returns-panel td { padding: 3px 6px; }
+        #wl-returns-panel thead th { font-weight: 400; font-size: 0.72rem; text-align: right; border-bottom: 1px solid #ddd; min-width: 44px; }
+        #wl-returns-panel thead th:first-child { text-align: left; min-width: 70px; }
         #wl-returns-panel tbody td { text-align: right; font-variant-numeric: tabular-nums; }
         #wl-returns-panel tbody td:first-child { text-align: left; font-weight: 600; position: sticky; left: 0; background: inherit; padding-right: 0.75rem; z-index: 1; }
         #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: var(--row-alt, #f8f8f8); }

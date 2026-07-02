@@ -4773,7 +4773,7 @@
                             fg = intensity > 0.55 ? '#fff' : 'inherit';
                         }
                         var sign = pct >= 0 ? '+' : '';
-                        html += '<td style="background:' + bg + ';color:' + fg + ';padding:3px 5px">' +
+                        html += '<td style="background:' + bg + ';color:' + fg + '">' +
                             sign + pct.toFixed(1) + '</td>';
                     }
                 });

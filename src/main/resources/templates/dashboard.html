@@ -528,11 +528,11 @@
         html[data-theme="dark"] .wl-view-toggle button { border-color: #444; color: #ccc; }
         html[data-theme="dark"] .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
         #wl-returns-panel { overflow-x: auto; margin-top: 1rem; }
-        #wl-returns-panel table { border-collapse: collapse; white-space: nowrap; font-size: 0.8rem; }
-        #wl-returns-panel th, #wl-returns-panel td { padding: 3px 5px; }
+        #wl-returns-panel table { border-collapse: collapse; white-space: nowrap; font-size: 0.8rem; width: 100%; table-layout: fixed; }
+        #wl-returns-panel th, #wl-returns-panel td { padding: 3px 4px; }
         #wl-returns-panel thead th { font-weight: 400; font-size: 0.7rem; text-align: right; border-bottom: 1px solid #ddd; }
-        #wl-returns-panel thead th:first-child { text-align: left; }
-        #wl-returns-panel tbody td { text-align: right; font-variant-numeric: tabular-nums; min-width: 46px; }
+        #wl-returns-panel thead th:first-child { text-align: left; width: 70px; }
+        #wl-returns-panel tbody td { text-align: right; font-variant-numeric: tabular-nums; }
         #wl-returns-panel tbody td:first-child { text-align: left; font-weight: 600; position: sticky; left: 0; background: inherit; padding-right: 0.75rem; z-index: 1; }
         #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: var(--row-alt, #f8f8f8); }
         html[data-theme="dark"] #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: #1e2026; }

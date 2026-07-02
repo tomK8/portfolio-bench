@@ -4181,11 +4181,11 @@
                 if (isNew) {
                     tr = document.createElement('tr');
                     tr.dataset.symbol = row.symbol;
-                    for (var i = 0; i < 9; i++) tr.appendChild(document.createElement('td'));
+                    for (var i = 0; i < 12; i++) tr.appendChild(document.createElement('td'));
                     tr.cells[0].className = 'txt';
                     tr.cells[1].className = 'txt';
-                    tr.cells[7].className = 'txt';
-                    tr.cells[8].className = 'txt';
+                    tr.cells[10].className = 'txt';
+                    tr.cells[11].className = 'txt';
                     tbody.appendChild(tr);
                     existing[row.symbol] = tr;
                 }
@@ -4216,9 +4216,18 @@
             applyDeltaClass(tr.cells[4], nPct);
             if (setNumericCell(tr.cells[5], row.symbol + '|dayGbp', nDay, nDay == null ? '—' : (nDay >= 0 ? '+' : '−') + fmtLiveNum(Math.abs(nDay), 2), prevByKey, nextByKey)) changed = true;
             applyDeltaClass(tr.cells[5], nDay);
-            if (setNumericCell(tr.cells[6], row.symbol + '|pos', nPos, nPos == null ? '—' : fmtLiveNum(nPos, 2), prevByKey, nextByKey)) changed = true;
-            tr.cells[7].textContent = row.accounts || '';
-            renderQuoteTs(tr.cells[8], row.priceTs);
+            var n5 = numOrNull(row.change5dPct);
+            var n10 = numOrNull(row.change10dPct);
+            var n30 = numOrNull(row.monthChangePct);
+            if (setNumericCell(tr.cells[6], row.symbol + '|d5', n5, n5 == null ? '—' : fmtLivePct(n5), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[6], n5);
+            if (setNumericCell(tr.cells[7], row.symbol + '|d10', n10, n10 == null ? '—' : fmtLivePct(n10), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[7], n10);
+            if (setNumericCell(tr.cells[8], row.symbol + '|d30', n30, n30 == null ? '—' : fmtLivePct(n30), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[8], n30);
+            if (setNumericCell(tr.cells[9], row.symbol + '|pos', nPos, nPos == null ? '—' : fmtLiveNum(nPos, 2), prevByKey, nextByKey)) changed = true;
+            tr.cells[10].textContent = row.accounts || '';
+            renderQuoteTs(tr.cells[11], row.priceTs);
             return changed;
         }
 

@@ -94,10 +94,16 @@ public class LivePricesService {
         LocalDate today = LocalDate.now();
         LocalDate yesterday = today.minusDays(1);
         Map<String, PriceBar> prevByTicker = new HashMap<>();
+        Map<String, BigDecimal> change5ByTicker = new HashMap<>();
+        Map<String, BigDecimal> change10ByTicker = new HashMap<>();
         Map<String, BigDecimal> monthChangeByTicker = new HashMap<>();
         for (String tk : new HashSet<>(tickerBySymbol.values())) {
             PriceBar bar = history.getPriceOn(tk, yesterday);
             if (bar != null) prevByTicker.put(tk, bar);
+            BigDecimal c5 = PriceMomentum.change(history, tk, today, 5);
+            if (c5 != null) change5ByTicker.put(tk, c5);
+            BigDecimal c10 = PriceMomentum.change(history, tk, today, 10);
+            if (c10 != null) change10ByTicker.put(tk, c10);
             BigDecimal mc = PriceMomentum.monthChange(history, tk, today);
             if (mc != null) monthChangeByTicker.put(tk, mc);
         }
@@ -141,6 +147,8 @@ public class LivePricesService {
                     scaleOrNull(lastGbp, 2),
                     formatAccounts(p.accounts()),
                     ip.ts(),
+                    change5ByTicker.get(ticker),
+                    change10ByTicker.get(ticker),
                     monthChangeByTicker.get(ticker)));
             if (lastGbp != null) totalPosGbp = totalPosGbp.add(lastGbp);
             if (prevGbp != null) prevPosTotalGbp = prevPosTotalGbp.add(prevGbp);
@@ -254,7 +262,9 @@ public class LivePricesService {
             BigDecimal positionGbp,
             String accounts,
             Instant priceTs,
-            BigDecimal monthChangePct) {   // trailing ~1-month price change (fraction); tints the Last cell
+            BigDecimal change5dPct,        // trailing 5-calendar-day price change (fraction)
+            BigDecimal change10dPct,       // trailing 10-calendar-day price change (fraction)
+            BigDecimal monthChangePct) {   // trailing ~30-day change; both tints the Last cell and fills the 30d column
     }
 
     public record Totals(

@@ -30,9 +30,20 @@ public final class PriceMomentum {
     private static final int LOOKBACK_DAYS = 30;
 
     public static BigDecimal monthChange(PriceHistoryRepository history, String ticker, LocalDate today) {
+        return change(history, ticker, today, LOOKBACK_DAYS);
+    }
+
+    /**
+     * Trailing price change over {@code lookbackDays} calendar days (base = last close
+     * on-or-before {@code today − lookbackDays}), calendar-anchored the same way the watchlist
+     * 5d/30d momentum is. Returns a decimal fraction, or {@code null} when either close is
+     * missing.
+     */
+    public static BigDecimal change(PriceHistoryRepository history, String ticker,
+                                    LocalDate today, int lookbackDays) {
         if (ticker == null) return null;
         PriceBar current = history.getPriceOn(ticker, today);
-        PriceBar base = history.getPriceOn(ticker, today.minusDays(LOOKBACK_DAYS));
+        PriceBar base = history.getPriceOn(ticker, today.minusDays(lookbackDays));
         if (current == null || base == null) return null;
         double c = current.close(), b = base.close();
         if (b == 0.0) return null;

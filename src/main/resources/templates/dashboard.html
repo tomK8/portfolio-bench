@@ -743,6 +743,7 @@
             font-weight: 600;
             color: #555;
         }
+        html[data-theme="dark"] .annual-table thead th { color: #bbb; border-bottom-color: #444; }
 
         .annual-table tr.partial { font-style: italic; color: #888; }
         .annual-table td.pos { color: #2ca02c; }
@@ -1723,7 +1724,7 @@
 
     <div id="wl-returns-panel" style="display:none;"></div>
 
-    <table id="watchlist-table" class="annual-table sticky-head" style="margin-top: 1rem; display: none;">
+    <table id="watchlist-table" class="annual-table sticky-head" style="margin-top: 0.4rem; display: none;">
         <thead><tr>
             <th data-sort="str">Symbol</th>
             <th data-sort="num">Price</th>

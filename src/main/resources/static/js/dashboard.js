@@ -4739,10 +4739,9 @@
             var html = '<table><thead><tr>' +
                 '<th style="min-width:80px">Symbol</th>';
             data.dates.forEach(function (d) {
-                // "Jun 30" — parse as UTC to avoid timezone shifts
+                // "6/6" (day/month) — parse as UTC to avoid timezone shifts
                 var parts = d.split('-');
-                var dt = new Date(Date.UTC(+parts[0], +parts[1] - 1, +parts[2]));
-                var label = dt.toLocaleDateString('en-GB', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+                var label = +parts[2] + '/' + +parts[1];
                 html += '<th style="min-width:46px">' + label + '</th>';
             });
             html += '</tr></thead><tbody>';

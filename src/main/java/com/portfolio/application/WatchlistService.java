@@ -408,7 +408,7 @@ public class WatchlistService {
 
         LocalDate today = LocalDate.now();
         // Fetch ~35 calendar days to guarantee ≥23 trading bars (need n+1 bars for n returns).
-        LocalDate from = today.minusDays(35);
+        LocalDate from = today.minusDays(70);
 
         // Collect union of all trading dates across symbols.
         TreeSet<LocalDate> allDates = new TreeSet<>();
@@ -431,7 +431,7 @@ public class WatchlistService {
 
         // Cap at the 22 most recent return-dates.
         List<String> dates = allDates.descendingSet().stream()
-                .limit(22).sorted().map(LocalDate::toString).toList();
+                .limit(44).sorted().map(LocalDate::toString).toList();
 
         if (dates.isEmpty()) return new ReturnsGrid(List.of(), List.of());
 

@@ -119,6 +119,12 @@
             box-shadow: inset 0 -2px 0 #2e3137;
         }
 
+        /* Match the compact watchlist (annual-table) typography on the long holdings lists
+           (files, cash ledger, Live, fundamentals snapshot). The watchlist already carries
+           annual-table so these values are a no-op there. */
+        .sticky-head { font-size: 0.85rem; }
+        .sticky-head th, .sticky-head td { padding: 0.25rem 0.5rem; }
+
         .totals {
             margin-bottom: 1.5rem;
         }

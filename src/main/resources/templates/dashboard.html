@@ -520,6 +520,23 @@
         .wl-stats .snap-kv .v { font-weight: 500; font-variant-numeric: tabular-nums; }
         html[data-theme="dark"] .wl-stats .snap-kv { border-bottom-color: #23262b; }
         .wl-window-toggle { display: inline-flex; gap: 0; margin: 0.5rem 0; }
+        .wl-view-toggle { display: inline-flex; gap: 0; margin-left: 0.5rem; }
+        .wl-view-toggle button { padding: 2px 10px; font-size: 0.82rem; border: 1px solid #ccc; background: none; cursor: pointer; }
+        .wl-view-toggle button:first-child { border-radius: 4px 0 0 4px; }
+        .wl-view-toggle button:last-child  { border-radius: 0 4px 4px 0; border-left: 0; }
+        .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
+        html[data-theme="dark"] .wl-view-toggle button { border-color: #444; color: #ccc; }
+        html[data-theme="dark"] .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
+        #wl-returns-panel { overflow-x: auto; margin-top: 1rem; }
+        #wl-returns-panel table { border-collapse: collapse; white-space: nowrap; font-size: 0.8rem; }
+        #wl-returns-panel th, #wl-returns-panel td { padding: 3px 5px; }
+        #wl-returns-panel thead th { font-weight: 400; font-size: 0.7rem; text-align: right; border-bottom: 1px solid #ddd; }
+        #wl-returns-panel thead th:first-child { text-align: left; }
+        #wl-returns-panel tbody td { text-align: right; font-variant-numeric: tabular-nums; min-width: 46px; }
+        #wl-returns-panel tbody td:first-child { text-align: left; font-weight: 600; position: sticky; left: 0; background: inherit; padding-right: 0.75rem; z-index: 1; }
+        #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: var(--row-alt, #f8f8f8); }
+        html[data-theme="dark"] #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: #1e2026; }
+        html[data-theme="dark"] #wl-returns-panel thead th { border-bottom-color: #333; }
         .wl-window-toggle button { padding: 0.25rem 0.7rem; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
         .wl-window-toggle button.active { background: #1f77b4; color: #fff; border-color: #1d6ba2; }
         html[data-theme="dark"] .wl-window-toggle button { background: #23262b; color: #c4c7cb; border-color: #3a3d44; }
@@ -1693,12 +1710,18 @@
         <label>Move %: <input id="wl-add-move" type="text" size="4" placeholder="10"/></label>
         <button id="wl-add-btn" type="button">Add</button>
         <button id="wl-refresh-btn" type="button">Refresh</button>
+        <span id="wl-view-toggle" class="wl-view-toggle" style="display:none;">
+            <button type="button" id="wl-view-stats" class="active">Stats</button>
+            <button type="button" id="wl-view-returns">Returns</button>
+        </span>
         <span id="wl-status" class="muted" style="font-size: 0.85rem;"></span>
     </div>
 
     <div id="wl-empty" class="muted" style="margin-top: 1rem;">
         No symbols yet. Add one above to start watching.
     </div>
+
+    <div id="wl-returns-panel" style="display:none;"></div>
 
     <table id="watchlist-table" class="annual-table sticky-head" style="margin-top: 1rem; display: none;">
         <thead><tr>

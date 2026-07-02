@@ -4586,6 +4586,8 @@
         var wlFundamentals = null;      // symbol -> quoteSummary, cached from /portfolio-fundamentals
         var wlSortAttached = false;
         var wlCurrentSymbol = null;
+        var wlReturnsLoaded = false;
+        var wlCurrentView = 'stats';    // 'stats' or 'returns'
 
         function setupWatchlist() {
             if (!watchlistInited) {
@@ -4617,8 +4619,32 @@
                     btn.classList.add('active');
                     loadWlSeries(wlCurrentSymbol, btn.dataset.window);
                 });
+                document.getElementById('wl-view-stats').addEventListener('click', function () { switchWlView('stats'); });
+                document.getElementById('wl-view-returns').addEventListener('click', function () { switchWlView('returns'); });
             }
             loadWatchlist();
+        }
+
+        function switchWlView(view) {
+            wlCurrentView = view;
+            var isStats = view === 'stats';
+            document.getElementById('wl-view-stats').classList.toggle('active', isStats);
+            document.getElementById('wl-view-returns').classList.toggle('active', !isStats);
+            var table = document.getElementById('watchlist-table');
+            var panel = document.getElementById('wl-returns-panel');
+            if (isStats) {
+                panel.style.display = 'none';
+                table.style.display = '';
+                return;
+            }
+            table.style.display = 'none';
+            panel.style.display = '';
+            if (!wlReturnsLoaded) {
+                panel.innerHTML = '<p class="muted" style="padding:0.5rem">Loading…</p>';
+                fetch('/watchlist/returns').then(function (r) { return r.json(); })
+                    .then(function (data) { wlReturnsLoaded = true; renderWatchlistReturns(data); })
+                    .catch(function () { panel.innerHTML = '<p class="muted">Could not load returns.</p>'; });
+            }
         }
 
         function wlSetStatus(msg) {
@@ -4626,6 +4652,7 @@
         }
 
         function loadWatchlist() {
+            wlReturnsLoaded = false;
             wlSetStatus('Loading…');
             fetch('/watchlist').then(function (r) { return r.json(); })
                 .then(function (view) { renderWatchlist(view.rows || []); wlSetStatus(''); })
@@ -4702,18 +4729,79 @@
             return '<td' + cls + '>' + s + '</td>';
         }
 
+        function renderWatchlistReturns(data) {
+            var panel = document.getElementById('wl-returns-panel');
+            if (!data || !data.dates || !data.dates.length) {
+                panel.innerHTML = '<p class="muted" style="padding:0.5rem">No price history yet — data will appear once the daily price fetch has run.</p>';
+                return;
+            }
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var html = '<table><thead><tr>' +
+                '<th style="min-width:80px">Symbol</th>';
+            data.dates.forEach(function (d) {
+                // "Jun 30" — parse as UTC to avoid timezone shifts
+                var parts = d.split('-');
+                var dt = new Date(Date.UTC(+parts[0], +parts[1] - 1, +parts[2]));
+                var label = dt.toLocaleDateString('en-GB', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+                html += '<th style="min-width:46px">' + label + '</th>';
+            });
+            html += '</tr></thead><tbody>';
+
+            data.rows.forEach(function (row) {
+                html += '<tr><td>' + row.symbol + '</td>';
+                row.returns.forEach(function (r) {
+                    if (r == null) {
+                        html += '<td style="color:#999">—</td>';
+                    } else {
+                        var pct = parseFloat(r) * 100;
+                        var absP = Math.abs(pct);
+                        // 0% → 0 intensity, 3%+ → full intensity (linear clamp)
+                        var intensity = Math.min(absP / 3, 1);
+                        var bg, fg;
+                        if (isDark) {
+                            // Dark mode: use lightness 20–45% so cells read on dark backgrounds
+                            var light = Math.round(20 + intensity * 25);
+                            var sat = Math.round(40 + intensity * 55);
+                            var hue = pct >= 0 ? 142 : 4;
+                            bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
+                            fg = intensity > 0.3 ? '#fff' : '#aaa';
+                        } else {
+                            // Light mode: lightness 90–40% (pale → saturated)
+                            var light = Math.round(90 - intensity * 50);
+                            var sat = Math.round(30 + intensity * 65);
+                            var hue = pct >= 0 ? 142 : 4;
+                            bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
+                            fg = intensity > 0.55 ? '#fff' : 'inherit';
+                        }
+                        var sign = pct >= 0 ? '+' : '';
+                        html += '<td style="background:' + bg + ';color:' + fg + ';padding:3px 5px">' +
+                            sign + pct.toFixed(1) + '</td>';
+                    }
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            panel.innerHTML = html;
+        }
+
         function renderWatchlist(rows) {
             var table = document.getElementById('watchlist-table');
             var empty = document.getElementById('wl-empty');
+            var toggle = document.getElementById('wl-view-toggle');
             var tbody = table.querySelector('tbody');
             tbody.innerHTML = '';
             if (!rows.length) {
                 table.style.display = 'none';
                 empty.style.display = 'block';
+                toggle.style.display = 'none';
                 return;
             }
             empty.style.display = 'none';
-            table.style.display = '';
+            toggle.style.display = '';
+            // Only show the stats table when in stats view.
+            if (wlCurrentView === 'stats') {
+                table.style.display = '';
+            }
 
             rows.forEach(function (r) {
                 var tr = document.createElement('tr');

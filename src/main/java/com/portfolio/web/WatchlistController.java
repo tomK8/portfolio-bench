@@ -103,6 +103,12 @@ public class WatchlistController {
         return watchlistService.volatility(symbol);
     }
 
+    @GetMapping("/watchlist/returns")
+    @ResponseBody
+    public WatchlistService.ReturnsGrid returns() {
+        return watchlistService.returns();
+    }
+
     @PostMapping("/watchlist/move")
     @ResponseBody
     public WatchlistView move(@RequestParam("symbol") String symbol,

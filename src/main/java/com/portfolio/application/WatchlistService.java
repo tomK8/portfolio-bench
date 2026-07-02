@@ -30,6 +30,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 /**
  * Assembles the volatility-trading watchlist screen and serves its price-popup series.
@@ -384,5 +387,71 @@ public class WatchlistService {
 
     /** Annualised realized-vol horizons (fractions). 5D/10D intraday-derived, 30D/1Y daily. */
     public record VolTerms(BigDecimal vol5d, BigDecimal vol10d, BigDecimal vol30d, BigDecimal vol1y) {
+    }
+
+    /** One row of the daily-returns heatmap (fraction per day, null = no close that day). */
+    public record SymbolReturns(String symbol, List<BigDecimal> returns) {
+    }
+
+    /** Daily-returns heatmap: shared date column headers + per-symbol return vectors. */
+    public record ReturnsGrid(List<String> dates, List<SymbolReturns> rows) {
+    }
+
+    /**
+     * Loads the last ~22 trading-day returns for every watchlist symbol from {@code price_history}.
+     * Uses {@code close} (not {@code adj_close}) so the number matches what the user sees as the
+     * daily price move. Aligns all symbols to a shared date set; missing days get {@code null}.
+     */
+    public ReturnsGrid returns() {
+        List<Entry> entries = watchlistRepo.loadAll();
+        if (entries.isEmpty()) return new ReturnsGrid(List.of(), List.of());
+
+        LocalDate today = LocalDate.now();
+        // Fetch ~35 calendar days to guarantee ≥23 trading bars (need n+1 bars for n returns).
+        LocalDate from = today.minusDays(35);
+
+        // Collect union of all trading dates across symbols.
+        TreeSet<LocalDate> allDates = new TreeSet<>();
+        Map<String, NavigableMap<LocalDate, Double>> closesBySym = new LinkedHashMap<>();
+
+        for (Entry e : entries) {
+            String ticker = Instruments.isBond(e.symbol()) ? e.symbol() : tickerMap.tickerFor(e.symbol());
+            List<PriceBar> bars = priceRepo.getPriceHistory(ticker, from, today);
+            if (bars.isEmpty()) {
+                closesBySym.put(e.symbol(), new TreeMap<>());
+                continue;
+            }
+            NavigableMap<LocalDate, Double> closes = new TreeMap<>();
+            for (PriceBar b : bars) closes.put(b.date(), b.close());
+            closesBySym.put(e.symbol(), closes);
+            // All dates except the first bar (which is only the base for computing the first return).
+            List<LocalDate> sortedDates = new ArrayList<>(closes.keySet());
+            for (int i = 1; i < sortedDates.size(); i++) allDates.add(sortedDates.get(i));
+        }
+
+        // Cap at the 22 most recent return-dates.
+        List<String> dates = allDates.descendingSet().stream()
+                .limit(22).sorted().map(LocalDate::toString).toList();
+
+        if (dates.isEmpty()) return new ReturnsGrid(List.of(), List.of());
+
+        List<SymbolReturns> rows = new ArrayList<>();
+        for (Map.Entry<String, NavigableMap<LocalDate, Double>> me : closesBySym.entrySet()) {
+            NavigableMap<LocalDate, Double> closes = me.getValue();
+            List<BigDecimal> returns = new ArrayList<>(dates.size());
+            for (String dateStr : dates) {
+                LocalDate d = LocalDate.parse(dateStr);
+                Double curr = closes.get(d);
+                Map.Entry<LocalDate, Double> prevEntry = closes.lowerEntry(d);
+                if (curr == null || prevEntry == null || prevEntry.getValue() == 0.0) {
+                    returns.add(null);
+                } else {
+                    double r = (curr - prevEntry.getValue()) / prevEntry.getValue();
+                    returns.add(BigDecimal.valueOf(r).setScale(5, RoundingMode.HALF_UP));
+                }
+            }
+            rows.add(new SymbolReturns(me.getKey(), returns));
+        }
+        return new ReturnsGrid(dates, rows);
     }
 }

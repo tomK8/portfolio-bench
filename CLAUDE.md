@@ -115,6 +115,7 @@ no `System.out` in production code.
 | Watchlist mutate      | `POST /watchlist/{add,remove,threshold,move}` | `WatchlistRepository` |
 | Watchlist popup chart | `GET /watchlist/series`    | `WatchlistService`        |
 | Watchlist vol horizons| `GET /watchlist/vol`       | `WatchlistService`        |
+| Fundamentals snapshot | `GET /portfolio-fundamentals` (+ `/add`, `/remove`, `/refresh`) | `PortfolioFundamentalsService` |
 
 ## Holding fields
 

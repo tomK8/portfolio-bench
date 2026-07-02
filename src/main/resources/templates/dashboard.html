@@ -1950,7 +1950,8 @@
 
     <div class="subview" id="fund-view-holdings">
         <p class="muted" style="margin-top: 0">
-            Current-state fundamentals for every currently-held symbol — P/E, forward P/E,
+            Current-state fundamentals for every currently-held symbol (plus any watchlist names
+            and any ticker you add below, owned or not) — P/E, forward P/E,
             EV/EBITDA, PEG, market cap, 52-week range, beta and analyst target, all from Yahoo's
             <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Data is
             cached in SQLite and refreshed by a background job on startup and every 4 hours, so
@@ -1960,6 +1961,8 @@
             ROIC, Net Debt/EBITDA, margins, balance-sheet ratios, dividends, sector and more.
         </p>
         <div class="actions">
+            <label>Add ticker: <input id="snapshot-add-symbol" type="text" size="8" placeholder="e.g. TSLA"/></label>
+            <button id="snapshot-add-btn" type="button">Add</button>
             <button id="snapshot-reload" type="button">Refresh</button>
             <span id="snapshot-status" class="muted" style="font-size: 0.85rem;"></span>
         </div>

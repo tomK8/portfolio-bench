@@ -2111,12 +2111,17 @@
 
         var snapshotInitialized = false;
         var snapshotRowsCache = [];
+        var snapshotExtra = [];          // user-added (non-held) symbols, for the remove control
         var snapshotRefreshTimer = null;
 
         function setupSnapshot() {
             if (snapshotInitialized) return;
             snapshotInitialized = true;
             document.getElementById('snapshot-reload').addEventListener('click', triggerSnapshotRefresh);
+            document.getElementById('snapshot-add-btn').addEventListener('click', addSnapshotSymbol);
+            document.getElementById('snapshot-add-symbol').addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') addSnapshotSymbol();
+            });
             document.getElementById('snapshot-detail-close').addEventListener('click', closeSnapshotDetail);
             document.getElementById('snapshot-detail-modal').addEventListener('click', function (e) {
                 if (e.target.id === 'snapshot-detail-modal') closeSnapshotDetail();
@@ -2129,10 +2134,39 @@
             var status = document.getElementById('snapshot-status');
             fetch('/portfolio-fundamentals').then(function (r) { return r.json(); })
                     .then(function (data) {
+                        snapshotExtra = data.extraSymbols || [];
                         renderSnapshot(data.rows || []);
                         status.textContent = formatLastUpdated(data.lastUpdatedAt);
                     })
                     .catch(function (e) { status.textContent = 'Error: ' + e.message; });
+        }
+
+        function addSnapshotSymbol() {
+            var input = document.getElementById('snapshot-add-symbol');
+            var sym = input.value.trim().toUpperCase();
+            if (!sym) return;
+            var status = document.getElementById('snapshot-status');
+            status.textContent = 'Adding ' + sym + ' — fetching fundamentals…';
+            var body = new URLSearchParams(); body.set('symbol', sym);
+            fetch('/portfolio-fundamentals/add', { method: 'POST', body: body })
+                    .then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error(t); }); return r.json(); })
+                    .then(function (data) {
+                        input.value = '';
+                        snapshotExtra = data.extraSymbols || [];
+                        renderSnapshot(data.rows || []);
+                        status.textContent = formatLastUpdated(data.lastUpdatedAt);
+                    })
+                    .catch(function () { status.textContent = 'Could not add ' + sym + '.'; });
+        }
+
+        function removeSnapshotSymbol(sym) {
+            var body = new URLSearchParams(); body.set('symbol', sym);
+            fetch('/portfolio-fundamentals/remove', { method: 'POST', body: body })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        snapshotExtra = data.extraSymbols || [];
+                        renderSnapshot(data.rows || []);
+                    });
         }
 
         function triggerSnapshotRefresh() {
@@ -2186,7 +2220,16 @@
                 var tr = document.createElement('tr');
                 tr.style.cursor = 'pointer';
                 tr.dataset.idx = idx;
-                tr.appendChild(td(row.symbol, 'txt'));
+                if (snapshotExtra.indexOf(row.symbol) >= 0) {
+                    // A user-added (not-held) row — carry a remove control in the symbol cell.
+                    var stc = document.createElement('td');
+                    stc.className = 'txt';
+                    stc.innerHTML = row.symbol +
+                            ' <button class="wl-remove snapshot-remove" data-sym="' + row.symbol + '" title="Remove">×</button>';
+                    tr.appendChild(stc);
+                } else {
+                    tr.appendChild(td(row.symbol, 'txt'));
+                }
                 tr.appendChild(td(fmtPrice(row.price, row.currency)));
                 tr.appendChild(td(fmtPrice(row.targetMeanPrice, row.currency)));
                 tr.appendChild(td(fmtRatio(row.trailingPe)));
@@ -2199,6 +2242,12 @@
                 tr.appendChild(td(fmtPrice(row.week52High, row.currency)));
                 tr.addEventListener('click', function () { openSnapshotDetail(idx); });
                 tbody.appendChild(tr);
+            });
+            tbody.querySelectorAll('.snapshot-remove').forEach(function (btn) {
+                btn.addEventListener('click', function (e) {
+                    e.stopPropagation();               // don't open the detail modal
+                    removeSnapshotSymbol(this.dataset.sym);
+                });
             });
             reapplyActiveSort(table);
         }
@@ -4549,6 +4598,11 @@
                 document.getElementById('wl-modal-close').addEventListener('click', closeWlModal);
                 document.getElementById('wl-modal').addEventListener('click', function (e) {
                     if (e.target.id === 'wl-modal') closeWlModal();
+                });
+                document.addEventListener('keydown', function (e) {
+                    if (e.key === 'Escape' && document.getElementById('wl-modal').classList.contains('open')) {
+                        closeWlModal();
+                    }
                 });
                 document.getElementById('wl-fund-toggle').addEventListener('click', function () {
                     var body = document.getElementById('wl-fund-body');

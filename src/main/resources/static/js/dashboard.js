@@ -4746,42 +4746,77 @@
             });
             html += '</tr></thead><tbody>';
 
-            data.rows.forEach(function (row) {
-                html += '<tr><td>' + row.symbol + '</td>';
+            // Shade a single return cell. `pct` is a percentage (null → blank). Shared by the
+            // daily rows and the click-to-expand cumulative rows. `compact` drops the +/- sign
+            // and rounds to a whole percent so the larger compounded numbers still fit the cell
+            // — direction is already carried by the hue.
+            function returnCell(pct, compact) {
+                if (pct == null) return '<td style="color:#999">—</td>';
+                var absP = Math.abs(pct);
+                // Smooth, unbounded ramp: every return gets a distinct shade instead of
+                // saturating at a hard cap. 1-e^(-|%|/4) rises fast near 0 (small moves
+                // still visible) and keeps deepening for the big ±10-16% days.
+                var intensity = 1 - Math.exp(-absP / 4);
+                var bg, fg;
+                var hue = pct >= 0 ? 142 : 4;
+                if (isDark) {
+                    // Dark mode: lightness 16–52% so cells read on dark backgrounds
+                    var light = Math.round(16 + intensity * 36);
+                    var sat = Math.round(38 + intensity * 57);
+                    bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
+                    fg = intensity > 0.28 ? '#fff' : '#aaa';
+                } else {
+                    // Light mode: lightness 93–38% (near-white → deep)
+                    var light = Math.round(93 - intensity * 55);
+                    var sat = Math.round(28 + intensity * 67);
+                    bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
+                    fg = intensity > 0.55 ? '#fff' : 'inherit';
+                }
+                var text = compact ? Math.round(pct).toString() : (pct >= 0 ? '+' : '') + pct.toFixed(1);
+                return '<td style="background:' + bg + ';color:' + fg + '">' + text + '</td>';
+            }
+
+            data.rows.forEach(function (row, i) {
+                html += '<tr class="wl-ret-row" data-idx="' + i + '" title="Click for cumulative returns"><td>' + row.symbol + '</td>';
                 row.returns.forEach(function (r) {
-                    if (r == null) {
-                        html += '<td style="color:#999">—</td>';
-                    } else {
-                        var pct = parseFloat(r) * 100;
-                        var absP = Math.abs(pct);
-                        // Smooth, unbounded ramp: every return gets a distinct shade instead of
-                        // saturating at a hard cap. 1-e^(-|%|/4) rises fast near 0 (small moves
-                        // still visible) and keeps deepening for the big ±10-16% days.
-                        var intensity = 1 - Math.exp(-absP / 4);
-                        var bg, fg;
-                        var hue = pct >= 0 ? 142 : 4;
-                        if (isDark) {
-                            // Dark mode: lightness 16–52% so cells read on dark backgrounds
-                            var light = Math.round(16 + intensity * 36);
-                            var sat = Math.round(38 + intensity * 57);
-                            bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
-                            fg = intensity > 0.28 ? '#fff' : '#aaa';
-                        } else {
-                            // Light mode: lightness 93–38% (near-white → deep)
-                            var light = Math.round(93 - intensity * 55);
-                            var sat = Math.round(28 + intensity * 67);
-                            bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
-                            fg = intensity > 0.55 ? '#fff' : 'inherit';
-                        }
-                        var sign = pct >= 0 ? '+' : '';
-                        html += '<td style="background:' + bg + ';color:' + fg + '">' +
-                            sign + pct.toFixed(1) + '</td>';
-                    }
+                    html += returnCell(r == null ? null : parseFloat(r) * 100);
                 });
                 html += '</tr>';
             });
             html += '</tbody></table>';
             panel.innerHTML = html;
+
+            var tbody = panel.querySelector('tbody');
+            panel.querySelectorAll('.wl-ret-row').forEach(function (tr) {
+                tr.addEventListener('click', function () {
+                    var existing = tr.previousElementSibling;
+                    // Toggle: a cumulative row already sitting above this one collapses it.
+                    if (existing && existing.classList.contains('wl-cum-row') &&
+                        existing.getAttribute('data-for') === tr.getAttribute('data-idx')) {
+                        existing.remove();
+                        return;
+                    }
+                    var row = data.rows[+tr.getAttribute('data-idx')];
+                    // Cumulative return through each column: compound the daily returns
+                    // (skipping missing days), so cell i = ∏(1+r_k) for k≤i, minus 1.
+                    var cum = document.createElement('tr');
+                    cum.className = 'wl-cum-row';
+                    cum.setAttribute('data-for', tr.getAttribute('data-idx'));
+                    var factor = 1, seen = false;
+                    var cells = '<td style="font-style:italic" title="Cumulative return">' + row.symbol + ' Σ</td>';
+                    row.returns.forEach(function (r) {
+                        if (r == null) {
+                            cells += returnCell(seen ? (factor - 1) * 100 : null, true);
+                        } else {
+                            factor *= 1 + parseFloat(r);
+                            seen = true;
+                            cells += returnCell((factor - 1) * 100, true);
+                        }
+                    });
+                    cum.innerHTML = cells;
+                    tbody.insertBefore(cum, tr);
+                });
+            });
         }
 
         function renderWatchlist(rows) {

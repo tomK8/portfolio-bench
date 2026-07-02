@@ -154,6 +154,7 @@
             if (panelId === 'panel-position') setupPosition();
             if (panelId === 'panel-correlations') setupCorrelations();
             if (panelId === 'panel-watchlist') setupWatchlist();
+            if (panelId === 'panel-swing') setupSwing();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
@@ -5101,6 +5102,322 @@
 
         function fmtNumOrDash(v, dp) {
             return v == null ? '—' : parseFloat(v).toFixed(dp);
+        }
+
+        // ================= Swing stats tab =================
+        var swReport = null;
+        var swCorrChart = null;
+        var swCorrMode = '30';
+        var swInit = false;
+
+        function setupSwing() {
+            if (swInit) return;
+            swInit = true;
+            document.getElementById('sw-run').addEventListener('click', runSwing);
+            document.getElementById('sw-save').addEventListener('click', saveSwingList);
+            document.getElementById('sw-backfill').addEventListener('click', backfillSwing);
+            document.getElementById('sw-detail-symbol').addEventListener('change', renderSwingDetail);
+            document.querySelectorAll('#sw-corr-toggle button').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    swCorrMode = b.dataset.corr;
+                    document.querySelectorAll('#sw-corr-toggle button').forEach(function (x) {
+                        x.classList.toggle('active', x === b);
+                    });
+                    renderSwingCorr();
+                });
+            });
+        }
+
+        function swVal(id) { return (document.getElementById(id).value || '').trim(); }
+        function swSet(id, v) { document.getElementById(id).value = v; }
+        function swStatus(msg) { document.getElementById('sw-status').textContent = msg || ''; }
+
+        function buildSwingQuery() {
+            var map = {
+                symbols: swVal('sw-symbols'), cluster: swVal('sw-cluster'), years: swVal('sw-years'),
+                sigmas: swVal('sw-sigmas'), dropPcts: swVal('sw-drops'), flushPcts: swVal('sw-flushpct'),
+                flushDays: swVal('sw-flushdays'), horizons: swVal('sw-horizons'), tp: swVal('sw-tp'),
+                sl: swVal('sw-sl'), timeStops: swVal('sw-timestops'),
+                barrierDays: swVal('sw-barrierdays'), barrierPct: swVal('sw-barrierpct')
+            };
+            var parts = [];
+            Object.keys(map).forEach(function (k) {
+                if (map[k] !== '') parts.push(k + '=' + encodeURIComponent(map[k]));
+            });
+            return parts.join('&');
+        }
+
+        function runSwing() {
+            swStatus('Computing…');
+            fetch('/swing?' + buildSwingQuery())
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (rep) {
+                    swReport = rep;
+                    fillSwingInputs(rep.config);
+                    document.getElementById('sw-empty').style.display = 'none';
+                    renderSwingVol();
+                    populateSwingDetailSelect();
+                    renderSwingDetail();
+                    renderSwingCorr();
+                    document.getElementById('sw-vol-wrap').style.display = 'block';
+                    document.getElementById('sw-detail-wrap').style.display = 'block';
+                    document.getElementById('sw-corr-wrap').style.display = 'block';
+                    swStatus('Updated ' + new Date().toLocaleTimeString());
+                })
+                .catch(function (e) { swStatus('Error: ' + e.message); });
+        }
+
+        function saveSwingList() {
+            var body = 'symbols=' + encodeURIComponent(swVal('sw-symbols')) +
+                       '&cluster=' + encodeURIComponent(swVal('sw-cluster'));
+            swStatus('Saving…');
+            fetch('/swing/symbols', {
+                method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body
+            }).then(function (r) { return r.json(); })
+              .then(function (res) {
+                  swSet('sw-symbols', (res.symbols || []).join(','));
+                  swSet('sw-cluster', (res.cluster || []).join(','));
+                  swStatus('Saved. Backfilling new names in the background…');
+              }).catch(function (e) { swStatus('Save failed: ' + e.message); });
+        }
+
+        function backfillSwing() {
+            swStatus('Backfill started (this can take a minute per new name)…');
+            fetch('/swing/backfill', { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function () { swStatus('Backfill running. Re-run once prices land.'); })
+                .catch(function (e) { swStatus('Backfill failed: ' + e.message); });
+        }
+
+        function fillSwingInputs(cfg) {
+            var pctList = function (arr) { return arr.map(function (x) { return +(x * 100).toFixed(4); }).join(','); };
+            swSet('sw-symbols', cfg.symbols.join(','));
+            swSet('sw-cluster', cfg.cluster.join(','));
+            swSet('sw-years', cfg.years);
+            swSet('sw-sigmas', cfg.sigmaMultiples.join(','));
+            swSet('sw-drops', pctList(cfg.absDrops));
+            swSet('sw-flushpct', pctList(cfg.flushThresholds));
+            swSet('sw-flushdays', cfg.flushDays.join(','));
+            swSet('sw-horizons', cfg.horizons.join(','));
+            swSet('sw-tp', +(cfg.takeProfit * 100).toFixed(4));
+            swSet('sw-sl', +(cfg.stopLoss * 100).toFixed(4));
+            swSet('sw-timestops', cfg.timeStops.join(','));
+            swSet('sw-barrierdays', cfg.barrierFlushDays);
+            swSet('sw-barrierpct', +(cfg.barrierFlushDrop * 100).toFixed(4));
+        }
+
+        // ---- formatting helpers ----
+        function swPctCell(frac, dp) {
+            if (frac == null) return '—';
+            var v = parseFloat(frac) * 100;
+            var cls = v > 0 ? 'swing-pos' : (v < 0 ? 'swing-neg' : '');
+            return '<span class="' + cls + '">' + (v > 0 ? '+' : '') + v.toFixed(dp == null ? 2 : dp) + '%</span>';
+        }
+        function swPct(frac, dp) { return frac == null ? '—' : (parseFloat(frac) * 100).toFixed(dp == null ? 1 : dp) + '%'; }
+        function swNum(v, dp) { return v == null ? '—' : parseFloat(v).toFixed(dp == null ? 2 : dp); }
+
+        function renderSwingVol() {
+            var floor = swReport.config.smallNFloor;
+            var windows = (swReport.perSymbol.find(function (s) { return !s.missingData; }) || {}).realizedVol
+                || swReport.pooled.realizedVol || [];
+            var head = '<thead><tr><th data-sort="str">Symbol</th>';
+            windows.forEach(function (w) {
+                head += '<th data-sort="num">' + w.window + 'd daily</th><th data-sort="num">' + w.window + 'd ann</th>';
+            });
+            head += '</tr></thead>';
+            var body = '<tbody>';
+            var rows = swReport.perSymbol.concat([swReport.pooled]);
+            rows.forEach(function (s) {
+                body += '<tr><td class="lbl"><b>' + s.symbol + '</b></td>';
+                if (s.missingData) {
+                    body += '<td colspan="' + (windows.length * 2) + '" class="swing-smalln">no price history — Backfill</td></tr>';
+                    return;
+                }
+                s.realizedVol.forEach(function (v) {
+                    var flag = v.smallN ? ' swing-smalln-cell' : '';
+                    body += '<td class="' + flag.trim() + '">' + swPct(v.dailySigma, 2) + '</td>';
+                    body += '<td class="' + flag.trim() + '">' + swPct(v.annualSigma, 1) + '</td>';
+                });
+                body += '</tr>';
+            });
+            body += '</tbody>';
+            document.getElementById('sw-vol-table').innerHTML = head + body;
+        }
+
+        function populateSwingDetailSelect() {
+            var sel = document.getElementById('sw-detail-symbol');
+            var prev = sel.value;
+            var opts = '<option value="__POOL__">CLUSTER (pooled)</option>';
+            swReport.perSymbol.forEach(function (s) {
+                if (s.missingData) return;
+                opts += '<option value="' + s.symbol + '">' + s.symbol + '</option>';
+            });
+            sel.innerHTML = opts;
+            sel.value = prev && sel.querySelector('option[value="' + prev.replace(/"/g, '') + '"]') ? prev : '__POOL__';
+        }
+
+        function renderSwingDetail() {
+            if (!swReport) return;
+            var sel = document.getElementById('sw-detail-symbol').value;
+            var rep = sel === '__POOL__' ? swReport.pooled
+                : swReport.perSymbol.find(function (s) { return s.symbol === sel; });
+            var host = document.getElementById('sw-detail');
+            if (!rep || rep.missingData) { host.innerHTML = '<p class="muted">No data.</p>'; return; }
+            host.innerHTML = swingRegimeBlock('Full history', rep.full) +
+                             swingRegimeBlock('Trailing 6 months', rep.trailing6m);
+        }
+
+        function swingRegimeBlock(label, regime) {
+            if (!regime) return '';
+            var floor = swReport.config.smallNFloor;
+            return '<div class="swing-block"><div class="swing-regime-head">' + label + '</div>' +
+                   swingForwardTable(regime.forward, floor) +
+                   swingContinuationTable(regime.forward, floor) +
+                   swingFlushTable(regime.flushes, floor) +
+                   swingBarrierTable(regime.barriers, floor) + '</div>';
+        }
+
+        function smallNTag(n, floor) {
+            return n < floor ? '<span class="swing-smalln"> (n=' + n + ')</span>' : '';
+        }
+
+        function swingForwardTable(fwd, floor) {
+            var hs = fwd.baseline.map(function (b) { return b.horizon; });
+            var html = '<div class="swing-sub">§2 baseline vs §3 down-day conditional — cell = mean fwd return, (％ positive); median on hover</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Trigger</th><th>n</th>';
+            hs.forEach(function (h) { html += '<th>+' + h + 'd</th>'; });
+            html += '</tr></thead><tbody>';
+            // baseline row
+            html += '<tr class="swing-baseline"><td class="lbl">baseline (all days)</td><td>' + fwd.baselineDays + '</td>';
+            fwd.baseline.forEach(function (st) { html += forwardCell(st); });
+            html += '</tr>';
+            fwd.conditional.forEach(function (blk) {
+                var dim = blk.smallN ? ' class="swing-smalln-cell"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + blk.label + smallNTag(blk.triggerDays, floor) + '</td><td>' + blk.triggerDays + '</td>';
+                blk.horizons.forEach(function (st) { html += forwardCell(st); });
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function forwardCell(st) {
+            if (!st || st.n === 0) return '<td>—</td>';
+            var title = 'median ' + swPct(st.median, 2) + ', %pos ' + swPct(st.pctPositive, 0) + ', n=' + st.n;
+            return '<td title="' + title + '">' + swPctCell(st.mean, 2) +
+                   ' <span class="muted">(' + swPct(st.pctPositive, 0) + ')</span></td>';
+        }
+
+        function swingContinuationTable(fwd, floor) {
+            var html = '<div class="swing-sub">§4 continuation — does the first red day keep falling?</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Trigger</th><th>n</th>' +
+                    '<th>P(next ≤ 0)</th><th>P(next ≤ −3%)</th></tr></thead><tbody>';
+            html += '<tr class="swing-baseline"><td class="lbl">baseline (all days)</td><td>' + fwd.baselineDays +
+                    '</td><td>' + swPct(fwd.basePDown, 0) + '</td><td>' + swPct(fwd.basePBig, 0) + '</td></tr>';
+            fwd.continuation.forEach(function (c) {
+                var dim = c.smallN ? ' class="swing-smalln-cell"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + c.label + smallNTag(c.triggerDays, floor) + '</td><td>' + c.triggerDays +
+                        '</td><td>' + swPct(c.pDown, 0) + '</td><td>' + swPct(c.pBig, 0) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function swingFlushTable(flushes, floor) {
+            var html = '<div class="swing-sub">§5 flush events — drawdown after the flush, time to +target, and which barrier hits first</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Flush</th><th>events</th>' +
+                    '<th>further DD (med)</th><th>DD q1…q3</th><th>days→target (med)</th>' +
+                    '<th>TP first</th><th>SL first</th><th>neither</th><th>ambig</th></tr></thead><tbody>';
+            flushes.forEach(function (f) {
+                var dim = f.smallN ? ' class="swing-smalln-cell"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + f.label + smallNTag(f.eventCount, floor) + '</td><td>' + f.eventCount + '</td>' +
+                        '<td>' + swPct(distMed(f.furtherDrawdown), 1) + '</td>' +
+                        '<td>' + swPct(f.furtherDrawdown.q1, 1) + '…' + swPct(f.furtherDrawdown.q3, 1) + '</td>' +
+                        '<td>' + swNum(distMed(f.daysToTarget), 1) + '</td>' +
+                        '<td>' + f.tpFirst + '</td><td>' + f.slFirst + '</td><td>' + f.neither + '</td><td>' + f.ambiguous + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function distMed(d) { return d && d.n > 0 ? d.median : null; }
+
+        function swingBarrierTable(barriers, floor) {
+            var html = '<div class="swing-sub">§6 barrier / time-stop simulation — entry at the flush close (close-to-close exits)</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Time stop</th><th>trades</th>' +
+                    '<th>%TP</th><th>%SL</th><th>%Time</th><th>mean ret</th><th>mean days</th><th>ret q1…q3</th></tr></thead><tbody>';
+            barriers.forEach(function (b) {
+                var dim = b.smallN ? ' class="swing-smalln-cell"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + b.timeStop + 'd' + smallNTag(b.trades, floor) + '</td><td>' + b.trades + '</td>' +
+                        '<td>' + swPct(b.pctTp, 0) + '</td><td>' + swPct(b.pctSl, 0) + '</td><td>' + swPct(b.pctTime, 0) + '</td>' +
+                        '<td>' + swPctCell(b.meanReturn, 2) + '</td><td>' + swNum(b.meanHoldingDays, 1) + '</td>' +
+                        '<td>' + swPct(b.returnDist.q1, 1) + '…' + swPct(b.returnDist.q3, 1) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            return html;
+        }
+
+        // ---- §7 correlation ----
+        function renderSwingCorr() {
+            if (!swReport) return;
+            var c = swReport.correlation;
+            var syms = c.symbols || [];
+            var matrix = swCorrMode === '60' ? c.matrix60 : (swCorrMode === 'down' ? c.downDayMatrix : c.matrix30);
+            var caption = swCorrMode === 'down'
+                ? 'Tail correlation: ' + c.downDayCount + ' days where the cluster mean return ≤ −' + (c.downDayThreshold * 100).toFixed(0) + '%'
+                : 'Latest rolling ' + (swCorrMode === '60' ? c.window60 : c.window30) + '-day pairwise correlation';
+            document.getElementById('sw-corr-caption').textContent = caption;
+
+            var table = document.getElementById('sw-corr-heatmap');
+            table.innerHTML = '';
+            if (!syms.length || !matrix) { table.innerHTML = '<tbody><tr><td class="muted">No cluster data.</td></tr></tbody>'; }
+            else {
+                var thead = '<thead><tr><th class="corr-axis"></th>';
+                syms.forEach(function (s) { thead += '<th class="corr-axis">' + s + '</th>'; });
+                thead += '</tr></thead>';
+                var tbody = '<tbody>';
+                matrix.forEach(function (row, i) {
+                    tbody += '<tr><th class="corr-axis">' + syms[i] + '</th>';
+                    row.forEach(function (cell) {
+                        if (cell == null) { tbody += '<td class="muted">—</td>'; return; }
+                        var v = parseFloat(cell);
+                        var col = corrColour(v);
+                        tbody += '<td style="background:' + col.bg + ';color:' + col.fg + '">' + v.toFixed(2) + '</td>';
+                    });
+                    tbody += '</tr>';
+                });
+                tbody += '</tbody>';
+                table.innerHTML = thead + tbody;
+            }
+            renderSwingCorrChart(c);
+        }
+
+        function renderSwingCorrChart(c) {
+            if (swCorrChart) swCorrChart.destroy();
+            var pts = c.avgPairwise || [];
+            if (!pts.length) return;
+            var ds = function (key, colour) {
+                return {
+                    label: key === 'avg30' ? c.window30 + 'd' : c.window60 + 'd',
+                    data: pts.filter(function (p) { return p[key] != null; })
+                             .map(function (p) { return { x: p.date, y: parseFloat(p[key]) }; }),
+                    borderColor: colour, backgroundColor: 'transparent',
+                    borderWidth: 1.4, pointRadius: 0, tension: 0.1
+                };
+            };
+            swCorrChart = new Chart(document.getElementById('sw-corr-chart').getContext('2d'), {
+                type: 'line',
+                data: { datasets: [ds('avg30', '#1f77b4'), ds('avg60', '#ff7f0e')] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                    scales: {
+                        x: { type: 'time', time: { unit: 'month' } },
+                        y: { suggestedMin: 0, suggestedMax: 1, title: { display: true, text: 'avg pairwise ρ' } }
+                    },
+                    plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } }
+                }
+            });
         }
 
     }());

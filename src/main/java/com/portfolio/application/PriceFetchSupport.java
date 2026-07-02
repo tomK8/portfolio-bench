@@ -44,6 +44,9 @@ final class PriceFetchSupport {
         // Watchlist names (owned or not) so freshly added symbols get daily + intraday prices
         // on the next tick, even before any cash statement mentions them.
         symbols.addAll(kv.getStringSet(WatchlistRepository.WATCHLIST_SYMBOLS_KEY));
+        // Swing-strategy universe (many not held/traded) so the nightly daily job keeps their
+        // 3-year history current for the Swing stats tab.
+        symbols.addAll(kv.getStringSet(SwingAnalysisService.SWING_SYMBOLS_KEY));
         for (String line : kv.getStringSet(HistoricalScenarioService.SUBSTITUTES_KEY)) {
             int eq = line.indexOf('=');
             if (eq <= 0 || eq >= line.length() - 1) continue;

@@ -486,4 +486,15 @@ public class BeanConfiguration {
                                                KeyValueStore keyValueStore) {
         return new WatchlistAlertJob(watchlistService, alertNotifier, keyValueStore);
     }
+
+    // ---- Swing-strategy validation statistics -------------------------------
+
+    @Bean
+    public SwingAnalysisService swingAnalysisService(PriceHistoryRepository priceHistoryRepository,
+                                                     YahooTickerMap yahooTickerMap,
+                                                     KeyValueStore keyValueStore,
+                                                     PriceFetchJob priceFetchJob) {
+        return new SwingAnalysisService(priceHistoryRepository, yahooTickerMap,
+                keyValueStore, priceFetchJob);
+    }
 }

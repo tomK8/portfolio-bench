@@ -98,6 +98,15 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   popup: same fields + a price chart with a 1D/3D/5D/10D/15D (intraday) + 30D (daily) window
   toggle + a collapsible Fundamentals section. See the Watchlist section below.
 
+- **Swing stats** — `GET /swing` → JSON, rendered as tables + a correlation heatmap under the
+  Tools group. Validation statistics for a short-term mean-reversion (dip-buy) strategy on a
+  configurable high-vol semi/AI watchlist: realized-vol term structure; forward returns after
+  down-day / flush triggers, always shown next to their unconditional baseline; a barrier /
+  time-stop trade simulation; and cluster correlation (incl. tail correlation on down days).
+  Everything is configurable and pooled across a "semi cluster" subset; §9 regime split (full
+  vs trailing 6 months) is shown side by side. §8 earnings hygiene is deferred. See the Swing
+  section below.
+
 Charts load lazily on first tab click. Logging is SLF4J + Logback (`logback-spring.xml`);
 no `System.out` in production code.
 
@@ -117,6 +126,8 @@ no `System.out` in production code.
 | Watchlist popup chart | `GET /watchlist/series`    | `WatchlistService`        |
 | Watchlist vol horizons| `GET /watchlist/vol`       | `WatchlistService`        |
 | Fundamentals snapshot | `GET /portfolio-fundamentals` (+ `/add`, `/remove`, `/refresh`) | `PortfolioFundamentalsService` |
+| Swing stats           | `GET /swing`               | `SwingAnalysisService`    |
+| Swing mutate/backfill | `POST /swing/{symbols,backfill}` | `SwingAnalysisService` |
 
 ## Holding fields
 
@@ -369,3 +380,39 @@ touches an order.
   (Gmail: `smtp.gmail.com:587`, STARTTLS). The app must be running during market hours for
   alerts to fire — keep the lid open + `caffeinate` (closing the lid sleeps the JVM even under
   caffeinate).
+
+## Swing-strategy validation statistics
+
+Backtesting/statistics tool (Swing stats tab) for validating a short-term mean-reversion
+strategy — dip-buy after 1–2 day flushes, exit at a fixed take-profit / wide stop / time stop —
+*before* trading it. Read-only: it never touches the ledger or places an order.
+
+- **Pure engine** lives in `com.portfolio.domain.swing` (framework-free, unit-tested like
+  `PriceStats`). `SwingConfig` holds every knob (spec defaults); `SwingSeries` pre-computes the
+  aligned `close/high/low/logRet/simpleRet` arrays plus a **look-ahead-free trailing-30d daily σ**
+  (σ over returns strictly *before* each bar, so a σ-trigger judges a day against vol known going
+  in). Engines: `RealizedVol` (§1), `ForwardReturns` (§2 baseline / §3 conditional / §4
+  continuation), `Flushes` (§5 flush profile + §6 barrier/time-stop sim), `ReturnCorrelation`
+  (§7). `Stats` provides mean/median/quartiles/%pos. All engines take a `List<SwingSeries>` so the
+  same code serves per-symbol (one) and pooled-cluster (concatenate observations across the
+  cluster, equal-weight by observation).
+- **Conventions:** returns off `close` (split-adjusted), log for vol, simple for anything P&L-like.
+  σ-triggers compare the day's simple return to −k×(trailing daily σ); absolute triggers to −p%.
+  §6 barriers are **close-to-close** (intraday touches are a deferred extension); §5's
+  further-drawdown/target uses session `high`/`low` (available in `price_history`). A 1e-9 epsilon
+  makes round thresholds (a "−10%" day stored as −0.0999999998) register. Small-N cells are
+  flagged, never silently averaged (`smallNFloor`).
+- **`SwingAnalysisService`** loads bars, runs every symbol + the pooled cluster over both §9
+  regimes (full history + trailing 6 months), and adds §7 correlation. No FX — statistics are
+  unit-less return ratios, so `.L` pence listings need no conversion. `SwingReport` (in
+  `application`) is the JSON DTO; `earningsHygiene` is a reserved `null` slot for the deferred §8.
+- **Config persistence:** the symbol universe + cluster live in `KeyValueStore` (`swing_symbols` /
+  `swing_cluster`, seeded from spec defaults on first read). `swing_symbols` is unioned into
+  `PriceFetchSupport.tickersToFetch`, so the nightly 30-year daily job keeps the swing universe
+  backfilled automatically; `POST /swing/backfill` (and `POST /swing/symbols` after an edit) covers
+  the first-run gap via `PriceFetchJob.fetchSingle` on a background executor. `GET /swing` echoes
+  the effective `SwingConfig`; every knob is also an optional query param (percents in, e.g.
+  `dropPcts=5,8,10`) so parameters can be swept without changing stored config.
+- **§8 earnings hygiene is deferred** — the app has no multi-year earnings-date source (Yahoo
+  serves only ~4–8 recent quarters). The DTO/config slot is reserved so it can land without a
+  reshape.

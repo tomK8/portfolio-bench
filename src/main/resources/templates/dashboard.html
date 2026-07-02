@@ -521,6 +521,33 @@
         .wl-stats .snap-kv { break-inside: avoid; border-bottom: 1px solid #f0f0f0; padding: 0.24rem 0; font-size: 0.8rem; }
         .wl-stats .snap-kv .k { color: #8a8f96; font-weight: 400; }
         .wl-stats .snap-kv .v { font-weight: 500; font-variant-numeric: tabular-nums; }
+
+        /* ---- Swing stats tab ---- */
+        .swing-controls { flex-wrap: wrap; row-gap: 0.35rem; }
+        .swing-h { margin: 0.4rem 0 0.3rem; font-size: 0.98rem; }
+        .swing-sub { font-weight: 400; font-size: 0.8rem; }
+        #panel-swing table.annual-table { font-size: 0.78rem; }
+        #panel-swing table.annual-table th, #panel-swing table.annual-table td { padding: 0.12rem 0.4rem; }
+        .swing-block { margin: 0.6rem 0 1rem; }
+        .swing-regime-head { font-weight: 600; font-size: 0.85rem; margin: 0.6rem 0 0.2rem; color: #1f77b4; }
+        .swing-tbl { border-collapse: collapse; font-size: 0.78rem; font-variant-numeric: tabular-nums; margin-bottom: 0.5rem; }
+        .swing-tbl th, .swing-tbl td { border: 1px solid #e3e3e3; padding: 0.12rem 0.45rem; text-align: right; white-space: nowrap; }
+        .swing-tbl th { background: #f6f7f9; font-weight: 600; }
+        .swing-tbl td.lbl, .swing-tbl th.lbl { text-align: left; }
+        .swing-tbl tr.swing-baseline td { background: #eef4fb; font-style: italic; }
+        .swing-pos { color: #2ca02c; } .swing-neg { color: #c0392b; }
+        .swing-smalln { color: #b0b3b8; }
+        .swing-smalln-cell { color: #b0b3b8; }
+        .swing-corr-toggle button, .swing-corr-toggle > button { font-size: 0.8rem; padding: 2px 8px; margin-right: 4px; }
+        .swing-corr-toggle button.active { background: #1f77b4; color: #fff; }
+        table.corr-matrix { border-collapse: collapse; font-size: 0.72rem; }
+        table.corr-matrix th, table.corr-matrix td { padding: 0.15rem 0.4rem; text-align: center; border: 1px solid #eee; }
+        table.corr-matrix th.corr-axis { background: #f6f7f9; font-weight: 600; position: sticky; }
+        html[data-theme="dark"] .swing-tbl th { background: #23262b; }
+        html[data-theme="dark"] .swing-tbl th, html[data-theme="dark"] .swing-tbl td { border-color: #333; }
+        html[data-theme="dark"] .swing-tbl tr.swing-baseline td { background: #1c2836; }
+        html[data-theme="dark"] .swing-pos { color: #4ade80; } html[data-theme="dark"] .swing-neg { color: #f87171; }
+        html[data-theme="dark"] table.corr-matrix th.corr-axis { background: #23262b; }
         html[data-theme="dark"] .wl-stats .snap-kv { border-bottom-color: #23262b; }
         .wl-window-toggle { display: inline-flex; gap: 0; margin: 0.5rem 0; }
         .wl-view-toggle { display: inline-flex; gap: 0; margin-left: 0.5rem; }
@@ -1045,6 +1072,7 @@
     <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-trades" type="button">Journal</button>
     <button class="tab" data-panel="panel-watchlist" type="button">Watchlist</button>
+    <button class="tab" data-panel="panel-swing" type="button">Swing stats</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -1777,6 +1805,79 @@
             <div class="modal-actions">
                 <button id="wl-modal-close" type="button">Close</button>
             </div>
+        </div>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-swing">
+    <p class="muted" style="margin-top: 0">
+        Validation statistics for a short-term mean-reversion (dip-buy) strategy on high-vol
+        semi/AI names. Every conditional number is shown next to its unconditional
+        <b>baseline</b> — a bounce stat only matters if it beats the drift. Thin cells
+        (<span class="swing-smalln">dimmed, with n</span>) are flagged, never silently averaged.
+        Returns use each symbol's own split-adjusted close (log for vol, simple for P&amp;L).
+        §8 earnings hygiene is deferred. Every field below is configurable.
+    </p>
+
+    <div class="benchmark-controls swing-controls">
+        <label>Symbols: <input id="sw-symbols" type="text" size="42"
+                                placeholder="MU,AMAT,KLAC,…"/></label>
+        <label>Cluster: <input id="sw-cluster" type="text" size="34"
+                                placeholder="MU,AMAT,… (pooled + correlation)"/></label>
+        <button id="sw-save" type="button" title="Persist symbols/cluster and backfill new names">Save&nbsp;list</button>
+        <button id="sw-backfill" type="button" title="Fetch daily history for symbols not in the DB yet">Backfill</button>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label>Years: <input id="sw-years" type="text" size="3" value="3"/></label>
+        <label>σ triggers: <input id="sw-sigmas" type="text" size="6" value="1,2,3"/></label>
+        <label>Abs drop %: <input id="sw-drops" type="text" size="8" value="5,8,10"/></label>
+        <label>Horizons: <input id="sw-horizons" type="text" size="8" value="1,3,5,10"/></label>
+        <label>Flush %: <input id="sw-flushpct" type="text" size="8" value="10,15,20"/></label>
+        <label>Flush days: <input id="sw-flushdays" type="text" size="5" value="2,3"/></label>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label>TP %: <input id="sw-tp" type="text" size="4" value="10"/></label>
+        <label>SL %: <input id="sw-sl" type="text" size="4" value="15"/></label>
+        <label>Time stops: <input id="sw-timestops" type="text" size="10" value="5,10,15,20"/></label>
+        <label>Barrier entry: <input id="sw-barrierdays" type="text" size="3" value="2"/>d ≤ −<input id="sw-barrierpct" type="text" size="3" value="10"/>%</label>
+        <button id="sw-run" type="button">Run</button>
+        <span id="sw-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="sw-empty" class="muted" style="margin-top: 1rem;">
+        Click <b>Run</b> to compute the report. First run of a fresh name needs a
+        <b>Backfill</b> (or wait for the nightly price job).
+    </div>
+
+    <div id="sw-vol-wrap" style="display:none; margin-top: 0.8rem;">
+        <h3 class="swing-h">§1 Realized volatility <span class="muted swing-sub">annualised, from daily log returns</span></h3>
+        <table id="sw-vol-table" class="annual-table sticky-head"></table>
+    </div>
+
+    <div id="sw-detail-wrap" style="display:none; margin-top: 1rem;">
+        <div class="benchmark-controls">
+            <label>Detail for:
+                <select id="sw-detail-symbol"></select>
+            </label>
+            <span class="muted swing-sub">§2–§6 · full history vs trailing 6 months (§9)</span>
+        </div>
+        <div id="sw-detail"></div>
+    </div>
+
+    <div id="sw-corr-wrap" style="display:none; margin-top: 1.2rem;">
+        <h3 class="swing-h">§7 Return correlation <span class="muted swing-sub">semi cluster, daily simple returns</span></h3>
+        <div class="swing-corr-toggle" id="sw-corr-toggle">
+            <button type="button" data-corr="30" class="active">Rolling 30d</button>
+            <button type="button" data-corr="60">Rolling 60d</button>
+            <button type="button" data-corr="down">Down days only</button>
+        </div>
+        <div id="sw-corr-caption" class="muted swing-sub" style="margin: 0.3rem 0;"></div>
+        <div style="overflow-x:auto;">
+            <table id="sw-corr-heatmap" class="corr-matrix"></table>
+        </div>
+        <h4 class="swing-h" style="margin-top: 0.9rem;">Average pairwise correlation over time</h4>
+        <div style="height: 260px;">
+            <canvas id="sw-corr-chart"></canvas>
         </div>
     </div>
 </section>

@@ -530,11 +530,17 @@
         .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
         html[data-theme="dark"] .wl-view-toggle button { border-color: #444; color: #ccc; }
         html[data-theme="dark"] .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
-        #wl-returns-panel { overflow-x: auto; margin-top: 1rem; }
-        #wl-returns-panel table { border-collapse: collapse; white-space: nowrap; font-size: 0.72rem; width: 100%; table-layout: fixed; }
-        #wl-returns-panel th, #wl-returns-panel td { padding: 2px 3px; overflow: hidden; text-overflow: clip; }
-        #wl-returns-panel thead th { font-weight: 400; font-size: 0.64rem; text-align: right; border-bottom: 1px solid #ddd; }
-        #wl-returns-panel thead th:first-child { text-align: left; width: 60px; }
+        /* Break out of the 960px body cap so the heatmap can use the whole viewport. */
+        #wl-returns-panel {
+            overflow-x: auto;
+            margin: 1rem calc(50% - 50vw) 0;
+            padding: 0 1.5rem;
+            box-sizing: border-box;
+        }
+        #wl-returns-panel table { border-collapse: collapse; white-space: nowrap; font-size: 0.75rem; width: 100%; table-layout: fixed; }
+        #wl-returns-panel th, #wl-returns-panel td { padding: 2px 3px; }
+        #wl-returns-panel thead th { font-weight: 400; font-size: 0.66rem; text-align: right; border-bottom: 1px solid #ddd; }
+        #wl-returns-panel thead th:first-child { text-align: left; width: 56px; }
         #wl-returns-panel tbody td { text-align: right; font-variant-numeric: tabular-nums; }
         #wl-returns-panel tbody td:first-child { text-align: left; font-weight: 600; position: sticky; left: 0; background: inherit; z-index: 1; }
         #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: var(--row-alt, #f8f8f8); }

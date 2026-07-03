@@ -2,7 +2,9 @@ package com.portfolio.domain.swing;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * §2–§4 — forward-return behaviour, the heart of the "does the dip-buy edge exist?" question.
@@ -81,6 +83,7 @@ public final class ForwardReturns {
                                                      SwingConfig cfg, String label, String kind,
                                                      double magnitude, TriggerFn fn) {
         int triggerDays = 0;
+        Set<LocalDate> episodeDates = new HashSet<>();
         List<List<Double>> perHorizon = new ArrayList<>();
         for (int ignored : cfg.horizons()) perHorizon.add(new ArrayList<>());
         for (SwingSeries s : seriesList) {
@@ -88,6 +91,7 @@ public final class ForwardReturns {
             for (int i = Math.max(1, s.startIndex(cutoff)); i < n; i++) {
                 if (!fn.fires(s, i)) continue;
                 triggerDays++;
+                episodeDates.add(s.dates[i]);
                 for (int hi = 0; hi < cfg.horizons().length; hi++) {
                     int h = cfg.horizons()[hi];
                     if (i + h < n) perHorizon.get(hi).add(forward(s, i, h));
@@ -98,22 +102,26 @@ public final class ForwardReturns {
         for (int hi = 0; hi < cfg.horizons().length; hi++) {
             horizons.add(stat(cfg.horizons()[hi], perHorizon.get(hi), cfg.smallNFloor()));
         }
-        return new ConditionalBlock(label, kind, magnitude, triggerDays,
-                triggerDays < cfg.smallNFloor(), horizons);
+        int episodes = episodeDates.size();
+        return new ConditionalBlock(label, kind, magnitude, triggerDays, episodes,
+                triggerDays < cfg.smallNFloor(), episodes < cfg.episodeFloor(), horizons);
     }
 
     private static ContinuationStat continuationStat(List<SwingSeries> seriesList, LocalDate cutoff,
                                                      SwingConfig cfg, String label, TriggerFn fn) {
         List<Double> next = new ArrayList<>();
+        Set<LocalDate> episodeDates = new HashSet<>();
         for (SwingSeries s : seriesList) {
             int n = s.size();
             for (int i = Math.max(1, s.startIndex(cutoff)); i < n; i++) {
                 if (!fn.fires(s, i)) continue;
-                if (i + 1 < n) next.add(s.simpleRet[i + 1]);
+                if (i + 1 < n) { next.add(s.simpleRet[i + 1]); episodeDates.add(s.dates[i]); }
             }
         }
         double[] arr = toArray(next);
-        return new ContinuationStat(label, arr.length, arr.length < cfg.smallNFloor(),
+        int episodes = episodeDates.size();
+        return new ContinuationStat(label, arr.length, episodes,
+                arr.length < cfg.smallNFloor(), episodes < cfg.episodeFloor(),
                 frac(arr, 0.0), frac(arr, -cfg.continuationDrop()));
     }
 
@@ -172,14 +180,22 @@ public final class ForwardReturns {
      * One down-day trigger's forward-return profile. {@code kind} is {@code "sigma"} or
      * {@code "abs"}; {@code magnitude} is the σ-multiple or the drop fraction. {@code triggerDays}
      * is the raw count of trigger occurrences (each horizon's {@code n} may be smaller near the
-     * series end where forward data runs out).
+     * series end where forward data runs out). {@code episodes} is the number of distinct trigger
+     * <em>dates</em> — equal to {@code triggerDays} for a single symbol, but smaller when pooling a
+     * cluster that dips on shared calendar dates; {@code thinEpisodes} flags fewer than the
+     * configured episode floor.
      */
     public record ConditionalBlock(String label, String kind, double magnitude,
-                                   int triggerDays, boolean smallN, List<ForwardStat> horizons) {
+                                   int triggerDays, int episodes, boolean smallN, boolean thinEpisodes,
+                                   List<ForwardStat> horizons) {
     }
 
-    /** §4 continuation probabilities after a trigger. {@code pDown} = P(next-day ≤ 0), {@code pBig} = P(next-day ≤ −big%). */
-    public record ContinuationStat(String label, int triggerDays, boolean smallN,
+    /**
+     * §4 continuation probabilities after a trigger. {@code pDown} = P(next-day ≤ 0), {@code pBig} =
+     * P(next-day ≤ −big%). {@code episodes} counts distinct trigger dates (see {@link ConditionalBlock}).
+     */
+    public record ContinuationStat(String label, int triggerDays, int episodes,
+                                   boolean smallN, boolean thinEpisodes,
                                    Double pDown, Double pBig) {
     }
 

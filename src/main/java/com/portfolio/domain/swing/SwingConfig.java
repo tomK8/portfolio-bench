@@ -36,6 +36,11 @@ import java.util.List;
  *                           correlation (§7), as a magnitude ({@code 0.02} = ≤ −2%)
  * @param corrWindows        rolling correlation windows (§7), in sessions
  * @param smallNFloor        cells with fewer observations than this are flagged small-N
+ * @param episodeFloor       pooled cells with fewer distinct event <em>dates</em> (episodes) than
+ *                           this are flagged — cluster names flush on shared dates, so an event
+ *                           count of 20 can be only a handful of independent episodes
+ * @param bootstrapIterations iterations for the §6 matched-random-bootstrap control
+ * @param randomSeed         seed for the bootstrap RNG, so a re-run reproduces the same figures
  */
 public record SwingConfig(
         List<String> symbols,
@@ -59,7 +64,10 @@ public record SwingConfig(
         int flushCooldown,
         double clusterDownDay,
         int[] corrWindows,
-        int smallNFloor) {
+        int smallNFloor,
+        int episodeFloor,
+        int bootstrapIterations,
+        long randomSeed) {
 
     public static final List<String> DEFAULT_SYMBOLS = List.of(
             "MU", "AMAT", "KLAC", "LRCX", "ASML", "AVGO", "INTC", "MRVL",
@@ -96,6 +104,9 @@ public record SwingConfig(
         private double clusterDownDay = 0.02;
         private int[] corrWindows = {30, 60};
         private int smallNFloor = 20;
+        private int episodeFloor = 5;
+        private int bootstrapIterations = 1000;
+        private long randomSeed = 42L;
 
         public Builder symbols(List<String> v) { if (v != null && !v.isEmpty()) symbols = v; return this; }
         public Builder cluster(List<String> v) { if (v != null && !v.isEmpty()) cluster = v; return this; }
@@ -111,13 +122,16 @@ public record SwingConfig(
         public Builder barrierFlushDays(int v) { if (v > 0) barrierFlushDays = v; return this; }
         public Builder barrierFlushDrop(double v) { if (v > 0) barrierFlushDrop = v; return this; }
         public Builder smallNFloor(int v) { if (v > 0) smallNFloor = v; return this; }
+        public Builder episodeFloor(int v) { if (v > 0) episodeFloor = v; return this; }
+        public Builder bootstrapIterations(int v) { if (v > 0) bootstrapIterations = v; return this; }
+        public Builder randomSeed(long v) { randomSeed = v; return this; }
 
         public SwingConfig build() {
             return new SwingConfig(symbols, cluster, years, volWindows, sigmaWindow, horizons,
                     sigmaMultiples, absDrops, continuationDrop, flushDays, flushThresholds,
                     takeProfit, stopLoss, timeStops, followSessions, drawdownWindow,
                     barrierFlushDays, barrierFlushDrop, flushCooldown, clusterDownDay,
-                    corrWindows, smallNFloor);
+                    corrWindows, smallNFloor, episodeFloor, bootstrapIterations, randomSeed);
         }
     }
 }

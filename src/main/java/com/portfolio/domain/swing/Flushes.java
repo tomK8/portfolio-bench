@@ -2,37 +2,127 @@ package com.portfolio.domain.swing;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * §5–§6 — flush events and the barrier / time-stop simulation, the calibration core of the study.
  * Pools across a list of {@link SwingSeries} just like {@link ForwardReturns}.
  *
  * <p><b>Flush event</b>: a session whose cumulative {@code days}-session return is ≤ −{@code
- * threshold}. Overlapping flushes on consecutive sessions are collapsed via a {@code flushCooldown}
- * so one down-leg counts once. Session {@code high}/{@code low} (available in {@code price_history})
- * drive §5's "traded ≥ +10%" and "drawdown to the low"; these are legitimate intraday extremes, not
- * the spec's deferred intraday-<em>barrier-touch</em> extension.
+ * threshold}. Session {@code high}/{@code low} (available in {@code price_history}) drive both §5's
+ * profile and §6's barrier touches — these are legitimate intraday extremes.
  *
- * <p><b>§5 per event</b>: further drawdown from the event close to the lowest low of the next
- * {@code drawdownWindow} sessions; sessions until the high first trades ≥ +{@code tp} above the
- * event close (censored past {@code followSessions}); and which of +{@code tp} / −{@code sl} is
- * touched first. When both are touched on the same session the daily bar can't order them, so it's
- * recorded as ambiguous rather than guessed.
+ * <p><b>Event de-duplication (stated in the output).</b> The two sections dedup differently, on
+ * purpose:
+ * <ul>
+ *   <li>§5 is a <em>descriptive</em> profile of what typically follows a flush, so it keeps every
+ *       flush subject to a fixed {@code flushCooldown}-session cooldown (one down-leg counts once).</li>
+ *   <li>§6 is a <em>tradeable</em> simulation, so it is strictly non-overlapping: after an entry, the
+ *       next entry waits until the prior simulated trade resolves (TP/SL/ambiguous touch or the time
+ *       stop). Overlapping trades are therefore excluded, and the event count legitimately shrinks as
+ *       the time stop lengthens.</li>
+ * </ul>
  *
- * <p><b>§6 barrier simulation</b>: a hypothetical long entered at each event close (seeded by the
- * {@code barrierFlush*} definition), exited on a <em>close-to-close</em> basis at the first close
- * ≥ +{@code tp} (take-profit), ≤ −{@code sl} (stop-loss), or at the close of session N (time stop),
- * swept over {@code timeStops}. Realized return is the actual breaching close, so a gap through a
- * barrier is reported honestly rather than clipped. Trades that can't reach their time stop for
- * lack of forward data are dropped (not counted as time-stop exits).
+ * <p><b>Touch convention (OHLC).</b> Barriers are evaluated intraday from the session's OHLC: a
+ * take-profit is touched when {@code high ≥ entry×(1+tp)}, a stop when {@code low ≤ entry×(1−sl)}.
+ * Fills are assumed at the barrier level; a time-stop exit is the close of session N. When both
+ * barriers are touched in the <em>same</em> session the daily bar can't order them — that case is
+ * recorded as <b>ambiguous</b> (excluded from the standard mean return; a separate conservative
+ * figure treats every ambiguous as a stop-loss, a pessimistic bound). An event whose outcome window
+ * extends past the last available bar is <b>open/censored</b> — never silently dropped, never
+ * counted as an outcome.
+ *
+ * <p><b>Reconciliation identity</b>, enforced in every table: {@code events = tpFirst + slFirst +
+ * timeStop(neither) + ambiguous + open}.
  */
 public final class Flushes {
 
     /** Tolerance so a round threshold (e.g. −10% stored as −0.0999999998) still registers. */
-    private static final double EPS = 1e-9;
+    static final double EPS = 1e-9;
 
     private Flushes() {
+    }
+
+    // ---- shared trade simulation (reused by §6 and the placebo/bootstrap control) ----
+
+    /** How a simulated trade ended. */
+    enum Outcome { TP, SL, TIME, AMBIGUOUS, OPEN }
+
+    /**
+     * One simulated trade's outcome. {@code ret} is the realized simple return (the barrier level
+     * for TP/SL, the close for TIME) and is {@link Double#NaN} for AMBIGUOUS and OPEN;
+     * {@code holdingDays} is the exit offset in sessions ({@code −1} for OPEN); {@code date} is the
+     * entry (event) date, used for episode de-duplication when pooling.
+     */
+    record Trade(Outcome outcome, double ret, int holdingDays, LocalDate date) {
+    }
+
+    /**
+     * Simulate a long entered at {@code close[i]} with an OHLC triple barrier and a {@code timeStop}.
+     * Returns {@code null} only when the entry close is non-positive.
+     */
+    static Trade simulateTrade(SwingSeries s, int i, double tp, double sl, int timeStop) {
+        int n = s.size();
+        double entry = s.close[i];
+        if (entry <= 0) return null;
+        double tpLevel = entry * (1 + tp);
+        double slLevel = entry * (1 - sl);
+        int last = Math.min(i + timeStop, n - 1);
+        for (int j = i + 1; j <= last; j++) {
+            boolean tpTouch = s.high[j] >= tpLevel - EPS;
+            boolean slTouch = s.low[j] <= slLevel + EPS;
+            if (tpTouch && slTouch) return new Trade(Outcome.AMBIGUOUS, Double.NaN, j - i, s.dates[i]);
+            if (tpTouch) return new Trade(Outcome.TP, tp, j - i, s.dates[i]);
+            if (slTouch) return new Trade(Outcome.SL, -sl, j - i, s.dates[i]);
+        }
+        if (i + timeStop <= n - 1) {                       // full window observed, no barrier touched
+            double ret = s.close[i + timeStop] / entry - 1.0;
+            return new Trade(Outcome.TIME, ret, timeStop, s.dates[i]);
+        }
+        return new Trade(Outcome.OPEN, Double.NaN, -1, s.dates[i]);   // window runs past the data
+    }
+
+    /**
+     * Aggregate simulated trades into counts and return statistics. The standard mean return / dist
+     * / holding-days are over the resolved-with-a-return set (TP/SL/TIME); ambiguous and open are
+     * excluded from those but counted. {@code meanReturnConservative} additionally books every
+     * ambiguous at {@code −sl}.
+     */
+    static BarrierAgg aggregate(List<Trade> trades, double sl) {
+        int tp = 0, slc = 0, time = 0, amb = 0, open = 0;
+        List<Double> stdReturns = new ArrayList<>();
+        List<Double> stdDays = new ArrayList<>();
+        List<Double> consReturns = new ArrayList<>();
+        for (Trade t : trades) {
+            switch (t.outcome()) {
+                case TP -> { tp++; stdReturns.add(t.ret()); stdDays.add((double) t.holdingDays()); consReturns.add(t.ret()); }
+                case SL -> { slc++; stdReturns.add(t.ret()); stdDays.add((double) t.holdingDays()); consReturns.add(t.ret()); }
+                case TIME -> { time++; stdReturns.add(t.ret()); stdDays.add((double) t.holdingDays()); consReturns.add(t.ret()); }
+                case AMBIGUOUS -> { amb++; consReturns.add(-sl); }
+                case OPEN -> open++;
+            }
+        }
+        double[] retArr = toArray(stdReturns);
+        double meanRet = stdReturns.isEmpty() ? Double.NaN : Stats.mean(retArr);
+        double meanDays = stdDays.isEmpty() ? Double.NaN : Stats.mean(toArray(stdDays));
+        double meanCons = consReturns.isEmpty() ? Double.NaN : Stats.mean(toArray(consReturns));
+        return new BarrierAgg(trades.size(), tp, slc, time, amb, open,
+                meanRet, meanDays, Stats.dist(retArr), meanCons);
+    }
+
+    /**
+     * Intermediate aggregate used by §6 and the placebo/bootstrap control. {@code %TP-first} is
+     * over the <em>closed</em> set (everything but open), so the placebo pool (which has no open
+     * trades) and the flush set are compared on the same basis.
+     */
+    record BarrierAgg(int total, int tp, int sl, int time, int ambiguous, int open,
+                      double meanReturn, double meanHoldingDays, Stats.Dist returnDist,
+                      double meanReturnConservative) {
+        int closed() { return tp + sl + time + ambiguous; }
+
+        double pctTp() { return closed() == 0 ? Double.NaN : (double) tp / closed(); }
     }
 
     // ---- §5 -----------------------------------------------------------------
@@ -53,7 +143,8 @@ public final class Flushes {
         double sl = cfg.stopLoss();
         String label = days + "d ≤ −" + pct(threshold);
 
-        int eventCount = 0, censored = 0, tpFirst = 0, slFirst = 0, neither = 0, ambiguous = 0;
+        int eventCount = 0, targetCensored = 0, tpFirst = 0, slFirst = 0, neither = 0, ambiguous = 0, open = 0;
+        Set<LocalDate> episodeDates = new HashSet<>();
         List<Double> furtherDd = new ArrayList<>();
         List<Double> daysToTarget = new ArrayList<>();
 
@@ -61,6 +152,7 @@ public final class Flushes {
             int n = s.size();
             for (int i : detectEvents(s, cutoff, days, threshold, cfg.flushCooldown())) {
                 eventCount++;
+                episodeDates.add(s.dates[i]);
                 double entry = s.close[i];
 
                 // Further drawdown to the lowest low of the next drawdownWindow sessions.
@@ -79,22 +171,25 @@ public final class Flushes {
                     if (s.high[j] >= tpLevel) { hitDay = j - i; break; }
                 }
                 if (hitDay > 0) daysToTarget.add((double) hitDay);
-                else if (fullWindow) censored++;   // full window observed, never reached target
+                else if (fullWindow) targetCensored++;   // full window observed, never reached target
 
-                // Which barrier is touched first (over the same follow window).
+                // Which barrier is touched first (over the same follow window) — full 5-way accounting.
                 int outcome = touchFirst(s, i, n, tpLevel, slLevel, cfg.followSessions());
                 switch (outcome) {
                     case TP_FIRST -> tpFirst++;
                     case SL_FIRST -> slFirst++;
                     case BOTH -> ambiguous++;
-                    case NONE -> { if (fullWindow) neither++; }   // else truncated → unclassified
+                    case NONE -> neither++;        // full window observed, neither barrier touched
+                    case TRUNCATED -> open++;      // window runs past the data → open/censored
                     default -> { }
                 }
             }
         }
-        return new FlushProfile(label, days, threshold, eventCount, eventCount < cfg.smallNFloor(),
+        int episodes = episodeDates.size();
+        return new FlushProfile(label, days, threshold, eventCount, episodes,
+                eventCount < cfg.smallNFloor(), episodes < cfg.episodeFloor(),
                 Stats.dist(toArray(furtherDd)), Stats.dist(toArray(daysToTarget)),
-                censored, tpFirst, slFirst, neither, ambiguous);
+                targetCensored, tpFirst, slFirst, neither, ambiguous, open);
     }
 
     private static final int TP_FIRST = 1, SL_FIRST = 2, BOTH = 3, NONE = 0, TRUNCATED = -1;
@@ -125,49 +220,45 @@ public final class Flushes {
                                          SwingConfig cfg, int timeStop) {
         double tp = cfg.takeProfit();
         double sl = cfg.stopLoss();
-        int tpCount = 0, slCount = 0, timeCount = 0;
-        List<Double> returns = new ArrayList<>();
-        List<Double> holdingDays = new ArrayList<>();
+        int days = cfg.barrierFlushDays();
+        double threshold = cfg.barrierFlushDrop();
+
+        List<Trade> trades = new ArrayList<>();
+        Set<LocalDate> episodeDates = new HashSet<>();
 
         for (SwingSeries s : seriesList) {
             int n = s.size();
-            for (int i : detectEvents(s, cutoff, cfg.barrierFlushDays(), cfg.barrierFlushDrop(), cfg.flushCooldown())) {
-                double entry = s.close[i];
-                if (entry <= 0) continue;
-                String reason = null;
-                double ret = 0;
-                int exitDay = 0;
-                int last = Math.min(i + timeStop, n - 1);
-                for (int j = i + 1; j <= last; j++) {
-                    double r = s.close[j] / entry - 1.0;
-                    if (r >= tp - EPS) { reason = "TP"; ret = r; exitDay = j - i; break; }
-                    if (r <= -sl + EPS) { reason = "SL"; ret = r; exitDay = j - i; break; }
+            int start = Math.max(days, s.startIndex(cutoff));
+            int nextAllowed = start;                       // non-overlapping: wait until prior trade resolves
+            for (int i = start; i < n; i++) {
+                if (i < nextAllowed) continue;
+                double base = s.close[i - days];
+                if (base <= 0) continue;
+                double cum = s.close[i] / base - 1.0;
+                if (cum <= -threshold + EPS) {
+                    Trade t = simulateTrade(s, i, tp, sl, timeStop);
+                    if (t == null) continue;
+                    trades.add(t);
+                    episodeDates.add(t.date());
+                    int resolveDay = t.holdingDays() > 0 ? t.holdingDays() : timeStop;   // OPEN → lock past data
+                    nextAllowed = i + Math.max(1, resolveDay);
                 }
-                if (reason == null) {
-                    if (i + timeStop <= n - 1) {          // time stop reachable with data
-                        reason = "TIME";
-                        ret = s.close[i + timeStop] / entry - 1.0;
-                        exitDay = timeStop;
-                    } else {
-                        continue;                         // incomplete — can't evaluate this stop
-                    }
-                }
-                switch (reason) {
-                    case "TP" -> tpCount++;
-                    case "SL" -> slCount++;
-                    default -> timeCount++;
-                }
-                returns.add(ret);
-                holdingDays.add((double) exitDay);
             }
         }
-        int trades = returns.size();
-        double[] retArr = toArray(returns);
-        return new BarrierResult(timeStop, trades, trades < cfg.smallNFloor(),
-                pct(tpCount, trades), pct(slCount, trades), pct(timeCount, trades),
-                trades == 0 ? null : Stats.mean(retArr),
-                trades == 0 ? null : Stats.mean(toArray(holdingDays)),
-                Stats.dist(retArr));
+        return barrierResult(timeStop, trades, episodeDates, sl, cfg);
+    }
+
+    /** Build a {@link BarrierResult} from a set of simulated trades (shared by §6 and the placebo). */
+    static BarrierResult barrierResult(int timeStop, List<Trade> trades, Set<LocalDate> episodeDates,
+                                       double sl, SwingConfig cfg) {
+        BarrierAgg agg = aggregate(trades, sl);
+        int events = trades.size();
+        int episodes = episodeDates.size();
+        return new BarrierResult(timeStop, events, episodes,
+                events < cfg.smallNFloor(), episodes < cfg.episodeFloor(),
+                agg.tp(), agg.sl(), agg.time(), agg.ambiguous(), agg.open(),
+                nullIfNaN(agg.meanReturn()), nullIfNaN(agg.meanHoldingDays()),
+                agg.returnDist(), nullIfNaN(agg.meanReturnConservative()));
     }
 
     // ---- shared -------------------------------------------------------------
@@ -192,43 +283,57 @@ public final class Flushes {
         return events;
     }
 
-    private static double pct(int part, int whole) {
-        return whole == 0 ? 0.0 : (double) part / whole;
-    }
-
     private static String pct(double fraction) {
         double v = fraction * 100;
         return v == Math.rint(v) ? Integer.toString((int) v) + "%" : v + "%";
     }
 
-    private static double[] toArray(List<Double> list) {
+    static double[] toArray(List<Double> list) {
         double[] a = new double[list.size()];
         for (int i = 0; i < list.size(); i++) a[i] = list.get(i);
         return a;
     }
 
+    static Double nullIfNaN(double v) {
+        return Double.isNaN(v) ? null : v;
+    }
+
     // ---- DTOs ---------------------------------------------------------------
 
     /**
-     * §5 profile for one flush definition. Distributions are over the events that had forward data;
-     * {@code censored} counts events that observed a full follow window without reaching +tp.
-     * {@code tpFirst}/{@code slFirst}/{@code neither}/{@code ambiguous} sum to the classifiable
-     * events (truncated ones near the series end are excluded). {@code furtherDrawdown} fractions
-     * are negative (drawdown below the entry); {@code daysToTarget} is in sessions.
+     * §5 profile for one flush definition. {@code eventCount} reconciles as
+     * {@code tpFirst + slFirst + neither + ambiguous + open}. {@code episodes} is the number of
+     * distinct event <em>dates</em> (equals {@code eventCount} for a single symbol; smaller when
+     * pooling a cluster that flushes on shared calendar dates); {@code thinEpisodes} flags fewer
+     * than {@code episodeFloor} episodes. {@code targetCensored} counts full-window events that
+     * never reached +tp (a days-to-target censoring, distinct from the barrier {@code open}).
+     * {@code furtherDrawdown} fractions are negative; {@code daysToTarget} is in sessions.
      */
-    public record FlushProfile(String label, int days, double threshold, int eventCount, boolean smallN,
+    public record FlushProfile(String label, int days, double threshold, int eventCount, int episodes,
+                               boolean smallN, boolean thinEpisodes,
                                Stats.Dist furtherDrawdown, Stats.Dist daysToTarget,
-                               int censored, int tpFirst, int slFirst, int neither, int ambiguous) {
+                               int targetCensored, int tpFirst, int slFirst, int neither, int ambiguous, int open) {
     }
 
     /**
-     * §6 barrier outcome for one time-stop N. {@code pctTp}/{@code pctSl}/{@code pctTime} are
-     * fractions of the {@code trades} that exited by each route; {@code meanReturn} and
-     * {@code meanHoldingDays} average over all trades; {@code returnDist} is the full return
-     * distribution.
+     * §6 barrier outcome for one time-stop N. {@code events} reconciles as
+     * {@code tpFirst + slFirst + timeCount + ambiguous + open}. Percentages are derived over the
+     * <em>closed</em> set (everything but {@code open}). {@code meanReturn}/{@code returnDist}/
+     * {@code meanHoldingDays} are over the resolved-with-a-return set (TP/SL/TIME);
+     * {@code meanReturnConservative} additionally books each ambiguous at −sl.
      */
-    public record BarrierResult(int timeStop, int trades, boolean smallN,
-                                double pctTp, double pctSl, double pctTime,
-                                Double meanReturn, Double meanHoldingDays, Stats.Dist returnDist) {
+    public record BarrierResult(int timeStop, int events, int episodes, boolean smallN, boolean thinEpisodes,
+                                int tpFirst, int slFirst, int timeCount, int ambiguous, int open,
+                                Double meanReturn, Double meanHoldingDays, Stats.Dist returnDist,
+                                Double meanReturnConservative) {
+
+        /** Resolved-and-decided trades: everything but the still-open ones. */
+        public int closed() { return tpFirst + slFirst + timeCount + ambiguous; }
+
+        public double pctTp() { return closed() == 0 ? 0.0 : (double) tpFirst / closed(); }
+
+        public double pctSl() { return closed() == 0 ? 0.0 : (double) slFirst / closed(); }
+
+        public double pctTime() { return closed() == 0 ? 0.0 : (double) timeCount / closed(); }
     }
 }

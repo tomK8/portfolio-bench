@@ -5241,7 +5241,11 @@
                 body += '</tr>';
             });
             body += '</tbody>';
-            document.getElementById('sw-vol-table').innerHTML = head + body;
+            var table = document.getElementById('sw-vol-table');
+            table.innerHTML = head + body;
+            // innerHTML replaces the thead too, so the header cells (and their arrows)
+            // are fresh every render — re-attach the sort handler each time.
+            attachSort(table);
         }
 
         function populateSwingDetailSelect() {
@@ -5259,32 +5263,65 @@
         function renderSwingDetail() {
             if (!swReport) return;
             var sel = document.getElementById('sw-detail-symbol').value;
-            var rep = sel === '__POOL__' ? swReport.pooled
+            var pooled = sel === '__POOL__';
+            var rep = pooled ? swReport.pooled
                 : swReport.perSymbol.find(function (s) { return s.symbol === sel; });
             var host = document.getElementById('sw-detail');
             if (!rep || rep.missingData) { host.innerHTML = '<p class="muted">No data.</p>'; return; }
-            host.innerHTML = swingRegimeBlock('Full history', rep.full) +
-                             swingRegimeBlock('Trailing 6 months', rep.trailing6m);
+            host.innerHTML = swingSpanHeader(rep, pooled) +
+                '<div class="swing-regimes">' +
+                swingRegimeBlock('Full history', rep.full, pooled) +
+                swingRegimeBlock('Trailing 6 months', rep.trailing6m, pooled) +
+                '</div>';
         }
 
-        function swingRegimeBlock(label, regime) {
+        // Per-symbol data-span line + a short-history warning (§9 transparency: what "full history" means).
+        function swingSpanHeader(rep, pooled) {
+            if (pooled) {
+                return '<div class="swing-span">Pooled <b>CLUSTER</b> — ' + rep.barCount +
+                    ' contributing member' + (rep.barCount === 1 ? '' : 's') +
+                    '. Pooled cells show <b>events / episodes</b> (distinct event dates); cells with ' +
+                    'fewer than ' + swReport.config.episodeFloor + ' episodes are ' +
+                    '<span class="swing-smalln">dimmed</span>.</div>';
+            }
+            var yrs = (rep.yearsAvailable || 0).toFixed(1);
+            var span = '<div class="swing-span">Data: <b>' + rep.symbol + '</b> ' + rep.from + ' → ' +
+                rep.to + ' (' + yrs + ' yrs, ' + rep.barCount + ' bars).';
+            if (rep.shortHistory) {
+                span += ' <span class="swing-warn">⚠ less than the requested ' + rep.requestedYears +
+                    'y — "full history" here is only ' + yrs + 'y (recent listing/spin-off).</span>';
+            }
+            return span + '</div>';
+        }
+
+        function swingRegimeBlock(label, regime, pooled) {
             if (!regime) return '';
             var floor = swReport.config.smallNFloor;
-            return '<div class="swing-block"><div class="swing-regime-head">' + label + '</div>' +
-                   swingForwardTable(regime.forward, floor) +
-                   swingContinuationTable(regime.forward, floor) +
-                   swingFlushTable(regime.flushes, floor) +
-                   swingBarrierTable(regime.barriers, floor) + '</div>';
+            var head = '<div class="swing-regime-head">' + label +
+                '<span class="muted swing-sub"> · window from ' + (regime.cutoff || 'series start') + '</span></div>';
+            return '<div class="swing-block swing-regime-col">' + head +
+                   swingForwardTable(regime.forward, floor, pooled) +
+                   swingContinuationTable(regime.forward, floor, pooled) +
+                   swingFlushTable(regime.flushes, floor, pooled) +
+                   swingBarrierSection(regime.barriers, floor, pooled) + '</div>';
         }
 
         function smallNTag(n, floor) {
             return n < floor ? '<span class="swing-smalln"> (n=' + n + ')</span>' : '';
         }
 
-        function swingForwardTable(fwd, floor) {
+        // "events / episodes" for pooled cells; plain count otherwise. Dims when episodes < floor.
+        function epCell(count, episodes, thinEpisodes, pooled) {
+            if (!pooled) return '' + count;
+            var cls = thinEpisodes ? ' class="swing-smalln"' : '';
+            return count + '<span' + cls + '> / ' + episodes + ' ep</span>';
+        }
+
+        function swingForwardTable(fwd, floor, pooled) {
             var hs = fwd.baseline.map(function (b) { return b.horizon; });
             var html = '<div class="swing-sub">§2 baseline vs §3 down-day conditional — cell = mean fwd return, (％ positive); median on hover</div>';
-            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Trigger</th><th>n</th>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Trigger</th><th>' +
+                    (pooled ? 'n / ep' : 'n') + '</th>';
             hs.forEach(function (h) { html += '<th>+' + h + 'd</th>'; });
             html += '</tr></thead><tbody>';
             // baseline row
@@ -5293,7 +5330,8 @@
             html += '</tr>';
             fwd.conditional.forEach(function (blk) {
                 var dim = blk.smallN ? ' class="swing-smalln-cell"' : '';
-                html += '<tr' + dim + '><td class="lbl">' + blk.label + smallNTag(blk.triggerDays, floor) + '</td><td>' + blk.triggerDays + '</td>';
+                html += '<tr' + dim + '><td class="lbl">' + blk.label + smallNTag(blk.triggerDays, floor) +
+                        '</td><td>' + epCell(blk.triggerDays, blk.episodes, blk.thinEpisodes, pooled) + '</td>';
                 blk.horizons.forEach(function (st) { html += forwardCell(st); });
                 html += '</tr>';
             });
@@ -5308,33 +5346,49 @@
                    ' <span class="muted">(' + swPct(st.pctPositive, 0) + ')</span></td>';
         }
 
-        function swingContinuationTable(fwd, floor) {
+        function swingContinuationTable(fwd, floor, pooled) {
             var html = '<div class="swing-sub">§4 continuation — does the first red day keep falling?</div>';
-            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Trigger</th><th>n</th>' +
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Trigger</th><th>' +
+                    (pooled ? 'n / ep' : 'n') + '</th>' +
                     '<th>P(next ≤ 0)</th><th>P(next ≤ −3%)</th></tr></thead><tbody>';
             html += '<tr class="swing-baseline"><td class="lbl">baseline (all days)</td><td>' + fwd.baselineDays +
                     '</td><td>' + swPct(fwd.basePDown, 0) + '</td><td>' + swPct(fwd.basePBig, 0) + '</td></tr>';
             fwd.continuation.forEach(function (c) {
                 var dim = c.smallN ? ' class="swing-smalln-cell"' : '';
-                html += '<tr' + dim + '><td class="lbl">' + c.label + smallNTag(c.triggerDays, floor) + '</td><td>' + c.triggerDays +
+                html += '<tr' + dim + '><td class="lbl">' + c.label + smallNTag(c.triggerDays, floor) + '</td><td>' +
+                        epCell(c.triggerDays, c.episodes, c.thinEpisodes, pooled) +
                         '</td><td>' + swPct(c.pDown, 0) + '</td><td>' + swPct(c.pBig, 0) + '</td></tr>';
             });
             html += '</tbody></table>';
             return html;
         }
 
-        function swingFlushTable(flushes, floor) {
-            var html = '<div class="swing-sub">§5 flush events — drawdown after the flush, time to +target, and which barrier hits first</div>';
-            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Flush</th><th>events</th>' +
+        function swingFlushTable(flushes, floor, pooled) {
+            var cooldown = swReport.config.flushCooldown;
+            var html = '<div class="swing-sub">§5 flush events — drawdown after the flush, time to +target, and which barrier hits first ' +
+                    'over the ' + swReport.config.followSessions + '-session follow window. ' +
+                    'Events deduped by a ' + cooldown + '-session cooldown; ' +
+                    '<b>events = TP + SL + neither + ambiguous + open</b>.</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Flush</th><th>' +
+                    (pooled ? 'events / ep' : 'events') + '</th>' +
                     '<th>further DD (med)</th><th>DD q1…q3</th><th>days→target (med)</th>' +
-                    '<th>TP first</th><th>SL first</th><th>neither</th><th>ambig</th></tr></thead><tbody>';
+                    '<th title="high traded ≥ +target first">TP</th>' +
+                    '<th title="low traded ≤ −stop first">SL</th>' +
+                    '<th title="full window, neither barrier touched">neither</th>' +
+                    '<th title="both barriers touched in the same session">ambig</th>' +
+                    '<th title="follow window runs past the last data date — open/censored">open</th></tr></thead><tbody>';
             flushes.forEach(function (f) {
                 var dim = f.smallN ? ' class="swing-smalln-cell"' : '';
-                html += '<tr' + dim + '><td class="lbl">' + f.label + smallNTag(f.eventCount, floor) + '</td><td>' + f.eventCount + '</td>' +
+                var reconciles = (f.tpFirst + f.slFirst + f.neither + f.ambiguous + f.open) === f.eventCount;
+                var evtCell = epCell(f.eventCount, f.episodes, f.thinEpisodes, pooled) +
+                    (reconciles ? '' : ' <span class="swing-warn">!</span>');
+                var daysTip = f.targetCensored > 0 ? ' title="' + f.targetCensored + ' full-window events never reached +target"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + f.label + smallNTag(f.eventCount, floor) + '</td><td>' + evtCell + '</td>' +
                         '<td>' + swPct(distMed(f.furtherDrawdown), 1) + '</td>' +
                         '<td>' + swPct(f.furtherDrawdown.q1, 1) + '…' + swPct(f.furtherDrawdown.q3, 1) + '</td>' +
-                        '<td>' + swNum(distMed(f.daysToTarget), 1) + '</td>' +
-                        '<td>' + f.tpFirst + '</td><td>' + f.slFirst + '</td><td>' + f.neither + '</td><td>' + f.ambiguous + '</td></tr>';
+                        '<td' + daysTip + '>' + swNum(distMed(f.daysToTarget), 1) + '</td>' +
+                        '<td>' + f.tpFirst + '</td><td>' + f.slFirst + '</td><td>' + f.neither + '</td>' +
+                        '<td>' + f.ambiguous + '</td><td>' + f.open + '</td></tr>';
             });
             html += '</tbody></table>';
             return html;
@@ -5342,19 +5396,97 @@
 
         function distMed(d) { return d && d.n > 0 ? d.median : null; }
 
-        function swingBarrierTable(barriers, floor) {
-            var html = '<div class="swing-sub">§6 barrier / time-stop simulation — entry at the flush close (close-to-close exits)</div>';
-            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Time stop</th><th>trades</th>' +
-                    '<th>%TP</th><th>%SL</th><th>%Time</th><th>mean ret</th><th>mean days</th><th>ret q1…q3</th></tr></thead><tbody>';
-            barriers.forEach(function (b) {
-                var dim = b.smallN ? ' class="swing-smalln-cell"' : '';
-                html += '<tr' + dim + '><td class="lbl">' + b.timeStop + 'd' + smallNTag(b.trades, floor) + '</td><td>' + b.trades + '</td>' +
-                        '<td>' + swPct(b.pctTp, 0) + '</td><td>' + swPct(b.pctSl, 0) + '</td><td>' + swPct(b.pctTime, 0) + '</td>' +
-                        '<td>' + swPctCell(b.meanReturn, 2) + '</td><td>' + swNum(b.meanHoldingDays, 1) + '</td>' +
-                        '<td>' + swPct(b.returnDist.q1, 1) + '…' + swPct(b.returnDist.q3, 1) + '</td></tr>';
+        // §6 — barrier accounting (flush vs all-days placebo) + matched-random bootstrap, plus the
+        // conventions the numbers depend on. `comparisons` is a list of {timeStop, flush, placebo, bootstrap}.
+        function swingBarrierSection(comparisons, floor, pooled) {
+            if (!comparisons || !comparisons.length) return '';
+            var cfg = swReport.config;
+            var tp = (cfg.takeProfit * 100).toFixed(0);
+            var sl = (cfg.stopLoss * 100).toFixed(0);
+            var note = '<div class="swing-sub">§6 barrier / time-stop simulation — entry at each ' +
+                cfg.barrierFlushDays + 'd ≤ −' + (cfg.barrierFlushDrop * 100).toFixed(0) + '% flush close.' +
+                ' <b>Touch convention</b>: intraday OHLC — TP if session high ≥ +' + tp + '%, SL if low ≤ −' + sl +
+                '%; fills at the barrier, time-stop exits at the close. <b>Ambiguous</b> = both barriers touched ' +
+                'in one session (excluded from mean ret; the <i>cons ret</i> column books each as a stop = a ' +
+                'pessimistic bound). <b>Open</b> = the time-stop window runs past the last data date (censored, ' +
+                'never counted as an outcome). <b>Overlap</b>: non-overlapping — the next entry waits until the ' +
+                'prior trade resolves. <b>events = TP + SL + Time + Ambiguous + Open</b>.</div>';
+
+            // Accounting table: flush row-group then placebo row-group.
+            var head = '<table class="swing-tbl"><thead><tr><th class="lbl">Source · N-stop</th><th>' +
+                (pooled ? 'events / ep' : 'events') + '</th>' +
+                '<th>TP</th><th>SL</th><th>Time</th><th>Amb</th><th>Open</th>' +
+                '<th title="TP ÷ closed">%TP</th><th>mean ret</th>' +
+                '<th title="ambiguous booked as SL">cons ret</th><th>mean days</th><th>ret q1…q3</th></tr></thead><tbody>';
+            var body = '';
+            comparisons.forEach(function (c) {
+                body += barrierAccountingRow('flush ' + c.timeStop + 'd', c.flush, floor, pooled, false);
+            });
+            comparisons.forEach(function (c) {
+                body += barrierAccountingRow('placebo ' + c.timeStop + 'd (all days)', c.placebo, floor, pooled, true);
+            });
+            var acct = head + body + '</tbody></table>';
+
+            return note + acct + swingBootstrapTable(comparisons, cfg);
+        }
+
+        // %TP is over the CLOSED set (events minus open); computed here since it isn't a serialized field.
+        function barPctTp(b) {
+            var closed = b.tpFirst + b.slFirst + b.timeCount + b.ambiguous;
+            return closed === 0 ? null : b.tpFirst / closed;
+        }
+
+        function barrierAccountingRow(label, b, floor, pooled, isPlacebo) {
+            var reconciles = (b.tpFirst + b.slFirst + b.timeCount + b.ambiguous + b.open) === b.events;
+            var cls = isPlacebo ? ' class="swing-placebo-row"' : (b.smallN ? ' class="swing-smalln-cell"' : '');
+            var evt = (isPlacebo ? '' + b.events : epCell(b.events, b.episodes, b.thinEpisodes, pooled)) +
+                (reconciles ? '' : ' <span class="swing-warn">!</span>');
+            return '<tr' + cls + '><td class="lbl">' + label + (isPlacebo ? '' : smallNTag(b.events, floor)) + '</td>' +
+                '<td>' + evt + '</td>' +
+                '<td>' + b.tpFirst + '</td><td>' + b.slFirst + '</td><td>' + b.timeCount + '</td>' +
+                '<td>' + b.ambiguous + '</td><td>' + b.open + '</td>' +
+                '<td>' + swPct(barPctTp(b), 0) + '</td>' +
+                '<td>' + swPctCell(b.meanReturn, 2) + '</td>' +
+                '<td>' + swPctCell(b.meanReturnConservative, 2) + '</td>' +
+                '<td>' + swNum(b.meanHoldingDays, 1) + '</td>' +
+                '<td>' + swPct(b.returnDist.q1, 1) + '…' + swPct(b.returnDist.q3, 1) + '</td></tr>';
+        }
+
+        // Bootstrap: is the flush result distinguishable from random timing of the same count?
+        function swingBootstrapTable(comparisons, cfg) {
+            var iters = cfg.bootstrapIterations;
+            var html = '<div class="swing-sub" style="margin-top:0.5rem;">§6 control — matched random bootstrap (' +
+                iters + '× per stop): draw the same number of entries at random dates, run the identical sim. ' +
+                'A flush figure inside the bootstrap IQR (percentile 25–75, <span class="swing-smalln">dimmed</span>) ' +
+                'is <b>indistinguishable from regime drift</b>; outside it (highlighted) the trigger adds signal.</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">N-stop</th><th>pool</th><th>draws</th>' +
+                '<th>%TP median</th><th>%TP 5–95</th><th>flush %TP (pctile)</th>' +
+                '<th>ret median</th><th>ret 5–95</th><th>flush ret (pctile)</th></tr></thead><tbody>';
+            comparisons.forEach(function (c) {
+                var bs = c.bootstrap;
+                var dim = bs.smallN ? ' class="swing-smalln-cell"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + bs.timeStop + 'd</td>' +
+                    '<td>' + bs.poolSize + '</td><td>' + bs.drawN + '</td>' +
+                    '<td>' + swPct(bs.tpMedian, 0) + '</td>' +
+                    '<td>' + swPct(bs.tpP05, 0) + '…' + swPct(bs.tpP95, 0) + '</td>' +
+                    '<td>' + rankBadge(swPct(bs.actualTpPct, 0), bs.tpPercentileRank) + '</td>' +
+                    '<td>' + swPctCell(bs.retMedian, 2) + '</td>' +
+                    '<td>' + swPct(bs.retP05, 1) + '…' + swPct(bs.retP95, 1) + '</td>' +
+                    '<td>' + rankBadge(swPctCellStr(bs.actualMeanReturn), bs.retPercentileRank) + '</td></tr>';
             });
             html += '</tbody></table>';
             return html;
+        }
+
+        function swPctCellStr(frac) { return frac == null ? '—' : swPctCell(frac, 2); }
+
+        // Value + its bootstrap percentile rank; dim when inside the IQR (adds nothing), highlight outside.
+        function rankBadge(valueHtml, rank) {
+            if (rank == null) return valueHtml;
+            var pctile = Math.round(rank * 100);
+            var inside = rank >= 0.25 && rank <= 0.75;
+            var cls = inside ? 'swing-smalln' : 'swing-rank-hit';
+            return valueHtml + ' <span class="' + cls + '" title="percentile rank within the bootstrap">(p' + pctile + ')</span>';
         }
 
         // ---- §7 correlation ----

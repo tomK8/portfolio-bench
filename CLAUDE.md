@@ -101,11 +101,13 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
 - **Swing stats** — `GET /swing` → JSON, rendered as tables + a correlation heatmap under the
   Tools group. Validation statistics for a short-term mean-reversion (dip-buy) strategy on a
   configurable high-vol semi/AI watchlist: realized-vol term structure; forward returns after
-  down-day / flush triggers, always shown next to their unconditional baseline; a barrier /
-  time-stop trade simulation; and cluster correlation (incl. tail correlation on down days).
-  Everything is configurable and pooled across a "semi cluster" subset; §9 regime split (full
-  vs trailing 6 months) is shown side by side. §8 earnings hygiene is deferred. See the Swing
-  section below.
+  down-day / flush triggers, always shown next to their unconditional baseline; an OHLC-touch
+  barrier / time-stop trade simulation with full TP/SL/Time/Ambiguous/Open accounting, an all-days
+  placebo and a matched-random bootstrap (does the flush trigger beat drift?); and cluster
+  correlation (incl. tail correlation on down days). Everything is configurable and pooled across a
+  "semi cluster" subset (pooled cells report distinct-date *episodes* alongside raw event counts);
+  §9 regime split (full vs trailing 6 months) is shown side by side with each name's actual data
+  span. §8 earnings hygiene is deferred. See the Swing section below.
 
 Charts load lazily on first tab click. Logging is SLF4J + Logback (`logback-spring.xml`);
 no `System.out` in production code.
@@ -392,20 +394,43 @@ strategy — dip-buy after 1–2 day flushes, exit at a fixed take-profit / wide
   aligned `close/high/low/logRet/simpleRet` arrays plus a **look-ahead-free trailing-30d daily σ**
   (σ over returns strictly *before* each bar, so a σ-trigger judges a day against vol known going
   in). Engines: `RealizedVol` (§1), `ForwardReturns` (§2 baseline / §3 conditional / §4
-  continuation), `Flushes` (§5 flush profile + §6 barrier/time-stop sim), `ReturnCorrelation`
-  (§7). `Stats` provides mean/median/quartiles/%pos. All engines take a `List<SwingSeries>` so the
-  same code serves per-symbol (one) and pooled-cluster (concatenate observations across the
-  cluster, equal-weight by observation).
+  continuation), `Flushes` (§5 flush profile + §6 barrier/time-stop sim), `Placebo` (§6 controls:
+  all-days placebo + matched-random bootstrap), `ReturnCorrelation` (§7). `Stats` provides
+  mean/median/quartiles/%pos + a public `quantile`. All engines take a `List<SwingSeries>` so the
+  same code serves per-symbol (one) and pooled-cluster (concatenate observations across the cluster,
+  equal-weight by observation).
 - **Conventions:** returns off `close` (split-adjusted), log for vol, simple for anything P&L-like.
   σ-triggers compare the day's simple return to −k×(trailing daily σ); absolute triggers to −p%.
-  §6 barriers are **close-to-close** (intraday touches are a deferred extension); §5's
-  further-drawdown/target uses session `high`/`low` (available in `price_history`). A 1e-9 epsilon
-  makes round thresholds (a "−10%" day stored as −0.0999999998) register. Small-N cells are
-  flagged, never silently averaged (`smallNFloor`).
+  A 1e-9 epsilon makes round thresholds (a "−10%" day stored as −0.0999999998) register. Small-N
+  cells are flagged, never silently averaged (`smallNFloor`); **pooled** cells also report distinct
+  event *dates* (episodes) beside the raw event count and flag `episodes < episodeFloor` (cluster
+  names flush on shared dates, so 10 symbols × one crash ≈ 1 episode, not 10).
+- **§6 event accounting** (the calibration core). Barrier touches are read from **intraday OHLC**
+  (TP if session `high ≥ entry×(1+tp)`, SL if `low ≤ entry×(1−sl)`; fills at the barrier, time-stop
+  exits at the close). `Flushes.simulateTrade`/`aggregate` are the shared single-trade engine (reused
+  by the placebo). Five-way reconciliation holds in every table: **events = TP + SL + Time +
+  Ambiguous + Open**. *Ambiguous* = both barriers touched in one session (excluded from the standard
+  mean return; a `meanReturnConservative` books each as a stop for a pessimistic bound). *Open* = the
+  outcome window runs past the last data date (censored — never dropped, never counted as an
+  outcome). §6 events are **non-overlapping until the prior simulated trade resolves** (so the count
+  legitimately shrinks as the time stop lengthens); §5 keeps its `flushCooldown` dedup for its
+  descriptive profile. `Stats.Dist` and any nullable figure never emit a bare `NaN` — `config/JacksonConfig`
+  serializes non-finite doubles as JSON `null` app-wide (empty distributions would otherwise corrupt
+  the payload).
+- **§6 controls (`Placebo`)** answer "does the flush trigger beat drift?": an **all-days placebo**
+  (entry at every fully-evaluable close, overlaps allowed, `open == 0` by construction) and a
+  **matched random bootstrap** (draw N = flush-event count random entry dates from that pool,
+  `bootstrapIterations` times, seeded by `randomSeed`; reports the %TP / mean-return distribution and
+  the percentile rank of the actual flush result — a rank inside the IQR means the trigger adds
+  nothing). The bootstrap samples the precomputed placebo pool, so 1,000 iterations are cheap.
 - **`SwingAnalysisService`** loads bars, runs every symbol + the pooled cluster over both §9
-  regimes (full history + trailing 6 months), and adds §7 correlation. No FX — statistics are
-  unit-less return ratios, so `.L` pence listings need no conversion. `SwingReport` (in
-  `application`) is the JSON DTO; `earningsHygiene` is a reserved `null` slot for the deferred §8.
+  regimes (full history + trailing 6 months, rendered **side by side**), and adds §7 correlation.
+  Each `SymbolReport` reports its actual data span (`from`/`to`/`yearsAvailable`) and a `shortHistory`
+  flag when the first bar post-dates the full-history cutoff (recent listing → "full history" is
+  really shorter than `years`). Each `Regime` pairs the §6 flush sim with its placebo + bootstrap
+  (`BarrierComparison`). No FX — statistics are unit-less return ratios, so `.L` pence listings need
+  no conversion. `SwingReport` (in `application`) is the JSON DTO; `earningsHygiene` is a reserved
+  `null` slot for the deferred §8.
 - **Config persistence:** the symbol universe + cluster live in `KeyValueStore` (`swing_symbols` /
   `swing_cluster`, seeded from spec defaults on first read). `swing_symbols` is unioned into
   `PriceFetchSupport.tickersToFetch`, so the nightly 30-year daily job keeps the swing universe

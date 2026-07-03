@@ -106,6 +106,51 @@ class SwingAnalysisServiceTest {
     }
 
     @Test
+    void regimeCarriesPlaceboAndBootstrapControls() {
+        var priceRepo = new PriceHistoryRepository(new JdbcConnectionFactory(dbDir));
+        priceRepo.savePriceBars(path("AAA", 100));
+
+        SwingReport r = service(priceRepo).report(cfg());
+        SwingReport.SymbolReport aaa = find(r, "AAA");
+
+        // Every §6 time stop pairs the flush sim with its all-days placebo + bootstrap control.
+        assertFalse(aaa.full().barriers().isEmpty());
+        SwingReport.BarrierComparison cmp = aaa.full().barriers().get(0);
+        assertNotNull(cmp.flush());
+        assertNotNull(cmp.placebo());
+        assertNotNull(cmp.bootstrap());
+        assertEquals(0, cmp.placebo().open(), "all-days placebo never censors");
+        // Reconciliation identity holds on the flush sim.
+        var f = cmp.flush();
+        assertEquals(f.events(), f.tpFirst() + f.slFirst() + f.timeCount() + f.ambiguous() + f.open());
+    }
+
+    @Test
+    void shortHistoryFlaggedForRecentListing() {
+        var priceRepo = new PriceHistoryRepository(new JdbcConnectionFactory(dbDir));
+        priceRepo.savePriceBars(path("AAA", 100));   // only ~60 days of data, far short of 3y
+
+        SwingReport.SymbolReport aaa = find(service(priceRepo).report(cfg()), "AAA");
+        assertTrue(aaa.shortHistory(), "60 days of data is less than the requested 3-year window");
+        assertEquals(3, aaa.requestedYears());
+        assertTrue(aaa.yearsAvailable() < 1.0);
+        assertNotNull(aaa.from());
+    }
+
+    @Test
+    void pooledEpisodesNeverExceedEventCount() {
+        var priceRepo = new PriceHistoryRepository(new JdbcConnectionFactory(dbDir));
+        priceRepo.savePriceBars(path("AAA", 100));
+        priceRepo.savePriceBars(path("BBB", 200));   // same calendar dates as AAA
+
+        SwingReport r = service(priceRepo).report(cfg());
+        ForwardReturns.ConditionalBlock pAbs = firstAbs(r.pooled().full().forward());
+        assertTrue(pAbs.episodes() <= pAbs.triggerDays());
+        // AAA and BBB share dates, so pooled episodes should be strictly below the summed count.
+        assertTrue(pAbs.episodes() < pAbs.triggerDays() || pAbs.triggerDays() == 0);
+    }
+
+    @Test
     void symbolsAndClusterPersist() {
         var priceRepo = new PriceHistoryRepository(new JdbcConnectionFactory(dbDir));
         var svc = service(priceRepo);

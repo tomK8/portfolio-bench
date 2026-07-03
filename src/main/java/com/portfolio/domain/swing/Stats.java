@@ -97,6 +97,16 @@ public final class Stats {
                 mean(a));
     }
 
+    /**
+     * Linear-interpolation quantile over the finite values of {@code a}. {@code p} in [0,1]
+     * ({@code 0.05} = 5th percentile). {@code NaN} for an empty sample. Public so the bootstrap
+     * engine can summarise its iteration distributions with the same rule the {@link Dist}
+     * quartiles use.
+     */
+    public static double quantile(double[] a, double p) {
+        return percentile(finiteSorted(a), p);
+    }
+
     private static double[] finiteSorted(double[] a) {
         double[] tmp = new double[a.length];
         int n = 0;

@@ -5,15 +5,18 @@ import com.portfolio.domain.Instruments;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.domain.swing.Flushes;
 import com.portfolio.domain.swing.ForwardReturns;
+import com.portfolio.domain.swing.Placebo;
 import com.portfolio.domain.swing.RealizedVol;
 import com.portfolio.domain.swing.ReturnCorrelation;
 import com.portfolio.domain.swing.SwingConfig;
+import com.portfolio.domain.swing.SwingSeries;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -112,19 +115,22 @@ public class SwingAnalysisService {
         LocalDate sixMonthCutoff = today.minusMonths(6);
 
         List<SwingReport.SymbolReport> perSymbol = new ArrayList<>();
-        List<com.portfolio.domain.swing.SwingSeries> clusterSeries = new ArrayList<>();
+        List<SwingSeries> clusterSeries = new ArrayList<>();
         Set<String> clusterSet = new LinkedHashSet<>(cfg.cluster());
 
         for (String symbol : cfg.symbols()) {
             var series = loadSeries(symbol, loadFrom, today, cfg.sigmaWindow());
             if (series == null) {
-                perSymbol.add(SwingReport.SymbolReport.missing(symbol));
+                perSymbol.add(SwingReport.SymbolReport.missing(symbol, cfg.years()));
                 continue;
             }
-            List<com.portfolio.domain.swing.SwingSeries> single = List.of(series);
+            List<SwingSeries> single = List.of(series);
+            double yearsAvailable = ChronoUnit.DAYS.between(series.firstDate(), series.lastDate()) / 365.25;
+            boolean shortHistory = series.firstDate().isAfter(fullCutoff);   // data starts after the full-history cutoff
             perSymbol.add(new SwingReport.SymbolReport(
                     symbol, false, series.size(),
                     series.firstDate().toString(), series.lastDate().toString(),
+                    yearsAvailable, shortHistory, cfg.years(),
                     RealizedVol.compute(series, cfg.volWindows()),
                     regime("full", single, fullCutoff, cfg),
                     regime("6m", single, sixMonthCutoff, cfg)));
@@ -133,6 +139,7 @@ public class SwingAnalysisService {
 
         SwingReport.SymbolReport pooled = new SwingReport.SymbolReport(
                 "CLUSTER", clusterSeries.isEmpty(), clusterSeries.size(), null, null,
+                0, false, cfg.years(),
                 pooledVol(perSymbol, clusterSet, cfg),
                 regime("full", clusterSeries, fullCutoff, cfg),
                 regime("6m", clusterSeries, sixMonthCutoff, cfg));
@@ -142,12 +149,24 @@ public class SwingAnalysisService {
         return new SwingReport(cfg, perSymbol, pooled, correlation, null);
     }
 
-    private SwingReport.Regime regime(String label, List<com.portfolio.domain.swing.SwingSeries> series,
+    private SwingReport.Regime regime(String label, List<SwingSeries> series,
                                       LocalDate cutoff, SwingConfig cfg) {
-        return new SwingReport.Regime(label,
+        List<Flushes.BarrierResult> flushBarriers = Flushes.barriers(series, cutoff, cfg);
+        List<SwingReport.BarrierComparison> comparisons = new ArrayList<>();
+        for (Flushes.BarrierResult flush : flushBarriers) {
+            int ts = flush.timeStop();
+            Flushes.BarrierResult placebo = Placebo.allDays(series, cutoff, cfg, ts);
+            // Compare the flush figures against the controls on the same (closed-set) basis.
+            Double actualTp = flush.closed() == 0 ? null : flush.pctTp();
+            Double actualRet = flush.meanReturn();
+            Placebo.Bootstrap bootstrap =
+                    Placebo.bootstrap(series, cutoff, cfg, ts, flush.events(), actualTp, actualRet);
+            comparisons.add(new SwingReport.BarrierComparison(ts, flush, placebo, bootstrap));
+        }
+        return new SwingReport.Regime(label, cutoff == null ? null : cutoff.toString(),
                 ForwardReturns.compute(series, cutoff, cfg),
                 Flushes.profiles(series, cutoff, cfg),
-                Flushes.barriers(series, cutoff, cfg));
+                comparisons);
     }
 
     /** Pooled §1: cross-sectional mean of the cluster members' per-window realized vol. */

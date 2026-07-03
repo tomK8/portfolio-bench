@@ -60,7 +60,9 @@ public class SwingController {
             @RequestParam(name = "sl", required = false) String sl,
             @RequestParam(name = "timeStops", required = false) String timeStops,
             @RequestParam(name = "barrierDays", required = false) Integer barrierDays,
-            @RequestParam(name = "barrierPct", required = false) String barrierPct) {
+            @RequestParam(name = "barrierPct", required = false) String barrierPct,
+            @RequestParam(name = "bootstrap", required = false) Integer bootstrap,
+            @RequestParam(name = "episodeFloor", required = false) Integer episodeFloor) {
 
         SwingConfig.Builder b = swingService.baseConfigBuilder();
         if (symbols != null) b.symbols(splitSymbols(symbols));
@@ -76,6 +78,8 @@ public class SwingController {
         if (timeStops != null) b.timeStops(parseInts(timeStops, "timeStops"));
         if (barrierDays != null) b.barrierFlushDays(barrierDays);
         if (barrierPct != null) b.barrierFlushDrop(parsePct(barrierPct, "barrierPct"));
+        if (bootstrap != null) b.bootstrapIterations(bootstrap);
+        if (episodeFloor != null) b.episodeFloor(episodeFloor);
 
         return swingService.report(b.build());
     }

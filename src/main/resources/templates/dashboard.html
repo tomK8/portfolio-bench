@@ -529,6 +529,10 @@
         #panel-swing table.annual-table { font-size: 0.78rem; }
         #panel-swing table.annual-table th, #panel-swing table.annual-table td { padding: 0.12rem 0.4rem; }
         .swing-block { margin: 0.6rem 0 1rem; }
+        .swing-regimes { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; overflow-x: auto; }
+        .swing-regime-col { flex: 1 1 620px; min-width: 560px; }
+        .swing-span { font-size: 0.82rem; margin: 0.5rem 0; padding: 0.3rem 0.5rem; background: #f6f7f9; border-radius: 4px; }
+        .swing-warn { color: #c0392b; font-weight: 600; }
         .swing-regime-head { font-weight: 600; font-size: 0.85rem; margin: 0.6rem 0 0.2rem; color: #1f77b4; }
         .swing-tbl { border-collapse: collapse; font-size: 0.78rem; font-variant-numeric: tabular-nums; margin-bottom: 0.5rem; }
         .swing-tbl th, .swing-tbl td { border: 1px solid #e3e3e3; padding: 0.12rem 0.45rem; text-align: right; white-space: nowrap; }
@@ -538,6 +542,8 @@
         .swing-pos { color: #2ca02c; } .swing-neg { color: #c0392b; }
         .swing-smalln { color: #b0b3b8; }
         .swing-smalln-cell { color: #b0b3b8; }
+        .swing-tbl tr.swing-placebo-row td { background: #fafbfc; color: #667; }
+        .swing-rank-hit { color: #1f77b4; font-weight: 600; }
         .swing-corr-toggle button, .swing-corr-toggle > button { font-size: 0.8rem; padding: 2px 8px; margin-right: 4px; }
         .swing-corr-toggle button.active { background: #1f77b4; color: #fff; }
         table.corr-matrix { border-collapse: collapse; font-size: 0.72rem; }
@@ -546,6 +552,9 @@
         html[data-theme="dark"] .swing-tbl th { background: #23262b; }
         html[data-theme="dark"] .swing-tbl th, html[data-theme="dark"] .swing-tbl td { border-color: #333; }
         html[data-theme="dark"] .swing-tbl tr.swing-baseline td { background: #1c2836; }
+        html[data-theme="dark"] .swing-span { background: #23262b; }
+        html[data-theme="dark"] .swing-tbl tr.swing-placebo-row td { background: #202328; color: #99a; }
+        html[data-theme="dark"] .swing-rank-hit { color: #6ab0f3; }
         html[data-theme="dark"] .swing-pos { color: #4ade80; } html[data-theme="dark"] .swing-neg { color: #f87171; }
         html[data-theme="dark"] table.corr-matrix th.corr-axis { background: #23262b; }
         html[data-theme="dark"] .wl-stats .snap-kv { border-bottom-color: #23262b; }
@@ -1813,9 +1822,15 @@
     <p class="muted" style="margin-top: 0">
         Validation statistics for a short-term mean-reversion (dip-buy) strategy on high-vol
         semi/AI names. Every conditional number is shown next to its unconditional
-        <b>baseline</b> — a bounce stat only matters if it beats the drift. Thin cells
-        (<span class="swing-smalln">dimmed, with n</span>) are flagged, never silently averaged.
+        <b>baseline</b> — a bounce stat only matters if it beats the drift, and next to
+        <b>placebo</b>/<b>bootstrap</b> controls (§6) that test whether the flush trigger adds
+        anything over random entry timing. Thin cells
+        (<span class="swing-smalln">dimmed, with n</span>) are flagged, never silently averaged;
+        pooled cells report <b>events / episodes</b> (distinct event dates, since cluster names flush
+        together). §6 accounting reconciles exactly: <b>events = TP + SL + Time + Ambiguous + Open</b>,
+        with barrier touches read from intraday OHLC and open/censored trades shown, never dropped.
         Returns use each symbol's own split-adjusted close (log for vol, simple for P&amp;L).
+        Full history vs trailing 6 months (§9) sit side by side, with each name's actual data span.
         §8 earnings hygiene is deferred. Every field below is configurable.
     </p>
 
@@ -1850,7 +1865,7 @@
     </div>
 
     <div id="sw-vol-wrap" style="display:none; margin-top: 0.8rem;">
-        <h3 class="swing-h">§1 Realized volatility <span class="muted swing-sub">annualised, from daily log returns</span></h3>
+        <h3 class="swing-h">§1 Realized volatility from daily log returns <span class="muted swing-sub">daily and annualized</span></h3>
         <table id="sw-vol-table" class="annual-table sticky-head"></table>
     </div>
 

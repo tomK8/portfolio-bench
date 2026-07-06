@@ -1,6 +1,7 @@
 package com.portfolio.config;
 
 import com.portfolio.ExcelReportWriter;
+import com.portfolio.adapter.EdgarEarningsFetcher;
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
 import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.GiltPriceFetcher;
@@ -11,6 +12,8 @@ import com.portfolio.adapter.YahooQuoteSummaryFetcher;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.*;
 import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.application.EarningsService;
+import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
@@ -20,6 +23,7 @@ import com.portfolio.persistence.SnapshotRepository;
 import com.portfolio.persistence.TradeNotesRepository;
 import com.portfolio.persistence.WatchlistRepository;
 import com.portfolio.port.AlertNotifier;
+import com.portfolio.port.EarningsCalendarProvider;
 import com.portfolio.port.FxRateProvider;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -490,11 +494,28 @@ public class BeanConfiguration {
     // ---- Swing-strategy validation statistics -------------------------------
 
     @Bean
+    public EarningsDateRepository earningsDateRepository(JdbcConnectionFactory connections) {
+        return new EarningsDateRepository(connections);
+    }
+
+    @Bean
+    public EarningsCalendarProvider earningsCalendarProvider() {
+        return new EdgarEarningsFetcher();
+    }
+
+    @Bean
+    public EarningsService earningsService(EarningsCalendarProvider earningsCalendarProvider,
+                                           EarningsDateRepository earningsDateRepository) {
+        return new EarningsService(earningsCalendarProvider, earningsDateRepository);
+    }
+
+    @Bean
     public SwingAnalysisService swingAnalysisService(PriceHistoryRepository priceHistoryRepository,
                                                      YahooTickerMap yahooTickerMap,
                                                      KeyValueStore keyValueStore,
-                                                     PriceFetchJob priceFetchJob) {
+                                                     PriceFetchJob priceFetchJob,
+                                                     EarningsService earningsService) {
         return new SwingAnalysisService(priceHistoryRepository, yahooTickerMap,
-                keyValueStore, priceFetchJob);
+                keyValueStore, priceFetchJob, earningsService);
     }
 }

@@ -546,6 +546,16 @@
         .swing-rank-hit { color: #1f77b4; font-weight: 600; }
         .swing-corr-toggle button, .swing-corr-toggle > button { font-size: 0.8rem; padding: 2px 8px; margin-right: 4px; }
         .swing-corr-toggle button.active { background: #1f77b4; color: #fff; }
+        .swing-family-head { font-weight: 700; font-size: 0.82rem; margin: 0.7rem 0 0.2rem; color: #333;
+            border-top: 2px solid #e3e3e3; padding-top: 0.4rem; }
+        .swing-family-head .swing-sub { font-weight: 400; color: #888; }
+        .swing-unverified { color: #c0392b; font-size: 0.72rem; font-weight: 600; }
+        .swing-eventlog { margin: 0.3rem 0 0.6rem; }
+        .swing-eventlog > summary { cursor: pointer; font-size: 0.8rem; font-weight: 600; }
+        .swing-eventlog .sw-csv-btn { font-size: 0.72rem; margin-left: 0.5rem; padding: 1px 6px; }
+        .swing-eventlog .swing-tbl { display: block; max-height: 320px; overflow: auto; margin-top: 0.3rem; }
+        html[data-theme="dark"] .swing-family-head { color: #ddd; border-top-color: #333; }
+        html[data-theme="dark"] .swing-unverified { color: #f87171; }
         table.corr-matrix { border-collapse: collapse; font-size: 0.72rem; }
         table.corr-matrix th, table.corr-matrix td { padding: 0.15rem 0.4rem; text-align: center; border: 1px solid #eee; }
         table.corr-matrix th.corr-axis { background: #f6f7f9; font-weight: 600; position: sticky; }
@@ -1831,7 +1841,12 @@
         with barrier touches read from intraday OHLC and open/censored trades shown, never dropped.
         Returns use each symbol's own split-adjusted close (log for vol, simple for P&amp;L).
         Full history vs trailing 6 months (§9) sit side by side, with each name's actual data span.
-        §8 earnings hygiene is deferred. Every field below is configurable.
+        Every flush runs for <b>two trigger families in parallel</b> — an absolute −% drop and a
+        volatility-scaled −k×σ×√N flush (§C) that fires at each regime's own scale. Each family carries
+        an event log (§A), a per-year breakdown (§B) and a 200d-MA split (§E), in <b>all</b> and
+        <b>ex-earnings</b> variants (§D — earnings dates proxied by SEC 10-Q/10-K filing dates, US
+        filers only; unsourceable names are flagged <span class="swing-warn">unverified</span>).
+        Every field below is configurable.
     </p>
 
     <div class="benchmark-controls swing-controls">
@@ -1855,6 +1870,13 @@
         <label>SL %: <input id="sw-sl" type="text" size="4" value="15"/></label>
         <label>Time stops: <input id="sw-timestops" type="text" size="10" value="5,10,15,20"/></label>
         <label>Barrier entry: <input id="sw-barrierdays" type="text" size="3" value="2"/>d ≤ −<input id="sw-barrierpct" type="text" size="3" value="10"/>%</label>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label title="σ multiples for the σ-scaled flush family's §5 profiles">Flush σ (§C): <input id="sw-flushsigmas" type="text" size="8" value="2,2.5,3"/></label>
+        <label title="σ multiple seeding the σ-scaled §6 barrier sim">Barrier σ-k: <input id="sw-barriersigmak" type="text" size="4" value="2.5"/></label>
+        <label title="trailing SMA window for the §A/§E MA flag">MA window: <input id="sw-mawindow" type="text" size="4" value="200"/></label>
+        <label title="± trading sessions around an earnings date (§D)">Earnings ±: <input id="sw-eventwindow" type="text" size="3" value="3"/></label>
+        <label title="time stop at which §A/§B resolve each event">Log stop: <input id="sw-eventlogstop" type="text" size="3" value="20"/></label>
         <button id="sw-run" type="button">Run</button>
         <span id="sw-status" class="muted" style="font-size: 0.85rem;"></span>
     </div>
@@ -1869,12 +1891,22 @@
         <table id="sw-vol-table" class="annual-table sticky-head"></table>
     </div>
 
+    <div id="sw-earnings-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">§D Earnings hygiene coverage <span class="muted swing-sub">EDGAR filing-date proxy</span></h3>
+        <div id="sw-earnings-note" class="muted swing-sub" style="margin: 0.2rem 0 0.4rem;"></div>
+        <table id="sw-earnings-table" class="annual-table sticky-head"></table>
+    </div>
+
     <div id="sw-detail-wrap" style="display:none; margin-top: 1rem;">
         <div class="benchmark-controls">
             <label>Detail for:
                 <select id="sw-detail-symbol"></select>
             </label>
-            <span class="muted swing-sub">§2–§6 · full history vs trailing 6 months (§9)</span>
+            <span class="swing-corr-toggle" id="sw-variant-toggle">
+                <button type="button" data-variant="all" class="active" title="every flush event">All events</button>
+                <button type="button" data-variant="ex" title="events within ±window of an earnings date removed (§D)">Ex-earnings</button>
+            </span>
+            <span class="muted swing-sub">§2–§6 · absolute + σ families · full history vs trailing 6 months (§9)</span>
         </div>
         <div id="sw-detail"></div>
     </div>

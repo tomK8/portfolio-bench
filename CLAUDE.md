@@ -48,7 +48,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 - `adapter` — `FrankfurterFxClient` (Jackson + shared HttpClient with timeouts),
   `HoldingFileLocator`, `YahooPriceFetcher`, `YahooTickerMap`.
 - `parser` — `AccountParser` / `CashTransactionParser` interfaces + impls.
-- `persistence` — `JdbcConnectionFactory` + 4 repositories + `KeyValueStore`. See below.
+- `persistence` — `JdbcConnectionFactory` + its repositories + `KeyValueStore`. See below.
 - `application` — `PortfolioGatherer`, `SyncPortfolioService`, `SyncFromCashService`
   (cash-ledger-derived view), `ExportExcelService`, `DividendService`,
   `ContributionService` (timeline for the Contributions chart), `PortfolioValueService`
@@ -104,10 +104,14 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   down-day / flush triggers, always shown next to their unconditional baseline; an OHLC-touch
   barrier / time-stop trade simulation with full TP/SL/Time/Ambiguous/Open accounting, an all-days
   placebo and a matched-random bootstrap (does the flush trigger beat drift?); and cluster
-  correlation (incl. tail correlation on down days). Everything is configurable and pooled across a
-  "semi cluster" subset (pooled cells report distinct-date *episodes* alongside raw event counts);
-  §9 regime split (full vs trailing 6 months) is shown side by side with each name's actual data
-  span. §8 earnings hygiene is deferred. See the Swing section below.
+  correlation (incl. tail correlation on down days). Every flush runs for **two trigger families in
+  parallel** (§C) — an absolute −% drop and a σ-scaled −k×σ×√N flush that fires at each regime's own
+  scale — each with an event log (§A), a per-year breakdown (§B) and a 200d-MA split (§E), in **all**
+  and **ex-earnings** variants (§D). Everything is configurable and pooled across a "semi cluster"
+  subset (pooled cells report distinct-date *episodes* alongside raw event counts); §9 regime split
+  (full vs trailing 6 months) is shown side by side with each name's actual data span. §8 earnings
+  hygiene is now active via an EDGAR filing-date proxy (US filers only; others flagged unverified).
+  See the Swing section below.
 
 Charts load lazily on first tab click. Logging is SLF4J + Logback (`logback-spring.xml`);
 no `System.out` in production code.
@@ -157,6 +161,8 @@ To convert native → GBP, **divide** by the rate.
 - `PriceHistoryRepository` — `price_history` (daily OHLCV).
 - `IntradayPriceRepository` — `price_intraday` (1-min closes). `loadLatestIntradayPrices` is a bulk
   query, not N round-trips.
+- `EarningsDateRepository` — `earnings_dates` (§D earnings-proxy cache: one row per `(symbol, date)`;
+  reads/cache-fill degrade, never throw).
 - `KeyValueStore` — file-backed scalar settings, one `<key>.txt` per key under `<db-dir>`:
   - `ii_sipp_cash_last` — last II SIPP **GBP** cash balance entered on the dashboard.
   - `ii_sipp_cash_last_usd` — last II SIPP **USD** cash balance entered on the dashboard.
@@ -391,14 +397,21 @@ strategy — dip-buy after 1–2 day flushes, exit at a fixed take-profit / wide
 
 - **Pure engine** lives in `com.portfolio.domain.swing` (framework-free, unit-tested like
   `PriceStats`). `SwingConfig` holds every knob (spec defaults); `SwingSeries` pre-computes the
-  aligned `close/high/low/logRet/simpleRet` arrays plus a **look-ahead-free trailing-30d daily σ**
-  (σ over returns strictly *before* each bar, so a σ-trigger judges a day against vol known going
-  in). Engines: `RealizedVol` (§1), `ForwardReturns` (§2 baseline / §3 conditional / §4
-  continuation), `Flushes` (§5 flush profile + §6 barrier/time-stop sim), `Placebo` (§6 controls:
-  all-days placebo + matched-random bootstrap), `ReturnCorrelation` (§7). `Stats` provides
-  mean/median/quartiles/%pos + a public `quantile`. All engines take a `List<SwingSeries>` so the
-  same code serves per-symbol (one) and pooled-cluster (concatenate observations across the cluster,
-  equal-weight by observation).
+  aligned `close/adjClose/high/low/logRet/simpleRet` arrays, a **look-ahead-free trailing-30d daily σ**
+  (σ over returns strictly *before* each bar, so a σ-trigger judges a day against vol known going in),
+  and a trailing **`sma[]`** (200d MA, `maWindow`) for the §A/§E regime flag. `preWindowSigma(i,days)`
+  = the σ strictly before a flush window (`trailSigma[i-days+1]`), so the flush can't inflate its own σ.
+  Engines: `RealizedVol` (§1), `ForwardReturns` (§2/§3/§4), `Flushes` (§5 profile + §6 barrier sim),
+  `Placebo` (§6 controls), `ReturnCorrelation` (§7), `FlushEvents` (§A event log), `AnnualBreakdown`
+  (§B per-year), `MaSplit` (§E 200d-MA split). `Stats` provides mean/median/quartiles/%pos + a public
+  `quantile`. All engines take a `List<SwingSeries>` so the same code serves per-symbol (one) and
+  pooled-cluster (concatenate observations across the cluster, equal-weight by observation).
+- **Trigger families (§C).** `FlushTrigger` abstracts "does a flush fire at bar `i`" with two impls —
+  `AbsoluteFlush` (cum ret ≤ −threshold) and `SigmaFlush` (cum ret ≤ −k×σ×√N, σ = `preWindowSigma`).
+  `Flushes` is parameterised by it, so the whole §5/§6/placebo/bootstrap/§A/§B/§E machinery runs for
+  the absolute and σ-scaled families **in parallel** over each regime. The σ family fires at each
+  regime's own scale, so a low-vol bear (2022) generates events the absolute trigger misses.
+  `Flushes.overlapCount` reports the dates both barrier-seed triggers fire (never double-pooled).
 - **Conventions:** returns off `close` (split-adjusted), log for vol, simple for anything P&L-like.
   σ-triggers compare the day's simple return to −k×(trailing daily σ); absolute triggers to −p%.
   A 1e-9 epsilon makes round thresholds (a "−10%" day stored as −0.0999999998) register. Small-N
@@ -423,21 +436,39 @@ strategy — dip-buy after 1–2 day flushes, exit at a fixed take-profit / wide
   `bootstrapIterations` times, seeded by `randomSeed`; reports the %TP / mean-return distribution and
   the percentile rank of the actual flush result — a rank inside the IQR means the trigger adds
   nothing). The bootstrap samples the precomputed placebo pool, so 1,000 iterations are cheap.
+- **§A/§B/§E engines.** `FlushEvents` emits one diagnostic row per **cooldown-deduped** event (every
+  down-leg, not the §6 non-overlap subset), resolved at `eventLogTimeStop` — cum return, σ-multiple,
+  above/below-200d-MA + distance, outcome/exit/return, further drawdown, sessions-to-target, and the
+  §D earnings flag; the row set is CSV-exportable in the UI. `AnnualBreakdown` groups events by
+  calendar year (outcome counts + mean/median trade return) beside the name's own `adjClose` calendar
+  return (pooled = member mean). `MaSplit` partitions §6 outcomes and the placebo pool by entry MA
+  state and runs a within-state bootstrap when powered (pool ≥ 100, draws ≥ 5), else flags
+  `underpowered`.
 - **`SwingAnalysisService`** loads bars, runs every symbol + the pooled cluster over both §9
   regimes (full history + trailing 6 months, rendered **side by side**), and adds §7 correlation.
   Each `SymbolReport` reports its actual data span (`from`/`to`/`yearsAvailable`) and a `shortHistory`
-  flag when the first bar post-dates the full-history cutoff (recent listing → "full history" is
-  really shorter than `years`). Each `Regime` pairs the §6 flush sim with its placebo + bootstrap
-  (`BarrierComparison`). No FX — statistics are unit-less return ratios, so `.L` pence listings need
-  no conversion. `SwingReport` (in `application`) is the JSON DTO; `earningsHygiene` is a reserved
-  `null` slot for the deferred §8.
+  flag when the first bar post-dates the full-history cutoff. Each `Regime` carries `families` (abs +
+  σ) + `familyOverlapCount`; each `FlushFamily` carries two `EarningsVariant`s ("all"/"ex-earnings",
+  §D) of the §5/§6 tables (each §6 stop still a `BarrierComparison` of flush + placebo + bootstrap),
+  plus the §A event log, §B annual and §E MA split. No FX — statistics are unit-less return ratios, so
+  `.L` pence listings need no conversion. `SwingReport` (in `application`) is the JSON DTO;
+  `earningsHygiene` is now a real §D coverage summary.
 - **Config persistence:** the symbol universe + cluster live in `KeyValueStore` (`swing_symbols` /
   `swing_cluster`, seeded from spec defaults on first read). `swing_symbols` is unioned into
   `PriceFetchSupport.tickersToFetch`, so the nightly 30-year daily job keeps the swing universe
   backfilled automatically; `POST /swing/backfill` (and `POST /swing/symbols` after an edit) covers
   the first-run gap via `PriceFetchJob.fetchSingle` on a background executor. `GET /swing` echoes
   the effective `SwingConfig`; every knob is also an optional query param (percents in, e.g.
-  `dropPcts=5,8,10`) so parameters can be swept without changing stored config.
-- **§8 earnings hygiene is deferred** — the app has no multi-year earnings-date source (Yahoo
-  serves only ~4–8 recent quarters). The DTO/config slot is reserved so it can land without a
-  reshape.
+  `dropPcts=5,8,10`; σ-family knobs `flushSigmas`/`barrierSigmaK`, plus `maWindow`/`eventWindow`/
+  `eventLogTimeStop`) so parameters can be swept without changing stored config.
+- **§D earnings hygiene (active).** Earnings dates are proxied by **SEC EDGAR 10-Q/10-K filing dates**
+  (submissions API), which land within a few days of the release — good enough for a ±window flag, and
+  the only free multi-year source. `port/EarningsCalendarProvider` → `adapter/EdgarEarningsFetcher`
+  (hard-coded CIK map for the semi universe's US filers), cached in `persistence/EarningsDateRepository`
+  (`earnings_dates` table) so the report never re-hits SEC; `application/EarningsService` composes them
+  and builds a per-series `EarningsLookup` (trading-days-to-nearest-earnings per bar). **US filers
+  only** — ASML (files 20-F/6-K) and SEMI.L (UK, no SEC) are `isVerifiable == false` and flagged
+  **unverified**, never treated as clean. The ex-earnings variant removes events within ±`eventWindow`
+  sessions of an earnings date and drops those dates from the placebo/bootstrap pool too, via a
+  per-`(symbol,date)` `EventFilter` (date-only would over-exclude ~10× when pooling a cluster). Report
+  reads the cache; `report()` and `POST /swing/backfill` warm it best-effort off the request path.

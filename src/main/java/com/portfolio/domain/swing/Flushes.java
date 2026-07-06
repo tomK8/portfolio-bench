@@ -125,23 +125,56 @@ public final class Flushes {
         double pctTp() { return closed() == 0 ? Double.NaN : (double) tp / closed(); }
     }
 
+    // ---- trigger families ---------------------------------------------------
+
+    /** §5 absolute flush definitions: {@code flushDays × flushThresholds}. */
+    public static List<FlushTrigger> absoluteFlushTriggers(SwingConfig cfg) {
+        List<FlushTrigger> out = new ArrayList<>();
+        for (int days : cfg.flushDays())
+            for (double thr : cfg.flushThresholds())
+                out.add(FlushTrigger.absolute(days, thr));
+        return out;
+    }
+
+    /** §5 σ-scaled flush definitions (§C): {@code flushDays × flushSigmaMultiples}. */
+    public static List<FlushTrigger> sigmaFlushTriggers(SwingConfig cfg) {
+        List<FlushTrigger> out = new ArrayList<>();
+        for (int days : cfg.flushDays())
+            for (double k : cfg.flushSigmaMultiples())
+                out.add(FlushTrigger.sigma(days, k));
+        return out;
+    }
+
+    /** The single absolute definition that seeds the §6 barrier simulation. */
+    public static FlushTrigger absoluteBarrierTrigger(SwingConfig cfg) {
+        return FlushTrigger.absolute(cfg.barrierFlushDays(), cfg.barrierFlushDrop());
+    }
+
+    /** The single σ-scaled definition that seeds the §6 barrier simulation (§C). */
+    public static FlushTrigger sigmaBarrierTrigger(SwingConfig cfg) {
+        return FlushTrigger.sigma(cfg.barrierFlushDays(), cfg.barrierSigmaK());
+    }
+
     // ---- §5 -----------------------------------------------------------------
 
+    /** §5 profiles for the absolute flush family (backward-compatible convenience). */
     public static List<FlushProfile> profiles(List<SwingSeries> seriesList, LocalDate cutoff, SwingConfig cfg) {
+        return profiles(seriesList, cutoff, cfg, absoluteFlushTriggers(cfg), null);
+    }
+
+    /** §5 profiles for an explicit set of triggers, optionally excluding a set of event dates (§D). */
+    public static List<FlushProfile> profiles(List<SwingSeries> seriesList, LocalDate cutoff, SwingConfig cfg,
+                                              List<FlushTrigger> triggers, EventFilter exclude) {
         List<FlushProfile> out = new ArrayList<>();
-        for (int days : cfg.flushDays()) {
-            for (double thr : cfg.flushThresholds()) {
-                out.add(profile(seriesList, cutoff, cfg, days, thr));
-            }
-        }
+        for (FlushTrigger trig : triggers) out.add(profile(seriesList, cutoff, cfg, trig, exclude));
         return out;
     }
 
     private static FlushProfile profile(List<SwingSeries> seriesList, LocalDate cutoff,
-                                        SwingConfig cfg, int days, double threshold) {
+                                        SwingConfig cfg, FlushTrigger trig, EventFilter exclude) {
         double tp = cfg.takeProfit();
         double sl = cfg.stopLoss();
-        String label = days + "d ≤ −" + pct(threshold);
+        String label = trig.label();
 
         int eventCount = 0, targetCensored = 0, tpFirst = 0, slFirst = 0, neither = 0, ambiguous = 0, open = 0;
         Set<LocalDate> episodeDates = new HashSet<>();
@@ -150,7 +183,7 @@ public final class Flushes {
 
         for (SwingSeries s : seriesList) {
             int n = s.size();
-            for (int i : detectEvents(s, cutoff, days, threshold, cfg.flushCooldown())) {
+            for (int i : detectEvents(s, cutoff, trig, cfg.flushCooldown(), exclude)) {
                 eventCount++;
                 episodeDates.add(s.dates[i]);
                 double entry = s.close[i];
@@ -186,7 +219,7 @@ public final class Flushes {
             }
         }
         int episodes = episodeDates.size();
-        return new FlushProfile(label, days, threshold, eventCount, episodes,
+        return new FlushProfile(label, trig.days(), trig.magnitude(), eventCount, episodes,
                 eventCount < cfg.smallNFloor(), episodes < cfg.episodeFloor(),
                 Stats.dist(toArray(furtherDd)), Stats.dist(toArray(daysToTarget)),
                 targetCensored, tpFirst, slFirst, neither, ambiguous, open);
@@ -208,44 +241,69 @@ public final class Flushes {
 
     // ---- §6 -----------------------------------------------------------------
 
+    /** §6 barriers seeded by the absolute flush trigger (backward-compatible convenience). */
     public static List<BarrierResult> barriers(List<SwingSeries> seriesList, LocalDate cutoff, SwingConfig cfg) {
+        return barriers(seriesList, cutoff, cfg, absoluteBarrierTrigger(cfg), null);
+    }
+
+    /** §6 barriers seeded by an explicit trigger, optionally excluding earnings-window dates (§D). */
+    public static List<BarrierResult> barriers(List<SwingSeries> seriesList, LocalDate cutoff, SwingConfig cfg,
+                                               FlushTrigger trig, EventFilter exclude) {
         List<BarrierResult> out = new ArrayList<>();
         for (int stop : cfg.timeStops()) {
-            out.add(barrier(seriesList, cutoff, cfg, stop));
+            out.add(barrier(seriesList, cutoff, cfg, trig, stop, exclude));
         }
         return out;
     }
 
     private static BarrierResult barrier(List<SwingSeries> seriesList, LocalDate cutoff,
-                                         SwingConfig cfg, int timeStop) {
-        double tp = cfg.takeProfit();
-        double sl = cfg.stopLoss();
-        int days = cfg.barrierFlushDays();
-        double threshold = cfg.barrierFlushDrop();
-
+                                         SwingConfig cfg, FlushTrigger trig, int timeStop, EventFilter exclude) {
         List<Trade> trades = new ArrayList<>();
         Set<LocalDate> episodeDates = new HashSet<>();
-
         for (SwingSeries s : seriesList) {
-            int n = s.size();
-            int start = Math.max(days, s.startIndex(cutoff));
-            int nextAllowed = start;                       // non-overlapping: wait until prior trade resolves
-            for (int i = start; i < n; i++) {
-                if (i < nextAllowed) continue;
-                double base = s.close[i - days];
-                if (base <= 0) continue;
-                double cum = s.close[i] / base - 1.0;
-                if (cum <= -threshold + EPS) {
-                    Trade t = simulateTrade(s, i, tp, sl, timeStop);
-                    if (t == null) continue;
-                    trades.add(t);
-                    episodeDates.add(t.date());
-                    int resolveDay = t.holdingDays() > 0 ? t.holdingDays() : timeStop;   // OPEN → lock past data
-                    nextAllowed = i + Math.max(1, resolveDay);
-                }
+            for (MaTrade mt : barrierTrades(s, cutoff, cfg, trig, timeStop, exclude)) {
+                trades.add(mt.trade());
+                episodeDates.add(mt.trade().date());
             }
         }
-        return barrierResult(timeStop, trades, episodeDates, sl, cfg);
+        return barrierResult(timeStop, trades, episodeDates, cfg.stopLoss(), cfg);
+    }
+
+    /**
+     * Non-overlapping barrier walk for one series + time stop: at each qualifying flush (per
+     * {@code trig}), enter and simulate; the next entry waits until the prior trade resolves. An
+     * event whose date is in {@code exclude} (§D earnings window) is skipped <em>without</em>
+     * consuming a slot, so the ex-earnings variant simply removes those trades. Each returned trade
+     * is tagged with its entry 200d-MA state (§E).
+     */
+    static List<MaTrade> barrierTrades(SwingSeries s, LocalDate cutoff, SwingConfig cfg,
+                                       FlushTrigger trig, int timeStop, EventFilter exclude) {
+        List<MaTrade> out = new ArrayList<>();
+        int n = s.size();
+        int start = Math.max(trig.days(), s.startIndex(cutoff));
+        int nextAllowed = start;                           // non-overlapping: wait until prior trade resolves
+        for (int i = start; i < n; i++) {
+            if (i < nextAllowed) continue;
+            if (trig.fire(s, i) == null) continue;
+            if (exclude != null && exclude.excludes(s.symbol(), s.dates[i])) continue;
+            Trade t = simulateTrade(s, i, cfg.takeProfit(), cfg.stopLoss(), timeStop);
+            if (t == null) continue;
+            out.add(new MaTrade(t, aboveMa(s, i)));
+            int resolveDay = t.holdingDays() > 0 ? t.holdingDays() : timeStop;   // OPEN → lock past data
+            nextAllowed = i + Math.max(1, resolveDay);
+        }
+        return out;
+    }
+
+    /** Entry-bar 200d-MA state: {@code TRUE} at/above, {@code FALSE} below, {@code null} when the MA is undefined. */
+    static Boolean aboveMa(SwingSeries s, int i) {
+        double ma = s.sma[i];
+        if (Double.isNaN(ma)) return null;
+        return s.close[i] >= ma;
+    }
+
+    /** A simulated trade tagged with its entry bar's 200d-MA state (for §E partitioning). */
+    record MaTrade(Trade trade, Boolean aboveMa) {
     }
 
     /** Build a {@link BarrierResult} from a set of simulated trades (shared by §6 and the placebo). */
@@ -263,29 +321,47 @@ public final class Flushes {
 
     // ---- shared -------------------------------------------------------------
 
-    /** Event bar indices where the cumulative {@code days}-session return ≤ −threshold, cooldown-deduped. */
-    private static List<Integer> detectEvents(SwingSeries s, LocalDate cutoff, int days,
-                                              double threshold, int cooldown) {
+    /**
+     * §C — number of dates on which both {@code a} and {@code b} fire (summed across series). Used to
+     * report the absolute/σ family overlap; the two families are never pooled into a combined table,
+     * so this is only a diagnostic count.
+     */
+    public static int overlapCount(List<SwingSeries> seriesList, LocalDate cutoff, FlushTrigger a, FlushTrigger b) {
+        int overlap = 0;
+        for (SwingSeries s : seriesList) {
+            Set<LocalDate> ad = firedDates(s, cutoff, a);
+            ad.retainAll(firedDates(s, cutoff, b));
+            overlap += ad.size();
+        }
+        return overlap;
+    }
+
+    private static Set<LocalDate> firedDates(SwingSeries s, LocalDate cutoff, FlushTrigger trig) {
+        Set<LocalDate> out = new HashSet<>();
+        int start = Math.max(trig.days(), s.startIndex(cutoff));
+        for (int i = start; i < s.size(); i++) if (trig.fire(s, i) != null) out.add(s.dates[i]);
+        return out;
+    }
+
+    /**
+     * Cooldown-deduped event bar indices where {@code trig} fires, excluding any bar whose date is in
+     * {@code exclude} (§D earnings window). Shared by §5 and the §A/§B engines so all three see the
+     * same descriptive event set.
+     */
+    static List<Integer> detectEvents(SwingSeries s, LocalDate cutoff, FlushTrigger trig,
+                                      int cooldown, EventFilter exclude) {
         List<Integer> events = new ArrayList<>();
         int n = s.size();
-        int start = Math.max(days, s.startIndex(cutoff));
+        int start = Math.max(trig.days(), s.startIndex(cutoff));
         int nextAllowed = start;
         for (int i = start; i < n; i++) {
             if (i < nextAllowed) continue;
-            double base = s.close[i - days];
-            if (base <= 0) continue;
-            double cum = s.close[i] / base - 1.0;
-            if (cum <= -threshold + EPS) {
-                events.add(i);
-                nextAllowed = i + Math.max(1, cooldown);
-            }
+            if (trig.fire(s, i) == null) continue;
+            if (exclude != null && exclude.excludes(s.symbol(), s.dates[i])) continue;
+            events.add(i);
+            nextAllowed = i + Math.max(1, cooldown);
         }
         return events;
-    }
-
-    private static String pct(double fraction) {
-        double v = fraction * 100;
-        return v == Math.rint(v) ? Integer.toString((int) v) + "%" : v + "%";
     }
 
     static double[] toArray(List<Double> list) {

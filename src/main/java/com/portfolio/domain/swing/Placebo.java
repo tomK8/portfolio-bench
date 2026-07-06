@@ -38,7 +38,13 @@ public final class Placebo {
     /** All-days control result for one time stop — same shape as a §6 {@link Flushes.BarrierResult}. */
     public static Flushes.BarrierResult allDays(List<SwingSeries> seriesList, LocalDate cutoff,
                                                 SwingConfig cfg, int timeStop) {
-        List<Flushes.Trade> pool = pool(seriesList, cutoff, cfg, timeStop);
+        return allDays(seriesList, cutoff, cfg, timeStop, null);
+    }
+
+    /** All-days control, optionally excluding earnings-window entry dates (§D like-for-like). */
+    public static Flushes.BarrierResult allDays(List<SwingSeries> seriesList, LocalDate cutoff,
+                                                SwingConfig cfg, int timeStop, EventFilter exclude) {
+        List<Flushes.Trade> pool = pool(seriesList, cutoff, cfg, timeStop, exclude);
         Set<LocalDate> dates = new HashSet<>();
         for (Flushes.Trade t : pool) dates.add(t.date());
         return Flushes.barrierResult(timeStop, pool, dates, cfg.stopLoss(), cfg);
@@ -47,14 +53,29 @@ public final class Placebo {
     /** Every fully-evaluable entry in the window (a full {@code timeStop} forward window ahead). */
     static List<Flushes.Trade> pool(List<SwingSeries> seriesList, LocalDate cutoff,
                                     SwingConfig cfg, int timeStop) {
+        return pool(seriesList, cutoff, cfg, timeStop, null);
+    }
+
+    /** As {@link #pool}, dropping entries whose date is in {@code exclude} (§D). */
+    static List<Flushes.Trade> pool(List<SwingSeries> seriesList, LocalDate cutoff,
+                                    SwingConfig cfg, int timeStop, EventFilter exclude) {
+        List<Flushes.Trade> out = new ArrayList<>();
+        for (Flushes.MaTrade mt : poolMa(seriesList, cutoff, cfg, timeStop, exclude)) out.add(mt.trade());
+        return out;
+    }
+
+    /** The all-days pool with each entry tagged by its 200d-MA state, for the §E within-state split. */
+    static List<Flushes.MaTrade> poolMa(List<SwingSeries> seriesList, LocalDate cutoff,
+                                        SwingConfig cfg, int timeStop, EventFilter exclude) {
         double tp = cfg.takeProfit(), sl = cfg.stopLoss();
-        List<Flushes.Trade> pool = new ArrayList<>();
+        List<Flushes.MaTrade> pool = new ArrayList<>();
         for (SwingSeries s : seriesList) {
             int n = s.size();
             for (int i = Math.max(1, s.startIndex(cutoff)); i + timeStop <= n - 1; i++) {
                 if (s.close[i] <= 0) continue;
+                if (exclude != null && exclude.excludes(s.symbol(), s.dates[i])) continue;
                 Flushes.Trade t = Flushes.simulateTrade(s, i, tp, sl, timeStop);
-                if (t != null && t.outcome() != Flushes.Outcome.OPEN) pool.add(t);
+                if (t != null && t.outcome() != Flushes.Outcome.OPEN) pool.add(new Flushes.MaTrade(t, Flushes.aboveMa(s, i)));
             }
         }
         return pool;
@@ -67,7 +88,25 @@ public final class Placebo {
      */
     public static Bootstrap bootstrap(List<SwingSeries> seriesList, LocalDate cutoff, SwingConfig cfg,
                                       int timeStop, int drawN, Double actualTpPct, Double actualMeanReturn) {
-        List<Flushes.Trade> pool = pool(seriesList, cutoff, cfg, timeStop);
+        return bootstrap(seriesList, cutoff, cfg, timeStop, drawN, actualTpPct, actualMeanReturn, null);
+    }
+
+    /** As {@link #bootstrap}, drawing from the earnings-excluded pool when {@code exclude} is set (§D). */
+    public static Bootstrap bootstrap(List<SwingSeries> seriesList, LocalDate cutoff, SwingConfig cfg,
+                                      int timeStop, int drawN, Double actualTpPct, Double actualMeanReturn,
+                                      EventFilter exclude) {
+        return bootstrapFromPool(pool(seriesList, cutoff, cfg, timeStop, exclude), cfg,
+                timeStop, drawN, actualTpPct, actualMeanReturn);
+    }
+
+    /**
+     * Matched random bootstrap over a precomputed entry pool. Extracted so both the whole-window
+     * control ({@link #bootstrap}) and the §E within-MA-state split can share the identical sampling
+     * and percentile-rank logic. The RNG seed folds in {@code timeStop} and the pool size, so a
+     * within-state pool (a different size) gets its own reproducible stream.
+     */
+    static Bootstrap bootstrapFromPool(List<Flushes.Trade> pool, SwingConfig cfg,
+                                       int timeStop, int drawN, Double actualTpPct, Double actualMeanReturn) {
         int poolSize = pool.size();
         int iterations = cfg.bootstrapIterations();
         int sampleN = Math.min(drawN, poolSize);

@@ -5108,6 +5108,9 @@
         var swReport = null;
         var swCorrChart = null;
         var swCorrMode = '30';
+        var swVariant = 'all';          // 'all' | 'ex' — which §D earnings variant the §5/§6 tables show
+        var swEventLogs = {};           // id → { rows, name } for the §A CSV export
+        var swEventLogSeq = 0;
         var swInit = false;
 
         function setupSwing() {
@@ -5126,6 +5129,22 @@
                     renderSwingCorr();
                 });
             });
+            document.querySelectorAll('#sw-variant-toggle button').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    swVariant = b.dataset.variant;
+                    document.querySelectorAll('#sw-variant-toggle button').forEach(function (x) {
+                        x.classList.toggle('active', x === b);
+                    });
+                    renderSwingDetail();
+                });
+            });
+            // §A CSV export — delegated because the buttons live in re-rendered HTML.
+            document.getElementById('sw-detail').addEventListener('click', function (e) {
+                var btn = e.target.closest('.sw-csv-btn');
+                if (!btn) return;
+                e.preventDefault();
+                downloadSwingCsv(btn.dataset.logId);
+            });
         }
 
         function swVal(id) { return (document.getElementById(id).value || '').trim(); }
@@ -5138,7 +5157,10 @@
                 sigmas: swVal('sw-sigmas'), dropPcts: swVal('sw-drops'), flushPcts: swVal('sw-flushpct'),
                 flushDays: swVal('sw-flushdays'), horizons: swVal('sw-horizons'), tp: swVal('sw-tp'),
                 sl: swVal('sw-sl'), timeStops: swVal('sw-timestops'),
-                barrierDays: swVal('sw-barrierdays'), barrierPct: swVal('sw-barrierpct')
+                barrierDays: swVal('sw-barrierdays'), barrierPct: swVal('sw-barrierpct'),
+                flushSigmas: swVal('sw-flushsigmas'), barrierSigmaK: swVal('sw-barriersigmak'),
+                maWindow: swVal('sw-mawindow'), eventWindow: swVal('sw-eventwindow'),
+                eventLogTimeStop: swVal('sw-eventlogstop')
             };
             var parts = [];
             Object.keys(map).forEach(function (k) {
@@ -5156,10 +5178,12 @@
                     fillSwingInputs(rep.config);
                     document.getElementById('sw-empty').style.display = 'none';
                     renderSwingVol();
+                    renderSwingEarnings();
                     populateSwingDetailSelect();
                     renderSwingDetail();
                     renderSwingCorr();
                     document.getElementById('sw-vol-wrap').style.display = 'block';
+                    document.getElementById('sw-earnings-wrap').style.display = 'block';
                     document.getElementById('sw-detail-wrap').style.display = 'block';
                     document.getElementById('sw-corr-wrap').style.display = 'block';
                     swStatus('Updated ' + new Date().toLocaleTimeString());
@@ -5204,6 +5228,31 @@
             swSet('sw-timestops', cfg.timeStops.join(','));
             swSet('sw-barrierdays', cfg.barrierFlushDays);
             swSet('sw-barrierpct', +(cfg.barrierFlushDrop * 100).toFixed(4));
+            swSet('sw-flushsigmas', cfg.flushSigmaMultiples.join(','));
+            swSet('sw-barriersigmak', cfg.barrierSigmaK);
+            swSet('sw-mawindow', cfg.maWindow);
+            swSet('sw-eventwindow', cfg.eventWindowSessions);
+            swSet('sw-eventlogstop', cfg.eventLogTimeStop);
+        }
+
+        function renderSwingEarnings() {
+            var h = swReport.earningsHygiene;
+            if (!h) return;
+            document.getElementById('sw-earnings-note').textContent =
+                h.proxyNote + ' Source: ' + h.source + '.';
+            var head = '<thead><tr><th data-sort="str">Symbol</th><th data-sort="str">Verified</th>' +
+                '<th data-sort="num">Dates</th><th data-sort="str">From</th><th data-sort="str">To</th></tr></thead>';
+            var body = '<tbody>';
+            (h.coverage || []).forEach(function (c) {
+                var v = c.verified ? '<span class="swing-pos">yes</span>'
+                                   : '<span class="swing-unverified">unverified</span>';
+                body += '<tr><td class="lbl"><b>' + c.symbol + '</b></td><td>' + v + '</td><td>' +
+                        c.dateCount + '</td><td>' + (c.from || '—') + '</td><td>' + (c.to || '—') + '</td></tr>';
+            });
+            body += '</tbody>';
+            var t = document.getElementById('sw-earnings-table');
+            t.innerHTML = head + body;
+            attachSort(t);
         }
 
         // ---- formatting helpers ----
@@ -5268,6 +5317,8 @@
                 : swReport.perSymbol.find(function (s) { return s.symbol === sel; });
             var host = document.getElementById('sw-detail');
             if (!rep || rep.missingData) { host.innerHTML = '<p class="muted">No data.</p>'; return; }
+            swEventLogs = {};               // re-registered fresh on every render (ids would otherwise leak)
+            swEventLogSeq = 0;
             host.innerHTML = swingSpanHeader(rep, pooled) +
                 '<div class="swing-regimes">' +
                 swingRegimeBlock('Full history', rep.full, pooled) +
@@ -5299,11 +5350,186 @@
             var floor = swReport.config.smallNFloor;
             var head = '<div class="swing-regime-head">' + label +
                 '<span class="muted swing-sub"> · window from ' + (regime.cutoff || 'series start') + '</span></div>';
-            return '<div class="swing-block swing-regime-col">' + head +
+            var html = '<div class="swing-block swing-regime-col">' + head +
                    swingForwardTable(regime.forward, floor, pooled) +
-                   swingContinuationTable(regime.forward, floor, pooled) +
-                   swingFlushTable(regime.flushes, floor, pooled) +
-                   swingBarrierSection(regime.barriers, floor, pooled) + '</div>';
+                   swingContinuationTable(regime.forward, floor, pooled);
+            if (regime.familyOverlapCount != null) {
+                html += '<div class="swing-sub">§C family overlap: <b>' + regime.familyOverlapCount +
+                    '</b> date(s) fire both the absolute and σ barrier triggers (not double-pooled).</div>';
+            }
+            (regime.families || []).forEach(function (fam) {
+                html += swingFamilyBlock(fam, label, floor, pooled);
+            });
+            return html + '</div>';
+        }
+
+        // One trigger family (§C): its selected earnings variant's §5/§6, then §A/§B/§E (variant-independent).
+        function swingFamilyBlock(fam, regimeLabel, floor, pooled) {
+            var wantName = swVariant === 'ex' ? 'ex-earnings' : 'all';
+            var variant = (fam.variants || []).find(function (v) { return v.name === wantName; })
+                || (fam.variants || [])[0];
+            var badge = fam.earningsVerified ? '' :
+                ' <span class="swing-unverified" title="some symbols have no earnings source — the ex-earnings variant is unreliable">unverified</span>';
+            var vlabel = swVariant === 'ex' ? 'ex-earnings' : 'all events';
+            var html = '<div class="swing-family-head">' + fam.label + ' family ' +
+                '<span class="swing-sub">· §5/§6 showing ' + vlabel + badge + '</span></div>';
+            if (variant) {
+                html += swingFlushTable(variant.flushes, floor, pooled);
+                html += swingBarrierSection(variant.barriers, floor, pooled, fam.kind);
+            }
+            html += swingEventLog(fam, regimeLabel, pooled);
+            html += swingAnnualTable(fam.annual, pooled);
+            html += swingMaSplitTable(fam.maSplit, pooled);
+            return html;
+        }
+
+        function currentSwingSymbol() {
+            var sel = document.getElementById('sw-detail-symbol');
+            return sel ? (sel.value === '__POOL__' ? 'CLUSTER' : sel.value) : '';
+        }
+
+        // §A event log — collapsible, with a CSV export. Rows are registered so the delegated
+        // click handler can rebuild the file without re-deriving anything.
+        function swingEventLog(fam, regimeLabel, pooled) {
+            var rows = fam.eventLog || [];
+            var id = 'log' + (swEventLogSeq++);
+            swEventLogs[id] = { rows: rows,
+                name: 'swing_events_' + currentSwingSymbol() + '_' + regimeLabel.replace(/\s+/g, '') + '_' + fam.kind };
+            var cols = ['Date', 'Sym', 'Def', 'cum%', 'σ', 'σ×', 'MA', 'MA%', 'entry', 'outcome',
+                'exit', 'held', 'ret%', 'cons%', 'DD10%', '→tgt', 'earn±', 'earnD'];
+            var thead = '<thead><tr>' + cols.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead>';
+            var tbody = '<tbody>';
+            rows.forEach(function (r) { tbody += eventLogRow(r); });
+            tbody += '</tbody>';
+            return '<details class="swing-eventlog"><summary>§A event log — ' + rows.length +
+                ' event' + (rows.length === 1 ? '' : 's') +
+                '<button type="button" class="sw-csv-btn" data-log-id="' + id + '">Download CSV</button></summary>' +
+                '<table class="swing-tbl">' + thead + tbody + '</table></details>';
+        }
+
+        function eventLogRow(r) {
+            var maFlag = r.aboveMa == null ? '—' : (r.aboveMa ? 'above' : 'below');
+            var earn = r.earningsWithinWindow ? '<span class="swing-warn">yes</span>'
+                : (r.earningsVerified ? 'no' : '<span class="swing-unverified">?</span>');
+            var earnD = r.tradingDaysToEarnings == null ? '—' : r.tradingDaysToEarnings;
+            var outCls = r.outcome === 'TP' ? 'swing-pos' : (r.outcome === 'SL' ? 'swing-neg' : '');
+            var toTgt = r.sessionsToTarget == null ? (r.targetCensored ? 'cens' : '—') : r.sessionsToTarget;
+            return '<tr><td class="lbl">' + r.date + '</td><td>' + r.symbol + '</td><td>' + r.definition + '</td>' +
+                '<td>' + swPct(r.cumReturn, 1) + '</td>' +
+                '<td>' + swPct(r.sigma, 1) + '</td>' +
+                '<td>' + swNum(r.sigmaMultiple, 1) + '</td>' +
+                '<td>' + maFlag + '</td>' +
+                '<td>' + swPct(r.maDistancePct, 0) + '</td>' +
+                '<td>' + swNum(r.entryClose, 2) + '</td>' +
+                '<td class="' + outCls + '">' + r.outcome + '</td>' +
+                '<td>' + (r.exitDate || '—') + '</td>' +
+                '<td>' + (r.sessionsHeld == null ? '—' : r.sessionsHeld) + '</td>' +
+                '<td>' + swPctCell(r.tradeReturn, 1) + '</td>' +
+                '<td>' + swPctCell(r.conservativeReturn, 1) + '</td>' +
+                '<td>' + swPct(r.furtherDrawdown, 1) + '</td>' +
+                '<td>' + toTgt + '</td>' +
+                '<td>' + earn + '</td>' +
+                '<td>' + earnD + '</td></tr>';
+        }
+
+        // §B per-year breakdown.
+        function swingAnnualTable(annual, pooled) {
+            if (!annual || !annual.length) return '';
+            var html = '<div class="swing-sub">§B per-year — events by outcome, mean/median trade return, ' +
+                'vs the name\'s own calendar-year total return' + (pooled ? ' (cluster mean)' : '') +
+                '. <b>events = TP+SL+Time+Amb+Open</b>.</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Year</th><th>events</th>' +
+                '<th>TP</th><th>SL</th><th>Time</th><th>Amb</th><th>Open</th>' +
+                '<th>mean ret</th><th>median</th>' +
+                '<th title="the stock\'s own total return that year">stock yr</th></tr></thead><tbody>';
+            annual.forEach(function (a) {
+                var dim = a.smallN ? ' class="swing-smalln-cell"' : '';
+                var reconciles = (a.tp + a.sl + a.time + a.ambiguous + a.open) === a.events;
+                html += '<tr' + dim + '><td class="lbl">' + a.year + '</td><td>' + a.events +
+                    (reconciles ? '' : ' <span class="swing-warn">!</span>') + '</td>' +
+                    '<td>' + a.tp + '</td><td>' + a.sl + '</td><td>' + a.time + '</td>' +
+                    '<td>' + a.ambiguous + '</td><td>' + a.open + '</td>' +
+                    '<td>' + swPctCell(a.meanReturn, 2) + '</td><td>' + swPctCell(a.medianReturn, 2) + '</td>' +
+                    '<td>' + swPctCell(a.calendarReturn, 1) + '</td></tr>';
+            });
+            return html + '</tbody></table>';
+        }
+
+        // §E 200d-MA split.
+        function swingMaSplitTable(ms, pooled) {
+            if (!ms) return '';
+            var html = '<div class="swing-sub">§E 200d-MA split (N=' + ms.timeStop + ') — does the edge exist ' +
+                'below the MA, or is it strictly buy-dips-in-uptrends? <i>boot p</i> = flush mean-return ' +
+                'percentile within the within-state bootstrap.</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">State · source</th><th>events</th>' +
+                '<th>TP</th><th>SL</th><th>Time</th><th>Amb</th><th>Open</th><th>%TP</th><th>mean ret</th>' +
+                '<th>boot p</th></tr></thead><tbody>';
+            ['above', 'below'].forEach(function (key) {
+                var st = ms[key];
+                if (st) html += maStateRows(st, key);
+            });
+            return html + '</tbody></table>';
+        }
+
+        function maStateRows(st, key) {
+            var label = key === 'above' ? '≥MA' : '<MA';
+            var bootCell = '—';
+            if (st.bootstrap && st.bootstrap.retPercentileRank != null) {
+                var rank = st.bootstrap.retPercentileRank;
+                var inside = rank >= 0.25 && rank <= 0.75;
+                bootCell = '<span class="' + (inside ? 'swing-smalln' : 'swing-rank-hit') + '">p' +
+                    Math.round(rank * 100) + '</span>';
+            } else if (st.underpowered) {
+                bootCell = '<span class="swing-smalln">underpwr</span>';
+            }
+            return maRow(label + ' flush', st.flush, false, bootCell) +
+                   maRow(label + ' placebo', st.placebo, true, '');
+        }
+
+        function maRow(label, b, isPlacebo, bootCell) {
+            if (!b) return '';
+            var cls = isPlacebo ? ' class="swing-placebo-row"' : '';
+            var reconciles = (b.tpFirst + b.slFirst + b.timeCount + b.ambiguous + b.open) === b.events;
+            return '<tr' + cls + '><td class="lbl">' + label + '</td>' +
+                '<td>' + b.events + (reconciles ? '' : ' <span class="swing-warn">!</span>') + '</td>' +
+                '<td>' + b.tpFirst + '</td><td>' + b.slFirst + '</td><td>' + b.timeCount + '</td>' +
+                '<td>' + b.ambiguous + '</td><td>' + b.open + '</td>' +
+                '<td>' + swPct(barPctTp(b), 0) + '</td>' +
+                '<td>' + swPctCell(b.meanReturn, 2) + '</td>' +
+                '<td>' + bootCell + '</td></tr>';
+        }
+
+        // ---- §A CSV export ----
+        function downloadSwingCsv(id) {
+            var entry = swEventLogs[id];
+            if (!entry) return;
+            var cols = ['date', 'symbol', 'definition', 'kind', 'cumReturn', 'sigma', 'sigmaMultiple',
+                'aboveMa', 'maDistancePct', 'entryClose', 'outcome', 'exitDate', 'sessionsHeld',
+                'tradeReturn', 'conservativeReturn', 'furtherDrawdown', 'sessionsToTarget', 'targetCensored',
+                'earningsVerified', 'tradingDaysToEarnings', 'earningsWithinWindow'];
+            var lines = [cols.join(',')];
+            entry.rows.forEach(function (r) {
+                lines.push(cols.map(function (c) { return csvCell(r[c]); }).join(','));
+            });
+            downloadCsv(entry.name + '.csv', lines.join('\n'));
+        }
+
+        function csvCell(v) {
+            if (v == null) return '';
+            var s = String(v);
+            return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        }
+
+        function downloadCsv(filename, text) {
+            var blob = new Blob([text], { type: 'text/csv' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
         function smallNTag(n, floor) {
@@ -5398,13 +5624,16 @@
 
         // §6 — barrier accounting (flush vs all-days placebo) + matched-random bootstrap, plus the
         // conventions the numbers depend on. `comparisons` is a list of {timeStop, flush, placebo, bootstrap}.
-        function swingBarrierSection(comparisons, floor, pooled) {
+        function swingBarrierSection(comparisons, floor, pooled, kind) {
             if (!comparisons || !comparisons.length) return '';
             var cfg = swReport.config;
             var tp = (cfg.takeProfit * 100).toFixed(0);
             var sl = (cfg.stopLoss * 100).toFixed(0);
+            var seed = kind === 'sigma'
+                ? cfg.barrierFlushDays + 'd ≤ −' + cfg.barrierSigmaK + 'σ'
+                : cfg.barrierFlushDays + 'd ≤ −' + (cfg.barrierFlushDrop * 100).toFixed(0) + '%';
             var note = '<div class="swing-sub">§6 barrier / time-stop simulation — entry at each ' +
-                cfg.barrierFlushDays + 'd ≤ −' + (cfg.barrierFlushDrop * 100).toFixed(0) + '% flush close.' +
+                seed + ' flush close.' +
                 ' <b>Touch convention</b>: intraday OHLC — TP if session high ≥ +' + tp + '%, SL if low ≤ −' + sl +
                 '%; fills at the barrier, time-stop exits at the close. <b>Ambiguous</b> = both barriers touched ' +
                 'in one session (excluded from mean ret; the <i>cons ret</i> column books each as a stop = a ' +

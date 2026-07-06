@@ -61,6 +61,11 @@ public class SwingController {
             @RequestParam(name = "timeStops", required = false) String timeStops,
             @RequestParam(name = "barrierDays", required = false) Integer barrierDays,
             @RequestParam(name = "barrierPct", required = false) String barrierPct,
+            @RequestParam(name = "flushSigmas", required = false) String flushSigmas,
+            @RequestParam(name = "barrierSigmaK", required = false) String barrierSigmaK,
+            @RequestParam(name = "maWindow", required = false) Integer maWindow,
+            @RequestParam(name = "eventWindow", required = false) Integer eventWindow,
+            @RequestParam(name = "eventLogTimeStop", required = false) Integer eventLogTimeStop,
             @RequestParam(name = "bootstrap", required = false) Integer bootstrap,
             @RequestParam(name = "episodeFloor", required = false) Integer episodeFloor) {
 
@@ -78,6 +83,11 @@ public class SwingController {
         if (timeStops != null) b.timeStops(parseInts(timeStops, "timeStops"));
         if (barrierDays != null) b.barrierFlushDays(barrierDays);
         if (barrierPct != null) b.barrierFlushDrop(parsePct(barrierPct, "barrierPct"));
+        if (flushSigmas != null) b.flushSigmaMultiples(parseDoubles(flushSigmas, "flushSigmas"));
+        if (barrierSigmaK != null) b.barrierSigmaK(parseDouble(barrierSigmaK, "barrierSigmaK"));
+        if (maWindow != null) b.maWindow(maWindow);
+        if (eventWindow != null) b.eventWindowSessions(eventWindow);
+        if (eventLogTimeStop != null) b.eventLogTimeStop(eventLogTimeStop);
         if (bootstrap != null) b.bootstrapIterations(bootstrap);
         if (episodeFloor != null) b.episodeFloor(episodeFloor);
 

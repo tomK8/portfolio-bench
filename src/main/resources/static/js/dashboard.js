@@ -4624,6 +4624,7 @@
                 document.getElementById('wl-view-returns').addEventListener('click', function () { switchWlView('returns'); });
             }
             loadWatchlist();
+            wlStartPolling();
         }
 
         function switchWlView(view) {
@@ -4655,9 +4656,89 @@
         function loadWatchlist() {
             wlReturnsLoaded = false;
             wlSetStatus('Loading…');
-            fetch('/watchlist').then(function (r) { return r.json(); })
-                .then(function (view) { renderWatchlist(view.rows || []); wlSetStatus(''); })
-                .catch(function () { wlSetStatus('Could not load watchlist.'); });
+            fetch('/watchlist').then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function (view) {
+                renderWatchlist(view.rows || []);          // sets wlLoadedOk
+                wlSetStatus('');
+            }).catch(function () {
+                wlLoadedOk = false;                         // the poll will retry the full load
+                wlSetStatus('Could not load watchlist.');
+            });
+        }
+
+        // ── Near-real-time poll ─────────────────────────────────────────────────
+        // Every WL_POLL_MS the watchlist patches only its fast-moving cells (price, momentum,
+        // 5D/10D vol, distance-from-high/low, row alert colour) from the lightweight
+        // /watchlist/quotes endpoint — no FX/ledger reads server-side, and cells are updated in
+        // place so an active sort, a threshold edit, and scroll position all survive. The slower
+        // position/fundamentals columns keep their last full-load values until the next full load
+        // (manual refresh, tab re-entry, or an add/remove). The interval self-gates: it does nothing
+        // unless the Watchlist tab is the visible one, in stats view, with the popup closed.
+        var wlPollTimer = null;
+        var wlLoadedOk = false;                            // true once a full /watchlist render succeeded
+        var WL_POLL_MS = 30000;
+
+        function wlStartPolling() {
+            if (wlPollTimer) return;                       // idempotent — one interval per page
+            wlPollTimer = setInterval(wlPollTick, WL_POLL_MS);
+        }
+
+        function wlPollTick() {
+            if (document.hidden) return;                   // browser tab backgrounded
+            var panel = document.getElementById('panel-watchlist');
+            if (!panel || !panel.classList.contains('active')) return;   // not the visible tab
+            if (document.getElementById('wl-modal').classList.contains('open')) return;  // user in the popup
+            // Self-heal: if the last full load failed (e.g. the server hot-restarted under the tab),
+            // the quote poll has no rows to patch — retry the full load until it renders.
+            if (!wlLoadedOk) { loadWatchlist(); return; }
+            if (wlCurrentView !== 'stats') return;         // returns heatmap doesn't move intraday
+            fetch('/watchlist/quotes').then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function (view) {
+                wlApplyQuotes(view.rows || []);
+                if (document.getElementById('wl-status').textContent) wlSetStatus('');  // recovered
+            }).catch(function () { /* transient; the next tick retries */ });
+        }
+
+        function wlApplyQuotes(rows) {
+            var tbody = document.querySelector('#watchlist-table tbody');
+            if (!tbody) return;
+            rows.forEach(function (q) {
+                var tr = tbody.querySelector('tr[data-sym="' + q.symbol + '"]');
+                if (!tr) return;                           // symbol set changed since last full load
+                if (document.activeElement && tr.contains(document.activeElement)) return;  // mid-edit
+                var priceCell = tr.querySelector('td[data-f="price"]');
+                if (priceCell) priceCell.textContent = q.currentPrice == null ? '—' : fmtPrice(q.currentPrice, q.currency);
+                wlPatchPct(tr, 'todayPct', q.todayPct, true);
+                wlPatchPct(tr, 'pct2d', q.pct2d, true);
+                wlPatchPct(tr, 'pct3d', q.pct3d, true);
+                wlPatchPct(tr, 'pct5d', q.pct5d, true);
+                wlPatchPct(tr, 'pct30d', q.pct30d, true);
+                wlPatchPct(tr, 'pctFromHigh', q.pctFromHigh, false);
+                wlPatchPct(tr, 'pctFromLow', q.pctFromLow, false);
+                wlPatchVol(tr, 'vol5d', q.vol5d);
+                wlPatchVol(tr, 'vol10d', q.vol10d);
+                tr.className = rowAlertClass(q);           // recolour by the fresh alert flags
+            });
+        }
+
+        function wlPatchPct(tr, field, frac, colour) {
+            var td = tr.querySelector('td[data-f="' + field + '"]');
+            if (!td) return;
+            if (frac == null) { td.className = 'na'; td.textContent = '—'; return; }
+            var n = parseFloat(frac) * 100;
+            td.className = colour ? (n >= 0 ? 'wl-pos' : 'wl-neg') : '';
+            td.textContent = (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+        }
+
+        function wlPatchVol(tr, field, frac) {
+            var td = tr.querySelector('td[data-f="' + field + '"]');
+            if (!td) return;
+            td.className = frac == null ? 'na' : '';
+            td.textContent = wlVolText(frac);
         }
 
         function addWatchlistSymbol() {
@@ -4665,10 +4746,14 @@
             if (!sym) return;
             var high = document.getElementById('wl-add-high').value.trim();
             var move = document.getElementById('wl-add-move').value.trim();
+            var above = document.getElementById('wl-add-above').value.trim();
+            var below = document.getElementById('wl-add-below').value.trim();
             var body = new URLSearchParams();
             body.set('symbol', sym);
             if (high) body.set('highPct', high);
             if (move) body.set('movePct', move);
+            if (above) body.set('priceAbove', above);
+            if (below) body.set('priceBelow', below);
             wlSetStatus('Adding ' + sym + ' — fetching prices…');
             fetch('/watchlist/add', { method: 'POST', body: body })
                 .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
@@ -4676,6 +4761,8 @@
                     document.getElementById('wl-add-symbol').value = '';
                     document.getElementById('wl-add-high').value = '';
                     document.getElementById('wl-add-move').value = '';
+                    document.getElementById('wl-add-above').value = '';
+                    document.getElementById('wl-add-below').value = '';
                     renderWatchlist(view.rows || []);
                     wlSetStatus(sym + ' added — data fills in as the backfill completes.');
                     // Poll a couple of times so a freshly-added row picks up its backfilled prices.
@@ -4699,27 +4786,32 @@
                 .then(function (view) { renderWatchlist(view.rows || []); });
         }
 
-        function saveWatchlistThreshold(sym, highPct, movePct) {
+        function saveWatchlistThreshold(sym, highPct, movePct, priceAbove, priceBelow) {
             var body = new URLSearchParams();
             body.set('symbol', sym);
             body.set('highPct', highPct);
             body.set('movePct', movePct);
+            body.set('priceAbove', priceAbove == null ? '' : priceAbove);
+            body.set('priceBelow', priceBelow == null ? '' : priceBelow);
             fetch('/watchlist/threshold', { method: 'POST', body: body })
                 .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
                 .then(function (view) { renderWatchlist(view.rows || []); })
                 .catch(function () { wlSetStatus('Could not update thresholds for ' + sym + '.'); });
         }
 
-        function wlPctCell(frac, colour) {
-            if (frac == null) return '<td class="na">—</td>';
+        // Optional `field` tags the cell with data-f so the near-real-time poll can patch it in place.
+        function wlPctCell(frac, colour, field) {
+            var fa = field ? ' data-f="' + field + '"' : '';
+            if (frac == null) return '<td class="na"' + fa + '>—</td>';
             var n = parseFloat(frac) * 100;
             var cls = colour ? (n >= 0 ? ' class="wl-pos"' : ' class="wl-neg"') : '';
-            return '<td' + cls + '>' + (n >= 0 ? '+' : '') + n.toFixed(1) + '%</td>';
+            return '<td' + cls + fa + '>' + (n >= 0 ? '+' : '') + n.toFixed(1) + '%</td>';
         }
 
         // Realized-vol cell — always positive, so no leading sign (matches the popup term structure).
-        function wlVolCell(frac) {
-            return frac == null ? '<td class="na">—</td>' : '<td>' + wlVolText(frac) + '</td>';
+        function wlVolCell(frac, field) {
+            var fa = field ? ' data-f="' + field + '"' : '';
+            return frac == null ? '<td class="na"' + fa + '>—</td>' : '<td' + fa + '>' + wlVolText(frac) + '</td>';
         }
 
         function wlGbpCell(v, colour) {
@@ -4841,6 +4933,7 @@
         }
 
         function renderWatchlist(rows) {
+            wlLoadedOk = true;                             // reaching a render means the fetch succeeded
             var table = document.getElementById('watchlist-table');
             var empty = document.getElementById('wl-empty');
             var toggle = document.getElementById('wl-view-toggle');
@@ -4862,24 +4955,30 @@
             rows.forEach(function (r) {
                 var tr = document.createElement('tr');
                 tr.className = rowAlertClass(r);
+                tr.dataset.sym = r.symbol;
                 var price = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
                 var pe = r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1);
                 // Blank (empty input) means "no alert for this trigger" — a disabled threshold
                 // is stored as 0, shown as an empty cell.
                 var highV = (r.highThresholdPct == null || parseFloat(r.highThresholdPct) <= 0) ? '' : parseFloat(r.highThresholdPct);
                 var moveV = (r.moveThresholdPct == null || parseFloat(r.moveThresholdPct) <= 0) ? '' : parseFloat(r.moveThresholdPct);
+                // Price levels are already surfaced as null when disabled (server-side levelOrNull).
+                var aboveV = (r.priceAbove == null) ? '' : parseFloat(r.priceAbove);
+                var belowV = (r.priceBelow == null) ? '' : parseFloat(r.priceBelow);
                 var symCell = '<td><b>' + r.symbol + '</b>' +
                     (r.missingData ? ' <span class="muted" style="font-size:0.75rem">(fetching…)</span>' : '') +
                     (r.held ? ' <span class="muted" title="You hold this" style="font-size:0.75rem">●</span>' : '') + '</td>';
                 tr.innerHTML = symCell +
-                    '<td>' + price + '</td>' +
-                    wlPctCell(r.todayPct, true) +
-                    wlPctCell(r.pct5d, true) +
-                    wlPctCell(r.pct30d, true) +
-                    wlPctCell(r.pctFromHigh, false) +
-                    wlPctCell(r.pctFromLow, false) +
-                    wlVolCell(r.vol5d) +
-                    wlVolCell(r.vol10d) +
+                    '<td data-f="price">' + price + '</td>' +
+                    wlPctCell(r.todayPct, true, 'todayPct') +
+                    wlPctCell(r.pct2d, true, 'pct2d') +
+                    wlPctCell(r.pct3d, true, 'pct3d') +
+                    wlPctCell(r.pct5d, true, 'pct5d') +
+                    wlPctCell(r.pct30d, true, 'pct30d') +
+                    wlPctCell(r.pctFromHigh, false, 'pctFromHigh') +
+                    wlPctCell(r.pctFromLow, false, 'pctFromLow') +
+                    wlVolCell(r.vol5d, 'vol5d') +
+                    wlVolCell(r.vol10d, 'vol10d') +
                     wlVolCell(r.vol30d) +
                     wlVolCell(r.vol1y) +
                     '<td>' + pe + '</td>' +
@@ -4887,6 +4986,8 @@
                     wlGbpCell(r.held ? r.gainGbp : null, true) +
                     '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="high" type="text" value="' + highV + '"/></td>' +
                     '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="move" type="text" value="' + moveV + '"/></td>' +
+                    '<td><input class="wl-thr-input wl-price-input" data-sym="' + r.symbol + '" data-kind="above" type="text" value="' + aboveV + '"/></td>' +
+                    '<td><input class="wl-thr-input wl-price-input" data-sym="' + r.symbol + '" data-kind="below" type="text" value="' + belowV + '"/></td>' +
                     '<td class="wl-actions">' +
                         '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="up" title="Move up">↑</button>' +
                         '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="down" title="Move down">↓</button>' +
@@ -4913,7 +5014,9 @@
                     var row = this.closest('tr');
                     var high = row.querySelector('.wl-thr-input[data-kind="high"]').value.trim();
                     var move = row.querySelector('.wl-thr-input[data-kind="move"]').value.trim();
-                    saveWatchlistThreshold(sym, high, move);
+                    var above = row.querySelector('.wl-thr-input[data-kind="above"]').value.trim();
+                    var below = row.querySelector('.wl-thr-input[data-kind="below"]').value.trim();
+                    saveWatchlistThreshold(sym, high, move, above, below);
                 });
             });
 
@@ -4924,6 +5027,9 @@
             var up = r.moveDirection >= 0;
             if (r.nearHigh && r.bigMove) return up ? 'wl-both-up' : 'wl-both-down';
             if (r.bigMove) return up ? 'wl-move-up' : 'wl-move-down';
+            // Explicit price-target hits rank above the passive near-high highlight.
+            if (r.aboveLevel) return 'wl-price-above';
+            if (r.belowLevel) return 'wl-price-below';
             if (r.nearHigh) return 'wl-near-high';
             return '';
         }
@@ -4939,6 +5045,7 @@
             var stats = document.getElementById('wl-modal-stats');
             stats.innerHTML = '';
             stats.appendChild(wlStat('Today', wlPctText(r.todayPct)));
+            stats.appendChild(wlStat('2d', wlPctText(r.pct2d)));
             stats.appendChild(wlStat('3d', wlPctText(r.pct3d)));
             stats.appendChild(wlStat('5d', wlPctText(r.pct5d)));
             stats.appendChild(wlStat('10d', wlPctText(r.pct10d)));
@@ -4946,6 +5053,8 @@
             stats.appendChild(wlStat('52wk high', r.week52High == null ? '—' : fmtPrice(r.week52High, r.currency)));
             stats.appendChild(wlStat('52wk low', r.week52Low == null ? '—' : fmtPrice(r.week52Low, r.currency)));
             stats.appendChild(wlStat('% vs high', wlPctText(r.pctFromHigh)));
+            if (r.priceAbove != null) stats.appendChild(wlStat('≥ target', fmtPrice(r.priceAbove, r.currency)));
+            if (r.priceBelow != null) stats.appendChild(wlStat('≤ target', fmtPrice(r.priceBelow, r.currency)));
             stats.appendChild(wlStat('P/E', r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1)));
             stats.appendChild(wlStat('Beta', r.beta == null ? '—' : parseFloat(r.beta).toFixed(2)));
             if (r.held) {

@@ -3,6 +3,7 @@ package com.portfolio.web;
 import com.portfolio.application.FundamentalsFetchJob;
 import com.portfolio.application.PriceFetchJob;
 import com.portfolio.application.WatchlistService;
+import com.portfolio.application.WatchlistService.QuoteView;
 import com.portfolio.application.WatchlistService.Series;
 import com.portfolio.application.WatchlistService.WatchlistView;
 import com.portfolio.persistence.WatchlistRepository;
@@ -61,14 +62,24 @@ public class WatchlistController {
         return watchlistService.view();
     }
 
+    /** Lightweight near-real-time refresh (see {@link WatchlistService#quotes()}) — polled by the dashboard. */
+    @GetMapping("/watchlist/quotes")
+    @ResponseBody
+    public QuoteView quotes() {
+        return watchlistService.quotes();
+    }
+
     @PostMapping("/watchlist/add")
     @ResponseBody
     public WatchlistView add(@RequestParam("symbol") String symbol,
                              @RequestParam(name = "highPct", required = false) String highPct,
-                             @RequestParam(name = "movePct", required = false) String movePct) {
+                             @RequestParam(name = "movePct", required = false) String movePct,
+                             @RequestParam(name = "priceAbove", required = false) String priceAbove,
+                             @RequestParam(name = "priceBelow", required = false) String priceBelow) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase();
         if (sym.isEmpty()) throw new IllegalArgumentException("Symbol is required.");
-        watchlistRepo.add(sym, parsePct(highPct, "high threshold"), parsePct(movePct, "move threshold"));
+        watchlistRepo.add(sym, parsePct(highPct, "high threshold"), parsePct(movePct, "move threshold"),
+                parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
         backfillInBackground(sym);
         return watchlistService.view();
     }
@@ -77,9 +88,12 @@ public class WatchlistController {
     @ResponseBody
     public WatchlistView threshold(@RequestParam("symbol") String symbol,
                                    @RequestParam(name = "highPct", required = false) String highPct,
-                                   @RequestParam(name = "movePct", required = false) String movePct) {
+                                   @RequestParam(name = "movePct", required = false) String movePct,
+                                   @RequestParam(name = "priceAbove", required = false) String priceAbove,
+                                   @RequestParam(name = "priceBelow", required = false) String priceBelow) {
         watchlistRepo.updateThresholds(symbol, parsePct(highPct, "high threshold"),
-                parsePct(movePct, "move threshold"));
+                parsePct(movePct, "move threshold"),
+                parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
         return watchlistService.view();
     }
 
@@ -141,6 +155,20 @@ public class WatchlistController {
         if (s == null || s.isBlank()) return null;
         try {
             BigDecimal v = new BigDecimal(s.replace("%", "").trim());
+            if (v.signum() < 0) throw new IllegalArgumentException(name + " must not be negative.");
+            return v;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(name + " '" + s + "' is not a number.");
+        }
+    }
+
+    /** Parse a price level: blank → null (disabled); rejects negatives; strips any currency prefix. */
+    private static BigDecimal parsePrice(String s, String name) {
+        if (s == null || s.isBlank()) return null;
+        String cleaned = s.replaceAll("[£$€,\\s]", "").trim();
+        if (cleaned.isEmpty()) return null;
+        try {
+            BigDecimal v = new BigDecimal(cleaned);
             if (v.signum() < 0) throw new IllegalArgumentException(name + " must not be negative.");
             return v;
         } catch (NumberFormatException e) {

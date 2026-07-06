@@ -92,9 +92,11 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   design) for volatility trading. Each row joins live price + today's move + trailing
   momentum (5d/30d) + a realized-vol term structure (5D/10D/30D/1Y annualised) + 52-wk
   high/low distances + P/E/beta
-  + position/gain (blank when not held). Two per-symbol alert triggers with editable
-  thresholds: proximity to the 52-week high, and |today's move|. Row colour = alert state
-  (green/red today-move by direction, blue near-high, pulsing when both). Click a row for a
+  + position/gain (blank when not held). Four per-symbol alert triggers with editable
+  thresholds/levels: proximity to the 52-week high, |today's move|, and absolute price
+  targets (≥ above and ≤ below, in the price's native currency). Row colour = alert state
+  (green/red today-move by direction, blue near-high, amber ≥-target, purple ≤-target,
+  pulsing when both near-high + big-move). Click a row for a
   popup: same fields + a price chart with a 1D/3D/5D/10D/15D (intraday) + 30D (daily) window
   toggle + a collapsible Fundamentals section. See the Watchlist section below.
 
@@ -353,17 +355,26 @@ touches an order.
   also kicks an immediate `PriceFetchJob.fetchSingle` + fundamentals refresh in the background.
 - `WatchlistService` — assembles each row from one snapshot (single FX fetch, one bulk
   latest-intraday lookup, one ledger read). Position/gain reuse `PositionDetailService`'s FIFO
-  engine (same package) rather than re-implementing it. Momentum is calendar-anchored via
-  `PriceStats.closeOnOrBefore`; realized vol is `PriceStats.annualizedVol` (30-session sample
+  engine (same package) rather than re-implementing it. Momentum (Today/2d/3d/5d/10d/30d) is
+  **session-anchored** via `PriceStats.closeNSessionsBefore` — `k` "days" = `k` trading sessions,
+  so "2d" is the last two sessions (today + the prior session) and the short windows stay distinct
+  over weekends (a calendar anchor collapsed Today/2d/3d onto the same Friday close on Mondays).
+  The full row and the near-real-time `/watchlist/quotes` poll share one `computeLive` calc so
+  they can't diverge; realized vol is `PriceStats.annualizedVol` (30-session sample
   stdev × √252, on split-adjusted `close`, same convention as the Risk tab). 52-wk high/low,
   P/E and beta come from the fundamentals cache. `series()` serves the popup chart: intraday
   for 1D–15D (downsampled to ~5-min beyond 5 days), daily `close×splitFactor` for 30D.
 - **Triggers** are pure domain logic (`WatchlistAlerts.evaluate` → `Flags`): (a) within
   `highThresholdPct`% of the 52-week high (a fresh high always fires); (b) `|today's move|` ≥
-  `moveThresholdPct`%, either direction. Screen and alert job evaluate identical `Row`s so they
-  never disagree. **No 52-wk-low trigger** — the low is displayed but never alerts (watched
-  names have run up too far for it to matter). A **blank/0 threshold disables that trigger**
-  (`WatchlistRepository` stores 0), so a symbol can be watched with no alerts at all.
+  `moveThresholdPct`%, either direction; (c) price ≥ `priceAbove` level; (d) price ≤ `priceBelow`
+  level. The two price levels are absolute, in the symbol's **native price currency** (compared
+  against the same native `currentPrice` the row shows — no FX), at-or-through counts. Screen and
+  alert job evaluate identical `Row`s so they never disagree. **No 52-wk-low trigger** — the low is
+  displayed but never alerts (watched names have run up too far for it to matter). A **blank/0
+  threshold/level disables that trigger** (`WatchlistRepository` stores 0; the columns are
+  `price_above`/`price_below`, NULL on rows predating them → read as 0 = disabled), so a symbol can
+  be watched with no alerts at all. `both()` (the pulse) stays near-high + big-move only; the alert
+  job dedups the price levels under `SYMBOL|ABOVE|date` / `SYMBOL|BELOW|date`.
 - **Popup extras:** `GET /watchlist/vol` returns a realized-vol **term structure** (5D/10D from
   intraday 1-min returns via `PriceStats.annualizedVolIntraday`, 30D/1Y from daily closes) shown
   in the popup stats. `GET /watchlist/series` for `1D` returns only the latest session's bars

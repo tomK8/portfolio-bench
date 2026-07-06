@@ -5,6 +5,7 @@ import com.portfolio.domain.model.PriceBar;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.HashSet;
@@ -110,6 +111,38 @@ public final class PriceStats {
         for (int i = barsAscending.size() - 1; i >= 0; i--) {
             PriceBar b = barsAscending.get(i);
             if (!b.date().isAfter(date)) return b.close();
+        }
+        return null;
+    }
+
+    /**
+     * Close {@code n} trading sessions before {@code today}: the close of the n-th most recent bar
+     * strictly dated before {@code today}. {@code n = 1} → the previous session's close (the base
+     * for a one-session / "today" return); {@code n = 2} → two sessions ago (the base for a
+     * two-session return — i.e. today's move plus the previous session's); and so on. Returns
+     * {@code null} when fewer than {@code n} such bars exist.
+     *
+     * <p>Session-based, unlike {@link #closeOnOrBefore}: over a weekend/holiday a calendar anchor
+     * collapses adjacent short windows onto the same base (on a Monday, {@code today−1}, {@code −2}
+     * and {@code −3} all resolve to Friday), making Today/2d/3d identical. Counting sessions keeps
+     * each window one trading day apart regardless of the calendar. Any bar dated {@code today}
+     * itself is skipped, so a live intraday {@code current} is compared against completed sessions.
+     *
+     * <p>Holidays need no calendar here — the daily series only has rows for real sessions on the
+     * symbol's own exchange (a US holiday leaves no US bar; a London name that traded that day keeps
+     * its bar), so walking bars is automatically per-exchange. Weekend-dated bars <em>are</em>
+     * skipped, though: {@code GiltPriceFetchJob} rolls the last price forward into {@code price_history}
+     * on Sat/Sun, and those phantom rows must not be counted as sessions.
+     */
+    public static Double closeNSessionsBefore(List<PriceBar> barsAscending, LocalDate today, int n) {
+        if (barsAscending == null || n < 1) return null;
+        int seen = 0;
+        for (int i = barsAscending.size() - 1; i >= 0; i--) {
+            LocalDate d = barsAscending.get(i).date();
+            if (!d.isBefore(today)) continue;                     // today's own bar or later
+            DayOfWeek dow = d.getDayOfWeek();
+            if (dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY) continue;  // phantom weekend row
+            if (++seen == n) return barsAscending.get(i).close();
         }
         return null;
     }

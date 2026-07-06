@@ -489,6 +489,8 @@
         #watchlist-table tbody tr.wl-move-up   { background: rgba(44, 160, 44, 0.14);  box-shadow: inset 3px 0 0 #2ca02c; }
         #watchlist-table tbody tr.wl-move-down { background: rgba(192, 57, 43, 0.14);  box-shadow: inset 3px 0 0 #c0392b; }
         #watchlist-table tbody tr.wl-near-high { background: rgba(31, 119, 180, 0.14); box-shadow: inset 3px 0 0 #1f77b4; }
+        #watchlist-table tbody tr.wl-price-above { background: rgba(224, 168, 0, 0.16);  box-shadow: inset 3px 0 0 #e0a800; }
+        #watchlist-table tbody tr.wl-price-below { background: rgba(111, 66, 193, 0.16); box-shadow: inset 3px 0 0 #6f42c1; }
         #watchlist-table tbody tr.wl-both-up   { animation: wl-pulse-up 1.6s ease-in-out infinite; }
         #watchlist-table tbody tr.wl-both-down { animation: wl-pulse-down 1.6s ease-in-out infinite; }
         @keyframes wl-pulse-up {
@@ -507,6 +509,7 @@
         html[data-theme="dark"] .wl-pos { color: #4ade80; }
         html[data-theme="dark"] .wl-neg { color: #f87171; }
         .wl-thr-input { width: 3.2rem; font-size: 0.8rem; padding: 1px 3px; }
+        .wl-price-input { width: 4.6rem; }
         .wl-remove { color: #c0392b; cursor: pointer; border: 0; background: none; font-size: 1rem; line-height: 1; }
         .wl-actions { white-space: nowrap; }
         .wl-move { border: 0; background: none; cursor: pointer; font-size: 0.95rem; line-height: 1; color: #999; padding: 0 2px; }
@@ -1757,14 +1760,20 @@
         Volatility-trading watchlist. Enter any symbol — owned or not. Rows colour when an alert
         fires: <b class="wl-pos">green</b>/<b class="wl-neg">red</b> = a big move today (up/down),
         <b style="color:#1f77b4">blue</b> = near the 52-week high, pulsing = both. Set each
-        symbol's two thresholds inline (% from 52-wk high, |today's move|); leave a threshold
-        blank to watch a symbol without any alert. Email alerts fire once per day per signal
-        when SMTP is configured. Click a row for the price chart and fundamentals.
+        symbol's alert triggers inline: % from 52-wk high, |today's move|, and absolute price
+        targets (≥ and ≤, in the price's own currency). Leave any of them blank to disable that
+        trigger. Email alerts fire once per day per signal when SMTP is configured. Click a row
+        for the price chart and fundamentals.
+        Prices, momentum, short-horizon vol and row colour auto-refresh every 30s while this tab
+        is open (data is ~1 minute fresh, from the intraday feed); the position and fundamentals
+        columns update on a manual <b>Refresh</b> or when you re-open the tab.
     </p>
     <div class="benchmark-controls">
         <label>Symbol: <input id="wl-add-symbol" type="text" size="8" placeholder="e.g. NVDA"/></label>
         <label>Near-high %: <input id="wl-add-high" type="text" size="4" placeholder="3"/></label>
         <label>Move %: <input id="wl-add-move" type="text" size="4" placeholder="10"/></label>
+        <label title="Alert when the price rises to or above this level (price's own currency)">≥ Target: <input id="wl-add-above" type="text" size="6" placeholder="—"/></label>
+        <label title="Alert when the price falls to or below this level (price's own currency)">≤ Target: <input id="wl-add-below" type="text" size="6" placeholder="—"/></label>
         <button id="wl-add-btn" type="button">Add</button>
         <button id="wl-refresh-btn" type="button">Refresh</button>
         <span id="wl-view-toggle" class="wl-view-toggle" style="display:none;">
@@ -1784,9 +1793,11 @@
         <thead><tr>
             <th data-sort="str">Symbol</th>
             <th data-sort="num">Price</th>
-            <th data-sort="num" title="Live move since prior close">Today %</th>
-            <th data-sort="num">5d %</th>
-            <th data-sort="num">30d %</th>
+            <th data-sort="num" title="Live move vs the previous session's close (1 trading session)">Today %</th>
+            <th data-sort="num" title="Return over the last 2 trading sessions (today + the previous session)">2d %</th>
+            <th data-sort="num" title="Return over the last 3 trading sessions">3d %</th>
+            <th data-sort="num" title="Return over the last 5 trading sessions">5d %</th>
+            <th data-sort="num" title="Return over the last 30 trading sessions">30d %</th>
             <th data-sort="num" title="Distance from 52-week high (negative = below)">% vs High</th>
             <th data-sort="num" title="Distance above 52-week low">% vs Low</th>
             <th data-sort="num" title="Annualised realized volatility, 5-day (from 1-minute intraday returns)">Vol 5D</th>
@@ -1798,6 +1809,8 @@
             <th data-sort="num" title="Unrealized gain on the holding, GBP">Gain</th>
             <th title="Alert when within this % of the 52-week high">Near-hi %</th>
             <th title="Alert when |today's move| exceeds this %">Move %</th>
+            <th title="Alert when the price rises to or above this level (price's own currency)">≥ Target</th>
+            <th title="Alert when the price falls to or below this level (price's own currency)">≤ Target</th>
             <th></th>
         </tr></thead>
         <tbody></tbody>

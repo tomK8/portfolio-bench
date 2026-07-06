@@ -98,6 +98,59 @@ class PriceStatsTest {
     }
 
     @Test
+    void closeNSessionsBefore_countsSessionsNotCalendarDays() {
+        // Wed/Thu/Fri closes; the following Monday is "today" (mid-session, no bar yet). A calendar
+        // anchor would map today−1/−2/−3 all onto Friday; session counting must stay one trading
+        // day apart.
+        List<PriceBar> bars = List.of(
+                bar("2026-07-01", 100),    // Wed
+                bar("2026-07-02", 110),    // Thu
+                bar("2026-07-03", 120));   // Fri
+        LocalDate monday = LocalDate.parse("2026-07-06");
+        assertEquals(120.0, PriceStats.closeNSessionsBefore(bars, monday, 1));   // previous session = Fri
+        assertEquals(110.0, PriceStats.closeNSessionsBefore(bars, monday, 2));   // 2 sessions ago = Thu
+        assertEquals(100.0, PriceStats.closeNSessionsBefore(bars, monday, 3));   // 3 sessions ago = Wed
+        assertNull(PriceStats.closeNSessionsBefore(bars, monday, 4));            // not enough sessions
+    }
+
+    @Test
+    void closeNSessionsBefore_skipsTodaysOwnBar() {
+        // Once today's daily bar is stored, n=1 must still be the *previous* session — the live
+        // current price supersedes today's close, so today's own bar is not a valid base.
+        List<PriceBar> bars = List.of(
+                bar("2026-07-02", 110),    // Thu
+                bar("2026-07-03", 120),    // Fri
+                bar("2026-07-06", 130));   // Mon (today)
+        LocalDate monday = LocalDate.parse("2026-07-06");
+        assertEquals(120.0, PriceStats.closeNSessionsBefore(bars, monday, 1));   // Fri, not Mon's 130
+        assertEquals(110.0, PriceStats.closeNSessionsBefore(bars, monday, 2));   // Thu
+    }
+
+    @Test
+    void closeNSessionsBefore_skipsPhantomWeekendBars() {
+        // GiltPriceFetchJob rolls the last price forward into price_history on Sat/Sun; those bars
+        // are not sessions and must not be counted (mirrors the 39 gilts with 07-04/07-05 rows).
+        List<PriceBar> bars = List.of(
+                bar("2026-07-01", 100),    // Wed
+                bar("2026-07-02", 110),    // Thu
+                bar("2026-07-03", 120),    // Fri
+                bar("2026-07-04", 120),    // Sat  (phantom roll-forward)
+                bar("2026-07-05", 120));   // Sun  (phantom roll-forward)
+        LocalDate monday = LocalDate.parse("2026-07-06");
+        assertEquals(120.0, PriceStats.closeNSessionsBefore(bars, monday, 1));   // Fri, not the Sat/Sun rows
+        assertEquals(110.0, PriceStats.closeNSessionsBefore(bars, monday, 2));   // Thu
+        assertEquals(100.0, PriceStats.closeNSessionsBefore(bars, monday, 3));   // Wed
+    }
+
+    @Test
+    void closeNSessionsBefore_guards() {
+        List<PriceBar> bars = List.of(bar("2026-07-03", 120));
+        assertNull(PriceStats.closeNSessionsBefore(bars, LocalDate.parse("2026-07-06"), 0));
+        assertNull(PriceStats.closeNSessionsBefore(null, LocalDate.parse("2026-07-06"), 1));
+        assertNull(PriceStats.closeNSessionsBefore(List.of(), LocalDate.parse("2026-07-06"), 1));
+    }
+
+    @Test
     void pctChange_basics() {
         assertEquals(0.10, PriceStats.pctChange(110.0, 100.0).doubleValue(), 1e-9);
         assertEquals(-0.20, PriceStats.pctChange(80.0, 100.0).doubleValue(), 1e-9);

@@ -85,6 +85,14 @@ public class WatchlistAlertJob {
                 String key = r.symbol() + "|MOVE|" + today;
                 if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeMove(r));
             }
+            if (r.aboveLevel()) {
+                String key = r.symbol() + "|ABOVE|" + today;
+                if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeLevel(r, true));
+            }
+            if (r.belowLevel()) {
+                String key = r.symbol() + "|BELOW|" + today;
+                if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeLevel(r, false));
+            }
         }
 
         if (newLines.isEmpty()) {
@@ -123,6 +131,14 @@ public class WatchlistAlertJob {
         String amount = mv == null ? "" : pct(mv.abs());
         return r.symbol() + " " + dir + amount + " today — " + price(r)
                 + " (threshold " + plain(r.moveThresholdPct()) + "%)";
+    }
+
+    private static String describeLevel(Row r, boolean above) {
+        BigDecimal level = above ? r.priceAbove() : r.priceBelow();
+        String dir = above ? "at/above" : "at/below";
+        String ccy = r.currency() == null ? "" : " " + r.currency();
+        String target = level == null ? "?" : level.stripTrailingZeros().toPlainString() + ccy;
+        return r.symbol() + " " + dir + " target " + target + " — now " + price(r);
     }
 
     private static String price(Row r) {

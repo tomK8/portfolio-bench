@@ -5500,16 +5500,34 @@
         }
 
         // ---- §A CSV export ----
+        // Per-column formatters so the file opens human-readable in Excel: fractions become rounded
+        // percents, prices/multiples round to 2dp, and the ≤/− in the definition label are ASCII-ised
+        // (belt-and-suspenders — the file is also written with a UTF-8 BOM so Excel decodes it right).
+        function csvPct(v) { return v == null ? '' : (v * 100).toFixed(2) + '%'; }
+        function csvNum(v) { return v == null ? '' : (+v).toFixed(2); }
+        function csvRaw(v) { return v == null ? '' : v; }
+        function csvDef(v) {
+            return v == null ? '' : String(v)
+                .replace(/≤/g, '<=').replace(/≥/g, '>=')
+                .replace(/[−–—]/g, '-').replace(/σ/g, 'sigma');
+        }
+
         function downloadSwingCsv(id) {
             var entry = swEventLogs[id];
             if (!entry) return;
-            var cols = ['date', 'symbol', 'definition', 'kind', 'cumReturn', 'sigma', 'sigmaMultiple',
-                'aboveMa', 'maDistancePct', 'entryClose', 'outcome', 'exitDate', 'sessionsHeld',
-                'tradeReturn', 'conservativeReturn', 'furtherDrawdown', 'sessionsToTarget', 'targetCensored',
-                'earningsVerified', 'tradingDaysToEarnings', 'earningsWithinWindow'];
-            var lines = [cols.join(',')];
+            // [field, formatter]
+            var cols = [
+                ['date', csvRaw], ['symbol', csvRaw], ['definition', csvDef], ['kind', csvRaw],
+                ['cumReturn', csvPct], ['sigma', csvPct], ['sigmaMultiple', csvNum],
+                ['aboveMa', csvRaw], ['maDistancePct', csvPct], ['entryClose', csvNum],
+                ['outcome', csvRaw], ['exitDate', csvRaw], ['sessionsHeld', csvRaw],
+                ['tradeReturn', csvPct], ['conservativeReturn', csvPct], ['furtherDrawdown', csvPct],
+                ['sessionsToTarget', csvRaw], ['targetCensored', csvRaw],
+                ['earningsVerified', csvRaw], ['tradingDaysToEarnings', csvRaw], ['earningsWithinWindow', csvRaw]
+            ];
+            var lines = [cols.map(function (c) { return c[0]; }).join(',')];
             entry.rows.forEach(function (r) {
-                lines.push(cols.map(function (c) { return csvCell(r[c]); }).join(','));
+                lines.push(cols.map(function (c) { return csvCell(c[1](r[c[0]])); }).join(','));
             });
             downloadCsv(entry.name + '.csv', lines.join('\n'));
         }
@@ -5521,7 +5539,8 @@
         }
 
         function downloadCsv(filename, text) {
-            var blob = new Blob([text], { type: 'text/csv' });
+            // Lead with a UTF-8 BOM so Excel decodes accented/maths glyphs instead of mojibake.
+            var blob = new Blob(['\uFEFF' + text], { type: 'text/csv;charset=utf-8;' });
             var url = URL.createObjectURL(blob);
             var a = document.createElement('a');
             a.href = url;

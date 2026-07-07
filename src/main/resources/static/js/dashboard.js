@@ -156,6 +156,7 @@
             if (panelId === 'panel-watchlist') setupWatchlist();
             if (panelId === 'panel-swing') setupSwing();
             if (panelId === 'panel-trend') setupTrend();
+            if (panelId === 'panel-momentum') setupMomentum();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
@@ -6255,6 +6256,413 @@
                 lines.push(cols.map(function (c) { return csvCell(c[1](r[c[0]])); }).join(','));
             });
             downloadCsv('trend-trades-' + v.key + '.csv', lines.join('\n'));
+        }
+
+        /* ==================== Momentum tab ==================== */
+
+        var moInit = false, moReport = null;
+
+        function setupMomentum() {
+            if (moInit) return;
+            moInit = true;
+            document.getElementById('mo-run').addEventListener('click', runMomentum);
+            document.getElementById('mo-backfill').addEventListener('click', backfillMomentum);
+            document.getElementById('mo-save').addEventListener('click', saveMomentumUniverse);
+            document.getElementById('mo-grid-variant').addEventListener('change', renderMomentumGrid);
+            document.getElementById('mo-log-variant').addEventListener('change', renderMomentumLog);
+            document.getElementById('mo-log-csv').addEventListener('click', function (e) {
+                e.preventDefault();
+                downloadMomentumCsv();
+            });
+        }
+
+        function moVal(id) { return (document.getElementById(id).value || '').trim(); }
+        function moStatus(msg) { document.getElementById('mo-status').textContent = msg || ''; }
+        function moNum(v, dp) {
+            if (v === null || v === undefined || (typeof v === 'number' && !isFinite(v))) return '—';
+            return (+v).toFixed(dp === undefined ? 2 : dp);
+        }
+        function moCls(v) { return v > 0 ? 'swing-pos' : (v < 0 ? 'swing-neg' : ''); }
+
+        function buildMomentumQuery() {
+            var map = {
+                universe: moVal('mo-universe'), topNs: moVal('mo-topns'), lookback: moVal('mo-lookback'),
+                skip: moVal('mo-skip'), cost: moVal('mo-cost'), rf: moVal('mo-rf'),
+                holdoutMonths: moVal('mo-holdout'), bootstrap: moVal('mo-bootstrap'),
+                seed: moVal('mo-seed'), benchmarks: moVal('mo-benchmarks'),
+                regimeSymbol: moVal('mo-regime'), crashDrawdown: moVal('mo-crashdd')
+            };
+            var parts = [];
+            Object.keys(map).forEach(function (k) {
+                if (map[k] !== '') parts.push(k + '=' + encodeURIComponent(map[k]));
+            });
+            return parts.join('&');
+        }
+
+        function runMomentum() {
+            moStatus('Computing (bootstrap per variant)…');
+            fetch('/momentum?' + buildMomentumQuery())
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (rep) {
+                    moReport = rep;
+                    fillMomentumInputs(rep.config);
+                    document.getElementById('mo-empty').style.display = 'none';
+                    renderMomentumHeader();
+                    renderMomentumVerdicts();
+                    renderMomentumFit();
+                    renderMomentumRegime();
+                    renderMomentumCrash();
+                    populateMomentumVariantSelects();
+                    renderMomentumGrid();
+                    renderMomentumHoldout();
+                    renderMomentumLog();
+                    ['mo-header-wrap', 'mo-fit-wrap', 'mo-grid-wrap', 'mo-holdout-wrap', 'mo-log-wrap']
+                        .forEach(function (id) { document.getElementById(id).style.display = 'block'; });
+                    moStatus('Updated ' + new Date().toLocaleTimeString());
+                })
+                .catch(function (e) { moStatus('Error: ' + e.message); });
+        }
+
+        function backfillMomentum() {
+            moStatus('Backfill started (deep daily history per new symbol)…');
+            fetch('/momentum/backfill', { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function () { moStatus('Backfill running. Re-run once prices land.'); })
+                .catch(function (e) { moStatus('Backfill failed: ' + e.message); });
+        }
+
+        function saveMomentumUniverse() {
+            var body = 'universe=' + encodeURIComponent(moVal('mo-universe'));
+            fetch('/momentum/symbols', {
+                method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body
+            }).then(function (r) { return r.json(); })
+                .then(function (res) {
+                    document.getElementById('mo-universe').value = (res.universe || []).join(',');
+                    moStatus('Universe saved (' + (res.universe || []).length + ' names); backfilling new ones.');
+                })
+                .catch(function (e) { moStatus('Save failed: ' + e.message); });
+        }
+
+        function fillMomentumInputs(cfg) {
+            if (!cfg) return;
+            document.getElementById('mo-universe').value = (cfg.universe || []).join(',');
+            document.getElementById('mo-topns').value = (cfg.topNs || []).join(',');
+            document.getElementById('mo-lookback').value = cfg.lookbackSessions;
+            document.getElementById('mo-skip').value = cfg.skipSessions;
+            document.getElementById('mo-cost').value = cfg.costPerSideBps;
+            document.getElementById('mo-rf').value = cfg.rfAnnualPct;
+            document.getElementById('mo-holdout').value = cfg.holdoutMonths;
+            document.getElementById('mo-bootstrap').value = cfg.bootstrapIterations;
+            document.getElementById('mo-seed').value = cfg.randomSeed;
+            document.getElementById('mo-benchmarks').value = (cfg.benchmarkSymbols || []).join(',');
+            document.getElementById('mo-regime').value = cfg.regimeSymbol;
+            document.getElementById('mo-crashdd').value = cfg.crashDrawdownPct;
+        }
+
+        function renderMomentumHeader() {
+            var r = moReport;
+            var banner = document.getElementById('mo-banner');
+            banner.textContent = '⚠ ' + r.survivorshipCaveat;
+            banner.style.display = 'block';
+
+            var spans = (r.symbolSpans || []).map(function (s) {
+                return s.symbol + (s.ranked ? '' : ' (bench)') + ' ' + s.from + '→' + s.to + ' (' + s.bars + ')';
+            }).join(' · ');
+            var html = '';
+            if (r.analysisStart) {
+                html += '<div><b>Analysis start:</b> ' + r.analysisStart + ' — ' + r.analysisStartReason + '</div>';
+                html += '<div><b>Fit:</b> ' + r.fitFrom + ' → ' + r.fitTo
+                    + (r.holdoutAvailable ? ' &nbsp;|&nbsp; <b style="color:#b0862f;">Holdout:</b> '
+                        + r.holdoutFrom + ' → ' + r.holdoutTo : ' &nbsp;|&nbsp; <i>no holdout window</i>')
+                    + ' &nbsp;|&nbsp; <b>seed</b> ' + r.bootstrapSeed + '</div>';
+            }
+            if ((r.missingSymbols || []).length) {
+                html += '<div class="swing-warn">No price history (excluded): ' + r.missingSymbols.join(', ')
+                    + ' — run Backfill.</div>';
+            }
+            if ((r.gaps || []).length) {
+                html += '<div class="muted" style="font-size:0.78rem;">Forward-fill gaps (ineligible over the stretch): '
+                    + r.gaps.map(function (g) { return g.symbol + ' ' + g.from + '→' + g.to + ' (' + g.sessions + 'd)'; }).join(' · ')
+                    + '</div>';
+            }
+            html += '<div class="muted" style="font-size:0.75rem; margin-top:0.2rem;">' + spans + '</div>';
+            document.getElementById('mo-header').innerHTML = html;
+
+            var warns = (r.warnings || []).map(function (w) {
+                return '<div class="swing-warn">' + w + '</div>';
+            }).join('');
+            document.getElementById('mo-warnings').innerHTML = warns;
+        }
+
+        function renderMomentumVerdicts() {
+            var html = (moReport.variants || []).map(function (v) {
+                var boot = v.fit.bootstrap;
+                var tagged = v.verdict;
+                if (boot) {
+                    var cls = boot.cagrInsideIqr ? 'mo-tag-random' : 'mo-tag-signal';
+                    tagged = tagged.replace(/\((≈random|signal)\)/, '<span class="' + cls + '">($1)</span>');
+                }
+                return '<div class="mo-verdict">• ' + tagged + '</div>';
+            }).join('');
+            document.getElementById('mo-verdicts').innerHTML = html;
+        }
+
+        // Rows: each top-N variant, then EW baseline + benchmarks as controls.
+        function renderMomentumFit() {
+            var r = moReport;
+            var head = ['Strategy', 'CAGR', 'Vol', 'Sharpe', 'MaxDD', 'Calmar', 'Hit% vs EW',
+                'Turnover', 'Cost drag', 'Boot pct', 'Rev bot-N'];
+            var rows = [];
+            (r.variants || []).forEach(function (v) {
+                rows.push(fitRow(v.label, v.fit, v.bottomNFitCagr, false));
+            });
+            if (r.baselineFit) rows.push(fitRow('EW baseline', r.baselineFit, null, true));
+            (r.benchmarks || []).forEach(function (b) {
+                rows.push(fitRow(b.symbol + ' (B&H)', { stats: b.fit }, null, true));
+            });
+            document.getElementById('mo-fit').innerHTML = swingTable(head, rows);
+            document.getElementById('mo-fit-sub').textContent =
+                r.fitFrom + ' → ' + r.fitTo + ' · controls in the lower rows';
+        }
+
+        function fitRow(label, section, revCagr, isControl) {
+            var s = section.stats;
+            var ddTitle = s.maxDrawdownPeak ? s.maxDrawdownPeak + ' → ' + s.maxDrawdownTrough : '';
+            var boot = section.bootstrap;
+            var bootCell = { t: '—' };
+            if (boot) {
+                bootCell = {
+                    t: Math.round(boot.cagrPercentile * 100) + 'th',
+                    cls: boot.cagrInsideIqr ? 'mo-dim' : (boot.cagrPercentile > 0.75 ? 'swing-pos' : '')
+                };
+            }
+            return {
+                cls: isControl ? 'swing-baseline' : '',
+                cells: [
+                    { t: label, lbl: true },
+                    { t: fmtPct(s.cagr), cls: moCls(s.cagr) },
+                    { t: fmtPct(s.annVol) },
+                    { t: moNum(s.sharpe) },
+                    { t: fmtPct(s.maxDrawdown), cls: 'swing-neg', title: ddTitle },
+                    { t: moNum(s.calmar) },
+                    { t: isControl && !section.bootstrap && !revCagr && label.indexOf('EW') === 0
+                        ? '—' : (s.hitRateVsBaseline == null ? '—' : Math.round(s.hitRateVsBaseline * 100) + '%') },
+                    { t: section.meanMonthlyTurnover == null ? '—' : fmtPct(section.meanMonthlyTurnover) },
+                    { t: section.costDragCagrPct == null ? '—' : moNum(section.costDragCagrPct, 2) + ' pp' },
+                    bootCell,
+                    { t: revCagr == null ? '—' : fmtPct(revCagr), cls: moCls(revCagr) }
+                ]
+            };
+        }
+
+        function renderMomentumRegime() {
+            var head = ['Strategy', 'Above ann', 'Above Sharpe', 'Above n', 'Below ann', 'Below Sharpe',
+                'Below n', 'Unknown n'];
+            var rows = [];
+            function regRow(label, section, isControl) {
+                var g = section.regime;
+                if (!g) return;
+                function cell(b, field, isPct) {
+                    if (!b || b.months === 0) return { t: '—', cls: 'mo-dim' };
+                    var v = b[field];
+                    return { t: isPct ? fmtPct(v) : moNum(v), cls: (b.thin ? 'mo-dim ' : '') + (isPct ? moCls(v) : '') };
+                }
+                rows.push({
+                    cls: isControl ? 'swing-baseline' : '',
+                    cells: [
+                        { t: label, lbl: true },
+                        cell(g.above, 'annReturn', true), cell(g.above, 'sharpe', false),
+                        { t: g.above ? g.above.months : 0, cls: g.above && g.above.thin ? 'mo-dim' : '' },
+                        cell(g.below, 'annReturn', true), cell(g.below, 'sharpe', false),
+                        { t: g.below ? g.below.months : 0, cls: g.below && g.below.thin ? 'mo-dim' : '' },
+                        { t: g.unknown ? g.unknown.months : 0 }
+                    ]
+                });
+            }
+            (moReport.variants || []).forEach(function (v) { regRow(v.label, v.fit, false); });
+            if (moReport.baselineFit) regRow('EW baseline', moReport.baselineFit, true);
+            document.getElementById('mo-regime-tbl').innerHTML = swingTable(head, rows);
+        }
+
+        function renderMomentumCrash() {
+            var head = ['Strategy', 'Worst 3 months (strategy · QQQ)', 'Crash setups', 'Episodes',
+                'Post-crash mean', 'Post-crash median', 'Censored'];
+            var rows = [];
+            function crashRow(label, section, isControl) {
+                var c = section.crash;
+                if (!c) return;
+                var worst = (c.worstMonths || []).map(function (w) {
+                    return w.month + ' ' + fmtPct(w.strategyReturn)
+                        + ' (' + (w.indexReturn == null ? '—' : fmtPct(w.indexReturn)) + ')';
+                }).join('; ');
+                var wr = c.windowReturns || {};
+                rows.push({
+                    cls: isControl ? 'swing-baseline' : '',
+                    cells: [
+                        { t: label, lbl: true },
+                        { t: worst || '—', lbl: true },
+                        { t: c.setupMonths },
+                        { t: c.episodes },
+                        { t: wr.n ? fmtPct(wr.mean) : '—', cls: wr.n ? moCls(wr.mean) : '' },
+                        { t: wr.n ? fmtPct(wr.median) : '—', cls: wr.n ? moCls(wr.median) : '' },
+                        { t: c.censored }
+                    ]
+                });
+            }
+            (moReport.variants || []).forEach(function (v) { crashRow(v.label, v.fit, false); });
+            if (moReport.baselineFit) crashRow('EW baseline', moReport.baselineFit, true);
+            document.getElementById('mo-crash-tbl').innerHTML = swingTable(head, rows);
+        }
+
+        function populateMomentumVariantSelects() {
+            var opts = (moReport.variants || []).map(function (v, i) {
+                return '<option value="' + i + '">' + v.label + '</option>';
+            }).join('');
+            document.getElementById('mo-grid-variant').innerHTML = opts;
+            document.getElementById('mo-log-variant').innerHTML = opts;
+        }
+
+        function moSelectedVariant(selectId) {
+            var i = +document.getElementById(selectId).value || 0;
+            return (moReport.variants || [])[i];
+        }
+
+        function renderMomentumGrid() {
+            var v = moSelectedVariant('mo-grid-variant');
+            if (!v) return;
+            var months = {};
+            Object.assign(months, v.fit.stats.months);
+            var holdoutKeys = {};
+            if (v.holdout && v.holdout.months) {
+                Object.keys(v.holdout.months).forEach(function (k) {
+                    months[k] = v.holdout.months[k];
+                    holdoutKeys[k] = true;
+                });
+            }
+            var keys = Object.keys(months).sort();
+            if (!keys.length) { document.getElementById('mo-grid').innerHTML = ''; return; }
+            var years = [];
+            var byYear = {};
+            keys.forEach(function (k) {
+                var y = k.slice(0, 4), m = +k.slice(5, 7);
+                if (!byYear[y]) { byYear[y] = {}; years.push(y); }
+                byYear[y][m] = { v: months[k], holdout: holdoutKeys[k] };
+            });
+            var mn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            var html = '<tr><th class="lbl">Year</th>';
+            mn.forEach(function (m) { html += '<th>' + m + '</th>'; });
+            html += '<th>Year</th></tr>';
+            years.forEach(function (y) {
+                html += '<tr><td class="lbl">' + y + '</td>';
+                var yf = 1, any = false;
+                for (var m = 1; m <= 12; m++) {
+                    var cell = byYear[y][m];
+                    if (!cell) { html += '<td></td>'; continue; }
+                    any = true;
+                    yf *= 1 + cell.v;
+                    html += '<td style="' + moGridStyle(cell.v, cell.holdout) + '" title="' + y + '-'
+                        + ('0' + m).slice(-2) + (cell.holdout ? ' (holdout)' : '') + '">'
+                        + (cell.v * 100).toFixed(1) + '</td>';
+                }
+                html += '<td class="' + moCls(yf - 1) + '"><b>' + (any ? (yf - 1) * 100 : 0).toFixed(1) + '</b></td></tr>';
+            });
+            document.getElementById('mo-grid').innerHTML = html;
+        }
+
+        function moGridStyle(v, holdout) {
+            var a = Math.min(Math.abs(v) / 0.15, 1) * 0.55;
+            var bg = v >= 0 ? 'rgba(44,160,44,' + a + ')' : 'rgba(192,57,43,' + a + ')';
+            return 'background:' + bg + (holdout ? ';outline:2px solid #b0862f;outline-offset:-2px' : '');
+        }
+
+        function renderMomentumHoldout() {
+            var r = moReport;
+            var wrap = document.getElementById('mo-holdout-wrap');
+            if (!r.holdoutAvailable) {
+                document.getElementById('mo-holdout').innerHTML = '';
+                document.getElementById('mo-holdout-sub').textContent = '— no holdout window for this history/config';
+                return;
+            }
+            document.getElementById('mo-holdout-sub').textContent = r.holdoutFrom + ' → ' + r.holdoutTo
+                + ' · same parameters, never seen by the fit sections or the bootstrap';
+            var head = ['Strategy', 'CAGR', 'Vol', 'Sharpe', 'MaxDD', 'Hit% vs EW', 'Turnover', 'Rev bot-N'];
+            var rows = [];
+            function hrow(label, stats, turnover, rev, isControl) {
+                if (!stats) return;
+                rows.push({
+                    cls: isControl ? 'swing-baseline' : '',
+                    cells: [
+                        { t: label, lbl: true },
+                        { t: fmtPct(stats.cagr), cls: moCls(stats.cagr) },
+                        { t: fmtPct(stats.annVol) },
+                        { t: moNum(stats.sharpe) },
+                        { t: fmtPct(stats.maxDrawdown), cls: 'swing-neg' },
+                        { t: stats.hitRateVsBaseline == null ? '—' : Math.round(stats.hitRateVsBaseline * 100) + '%' },
+                        { t: turnover == null ? '—' : fmtPct(turnover) },
+                        { t: rev == null ? '—' : fmtPct(rev), cls: moCls(rev) }
+                    ]
+                });
+            }
+            (r.variants || []).forEach(function (v) {
+                hrow(v.label, v.holdout, v.holdoutMeanTurnover, v.bottomNHoldoutCagr, false);
+            });
+            hrow('EW baseline', r.baselineHoldout, null, null, true);
+            (r.benchmarks || []).forEach(function (b) { hrow(b.symbol + ' (B&H)', b.holdout, null, null, true); });
+            document.getElementById('mo-holdout').innerHTML = swingTable(head, rows);
+        }
+
+        function renderMomentumLog() {
+            var v = moSelectedVariant('mo-log-variant');
+            if (!v) return;
+            var head = ['Date', 'Sec', 'Elig', 'In', 'Out', 'Holdings (rank:score)', 'Turnover', 'Cost', 'Cash'];
+            var rows = (v.log || []).map(function (e) {
+                return {
+                    cls: e.section === 'holdout' ? 'swing-baseline' : '',
+                    cells: [
+                        { t: e.date, lbl: true },
+                        { t: e.section },
+                        { t: e.eligible },
+                        { t: (e.in || []).join(' ') || '—', lbl: true },
+                        { t: (e.out || []).join(' ') || '—', lbl: true },
+                        { t: (e.heldRanks || []).join(' '), lbl: true },
+                        { t: fmtPct(e.turnover) },
+                        { t: fmtPct(e.cost) },
+                        { t: fmtPct(e.cashWeight) }
+                    ]
+                };
+            });
+            document.getElementById('mo-log').innerHTML = swingTable(head, rows);
+        }
+
+        function downloadMomentumCsv() {
+            var v = moSelectedVariant('mo-log-variant');
+            if (!v) return;
+            var lines = ['date,section,eligible,in,out,holdings,turnover,cost,cash'];
+            (v.log || []).forEach(function (e) {
+                lines.push([e.date, e.section, e.eligible,
+                    '"' + (e.in || []).join(' ') + '"', '"' + (e.out || []).join(' ') + '"',
+                    '"' + (e.heldRanks || []).join(' ') + '"',
+                    e.turnover, e.cost, e.cashWeight].join(','));
+            });
+            downloadCsv('momentum-' + v.label.replace(/\s+/g, '') + '.csv', lines.join('\n'));
+        }
+
+        // Small table builder shared by the momentum renderers.
+        function swingTable(head, rows) {
+            var html = '<tr>';
+            head.forEach(function (h, i) { html += '<th' + (i === 0 ? ' class="lbl"' : '') + '>' + h + '</th>'; });
+            html += '</tr>';
+            rows.forEach(function (row) {
+                if (!row) return;
+                html += '<tr' + (row.cls ? ' class="' + row.cls + '"' : '') + '>';
+                row.cells.forEach(function (c) {
+                    var cls = (c.lbl ? 'lbl ' : '') + (c.cls || '');
+                    html += '<td' + (cls.trim() ? ' class="' + cls.trim() + '"' : '')
+                        + (c.title ? ' title="' + c.title + '"' : '') + '>' + c.t + '</td>';
+                });
+                html += '</tr>';
+            });
+            return html;
         }
 
     }());

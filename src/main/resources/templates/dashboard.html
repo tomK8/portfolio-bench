@@ -569,6 +569,16 @@
         html[data-theme="dark"] .swing-tbl tr.swing-placebo-row td { background: #202328; color: #99a; }
         html[data-theme="dark"] .swing-rank-hit { color: #6ab0f3; }
         html[data-theme="dark"] .swing-pos { color: #4ade80; } html[data-theme="dark"] .swing-neg { color: #f87171; }
+        /* Momentum tab */
+        .mo-banner { background: #fdecea; border: 1px solid #f5c6cb; color: #8a1f2b; padding: 0.5rem 0.7rem;
+            border-radius: 4px; font-size: 0.82rem; margin: 0.5rem 0 0.8rem; line-height: 1.35; }
+        .mo-verdict { font-size: 0.86rem; margin: 0.15rem 0; font-variant-numeric: tabular-nums; }
+        .mo-verdict .mo-tag-signal { color: #2ca02c; font-weight: 600; }
+        .mo-verdict .mo-tag-random { color: #b0862f; font-weight: 600; }
+        .swing-tbl td.mo-dim, .swing-tbl tr.mo-dim td { opacity: 0.5; }
+        .mo-grid td { min-width: 2.6rem; text-align: center; }
+        .mo-grid td.lbl { text-align: left; font-weight: 600; }
+        html[data-theme="dark"] .mo-banner { background: #3a1c1f; border-color: #5a2a2f; color: #f3b0b6; }
         html[data-theme="dark"] table.corr-matrix th.corr-axis { background: #23262b; }
         html[data-theme="dark"] .wl-stats .snap-kv { border-bottom-color: #23262b; }
         .wl-window-toggle { display: inline-flex; gap: 0; margin: 0.5rem 0; }
@@ -1096,6 +1106,7 @@
     <button class="tab" data-panel="panel-watchlist" type="button">Watchlist</button>
     <button class="tab" data-panel="panel-swing" type="button">Swing stats</button>
     <button class="tab" data-panel="panel-trend" type="button">Trend filter</button>
+    <button class="tab" data-panel="panel-momentum" type="button">Momentum</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -2061,6 +2072,93 @@
                 <button type="button" class="sw-csv-btn" id="tr-tradelog-csv">CSV</button></summary>
             <table id="tr-tradelog" class="swing-tbl"></table>
         </details>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-momentum">
+    <p class="muted" style="margin-top: 0">
+        Cross-sectional <b>12-1 momentum</b> rotation over a fixed US large-cap universe: each
+        month-end, rank every name by its trailing 12-month return skipping the last month, hold the
+        top N equal-weighted, rebalance monthly. Run for N = 3/4/5. The point is not the raw CAGR —
+        the universe is hand-picked survivors — but whether momentum beats its <b>controls</b>: the
+        equal-weight universe baseline, a <b>matched random-selection bootstrap</b> (same N, same
+        costs, random names — inside the IQR means the ranking adds nothing, dimmed), the
+        <b>reversed signal</b> (worst-N should lose), and QQQ/SPY. The recent 12 months are held out
+        as a labelled <b>holdout</b>; the fit sections never see them. Turnover and cost drag are
+        shown per variant (momentum lives or dies on turnover), plus a 200d-MA regime split and
+        momentum-crash diagnostics. Names enter the universe as they accumulate history (expanding
+        window), so the backtest spans multiple regimes. Every parameter below is configurable; the
+        bootstrap seed is fixed and reported for reproducibility.
+    </p>
+
+    <div id="mo-banner" class="mo-banner" style="display:none;"></div>
+
+    <div class="benchmark-controls swing-controls">
+        <label style="flex: 1 1 100%;">Universe:
+            <input id="mo-universe" type="text" style="width: 90%;" value=""/></label>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label title="portfolio sizes run as separate variants">Top N: <input id="mo-topns" type="text" size="6" value="3,4,5"/></label>
+        <label title="momentum window length, trading sessions (252 ≈ 12 months)">Lookback: <input id="mo-lookback" type="text" size="4" value="252"/></label>
+        <label title="most recent sessions skipped (21 ≈ 1 month, mean-reversion)">Skip: <input id="mo-skip" type="text" size="3" value="21"/></label>
+        <label title="per-trade cost each way, basis points">Cost bps: <input id="mo-cost" type="text" size="4" value="10"/></label>
+        <label title="flat annual risk-free rate, %">rf %: <input id="mo-rf" type="text" size="3" value="4"/></label>
+        <label title="months held out as the recent out-of-sample block">Holdout m: <input id="mo-holdout" type="text" size="3" value="12"/></label>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label title="buy-and-hold benchmarks">Benchmarks: <input id="mo-benchmarks" type="text" size="9" value="QQQ,SPY"/></label>
+        <label title="index for the regime split + crash detection">Regime idx: <input id="mo-regime" type="text" size="5" value="QQQ"/></label>
+        <label title="index decline from high that opens a crash window, %">Crash DD %: <input id="mo-crashdd" type="text" size="3" value="15"/></label>
+        <label title="random bootstrap iterations per variant">Bootstrap: <input id="mo-bootstrap" type="text" size="5" value="1000"/></label>
+        <label title="bootstrap RNG seed (reproducible)">Seed: <input id="mo-seed" type="text" size="4" value="42"/></label>
+        <button id="mo-save" type="button" title="Persist the universe + backfill new names">Save list</button>
+        <button id="mo-backfill" type="button" title="Fetch ~45y of daily history for names not in the DB yet">Backfill</button>
+        <button id="mo-run" type="button">Run</button>
+        <span id="mo-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="mo-empty" class="muted" style="margin-top: 1rem;">
+        Click <b>Run</b> to compute. First run needs a <b>Backfill</b> to fetch deep daily history
+        for the universe + benchmarks.
+    </div>
+
+    <div id="mo-header-wrap" style="display:none; margin-top: 0.8rem;">
+        <div id="mo-header" class="swing-span"></div>
+        <div id="mo-warnings"></div>
+        <div id="mo-verdicts" style="margin-top: 0.5rem;"></div>
+    </div>
+
+    <div id="mo-fit-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Fit window <span class="muted swing-sub" id="mo-fit-sub"></span></h3>
+        <div style="overflow-x:auto;"><table id="mo-fit" class="swing-tbl"></table></div>
+        <h4 class="swing-h" style="margin-top:0.7rem;">200d-MA regime split <span class="muted swing-sub">annualised return / Sharpe / months, by QQQ vs its 200d MA at the positioning date</span></h4>
+        <div style="overflow-x:auto;"><table id="mo-regime-tbl" class="swing-tbl"></table></div>
+        <h4 class="swing-h" style="margin-top:0.7rem;">Momentum-crash diagnostics <span class="muted swing-sub">worst 3 months (with QQQ that month) + strategy return in the 3 months after each ≥15% index drawdown</span></h4>
+        <div style="overflow-x:auto;"><table id="mo-crash-tbl" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="mo-grid-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Monthly returns
+            <select id="mo-grid-variant" style="font-size:0.8rem;"></select>
+            <span class="muted swing-sub">green ≥ 0, red &lt; 0; holdout months shaded</span></h3>
+        <div style="overflow-x:auto;"><table id="mo-grid" class="swing-tbl mo-grid"></table></div>
+    </div>
+
+    <div id="mo-holdout-wrap" style="display:none; margin-top: 1rem; border-top: 2px solid #b0862f; padding-top: 0.6rem;">
+        <h3 class="swing-h" style="color:#b0862f;">HOLDOUT — last 12 months, out of sample
+            <span class="muted swing-sub" id="mo-holdout-sub"></span></h3>
+        <div style="overflow-x:auto;"><table id="mo-holdout" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="mo-log-wrap" style="display:none; margin-top: 1rem;">
+        <div class="swing-eventlog">
+            <details>
+                <summary class="swing-h" style="cursor:pointer;">Rebalance event log
+                    <select id="mo-log-variant" style="font-size:0.8rem;"></select>
+                    <button type="button" class="sw-csv-btn" id="mo-log-csv">CSV</button></summary>
+                <table id="mo-log" class="swing-tbl"></table>
+            </details>
+        </div>
     </div>
 </section>
 

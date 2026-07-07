@@ -531,4 +531,15 @@ public class BeanConfiguration {
         return new TrendAnalysisService(priceHistoryRepository, yahooTickerMap,
                 keyValueStore, priceFetchJob);
     }
+
+    // ---- Momentum rotation backtest -----------------------------------------
+
+    @Bean
+    public MomentumAnalysisService momentumAnalysisService(PriceHistoryRepository priceHistoryRepository,
+                                                           YahooTickerMap yahooTickerMap,
+                                                           KeyValueStore keyValueStore,
+                                                           PriceFetchJob priceFetchJob) {
+        return new MomentumAnalysisService(priceHistoryRepository, yahooTickerMap,
+                keyValueStore, priceFetchJob);
+    }
 }

@@ -50,6 +50,9 @@ final class PriceFetchSupport {
         // Trend-filter series (QQQ + ^NDX + ^IRX) so the nightly job maintains the backtest's
         // primary/extension/cash history once the deep backfill has seeded it.
         symbols.addAll(kv.getStringSet(TrendAnalysisService.TREND_SYMBOLS_KEY));
+        // Momentum-rotation universe + benchmarks so the nightly job keeps their deep history
+        // current for the Momentum tab (fetch set = universe ∪ benchmarks ∪ regime index).
+        symbols.addAll(kv.getStringSet(MomentumAnalysisService.MOMENTUM_SYMBOLS_KEY));
         for (String line : kv.getStringSet(HistoricalScenarioService.SUBSTITUTES_KEY)) {
             int eq = line.indexOf('=');
             if (eq <= 0 || eq >= line.length() - 1) continue;

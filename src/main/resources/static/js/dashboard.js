@@ -155,6 +155,7 @@
             if (panelId === 'panel-correlations') setupCorrelations();
             if (panelId === 'panel-watchlist') setupWatchlist();
             if (panelId === 'panel-swing') setupSwing();
+            if (panelId === 'panel-trend') setupTrend();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
@@ -5907,6 +5908,353 @@
                     plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } }
                 }
             });
+        }
+
+
+        // ================= Trend filter tab =================
+        var trReport = null;
+        var trInit = false;
+
+        function setupTrend() {
+            if (trInit) return;
+            trInit = true;
+            document.getElementById('tr-run').addEventListener('click', runTrend);
+            document.getElementById('tr-backfill').addEventListener('click', backfillTrend);
+            document.getElementById('tr-detail-variant').addEventListener('change', renderTrendDetail);
+            document.getElementById('tr-tradelog-csv').addEventListener('click', function (e) {
+                e.preventDefault();
+                downloadTrendCsv();
+            });
+        }
+
+        function trVal(id) { return (document.getElementById(id).value || '').trim(); }
+        function trSet(id, v) { document.getElementById(id).value = v; }
+        function trStatus(msg) { document.getElementById('tr-status').textContent = msg || ''; }
+
+        function buildTrendQuery() {
+            var map = {
+                primary: trVal('tr-primary'), extension: trVal('tr-extension'), cash: trVal('tr-cash'),
+                flatCash: trVal('tr-flatcash'), signalSource: trVal('tr-signalsource'),
+                maLengths: trVal('tr-malengths'), monthlyMa: trVal('tr-monthlyma'),
+                anchorEvery: trVal('tr-anchorevery'), anchorOffset: trVal('tr-anchoroffset'),
+                bufferPcts: trVal('tr-bufferpcts'), bufferNs: trVal('tr-bufferns'),
+                costs: trVal('tr-costs'), headlineCost: trVal('tr-headlinecost'),
+                halfFraction: trVal('tr-halffraction'), bootstrap: trVal('tr-bootstrap')
+            };
+            var parts = [];
+            Object.keys(map).forEach(function (k) {
+                // extension/cash may be intentionally blank (disables) — always send them.
+                if (map[k] !== '' || k === 'extension' || k === 'cash') {
+                    parts.push(k + '=' + encodeURIComponent(map[k]));
+                }
+            });
+            return parts.join('&');
+        }
+
+        function runTrend() {
+            trStatus('Computing (~1000 bootstrap runs per cell)…');
+            fetch('/trend?' + buildTrendQuery())
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (rep) {
+                    trReport = rep;
+                    fillTrendInputs(rep.config);
+                    document.getElementById('tr-empty').style.display = 'none';
+                    renderTrendData();
+                    renderTrendLive();
+                    renderTrendGrid();
+                    renderTrendSens();
+                    renderTrendAnchor();
+                    renderTrendBoot();
+                    renderTrendWhip();
+                    populateTrendDetail();
+                    renderTrendDetail();
+                    ['tr-data-wrap', 'tr-live-wrap', 'tr-grid-wrap', 'tr-sens-wrap', 'tr-anchor-wrap',
+                     'tr-boot-wrap', 'tr-whip-wrap', 'tr-detail-wrap'].forEach(function (id) {
+                        document.getElementById(id).style.display = 'block';
+                    });
+                    trStatus('Updated ' + new Date().toLocaleTimeString());
+                })
+                .catch(function (e) { trStatus('Error: ' + e.message); });
+        }
+
+        function backfillTrend() {
+            trStatus('Backfill started (45y per new symbol; ^NDX takes ~a minute)…');
+            fetch('/trend/backfill', { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function () { trStatus('Backfill running. Re-run once prices land.'); })
+                .catch(function (e) { trStatus('Backfill failed: ' + e.message); });
+        }
+
+        function fillTrendInputs(cfg) {
+            trSet('tr-primary', cfg.primarySymbol);
+            trSet('tr-extension', cfg.extensionSymbol || '');
+            trSet('tr-cash', cfg.cashSymbol || '');
+            trSet('tr-flatcash', cfg.flatCashRatePct);
+            document.getElementById('tr-signalsource').value = cfg.signalSource;
+            trSet('tr-malengths', cfg.maLengths.join(','));
+            trSet('tr-monthlyma', cfg.monthlyMaLengths.join(','));
+            trSet('tr-anchorevery', cfg.anchorEvery);
+            trSet('tr-anchoroffset', cfg.anchorOffset);
+            trSet('tr-bufferpcts', cfg.bufferPcts.map(function (x) { return +(x * 100).toFixed(4); }).join(','));
+            trSet('tr-bufferns', cfg.bufferNs.join(','));
+            trSet('tr-costs', cfg.costsBps.join(','));
+            trSet('tr-headlinecost', cfg.headlineCostBps);
+            trSet('tr-halffraction', cfg.halfSwitchFraction);
+            trSet('tr-bootstrap', cfg.bootstrapIterations);
+        }
+
+        function trMaLabel(v) {
+            return v.maLength != null ? v.maLength + 'd' : v.key.replace('monthly-', '') + 'mo';
+        }
+
+        function renderTrendData() {
+            var d = trReport.data;
+            var parts = [];
+            parts.push('<b>' + d.primarySymbol + '</b> ' + (d.from || '—') + ' → ' + (d.to || '—') +
+                       (d.years ? ' (' + d.years.toFixed(1) + 'y)' : ''));
+            if (d.spliced) {
+                parts.push('spliced with <b>' + d.extensionSymbol + '</b> at ' + d.spliceDate +
+                           ' — <span class="swing-warn">price-only proxy ' + d.proxiedFrom + ' → ' + d.proxiedTo + '</span>');
+            } else if (d.extensionSymbol) {
+                parts.push('no splice in effect');
+            }
+            parts.push(d.cashSymbol
+                ? 'cash leg <b>' + d.cashSymbol + '</b> from ' + d.cashFrom +
+                  (d.cashFallbackUntil ? ' (flat ' + d.flatCashRatePct + '% until ' + d.cashFallbackUntil + ')' : '')
+                : 'cash leg flat ' + d.flatCashRatePct + '%');
+            if (d.analysisStart) {
+                parts.push('analysis window from <b>' + d.analysisStart + '</b> (' + d.analysisBars +
+                           ' bars; MA warm-up consumes the difference)');
+            }
+            parts.push(d.dotComInSample
+                ? '<span class="swing-pos">2000–02 bust in-sample</span>'
+                : '<span class="swing-warn">2000–02 bust NOT in-sample</span>');
+            document.getElementById('tr-data').innerHTML = parts.join(' · ');
+            document.getElementById('tr-warnings').innerHTML = (d.warnings || []).map(function (w) {
+                return '<div class="swing-warn" style="margin-top:0.3rem;">⚠ ' + w + '</div>';
+            }).join('');
+        }
+
+        function renderTrendLive() {
+            var ls = trReport.liveState;
+            if (!ls) return;
+            var readout = function (rows) {
+                var h = '<thead><tr><th class="lbl">MA</th><th>Close</th><th>MA level</th><th>Dist</th><th>State</th></tr></thead><tbody>';
+                rows.forEach(function (r) {
+                    h += '<tr><td class="lbl">' + r.length + 'd</td><td>' + swNum(r.close) + '</td><td>' +
+                         swNum(r.ma) + '</td><td>' + swPctCell(r.distancePct) + '</td><td>' +
+                         (r.above ? '<span class="swing-pos">above</span>' : '<span class="swing-neg">below</span>') +
+                         '</td></tr>';
+                });
+                return h + '</tbody>';
+            };
+            document.getElementById('tr-live-primary-head').textContent =
+                ls.primarySymbol + ' (as of ' + ls.asOf + ')';
+            document.getElementById('tr-live-primary').innerHTML = readout(ls.primary || []);
+            var holdingHead = document.getElementById('tr-live-holding-head');
+            if ((ls.holding || []).length > 0) {
+                holdingHead.textContent = ls.holdingSymbol + ' (as of ' + ls.holdingAsOf + ')';
+                document.getElementById('tr-live-holding').innerHTML = readout(ls.holding);
+            } else {
+                holdingHead.textContent = ls.holdingSymbol + ': no local history';
+                document.getElementById('tr-live-holding').innerHTML = '';
+            }
+            var h = '<thead><tr><th class="lbl">Variant</th><th>MA</th><th>State</th><th>Pending</th><th class="lbl">Today</th></tr></thead><tbody>';
+            (ls.variants || []).forEach(function (v) {
+                h += '<tr><td class="lbl">' + v.label + '</td><td>' + trMaLabel(v) + '</td><td>' +
+                     (v.invested ? '<span class="swing-pos">in</span>' : '<span class="swing-neg">out</span>') +
+                     '</td><td>' + (v.pendingSwitch ? '<b class="swing-warn">switch at next open</b>' : '—') +
+                     '</td><td class="lbl">' + v.note + '</td></tr>';
+            });
+            document.getElementById('tr-live-variants').innerHTML = h + '</tbody>';
+        }
+
+        function trStatsCells(st) {
+            if (!st) return '<td colspan="8">—</td>';
+            return '<td>' + swPctCell(st.cagr) + '</td><td>' + swPct(st.vol) + '</td><td>' +
+                   swPctCell(st.maxDrawdown) + '</td><td>' + swNum(st.longestDrawdownMonths, 1) + '</td><td>' +
+                   swPct(st.timeInvested, 0) + '</td><td>' + st.roundTrips + '</td><td>' + st.switches +
+                   '</td><td>' + swNum(st.sharpe) + '</td>';
+        }
+
+        function renderTrendGrid() {
+            document.getElementById('tr-grid-sub').textContent =
+                'full switch, next-open fills, ' + trReport.config.headlineCostBps +
+                ' bps/side, historical cash — every cell over the same window';
+            var h = '<thead><tr><th class="lbl" data-sort="str">Variant</th><th data-sort="str">MA</th>' +
+                    '<th data-sort="num">CAGR</th><th data-sort="num">Vol</th><th data-sort="num">MaxDD</th>' +
+                    '<th data-sort="num">DD mo</th><th data-sort="num">Time in</th><th data-sort="num">Trips</th>' +
+                    '<th data-sort="num">Switches</th><th data-sort="num">Sharpe</th></tr></thead><tbody>';
+            var bh = trReport.buyHold;
+            h += '<tr class="swing-baseline"><td class="lbl"><b>Buy &amp; hold</b></td><td>—</td>' +
+                 trStatsCells(bh) + '</tr>';
+            (trReport.variants || []).forEach(function (v) {
+                h += '<tr><td class="lbl">' + v.label + '</td><td>' + trMaLabel(v) + '</td>' +
+                     trStatsCells(v.headline) + '</tr>';
+            });
+            var t = document.getElementById('tr-grid');
+            t.innerHTML = h + '</tbody>';
+            attachSort(t);
+        }
+
+        function renderTrendSens() {
+            var costs = (trReport.variants[0] || {}).costs || [];
+            var h = '<thead><tr><th class="lbl" data-sort="str">Variant</th><th data-sort="str">MA</th>';
+            costs.forEach(function (c) { h += '<th data-sort="num">@' + c.bps + 'bp</th>'; });
+            h += '<th data-sort="num">Close-fill</th><th data-sort="num">Half CAGR</th>' +
+                 '<th data-sort="num">Half MaxDD</th><th data-sort="num">0% cash</th></tr></thead><tbody>';
+            (trReport.variants || []).forEach(function (v) {
+                h += '<tr><td class="lbl">' + v.label + '</td><td>' + trMaLabel(v) + '</td>';
+                (v.costs || []).forEach(function (c) { h += '<td>' + swPctCell(c.stats.cagr) + '</td>'; });
+                h += '<td>' + swPctCell(v.closeFill && v.closeFill.cagr) + '</td>' +
+                     '<td>' + swPctCell(v.halfSwitch && v.halfSwitch.cagr) + '</td>' +
+                     '<td>' + swPctCell(v.halfSwitch && v.halfSwitch.maxDrawdown) + '</td>' +
+                     '<td>' + swPctCell(v.cashZero && v.cashZero.cagr) + '</td></tr>';
+            });
+            var t = document.getElementById('tr-sens');
+            t.innerHTML = h + '</tbody>';
+            attachSort(t);
+        }
+
+        function renderTrendAnchor() {
+            var h = '<thead><tr><th class="lbl">MA</th><th>CAGR min</th><th>q1</th><th>median</th><th>q3</th>' +
+                    '<th>max</th><th>spread</th><th>MaxDD min</th><th>median</th><th>max</th></tr></thead><tbody>';
+            (trReport.anchorSensitivity || []).forEach(function (a) {
+                h += '<tr><td class="lbl">' + a.maLength + 'd</td><td>' + swPctCell(a.cagr.min) + '</td><td>' +
+                     swPctCell(a.cagr.q1) + '</td><td><b>' + swPctCell(a.cagr.median) + '</b></td><td>' +
+                     swPctCell(a.cagr.q3) + '</td><td>' + swPctCell(a.cagr.max) + '</td><td>' +
+                     swPct(a.cagr.max - a.cagr.min) + '</td><td>' + swPctCell(a.maxDd.min) + '</td><td>' +
+                     swPctCell(a.maxDd.median) + '</td><td>' + swPctCell(a.maxDd.max) + '</td></tr>';
+            });
+            document.getElementById('tr-anchor').innerHTML = h + '</tbody>';
+        }
+
+        function trPctileCell(p) {
+            if (p == null) return '—';
+            var cls = p >= 75 ? 'swing-pos' : (p <= 25 ? 'swing-neg' : 'swing-rank-hit');
+            var note = (p > 25 && p < 75) ? ' (inside IQR)' : '';
+            return '<span class="' + cls + '">' + p.toFixed(0) + note + '</span>';
+        }
+
+        function renderTrendBoot() {
+            var h = '<thead><tr><th class="lbl" data-sort="str">Variant</th><th data-sort="str">MA</th>' +
+                    '<th data-sort="num">Trips</th><th data-sort="num">CAGR pctile</th><th>Boot CAGR q1/med/q3</th>' +
+                    '<th data-sort="num">MaxDD pctile</th><th>Boot MaxDD q1/med/q3</th></tr></thead><tbody>';
+            (trReport.variants || []).forEach(function (v) {
+                var b = v.bootstrap;
+                h += '<tr><td class="lbl">' + v.label + '</td><td>' + trMaLabel(v) + '</td>';
+                if (!b) {
+                    h += '<td>0</td><td colspan="4" class="swing-smalln">never exited — nothing to scatter</td></tr>';
+                    return;
+                }
+                h += '<td>' + v.headline.roundTrips + '</td><td>' + trPctileCell(b.cagrPercentile) + '</td><td>' +
+                     swPct(b.cagrDist.q1) + ' / ' + swPct(b.cagrDist.median) + ' / ' + swPct(b.cagrDist.q3) +
+                     '</td><td>' + trPctileCell(b.maxDdPercentile) + '</td><td>' +
+                     swPct(b.maxDdDist.q1) + ' / ' + swPct(b.maxDdDist.median) + ' / ' + swPct(b.maxDdDist.q3) +
+                     '</td></tr>';
+            });
+            var t = document.getElementById('tr-boot');
+            t.innerHTML = h + '</tbody>';
+            attachSort(t);
+        }
+
+        function renderTrendWhip() {
+            var h = '<thead><tr><th class="lbl" data-sort="str">Variant</th><th data-sort="str">MA</th>' +
+                    '<th data-sort="num">Trips</th><th data-sort="num">Bought back higher</th>' +
+                    '<th data-sort="num">Whipsaw drag</th><th data-sort="num">Net timing effect</th></tr></thead><tbody>';
+            (trReport.variants || []).forEach(function (v) {
+                var w = v.whipsaw || {};
+                h += '<tr><td class="lbl">' + v.label + '</td><td>' + trMaLabel(v) + '</td><td>' +
+                     (w.roundTrips || 0) + '</td><td>' + (w.boughtBackHigher || 0) + '</td><td>' +
+                     swPctCell(w.whipsawDrag) + '</td><td>' + swPctCell(w.netTimingEffect) + '</td></tr>';
+            });
+            var t = document.getElementById('tr-whip');
+            t.innerHTML = h + '</tbody>';
+            attachSort(t);
+        }
+
+        function populateTrendDetail() {
+            var sel = document.getElementById('tr-detail-variant');
+            var prev = sel.value;
+            sel.innerHTML = '';
+            (trReport.variants || []).forEach(function (v, i) {
+                var o = document.createElement('option');
+                o.value = i;
+                o.textContent = v.label + ' · ' + trMaLabel(v);
+                sel.appendChild(o);
+            });
+            if (prev && prev < trReport.variants.length) sel.value = prev;
+        }
+
+        function renderTrendDetail() {
+            var v = (trReport.variants || [])[+document.getElementById('tr-detail-variant').value || 0];
+            if (!v) return;
+
+            var h = '<thead><tr><th class="lbl">Episode</th><th>Window</th><th>Covered</th><th>Strategy</th>' +
+                    '<th>B&amp;H</th><th>Strat MaxDD</th><th>B&amp;H MaxDD</th><th>Switches</th><th>Days out</th></tr></thead><tbody>';
+            (v.episodes || []).forEach(function (e) {
+                h += '<tr><td class="lbl"><b>' + e.name + '</b></td><td>' + e.from + ' → ' + e.to + '</td><td>' +
+                     (e.covered ? 'yes' : '<span class="swing-warn">' +
+                        (e.strategyReturn == null ? 'no data' : 'partial') + '</span>') + '</td><td>' +
+                     swPctCell(e.strategyReturn) + '</td><td>' + swPctCell(e.bhReturn) + '</td><td>' +
+                     swPctCell(e.strategyMaxDd) + '</td><td>' + swPctCell(e.bhMaxDd) + '</td><td>' +
+                     (e.switches == null ? '—' : e.switches) + '</td><td>' +
+                     (e.daysOut == null ? '—' : e.daysOut) + '</td></tr>';
+            });
+            document.getElementById('tr-episodes').innerHTML = h + '</tbody>';
+
+            h = '<thead><tr><th class="lbl" data-sort="num">Year</th><th data-sort="num">Strategy</th>' +
+                '<th data-sort="num">B&amp;H</th><th data-sort="num">Diff</th><th data-sort="num">Time in</th>' +
+                '<th data-sort="num">Switches</th></tr></thead><tbody>';
+            (v.annual || []).forEach(function (y) {
+                h += '<tr><td class="lbl">' + y.year + (y.partial ? '*' : '') + '</td><td>' +
+                     swPctCell(y.strategyReturn) + '</td><td>' + swPctCell(y.bhReturn) + '</td><td>' +
+                     swPctCell(y.strategyReturn - y.bhReturn) + '</td><td>' + swPct(y.timeInvested, 0) +
+                     '</td><td>' + y.switches + '</td></tr>';
+            });
+            var annualTable = document.getElementById('tr-annual');
+            annualTable.innerHTML = h + '</tbody>';
+            attachSort(annualTable);
+
+            h = '<thead><tr><th class="lbl">Decade</th><th>Trips</th><th>Bought higher</th>' +
+                '<th>Whipsaw drag</th><th>Net effect</th></tr></thead><tbody>';
+            ((v.whipsaw || {}).perDecade || []).forEach(function (d) {
+                h += '<tr><td class="lbl">' + d.decade + '</td><td>' + d.trips + '</td><td>' +
+                     d.boughtBackHigher + '</td><td>' + swPctCell(d.whipsawDrag) + '</td><td>' +
+                     swPctCell(d.netTimingEffect) + '</td></tr>';
+            });
+            document.getElementById('tr-decades').innerHTML = h + '</tbody>';
+
+            document.getElementById('tr-tradelog-count').textContent =
+                '(' + (v.trades || []).length + ' rows — exit → re-entry pairs)';
+            h = '<thead><tr><th>Exit</th><th>Price</th><th>MA</th><th>Dist</th><th>Re-entry</th><th>Price</th>' +
+                '<th>MA</th><th>Dist</th><th>Days out</th><th>Re-entry vs exit</th><th>Trip effect</th></tr></thead><tbody>';
+            (v.trades || []).forEach(function (r) {
+                h += '<tr><td>' + (r.exitDate || '—') + '</td><td>' + swNum(r.exitPrice) + '</td><td>' +
+                     swNum(r.exitMa) + '</td><td>' + swPctCell(r.exitDistancePct) + '</td><td>' +
+                     (r.reentryDate || '<span class="swing-warn">open</span>') + '</td><td>' +
+                     swNum(r.reentryPrice) + '</td><td>' + swNum(r.reentryMa) + '</td><td>' +
+                     swPctCell(r.reentryDistancePct) + '</td><td>' + (r.daysOut == null ? '—' : r.daysOut) +
+                     '</td><td>' + swPctCell(r.reentryVsExitPct) + '</td><td>' +
+                     swPctCell(r.tripEffectPct) + '</td></tr>';
+            });
+            document.getElementById('tr-tradelog').innerHTML = h + '</tbody>';
+        }
+
+        function downloadTrendCsv() {
+            var v = (trReport.variants || [])[+document.getElementById('tr-detail-variant').value || 0];
+            if (!v) return;
+            var cols = [
+                ['exitDate', csvRaw], ['exitPrice', csvNum], ['exitMa', csvNum], ['exitDistancePct', csvPct],
+                ['reentryDate', csvRaw], ['reentryPrice', csvNum], ['reentryMa', csvNum],
+                ['reentryDistancePct', csvPct], ['daysOut', csvRaw],
+                ['reentryVsExitPct', csvPct], ['tripEffectPct', csvPct]
+            ];
+            var lines = [cols.map(function (c) { return c[0]; }).join(',')];
+            (v.trades || []).forEach(function (r) {
+                lines.push(cols.map(function (c) { return csvCell(c[1](r[c[0]])); }).join(','));
+            });
+            downloadCsv('trend-trades-' + v.key + '.csv', lines.join('\n'));
         }
 
     }());

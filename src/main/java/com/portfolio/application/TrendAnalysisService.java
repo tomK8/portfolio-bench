@@ -81,7 +81,6 @@ public class TrendAnalysisService {
     // ---- report -------------------------------------------------------------
 
     public TrendReport report(TrendConfig cfg) {
-        syncFetchUniverse(cfg);
         LocalDate today = LocalDate.now();
         List<String> warnings = new ArrayList<>();
 
@@ -245,7 +244,12 @@ public class TrendAnalysisService {
         return set;
     }
 
-    /** Mirror the effective symbols to the KV set the nightly price job unions in. */
+    /**
+     * Mirror the symbols to the KV set the nightly price job unions in. Called from the
+     * constructor seed and from {@link #ensureBackfilled} (an explicit action) only — never from
+     * {@code report()}, so an exploratory query-param sweep (e.g. {@code ?extension=}) can't
+     * silently drop ^NDX from the nightly maintenance set.
+     */
     private void syncFetchUniverse(TrendConfig cfg) {
         Set<String> desired = configuredSymbols(cfg);
         if (!desired.equals(kv.getStringSet(TREND_SYMBOLS_KEY))) {
@@ -254,15 +258,22 @@ public class TrendAnalysisService {
     }
 
     /**
-     * Fetches deep daily history for any configured symbol with no rows yet. Intended to run off
-     * the request thread. Returns the symbols actually fetched.
+     * Fetches deep daily history for any configured symbol whose coverage is missing <em>or
+     * shallow</em>. Shallow matters: the nightly/startup price job unions {@code trend_symbols}
+     * and can win the race with its standard 30-year window, leaving ^NDX starting in the
+     * mid-90s — so "already has rows" is not "already backfilled". Anything whose earliest bar
+     * is inside the standard window gets the full {@value #DEEP_LOOKBACK_YEARS}-year refetch
+     * (idempotent upsert); a genuinely short history (QQQ lists in 1999) ends up earlier than
+     * that cutoff and is left alone. Intended to run off the request thread.
      */
     public List<String> ensureBackfilled(TrendConfig cfg) {
         syncFetchUniverse(cfg);
         List<String> fetched = new ArrayList<>();
         if (priceFetchJob == null) return fetched;
+        LocalDate standardWindow = LocalDate.now().minusYears(31);
         for (String symbol : configuredSymbols(cfg)) {
-            if (priceRepo.getEarliestPriceDate(tickerMap.tickerFor(symbol)) != null) continue;
+            LocalDate earliest = priceRepo.getEarliestPriceDate(tickerMap.tickerFor(symbol));
+            if (earliest != null && !earliest.isAfter(standardWindow)) continue;   // already deep
             int rows = priceFetchJob.fetchSingle(symbol, DEEP_LOOKBACK_YEARS);
             log.info("Trend backfill: {} → {} rows", symbol, rows);
             if (rows > 0) fetched.add(symbol);

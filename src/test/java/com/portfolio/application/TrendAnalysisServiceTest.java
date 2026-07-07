@@ -150,7 +150,7 @@ class TrendAnalysisServiceTest {
     }
 
     @Test
-    void fetchUniverseMirrorsTheEffectiveSymbols() {
+    void fetchUniverseSyncsOnSeedAndBackfillButNeverOnReport() {
         KeyValueStore kv = new KeyValueStore(dbDir);
         TrendAnalysisService svc = service(repo(), kv);
 
@@ -158,7 +158,11 @@ class TrendAnalysisServiceTest {
                 "constructor seeds the defaults for the nightly job");
 
         svc.report(smallCfg(svc).extensionSymbol("").build());
+        assertEquals(Set.of("QQQ", "^NDX", "^IRX"), kv.getStringSet(TrendAnalysisService.TREND_SYMBOLS_KEY),
+                "an exploratory query-param sweep must not rewrite the nightly fetch set");
+
+        svc.ensureBackfilled(smallCfg(svc).extensionSymbol("").build());
         assertEquals(Set.of("QQQ", "^IRX"), kv.getStringSet(TrendAnalysisService.TREND_SYMBOLS_KEY),
-                "disabling the splice drops the extension from the fetch set");
+                "the explicit backfill action syncs the set to its config");
     }
 }

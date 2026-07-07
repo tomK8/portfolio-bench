@@ -1095,6 +1095,7 @@
     <button class="tab" data-panel="panel-trades" type="button">Journal</button>
     <button class="tab" data-panel="panel-watchlist" type="button">Watchlist</button>
     <button class="tab" data-panel="panel-swing" type="button">Swing stats</button>
+    <button class="tab" data-panel="panel-trend" type="button">Trend filter</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -1939,6 +1940,127 @@
         <div style="height: 260px;">
             <canvas id="sw-corr-chart"></canvas>
         </div>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-trend">
+    <p class="muted" style="margin-top: 0">
+        Moving-average trend-filter backtest on the core Nasdaq-100 holding: does a mechanical
+        exit below a long MA cut catastrophic drawdowns enough to justify its whipsaw and lag
+        costs, and which signal clock does it best? Total-return QQQ, extended back with the
+        <b>^NDX</b> price index (<span class="swing-warn">price-only proxy</span>, flagged);
+        cash earns the <b>^IRX</b> 13-week T-bill rate while out (flat-rate fallback + a 0%
+        sensitivity — over 25 years this assumption moves the answer). Every cell runs over one
+        common analysis window and reports switch counts beside every performance number.
+        Headline settings: full switch, <b>next-open fills</b>, configurable per-side cost,
+        historical cash. The full sweep grid is shown, never a champion cell; where variants
+        disagree, the disagreement is the finding. Controls: <b>buy-and-hold</b> in every table
+        and a <b>matched random-exposure bootstrap</b> (same time-in fraction and switch count,
+        random timing) — a CAGR percentile inside the IQR means the exits' timing adds nothing.
+        The case for the filter lives in 2000/2008/2022; the case against in 2015–16 and COVID —
+        the episode table shows both. Every window, buffer, cost and rate below is configurable.
+    </p>
+
+    <div class="benchmark-controls swing-controls">
+        <label>Primary: <input id="tr-primary" type="text" size="6" value="QQQ"/></label>
+        <label title="price-only index spliced in before the primary's first bar; blank disables">Extension:
+            <input id="tr-extension" type="text" size="6" value="^NDX"/></label>
+        <label title="short-rate series for the cash leg; blank = flat rate only">Cash:
+            <input id="tr-cash" type="text" size="6" value="^IRX"/></label>
+        <label title="annual % used before the cash series starts">Flat cash %:
+            <input id="tr-flatcash" type="text" size="4" value="2"/></label>
+        <label title="series the MA and its input use">Signal:
+            <select id="tr-signalsource">
+                <option value="close">close (price)</option>
+                <option value="adjClose">adjClose (total return)</option>
+            </select></label>
+        <button id="tr-backfill" type="button"
+                title="Fetch ~45y of daily history for configured symbols not in the DB yet">Backfill</button>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label>MA lengths: <input id="tr-malengths" type="text" size="16" value="150,175,200,225,250"/></label>
+        <label title="monthly-close cross-check, in months">Monthly MA: <input id="tr-monthlyma" type="text" size="7" value="8,10,12"/></label>
+        <label title="sessions between month-anchored checks">Anchor every: <input id="tr-anchorevery" type="text" size="3" value="21"/></label>
+        <label title="which session within the cycle the headline uses (sweep runs all)">offset: <input id="tr-anchoroffset" type="text" size="2" value="0"/></label>
+        <label title="buffered-daily band half-widths, %">Buffer %: <input id="tr-bufferpcts" type="text" size="6" value="1,2,3"/></label>
+        <label title="buffered-daily consecutive-close counts">Buffer N: <input id="tr-bufferns" type="text" size="4" value="3,5"/></label>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label title="per-side switch costs swept, basis points">Costs bps: <input id="tr-costs" type="text" size="8" value="0,10,30"/></label>
+        <label title="the per-side cost the headline grid uses">Headline: <input id="tr-headlinecost" type="text" size="3" value="10"/></label>
+        <label title="invested weight while out in half-switch mode">Half fraction: <input id="tr-halffraction" type="text" size="4" value="0.5"/></label>
+        <label>Bootstrap: <input id="tr-bootstrap" type="text" size="5" value="1000"/></label>
+        <button id="tr-run" type="button">Run</button>
+        <span id="tr-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="tr-empty" class="muted" style="margin-top: 1rem;">
+        Click <b>Run</b> to compute the report. First run needs a <b>Backfill</b> for
+        ^NDX/^IRX (QQQ history is usually already present).
+    </div>
+
+    <div id="tr-data-wrap" style="display:none; margin-top: 0.8rem;">
+        <div id="tr-data" class="swing-span"></div>
+        <div id="tr-warnings"></div>
+    </div>
+
+    <div id="tr-live-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Live state <span class="muted swing-sub">latest close vs MA, and what each variant says today</span></h3>
+        <div class="swing-regimes">
+            <div>
+                <div class="swing-regime-head" id="tr-live-primary-head"></div>
+                <table id="tr-live-primary" class="swing-tbl"></table>
+            </div>
+            <div>
+                <div class="swing-regime-head" id="tr-live-holding-head"></div>
+                <table id="tr-live-holding" class="swing-tbl"></table>
+            </div>
+        </div>
+        <table id="tr-live-variants" class="swing-tbl" style="margin-top: 0.5rem;"></table>
+    </div>
+
+    <div id="tr-grid-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Headline grid <span class="muted swing-sub" id="tr-grid-sub"></span></h3>
+        <div style="overflow-x:auto;"><table id="tr-grid" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="tr-sens-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Sensitivity <span class="muted swing-sub">one dimension varied off the headline at a time — CAGR unless noted</span></h3>
+        <div style="overflow-x:auto;"><table id="tr-sens" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="tr-anchor-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Anchor-day sensitivity <span class="muted swing-sub">identical month-anchored rule at every offset — a wide band means anchor-luck, not signal</span></h3>
+        <table id="tr-anchor" class="swing-tbl"></table>
+    </div>
+
+    <div id="tr-boot-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Random-exposure bootstrap <span class="muted swing-sub">same time-in fraction + switch count, random timing; percentile = share of random schedules the rule beats</span></h3>
+        <div style="overflow-x:auto;"><table id="tr-boot" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="tr-whip-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Whipsaw accounting <span class="muted swing-sub">the cost side, explicit: trips re-entered higher and what they cost vs staying in</span></h3>
+        <div style="overflow-x:auto;"><table id="tr-whip" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="tr-detail-wrap" style="display:none; margin-top: 1rem;">
+        <div class="benchmark-controls">
+            <label>Detail for:
+                <select id="tr-detail-variant"></select>
+            </label>
+        </div>
+        <h4 class="swing-h">Named episodes <span class="muted swing-sub">strategy vs buy-and-hold where it mattered; uncovered windows flagged, never dropped</span></h4>
+        <div style="overflow-x:auto;"><table id="tr-episodes" class="swing-tbl"></table></div>
+        <h4 class="swing-h">Calendar years</h4>
+        <div style="overflow-x:auto;"><table id="tr-annual" class="swing-tbl"></table></div>
+        <h4 class="swing-h">Whipsaw per decade</h4>
+        <table id="tr-decades" class="swing-tbl"></table>
+        <details class="swing-eventlog" id="tr-tradelog-details">
+            <summary>Trade log <span class="muted swing-sub" id="tr-tradelog-count"></span>
+                <button type="button" class="sw-csv-btn" id="tr-tradelog-csv">CSV</button></summary>
+            <table id="tr-tradelog" class="swing-tbl"></table>
+        </details>
     </div>
 </section>
 

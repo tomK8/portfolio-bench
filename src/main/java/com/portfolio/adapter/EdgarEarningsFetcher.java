@@ -25,10 +25,13 @@ import java.util.TreeSet;
  * auth, ~10y of history for any US filer. Used only to <em>flag</em> flush events as
  * earnings-adjacent (§D); it is not a precise announcement calendar.
  *
- * <p>CIKs are hard-coded for the swing universe's US filers (same approach as
- * {@link EdgarFundamentalsFetcher}). A symbol with no CIK here is {@link #isVerifiable not verifiable}
- * — ASML files 20-F/6-K (no 10-Q, so this proxy can't see it) and SEMI.L has no SEC filings at all,
- * so both are left out on purpose rather than mapped to a wrong or empty result.
+ * <p>CIKs resolve <b>dynamically</b> via {@link CikRegistry} (SEC's {@code company_tickers.json}),
+ * so a new swing name needs no source edit. A small {@link #CIK_OVERRIDES} map is kept only as an
+ * offline fallback / override for the core universe (keeps unit tests network-free). A symbol that
+ * resolves to no CIK is {@link #isVerifiable not verifiable}; note that resolving a CIK is
+ * <em>necessary but not sufficient</em> for §D verification — a foreign filer like ASML resolves a
+ * CIK but files 20-F/6-K, so it yields no 10-Q/10-K dates and callers (see {@code EarningsService})
+ * treat "obtained ≥1 date" as the real verified signal.
  *
  * <p>SEC requires a contact User-Agent and asks callers to stay under 10 req/s; we send one and stay
  * well under. Network/parse failures degrade to an empty list (logged), same convention as the other
@@ -43,35 +46,57 @@ public class EdgarEarningsFetcher implements EarningsCalendarProvider {
     private static final String USER_AGENT = "PortfolioBench tomaszp@gmail.com";
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
 
-    /** US 10-Q/10-K filers in the swing universe. Extend by adding rows. */
-    private static final Map<String, Integer> CIK_BY_TICKER = new LinkedHashMap<>();
+    /**
+     * Offline fallback / override for the core universe's US 10-Q/10-K filers. The primary source is
+     * the dynamic {@link CikRegistry}; this map only pins these names when the SEC file can't be
+     * fetched (offline dev, unit tests) and is consulted first so an override always wins.
+     */
+    private static final Map<String, Integer> CIK_OVERRIDES = new LinkedHashMap<>();
     static {
-        CIK_BY_TICKER.put("MU", 723125);
-        CIK_BY_TICKER.put("AMAT", 6951);
-        CIK_BY_TICKER.put("KLAC", 319201);
-        CIK_BY_TICKER.put("LRCX", 707549);
-        CIK_BY_TICKER.put("AVGO", 1730168);
-        CIK_BY_TICKER.put("INTC", 50863);
-        CIK_BY_TICKER.put("MRVL", 1835632);
-        CIK_BY_TICKER.put("ANET", 1596532);
-        CIK_BY_TICKER.put("TSLA", 1318605);
-        CIK_BY_TICKER.put("NVDA", 1045810);
-        CIK_BY_TICKER.put("GOOG", 1652044);
-        CIK_BY_TICKER.put("GOOGL", 1652044);
-        CIK_BY_TICKER.put("MSFT", 789019);
-        CIK_BY_TICKER.put("AAPL", 320193);
-        CIK_BY_TICKER.put("AMZN", 1018724);
-        CIK_BY_TICKER.put("META", 1326801);
+        CIK_OVERRIDES.put("MU", 723125);
+        CIK_OVERRIDES.put("AMAT", 6951);
+        CIK_OVERRIDES.put("KLAC", 319201);
+        CIK_OVERRIDES.put("LRCX", 707549);
+        CIK_OVERRIDES.put("AVGO", 1730168);
+        CIK_OVERRIDES.put("INTC", 50863);
+        CIK_OVERRIDES.put("MRVL", 1835632);
+        CIK_OVERRIDES.put("ANET", 1596532);
+        CIK_OVERRIDES.put("TSLA", 1318605);
+        CIK_OVERRIDES.put("NVDA", 1045810);
+        CIK_OVERRIDES.put("GOOG", 1652044);
+        CIK_OVERRIDES.put("GOOGL", 1652044);
+        CIK_OVERRIDES.put("MSFT", 789019);
+        CIK_OVERRIDES.put("AAPL", 320193);
+        CIK_OVERRIDES.put("AMZN", 1018724);
+        CIK_OVERRIDES.put("META", 1326801);
     }
 
+    private final CikRegistry registry;
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /** Override-only (no dynamic resolution). Used by unit tests so no network is touched. */
+    public EdgarEarningsFetcher() {
+        this(null);
+    }
+
+    public EdgarEarningsFetcher(CikRegistry registry) {
+        this.registry = registry;
+    }
+
+    /** CIK from the override map first, then the dynamic registry; null when unresolvable. */
+    private Integer resolveCik(String symbol) {
+        if (symbol == null) return null;
+        Integer override = CIK_OVERRIDES.get(symbol.toUpperCase());
+        if (override != null) return override;
+        return registry == null ? null : registry.cik(symbol).orElse(null);
+    }
+
     @Override
     public boolean isVerifiable(String symbol) {
-        return symbol != null && CIK_BY_TICKER.containsKey(symbol.toUpperCase());
+        return resolveCik(symbol) != null;
     }
 
     @Override
@@ -80,8 +105,13 @@ public class EdgarEarningsFetcher implements EarningsCalendarProvider {
     }
 
     @Override
+    public void refresh() {
+        if (registry != null) registry.refresh();
+    }
+
+    @Override
     public List<LocalDate> earningsDates(String symbol) {
-        Integer cik = CIK_BY_TICKER.get(symbol == null ? "" : symbol.toUpperCase());
+        Integer cik = resolveCik(symbol);
         if (cik == null) return List.of();
         String body = get(String.format(SUBMISSIONS_URL, cik));
         if (body == null) return List.of();

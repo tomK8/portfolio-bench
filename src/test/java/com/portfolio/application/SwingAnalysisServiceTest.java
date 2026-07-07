@@ -197,7 +197,7 @@ class SwingAnalysisServiceTest {
             public boolean isVerifiable(String symbol) { return "AAA".equals(symbol); }
             public String sourceName() { return "fake"; }
         };
-        var earnings = new EarningsService(provider, new EarningsDateRepository(new JdbcConnectionFactory(dbDir)));
+        var earnings = new EarningsService(provider, new EarningsDateRepository(new JdbcConnectionFactory(dbDir)), new KeyValueStore(dbDir));
         var svc = new SwingAnalysisService(priceRepo, tickers, new KeyValueStore(dbDir), null, earnings);
 
         SwingReport r = svc.report(cfg());

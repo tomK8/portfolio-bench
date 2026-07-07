@@ -301,9 +301,9 @@ public class SwingAnalysisService {
 
     /**
      * Fetches daily history for any universe/cluster symbol with no rows in {@code price_history}
-     * yet (freshly added, or a default the nightly job hasn't reached) and warms the §D earnings
-     * cache for verifiable names. Returns the symbols whose prices were fetched. Intended to run off
-     * the request thread.
+     * yet (freshly added, or a default the nightly job hasn't reached) and force-warms the §D
+     * earnings cache (refreshes the CIK registry and retries even previously-attempted names).
+     * Returns the symbols whose prices were fetched. Intended to run off the request thread.
      */
     public List<String> ensureBackfilled(SwingConfig cfg) {
         Set<String> universe = new LinkedHashSet<>(cfg.symbols());
@@ -319,7 +319,7 @@ public class SwingAnalysisService {
         }
         if (earningsService != null) {
             try {
-                earningsService.ensureEarnings(universe);
+                earningsService.ensureEarnings(universe, /*force*/ true);
             } catch (RuntimeException e) {
                 log.warn("Swing earnings backfill failed", e);
             }

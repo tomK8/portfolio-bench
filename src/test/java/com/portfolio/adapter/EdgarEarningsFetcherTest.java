@@ -2,6 +2,7 @@ package com.portfolio.adapter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,12 +32,26 @@ class EdgarEarningsFetcherTest {
     }
 
     @Test
-    void verifiabilityFollowsTheCikMap() {
-        EdgarEarningsFetcher f = new EdgarEarningsFetcher();
+    void overrideOnlyFetcherResolvesTheCoreUniverse() {
+        EdgarEarningsFetcher f = new EdgarEarningsFetcher();   // no registry — override map only
         assertTrue(f.isVerifiable("MU"));
         assertTrue(f.isVerifiable("nvda"));           // case-insensitive
         assertFalse(f.isVerifiable("SEMI.L"));        // UK listing — no SEC filings
-        assertFalse(f.isVerifiable("ASML"));          // files 20-F/6-K, not 10-Q/10-K
+        assertFalse(f.isVerifiable("ORCL"));          // not in overrides; only the registry knows it
         assertNotNull(f.sourceName());
+    }
+
+    @Test
+    void registryResolvesNewNames_verificationIsDataDrivenDownstream(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("sec_company_tickers.json"),
+                Files.readString(Path.of("src/test/resources/sec-company-tickers-sample.json")));
+        EdgarEarningsFetcher f = new EdgarEarningsFetcher(new CikRegistry(dir));
+
+        assertTrue(f.isVerifiable("MU"), "override still wins");
+        assertTrue(f.isVerifiable("ORCL"), "resolved dynamically from the SEC file");
+        // ASML resolves a CIK too — isVerifiable is CIK-presence; the 20-F/no-10-Q reality is caught
+        // downstream (earningsDates would be empty), where EarningsService keeps it unverified.
+        assertTrue(f.isVerifiable("ASML"));
+        assertFalse(f.isVerifiable("SEMI.L"));        // absent from the file → unresolvable
     }
 }

@@ -1,6 +1,7 @@
 package com.portfolio.config;
 
 import com.portfolio.ExcelReportWriter;
+import com.portfolio.adapter.CikRegistry;
 import com.portfolio.adapter.EdgarEarningsFetcher;
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
 import com.portfolio.adapter.FrankfurterFxClient;
@@ -499,14 +500,15 @@ public class BeanConfiguration {
     }
 
     @Bean
-    public EarningsCalendarProvider earningsCalendarProvider() {
-        return new EdgarEarningsFetcher();
+    public EarningsCalendarProvider earningsCalendarProvider(JdbcConnectionFactory jdbcConnectionFactory) {
+        return new EdgarEarningsFetcher(new CikRegistry(jdbcConnectionFactory.dbDir()));
     }
 
     @Bean
     public EarningsService earningsService(EarningsCalendarProvider earningsCalendarProvider,
-                                           EarningsDateRepository earningsDateRepository) {
-        return new EarningsService(earningsCalendarProvider, earningsDateRepository);
+                                           EarningsDateRepository earningsDateRepository,
+                                           KeyValueStore keyValueStore) {
+        return new EarningsService(earningsCalendarProvider, earningsDateRepository, keyValueStore);
     }
 
     @Bean

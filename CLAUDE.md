@@ -485,14 +485,23 @@ strategy — dip-buy after 1–2 day flushes, exit at a fixed take-profit / wide
 - **§D earnings hygiene (active).** Earnings dates are proxied by **SEC EDGAR 10-Q/10-K filing dates**
   (submissions API), which land within a few days of the release — good enough for a ±window flag, and
   the only free multi-year source. `port/EarningsCalendarProvider` → `adapter/EdgarEarningsFetcher`
-  (hard-coded CIK map for the semi universe's US filers), cached in `persistence/EarningsDateRepository`
-  (`earnings_dates` table) so the report never re-hits SEC; `application/EarningsService` composes them
-  and builds a per-series `EarningsLookup` (trading-days-to-nearest-earnings per bar). **US filers
-  only** — ASML (files 20-F/6-K) and SEMI.L (UK, no SEC) are `isVerifiable == false` and flagged
-  **unverified**, never treated as clean. The ex-earnings variant removes events within ±`eventWindow`
-  sessions of an earnings date and drops those dates from the placebo/bootstrap pool too, via a
-  per-`(symbol,date)` `EventFilter` (date-only would over-exclude ~10× when pooling a cluster). Report
-  reads the cache; `report()` and `POST /swing/backfill` warm it best-effort off the request path.
+  resolves a ticker's CIK **dynamically** via `adapter/CikRegistry` (SEC's `company_tickers.json`, disk-
+  cached at `<db-dir>/sec_company_tickers.json`, 30-day TTL, lazy load), so a new swing name needs no
+  source edit; a small `CIK_OVERRIDES` map is kept only as an offline fallback and is consulted first.
+  Dates are cached in `persistence/EarningsDateRepository` (`earnings_dates` table) so the report never
+  re-hits SEC; `application/EarningsService` composes them and builds a per-series `EarningsLookup`
+  (trading-days-to-nearest-earnings per bar). **Verification is data-driven** — a symbol is verified
+  iff we actually obtained ≥1 date (`EarningsService.isVerifiable == repo.hasAny`), *not* CIK-presence.
+  This is load-bearing: ASML resolves a CIK from `company_tickers.json` but files 20-F/6-K (zero
+  10-Q/10-K), so it yields no dates and stays **unverified**; SEMI.L (UK, absent from the file) is
+  unresolvable and likewise unverified — neither is ever treated as clean. To cap SEC traffic, every
+  attempted symbol is recorded in a KV set (`earnings_checked`); a non-forced warm skips already-
+  attempted names, so ASML-type "resolves-but-empty" names aren't re-fetched each report. The
+  ex-earnings variant removes events within ±`eventWindow` sessions of an earnings date and drops those
+  dates from the placebo/bootstrap pool too, via a per-`(symbol,date)` `EventFilter` (date-only would
+  over-exclude ~10× when pooling a cluster). Report reads the cache; `report()` warms it best-effort
+  (non-forced), while `POST /swing/backfill` **force**-warms — it refreshes the CIK registry and retries
+  even previously-attempted names.
 
 ## Trend-filter backtest
 

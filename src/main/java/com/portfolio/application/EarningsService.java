@@ -4,6 +4,7 @@ import com.portfolio.domain.swing.EarningsLookup;
 import com.portfolio.domain.swing.SwingConfig;
 import com.portfolio.domain.swing.SwingSeries;
 import com.portfolio.persistence.EarningsDateRepository;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.port.EarningsCalendarProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,52 +13,86 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * §D — composes the {@link EarningsCalendarProvider} (EDGAR filing-date proxy) with the
  * {@link EarningsDateRepository} cache, and turns cached dates into a per-{@link SwingSeries}
- * {@link EarningsLookup} the pure engines consume. Verifiable symbols are fetched once and cached;
- * unverifiable ones ({@code isVerifiable == false}) always resolve to {@link EarningsLookup#UNVERIFIED}
- * so their events are marked, never treated as clean.
+ * {@link EarningsLookup} the pure engines consume.
+ *
+ * <p><b>Verification is data-driven:</b> a symbol counts as verified iff we actually obtained ≥1
+ * earnings date for it ({@link #isVerifiable} → {@code repo.hasAny}). Resolving a CIK is necessary
+ * but not sufficient — a foreign filer like ASML resolves a CIK yet files 20-F/6-K, so it yields no
+ * 10-Q/10-K dates and stays <em>unverified</em>, its events flagged rather than silently treated as
+ * clean. Symbols that resolve no CIK (e.g. SEMI.L) are likewise unverified.
+ *
+ * <p>To avoid re-hitting SEC every report for names that legitimately produce nothing (ASML-type),
+ * every attempted symbol is recorded in a {@link KeyValueStore} set ({@link #CHECKED_KEY}); a
+ * non-forced {@link #ensureEarnings} skips already-checked symbols. A forced call (an explicit
+ * Backfill) ignores that set and refreshes the provider so a genuinely new listing is retried.
  */
 public class EarningsService {
 
     private static final Logger log = LoggerFactory.getLogger(EarningsService.class);
 
+    /** KV set of symbols we've already attempted a fetch for (verified or not), to cap SEC traffic. */
+    private static final String CHECKED_KEY = "earnings_checked";
+
     private final EarningsCalendarProvider provider;
     private final EarningsDateRepository repo;
+    private final KeyValueStore kv;
 
-    public EarningsService(EarningsCalendarProvider provider, EarningsDateRepository repo) {
+    public EarningsService(EarningsCalendarProvider provider, EarningsDateRepository repo, KeyValueStore kv) {
         this.provider = provider;
         this.repo = repo;
+        this.kv = kv;
+    }
+
+    /** Non-forced warm: skip symbols already fetched or previously attempted. */
+    public List<String> ensureEarnings(Collection<String> symbols) {
+        return ensureEarnings(symbols, false);
     }
 
     /**
-     * Fetch + cache earnings dates for any verifiable symbol with no cached rows yet. Best-effort:
-     * a per-symbol failure is logged and skipped. Returns the symbols freshly fetched.
+     * Fetch + cache earnings dates for symbols with no cached rows yet. Best-effort: a per-symbol
+     * failure is logged and skipped. When {@code force} is true the checked-set is ignored (and the
+     * provider refreshed) so a manual Backfill retries names a passive warm would skip. Returns the
+     * symbols freshly fetched (dates found).
      */
-    public List<String> ensureEarnings(Collection<String> symbols) {
+    public List<String> ensureEarnings(Collection<String> symbols, boolean force) {
+        if (force) provider.refresh();
+        Set<String> checked = kv == null ? new LinkedHashSet<>() : new LinkedHashSet<>(kv.getStringSet(CHECKED_KEY));
         List<String> fetched = new ArrayList<>();
+        boolean checkedChanged = false;
         for (String raw : symbols) {
             if (raw == null) continue;
             String symbol = raw.trim().toUpperCase();
-            if (symbol.isEmpty() || !provider.isVerifiable(symbol) || repo.hasAny(symbol)) continue;
+            if (symbol.isEmpty() || repo.hasAny(symbol)) continue;
+            if (!force && checked.contains(symbol)) continue;
+            if (!provider.isVerifiable(symbol)) {           // no CIK at all — record so we don't retry each report
+                checkedChanged |= checked.add(symbol);
+                continue;
+            }
             try {
                 List<LocalDate> dates = provider.earningsDates(symbol);
                 if (!dates.isEmpty()) {
                     repo.saveDates(symbol, dates, provider.sourceName());
                     fetched.add(symbol);
                 }
+                checkedChanged |= checked.add(symbol);      // mark attempted even when empty (ASML-type)
             } catch (RuntimeException e) {
                 log.warn("Earnings fetch failed for {}", symbol, e);
             }
         }
+        if (checkedChanged && kv != null) kv.putStringSet(CHECKED_KEY, checked);
         return fetched;
     }
 
+    /** Data-driven: verified iff we have cached earnings dates for the symbol. */
     public boolean isVerifiable(String symbol) {
-        return provider.isVerifiable(symbol);
+        return repo.hasAny(symbol == null ? "" : symbol.trim().toUpperCase());
     }
 
     public String sourceName() {
@@ -74,9 +109,9 @@ public class EarningsService {
      * nearest bar and precompute the trading-session distance to the nearest earnings for every bar.
      */
     public EarningsLookup lookupFor(SwingSeries series, SwingConfig cfg) {
-        String symbol = series.symbol();
-        if (!provider.isVerifiable(symbol)) return EarningsLookup.UNVERIFIED;
-        return buildLookup(series, repo.datesFor(symbol), cfg.eventWindowSessions());
+        List<LocalDate> dates = repo.datesFor(series.symbol());
+        if (dates.isEmpty()) return EarningsLookup.UNVERIFIED;   // no dates obtained ⇒ unverified (incl. ASML-type)
+        return buildLookup(series, dates, cfg.eventWindowSessions());
     }
 
     /** Package-visible for tests: build a verified lookup from an explicit date list. */

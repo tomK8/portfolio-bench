@@ -18,9 +18,16 @@ public interface EarningsCalendarProvider {
     /** Earnings-proxy dates for {@code symbol}, ascending and distinct; empty on failure or no source. */
     List<LocalDate> earningsDates(String symbol);
 
-    /** {@code true} when the symbol can be sourced (a US filer with a known CIK). */
+    /** {@code true} when the symbol can be sourced (a US filer with a resolvable CIK). */
     boolean isVerifiable(String symbol);
 
     /** Short human label for the source, shown in the coverage summary. */
     String sourceName();
+
+    /**
+     * Drop any cached ticker→source resolution so the next lookup re-fetches it. No-op by default;
+     * the EDGAR adapter uses it to refresh its dynamic CIK registry on an explicit backfill.
+     */
+    default void refresh() {
+    }
 }

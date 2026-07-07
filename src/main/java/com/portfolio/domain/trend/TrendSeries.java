@@ -203,6 +203,31 @@ public final class TrendSeries {
         return dates[dates.length - 1];
     }
 
+    /** Date of bar {@code i}. Public so the application layer can report the analysis window. */
+    public LocalDate dateAt(int i) {
+        return dates[i];
+    }
+
+    /** The historical cash-leg return array the series was built with (flat fallback included). */
+    public double[] cashDailyHistorical() {
+        return cashDaily;
+    }
+
+    /** A zeroed cash leg for the 0%-rate sensitivity run. */
+    public double[] cashDailyZero() {
+        return new double[size()];
+    }
+
+    /** First cash-series bar date; null when running flat-only. */
+    public LocalDate cashFrom() {
+        return cashFrom;
+    }
+
+    /** Last series date priced at the flat fallback rate; null if the cash series covered everything. */
+    public LocalDate cashFallbackUntil() {
+        return cashFallbackUntil;
+    }
+
     /** Date of the first primary (non-proxied) bar; equals {@link #firstDate} when no splice. */
     public LocalDate spliceDate() {
         return dates[spliceIndex];
@@ -210,5 +235,10 @@ public final class TrendSeries {
 
     public boolean spliced() {
         return spliceIndex > 0;
+    }
+
+    /** Index of the first primary (non-proxied) bar; 0 when no splice. */
+    public int spliceIndex() {
+        return spliceIndex;
     }
 }

@@ -47,6 +47,9 @@ final class PriceFetchSupport {
         // Swing-strategy universe (many not held/traded) so the nightly daily job keeps their
         // 3-year history current for the Swing stats tab.
         symbols.addAll(kv.getStringSet(SwingAnalysisService.SWING_SYMBOLS_KEY));
+        // Trend-filter series (QQQ + ^NDX + ^IRX) so the nightly job maintains the backtest's
+        // primary/extension/cash history once the deep backfill has seeded it.
+        symbols.addAll(kv.getStringSet(TrendAnalysisService.TREND_SYMBOLS_KEY));
         for (String line : kv.getStringSet(HistoricalScenarioService.SUBSTITUTES_KEY)) {
             int eq = line.indexOf('=');
             if (eq <= 0 || eq >= line.length() - 1) continue;

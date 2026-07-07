@@ -518,4 +518,15 @@ public class BeanConfiguration {
         return new SwingAnalysisService(priceHistoryRepository, yahooTickerMap,
                 keyValueStore, priceFetchJob, earningsService);
     }
+
+    // ---- Trend-filter backtest ----------------------------------------------
+
+    @Bean
+    public TrendAnalysisService trendAnalysisService(PriceHistoryRepository priceHistoryRepository,
+                                                     YahooTickerMap yahooTickerMap,
+                                                     KeyValueStore keyValueStore,
+                                                     PriceFetchJob priceFetchJob) {
+        return new TrendAnalysisService(priceHistoryRepository, yahooTickerMap,
+                keyValueStore, priceFetchJob);
+    }
 }

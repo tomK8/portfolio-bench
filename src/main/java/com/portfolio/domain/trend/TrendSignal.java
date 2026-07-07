@@ -30,4 +30,11 @@ public interface TrendSignal {
 
     /** Desired invested state per bar, decided at that bar's close. */
     boolean[] targets(TrendSeries s);
+
+    /**
+     * The MA series this signal compares against (per-bar; {@code NaN} where undefined — for the
+     * monthly variants that is everywhere except completed month ends). Used by the trade log to
+     * report the MA level and distance at each signal bar.
+     */
+    double[] maSeries(TrendSeries s);
 }

@@ -72,6 +72,7 @@ public final class Signals {
         @Override public String label() { return "Month-anchored (every " + every + "d)"; }
         @Override public Integer maLength() { return len; }
         @Override public int firstValid(TrendSeries s) { return Math.min(len - 1, s.size()); }
+        @Override public double[] maSeries(TrendSeries s) { return s.sma(len); }
 
         @Override
         public boolean[] targets(TrendSeries s) {
@@ -96,6 +97,7 @@ public final class Signals {
         @Override public String label() { return "Daily first-touch"; }
         @Override public Integer maLength() { return len; }
         @Override public int firstValid(TrendSeries s) { return Math.min(len - 1, s.size()); }
+        @Override public double[] maSeries(TrendSeries s) { return s.sma(len); }
 
         @Override
         public boolean[] targets(TrendSeries s) {
@@ -115,6 +117,7 @@ public final class Signals {
         @Override public String label() { return "Buffered ±" + fmt(x * 100) + "%"; }
         @Override public Integer maLength() { return len; }
         @Override public int firstValid(TrendSeries s) { return Math.min(len - 1, s.size()); }
+        @Override public double[] maSeries(TrendSeries s) { return s.sma(len); }
 
         @Override
         public boolean[] targets(TrendSeries s) {
@@ -139,6 +142,7 @@ public final class Signals {
         @Override public String label() { return "Buffered " + n + "-in-a-row"; }
         @Override public Integer maLength() { return len; }
         @Override public int firstValid(TrendSeries s) { return Math.min(len - 1, s.size()); }
+        @Override public double[] maSeries(TrendSeries s) { return s.sma(len); }
 
         @Override
         public boolean[] targets(TrendSeries s) {
@@ -169,6 +173,11 @@ public final class Signals {
         @Override
         public int firstValid(TrendSeries s) {
             return s.monthEndIdx.length >= months ? s.monthEndIdx[months - 1] : s.size();
+        }
+
+        @Override
+        public double[] maSeries(TrendSeries s) {
+            return s.monthlySmaFor(months);
         }
 
         @Override

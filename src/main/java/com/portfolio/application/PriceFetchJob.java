@@ -102,13 +102,25 @@ public class PriceFetchJob {
      * Yahoo. Returns the row count written; 0 means Yahoo had nothing or rejected the ticker.
      */
     public int fetchSingle(String symbol) {
+        return fetchSingle(symbol, LOOKBACK_YEARS);
+    }
+
+    /**
+     * Same as {@link #fetchSingle(String)} but with an explicit lookback depth — the trend-filter
+     * backfill needs ~45 years for {@code ^NDX}/{@code ^IRX} (Yahoo serves the Nasdaq-100 index
+     * from 1985 and the 13-week T-bill yield from the 1960s), deeper than the standard window.
+     * Once the rows exist, the nightly incremental run maintains them from the latest stored day,
+     * and {@code runFullRebuild} already refetches from the earliest stored row when it predates
+     * the default window.
+     */
+    public int fetchSingle(String symbol, int lookbackYears) {
         if (com.portfolio.domain.Instruments.isBond(symbol)) {
             log.info("fetchSingle skipped {} — bonds are not on Yahoo", symbol);
             return 0;
         }
         String ticker = tickers.tickerFor(symbol);
         LocalDate today = LocalDate.now();
-        List<PriceBar> bars = fetcher.fetch(ticker, today.minusYears(LOOKBACK_YEARS), today);
+        List<PriceBar> bars = fetcher.fetch(ticker, today.minusYears(lookbackYears), today);
         int touched = priceRepo.upsertPriceBars(bars);
         log.info("fetchSingle {} → {}: {} rows ({} written)", symbol, ticker, bars.size(), touched);
         return touched;

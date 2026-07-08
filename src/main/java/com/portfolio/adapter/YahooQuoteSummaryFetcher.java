@@ -5,16 +5,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509ExtendedTrustManager;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
+import java.net.Socket;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -45,11 +54,12 @@ public class YahooQuoteSummaryFetcher {
                     ",balanceSheetHistoryQuarterly" +
                     "&crumb=%s";
     private static final String CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb";
-    // Bootstrap host for the A1/A3 session cookies the crumb endpoint requires. Was fc.yahoo.com,
-    // but that host stopped presenting a cert covering its own name (SSLHandshakeException: no
-    // matching subject alternative DNS name), which aborted the whole handshake. finance.yahoo.com
-    // serves a valid cert and sets the same cookies.
-    private static final String COOKIE_BOOTSTRAP_URL = "https://finance.yahoo.com";
+    // Bootstrap host for the A1/A3 session cookies the crumb endpoint requires. fc.yahoo.com is
+    // the only host that mints them for an unauthenticated EU/UK client (finance.yahoo.com only
+    // sets a useless dflow cookie → getcrumb answers 401 Invalid Cookie). Its cert chain is valid
+    // but no longer lists fc.yahoo.com as a SAN, so the bootstrap goes through a dedicated client
+    // that validates the chain while skipping only the hostname match — see bootstrapClient().
+    private static final String COOKIE_BOOTSTRAP_URL = "https://fc.yahoo.com";
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(20);
@@ -64,6 +74,7 @@ public class YahooQuoteSummaryFetcher {
             .build();
     private final ObjectMapper mapper = new ObjectMapper();
     private volatile String crumb;
+    private HttpClient bootstrapHttpClient; // lazy; only touched under ensureCrumb's lock
 
     public QuoteSummary fetch(String yahooTicker) {
         try {
@@ -101,15 +112,15 @@ public class YahooQuoteSummaryFetcher {
     /** Cached after first success; refreshed lazily if a request comes back unauthorised. */
     private synchronized void ensureCrumb() throws Exception {
         if (crumb != null) return;
-        // Bootstrap: hit a Yahoo web endpoint to populate A1/A3 cookies into the CookieManager.
-        // Best-effort — if this host has a transient TLS/network hiccup we still try the crumb
-        // fetch (it can carry the cookie set from a prior successful bootstrap), rather than
-        // aborting the whole handshake as an fc.yahoo.com cert failure used to.
+        // Bootstrap: hit fc.yahoo.com to populate A1/A3 cookies into the shared CookieManager.
+        // Sent through the hostname-lenient client (chain still validated); response body is
+        // discarded — only the Set-Cookie side effect matters. Best-effort: on failure we still
+        // try the crumb fetch, which can ride cookies from a prior successful bootstrap.
         try {
             HttpRequest bootstrap = HttpRequest.newBuilder(URI.create(COOKIE_BOOTSTRAP_URL))
                     .header("User-Agent", USER_AGENT)
                     .timeout(REQUEST_TIMEOUT).GET().build();
-            client.send(bootstrap, HttpResponse.BodyHandlers.discarding());
+            bootstrapClient().send(bootstrap, HttpResponse.BodyHandlers.discarding());
         } catch (Exception e) {
             log.warn("quoteSummary: cookie bootstrap failed ({}), attempting crumb anyway",
                     e.toString());
@@ -127,6 +138,63 @@ public class YahooQuoteSummaryFetcher {
         if (c.isEmpty()) throw new IllegalStateException("Empty crumb response from Yahoo");
         crumb = c;
         log.info("Acquired Yahoo session crumb");
+    }
+
+    /**
+     * Client for the fc.yahoo.com bootstrap only. Shares the main client's cookie store, but its
+     * trust manager delegates chain validation to the JDK default via the plain (non-endpoint-
+     * aware) overload — the chain is still verified against the system CAs, only the hostname
+     * match that fc.yahoo.com's cert fails is skipped. Every other request in this class goes
+     * through the fully-verifying {@link #client}.
+     */
+    private HttpClient bootstrapClient() throws Exception {
+        if (bootstrapHttpClient != null) return bootstrapHttpClient;
+        TrustManagerFactory tmf =
+                TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init((KeyStore) null);
+        X509ExtendedTrustManager system = null;
+        for (TrustManager tm : tmf.getTrustManagers()) {
+            if (tm instanceof X509ExtendedTrustManager x) { system = x; break; }
+        }
+        if (system == null) throw new IllegalStateException("No system X509ExtendedTrustManager");
+        X509ExtendedTrustManager systemTm = system;
+        X509ExtendedTrustManager chainOnly = new X509ExtendedTrustManager() {
+            @Override public void checkServerTrusted(X509Certificate[] chain, String authType,
+                                                     Socket socket) throws CertificateException {
+                systemTm.checkServerTrusted(chain, authType); // chain check, no hostname match
+            }
+            @Override public void checkServerTrusted(X509Certificate[] chain, String authType,
+                                                     SSLEngine engine) throws CertificateException {
+                systemTm.checkServerTrusted(chain, authType);
+            }
+            @Override public void checkServerTrusted(X509Certificate[] chain, String authType)
+                    throws CertificateException {
+                systemTm.checkServerTrusted(chain, authType);
+            }
+            @Override public void checkClientTrusted(X509Certificate[] chain, String authType,
+                                                     Socket socket) throws CertificateException {
+                systemTm.checkClientTrusted(chain, authType, socket);
+            }
+            @Override public void checkClientTrusted(X509Certificate[] chain, String authType,
+                                                     SSLEngine engine) throws CertificateException {
+                systemTm.checkClientTrusted(chain, authType, engine);
+            }
+            @Override public void checkClientTrusted(X509Certificate[] chain, String authType)
+                    throws CertificateException {
+                systemTm.checkClientTrusted(chain, authType);
+            }
+            @Override public X509Certificate[] getAcceptedIssuers() {
+                return systemTm.getAcceptedIssuers();
+            }
+        };
+        SSLContext ctx = SSLContext.getInstance("TLS");
+        ctx.init(null, new TrustManager[]{chainOnly}, null);
+        bootstrapHttpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .cookieHandler(cookies)
+                .sslContext(ctx)
+                .build();
+        return bootstrapHttpClient;
     }
 
     private String get(String url) {

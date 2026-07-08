@@ -3,7 +3,9 @@
             var t = cell.textContent.trim();
             if (type === 'num') {
                 if (t === '—' || t === '') return null;
-                var s = t.replace(/[£$€p%\s]/g, '').replace(/,/g, '');
+                // U+2212 (typographic minus, used by the display formatters) → ASCII '-';
+                // parseFloat returns NaN on it, which made every negative sort as null.
+                var s = t.replace(/−/g, '-').replace(/[£$€p%\s]/g, '').replace(/,/g, '');
                 var suffix = s.slice(-1);
                 var n = parseFloat(s);
                 if (!isFinite(n)) return null;

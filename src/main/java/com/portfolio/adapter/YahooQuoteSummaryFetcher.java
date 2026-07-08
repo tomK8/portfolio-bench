@@ -45,7 +45,11 @@ public class YahooQuoteSummaryFetcher {
                     ",balanceSheetHistoryQuarterly" +
                     "&crumb=%s";
     private static final String CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb";
-    private static final String COOKIE_BOOTSTRAP_URL = "https://fc.yahoo.com";
+    // Bootstrap host for the A1/A3 session cookies the crumb endpoint requires. Was fc.yahoo.com,
+    // but that host stopped presenting a cert covering its own name (SSLHandshakeException: no
+    // matching subject alternative DNS name), which aborted the whole handshake. finance.yahoo.com
+    // serves a valid cert and sets the same cookies.
+    private static final String COOKIE_BOOTSTRAP_URL = "https://finance.yahoo.com";
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(20);
@@ -97,11 +101,19 @@ public class YahooQuoteSummaryFetcher {
     /** Cached after first success; refreshed lazily if a request comes back unauthorised. */
     private synchronized void ensureCrumb() throws Exception {
         if (crumb != null) return;
-        // Bootstrap: hit any Yahoo endpoint to populate A1/A1S cookies into the CookieManager.
-        HttpRequest bootstrap = HttpRequest.newBuilder(URI.create(COOKIE_BOOTSTRAP_URL))
-                .header("User-Agent", USER_AGENT)
-                .timeout(REQUEST_TIMEOUT).GET().build();
-        client.send(bootstrap, HttpResponse.BodyHandlers.discarding());
+        // Bootstrap: hit a Yahoo web endpoint to populate A1/A3 cookies into the CookieManager.
+        // Best-effort — if this host has a transient TLS/network hiccup we still try the crumb
+        // fetch (it can carry the cookie set from a prior successful bootstrap), rather than
+        // aborting the whole handshake as an fc.yahoo.com cert failure used to.
+        try {
+            HttpRequest bootstrap = HttpRequest.newBuilder(URI.create(COOKIE_BOOTSTRAP_URL))
+                    .header("User-Agent", USER_AGENT)
+                    .timeout(REQUEST_TIMEOUT).GET().build();
+            client.send(bootstrap, HttpResponse.BodyHandlers.discarding());
+        } catch (Exception e) {
+            log.warn("quoteSummary: cookie bootstrap failed ({}), attempting crumb anyway",
+                    e.toString());
+        }
         // Crumb fetch — the cookie store now has what query2 needs to mint a session crumb.
         HttpRequest crumbReq = HttpRequest.newBuilder(URI.create(CRUMB_URL))
                 .header("User-Agent", USER_AGENT)

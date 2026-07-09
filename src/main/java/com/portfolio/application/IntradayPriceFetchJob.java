@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
 
@@ -57,6 +58,9 @@ public class IntradayPriceFetchJob {
         this.kv = kv;
     }
 
+    /** Day the retention prune last ran — rows only age out daily, so scanning every tick is waste. */
+    private LocalDate lastPruneDate;
+
     public void run() {
         Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
 
@@ -64,6 +68,10 @@ public class IntradayPriceFetchJob {
         Instant earliest = now.minus(LOOKBACK);
 
         for (String ticker : tickerSet) {
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("Intraday fetch interrupted — stopping early");
+                return;
+            }
             Instant latest = intradayRepo.getLatestIntradayTs(ticker);
             Instant from = (latest == null) ? earliest : latest.plusSeconds(60);
             if (from.isBefore(earliest)) from = earliest;   // catch-up after a long gap → clamp to window
@@ -78,7 +86,11 @@ public class IntradayPriceFetchJob {
             PriceFetchSupport.sleep(THROTTLE_MS);
         }
 
-        int pruned = intradayRepo.pruneIntradayBefore(now.minus(Duration.ofDays(RETENTION_DAYS)));
-        if (pruned > 0) log.info("Intraday prune — removed {} rows older than {} days", pruned, RETENTION_DAYS);
+        LocalDate today = LocalDate.now();
+        if (!today.equals(lastPruneDate)) {
+            int pruned = intradayRepo.pruneIntradayBefore(now.minus(Duration.ofDays(RETENTION_DAYS)));
+            lastPruneDate = today;
+            if (pruned > 0) log.info("Intraday prune — removed {} rows older than {} days", pruned, RETENTION_DAYS);
+        }
     }
 }

@@ -134,6 +134,30 @@ class IntradayPriceFetchJobTest {
                 "MU from the synced holdings set should be in the fetch universe even with no MU ledger row");
     }
 
+    /**
+     * Shutdown responsiveness: the scheduler interrupts the worker on context close, and the
+     * per-ticker loop must notice and stop instead of finishing the remaining universe (this
+     * is what made Ctrl-C hang for the length of a full ~60-ticker tick).
+     */
+    @Test
+    void runStopsBeforeAnyFetchWhenThreadInterrupted() {
+        CashTransactionRepository cash = cashRepo();
+        IntradayPriceRepository intraday = intradayRepo();
+        KeyValueStore kv = new KeyValueStore(dbDir);
+        kv.putStringSet("held_symbols", List.of("AAPL", "MU"));
+
+        FakeFetcher fetcher = new FakeFetcher();
+        IntradayPriceFetchJob job = new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), kv);
+
+        Thread.currentThread().interrupt();
+        try {
+            job.run();
+        } finally {
+            assertTrue(Thread.interrupted(), "interrupt flag left intact for the caller (and cleared for later tests)");
+        }
+        assertTrue(fetcher.requested.isEmpty(), "interrupted run stops before any fetch");
+    }
+
     @Test
     void prunesRowsOlderThanRetention() {
         CashTransactionRepository cash = cashRepo();

@@ -16,9 +16,16 @@ import java.util.Properties;
  * route their JDBC traffic through here so concurrency safety (e.g. a future
  * price-poller) can be added in one place.
  *
- * <p>Every connection carries a {@code busy_timeout}: the background price jobs write every
- * minute, so without it a user action (e.g. a watchlist add) that lands mid-write fails
- * instantly with SQLITE_BUSY instead of waiting the few milliseconds the lock is held.
+ * <p>Connections run in WAL mode with {@code synchronous=NORMAL}: readers are never blocked by
+ * a writer, so a bulk price backfill can't lock the dashboard's reads out (in the default
+ * rollback-journal mode every write excluded all readers, and reads that outlasted the busy
+ * timeout degraded to empty results — blank charts). WAL persists in the database file; the
+ * {@code -wal}/{@code -shm} sidecars mean a raw file copy should happen after a clean shutdown
+ * (or via {@code sqlite3 .backup}).
+ *
+ * <p>Every connection also carries a {@code busy_timeout}: with WAL this only arbitrates
+ * writer-vs-writer, e.g. a user action (a watchlist add) landing mid-write of a background
+ * price job waits instead of failing instantly with SQLITE_BUSY.
  */
 public class JdbcConnectionFactory {
 
@@ -33,6 +40,8 @@ public class JdbcConnectionFactory {
         this.dbPath = dbDir.resolve("portfolio.db");
         SQLiteConfig config = new SQLiteConfig();
         config.setBusyTimeout(BUSY_TIMEOUT_MS);
+        config.setJournalMode(SQLiteConfig.JournalMode.WAL);
+        config.setSynchronous(SQLiteConfig.SynchronousMode.NORMAL);
         this.connectionProperties = config.toProperties();
     }
 

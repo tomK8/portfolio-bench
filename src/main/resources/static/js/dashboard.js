@@ -1865,28 +1865,40 @@
         var fundPeChart = null;
         var fundGrowthChart = null;
 
+        var fundTickersLoaded = false;
         function setupFundamentals() {
-            if (fundInitialized) return;
-            fundInitialized = true;
+            if (!fundInitialized) {
+                fundInitialized = true;
+                document.getElementById('fund-run').addEventListener('click', runFundamentals);
+                document.getElementById('fund-ticker').addEventListener('change', runFundamentals);
+                document.getElementById('fund-years').addEventListener('change', runFundamentals);
+                document.getElementById('fund-backfill').addEventListener('click', backfillFundamentalsPrices);
+                document.getElementById('fund-pe-zoom-reset').addEventListener('click', function () {
+                    if (fundPeChart) fundPeChart.resetZoom();
+                });
+            }
+            // The ticker load retries on each tab entry until it succeeds — a single failed
+            // fetch (server restarting under the tab) must not leave the tab dead for the
+            // whole session. Listeners above still attach exactly once.
+            if (fundTickersLoaded) return;
             var sel = document.getElementById('fund-ticker');
-            fetch('/fundamentals/tickers').then(function (r) { return r.json(); })
-                    .then(function (tickers) {
-                        (tickers || []).forEach(function (t) {
-                            var opt = document.createElement('option');
-                            opt.value = t;
-                            opt.textContent = t;
-                            sel.appendChild(opt);
-                        });
-                        // Default to GOOGL since the user's example used Google.
-                        if (sel.querySelector('option[value="GOOGL"]')) sel.value = 'GOOGL';
-                        runFundamentals();
-                    });
-            document.getElementById('fund-run').addEventListener('click', runFundamentals);
-            document.getElementById('fund-ticker').addEventListener('change', runFundamentals);
-            document.getElementById('fund-years').addEventListener('change', runFundamentals);
-            document.getElementById('fund-backfill').addEventListener('click', backfillFundamentalsPrices);
-            document.getElementById('fund-pe-zoom-reset').addEventListener('click', function () {
-                if (fundPeChart) fundPeChart.resetZoom();
+            fetch('/fundamentals/tickers').then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function (tickers) {
+                fundTickersLoaded = true;
+                (tickers || []).forEach(function (t) {
+                    var opt = document.createElement('option');
+                    opt.value = t;
+                    opt.textContent = t;
+                    sel.appendChild(opt);
+                });
+                // Default to GOOGL since the user's example used Google.
+                if (sel.querySelector('option[value="GOOGL"]')) sel.value = 'GOOGL';
+                runFundamentals();
+            }).catch(function () {
+                document.getElementById('fund-status').textContent =
+                    'Could not load tickers — click the Fundamentals tab again to retry.';
             });
         }
 
@@ -5248,13 +5260,24 @@
             }
             if (wlFundamentals) { render(); return; }
             body.innerHTML = '<p class="muted">Loading fundamentals…</p>';
-            fetch('/portfolio-fundamentals').then(function (r) { return r.json(); })
-                .then(function (snap) {
-                    wlFundamentals = {};
-                    (snap.rows || []).forEach(function (row) { wlFundamentals[row.symbol] = row; });
-                    render();
-                })
-                .catch(function () { body.innerHTML = '<p class="muted">Could not load fundamentals.</p>'; });
+            fetch('/portfolio-fundamentals').then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function (snap) {
+                var rows = snap.rows || [];
+                // Only cache a non-empty snapshot: caching a degraded/empty response would
+                // poison the session cache — every later popup would say "no fundamentals"
+                // and never retry.
+                if (!rows.length) {
+                    body.innerHTML = '<p class="muted">No fundamentals available yet — reopen the popup to retry.</p>';
+                    return;
+                }
+                wlFundamentals = {};
+                rows.forEach(function (row) { wlFundamentals[row.symbol] = row; });
+                render();
+            }).catch(function () {
+                body.innerHTML = '<p class="muted">Could not load fundamentals — reopen the popup to retry.</p>';
+            });
         }
 
         function wlKv(label, value) {

@@ -137,6 +137,10 @@ public class PortfolioFundamentalsService {
         int fetched = 0;
         long start = System.currentTimeMillis();
         for (String internal : heldSorted) {
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("Fundamentals refresh interrupted — stopping early");
+                break;
+            }
             if (fetched > 0) PriceFetchSupport.sleep(THROTTLE_MS);
             String yahooTicker = tickerMap.tickerFor(internal);
             QuoteSummary q = fetcher.fetch(yahooTicker);

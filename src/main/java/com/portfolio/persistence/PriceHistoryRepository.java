@@ -64,27 +64,21 @@ public class PriceHistoryRepository {
     public int savePriceBars(List<PriceBar> bars) {
         if (bars.isEmpty()) return 0;
         String fetchedAt = Instant.now().toString();
+        // One transaction for the whole batch — a multi-decade backfill is ~11k rows per
+        // ticker, and per-row autocommit made each row its own fsync-ed write transaction.
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT OR IGNORE INTO price_history " +
                              "(symbol, date, open, high, low, close, adj_close, split_factor, volume, currency, fetched_at) " +
                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
-            int inserted = 0;
+            conn.setAutoCommit(false);
             for (PriceBar b : bars) {
-                ps.setString(1, b.symbol());
-                ps.setString(2, b.date().toString());
-                setNullableDouble(ps, 3, b.open());
-                setNullableDouble(ps, 4, b.high());
-                setNullableDouble(ps, 5, b.low());
-                ps.setDouble(6, b.close());
-                ps.setDouble(7, b.adjClose());
-                ps.setDouble(8, b.splitFactor());
-                if (b.volume() != null) ps.setLong(9, b.volume());
-                else ps.setNull(9, Types.INTEGER);
-                ps.setString(10, b.currency());
-                ps.setString(11, fetchedAt);
-                inserted += ps.executeUpdate();
+                bindBar(ps, b, fetchedAt);
+                ps.addBatch();
             }
+            int inserted = 0;
+            for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+            conn.commit();
             return inserted;
         } catch (Exception e) {
             log.warn("Could not save price bars", e);
@@ -114,27 +108,35 @@ public class PriceHistoryRepository {
                              "split_factor = excluded.split_factor, " +
                              "volume = excluded.volume, currency = excluded.currency, " +
                              "fetched_at = excluded.fetched_at")) {
-            int touched = 0;
+            conn.setAutoCommit(false);
             for (PriceBar b : bars) {
-                ps.setString(1, b.symbol());
-                ps.setString(2, b.date().toString());
-                setNullableDouble(ps, 3, b.open());
-                setNullableDouble(ps, 4, b.high());
-                setNullableDouble(ps, 5, b.low());
-                ps.setDouble(6, b.close());
-                ps.setDouble(7, b.adjClose());
-                ps.setDouble(8, b.splitFactor());
-                if (b.volume() != null) ps.setLong(9, b.volume());
-                else ps.setNull(9, Types.INTEGER);
-                ps.setString(10, b.currency());
-                ps.setString(11, fetchedAt);
-                touched += ps.executeUpdate();
+                bindBar(ps, b, fetchedAt);
+                ps.addBatch();
             }
+            int touched = 0;
+            for (int n : ps.executeBatch()) if (n > 0) touched += n;
+            conn.commit();
             return touched;
         } catch (Exception e) {
             log.warn("Could not upsert price bars", e);
             return 0;
         }
+    }
+
+    /** Shared column binding for the two bulk write paths (identical column lists). */
+    private static void bindBar(PreparedStatement ps, PriceBar b, String fetchedAt) throws SQLException {
+        ps.setString(1, b.symbol());
+        ps.setString(2, b.date().toString());
+        setNullableDouble(ps, 3, b.open());
+        setNullableDouble(ps, 4, b.high());
+        setNullableDouble(ps, 5, b.low());
+        ps.setDouble(6, b.close());
+        ps.setDouble(7, b.adjClose());
+        ps.setDouble(8, b.splitFactor());
+        if (b.volume() != null) ps.setLong(9, b.volume());
+        else ps.setNull(9, Types.INTEGER);
+        ps.setString(10, b.currency());
+        ps.setString(11, fetchedAt);
     }
 
     public LocalDate getLatestPriceDate(String symbol) {

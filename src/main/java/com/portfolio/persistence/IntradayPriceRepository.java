@@ -55,12 +55,14 @@ public class IntradayPriceRepository {
     public int saveIntradayBars(List<IntradayBar> bars) {
         if (bars.isEmpty()) return 0;
         String fetchedAt = Instant.now().toString();
+        // One transaction for the whole batch — per-row autocommit turned a bulk fetch into
+        // thousands of fsync-ed write transactions, each excluding readers.
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT OR IGNORE INTO price_intraday " +
                              "(symbol, ts, close, volume, currency, fetched_at) " +
                              "VALUES (?, ?, ?, ?, ?, ?)")) {
-            int inserted = 0;
+            conn.setAutoCommit(false);
             for (IntradayBar b : bars) {
                 ps.setString(1, b.symbol());
                 ps.setString(2, b.ts().toString());
@@ -69,8 +71,11 @@ public class IntradayPriceRepository {
                 else ps.setNull(4, Types.INTEGER);
                 ps.setString(5, b.currency());
                 ps.setString(6, fetchedAt);
-                inserted += ps.executeUpdate();
+                ps.addBatch();
             }
+            int inserted = 0;
+            for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+            conn.commit();
             return inserted;
         } catch (Exception e) {
             log.warn("Could not save intraday bars", e);

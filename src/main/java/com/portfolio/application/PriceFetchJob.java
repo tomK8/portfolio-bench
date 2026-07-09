@@ -49,6 +49,10 @@ public class PriceFetchJob {
         Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
 
         for (String ticker : tickerSet) {
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("Daily price fetch interrupted — stopping early");
+                return;
+            }
             LocalDate latest = priceRepo.getLatestPriceDate(ticker);
             // First run backfills; subsequent runs include the latest stored day so its close
             // gets refreshed if it was captured mid-session.
@@ -79,6 +83,10 @@ public class PriceFetchJob {
         Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
         int refreshed = 0;
         for (String ticker : tickerSet) {
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("Price rebuild interrupted — stopping early");
+                return refreshed;
+            }
             // Cover anything already stored. If we have rows older than the lookback cutoff
             // (early portfolio history that the first backfill caught), we must refetch them
             // too — otherwise their stale adj_close survives the rebuild and pollutes

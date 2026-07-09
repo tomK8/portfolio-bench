@@ -4760,7 +4760,14 @@
             if (below) body.set('priceBelow', below);
             wlSetStatus('Adding ' + sym + ' — fetching prices…');
             fetch('/watchlist/add', { method: 'POST', body: body })
-                .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+                .then(function (r) {
+                    if (!r.ok) {
+                        // 400/500 bodies are plain-text messages (GlobalExceptionAdvice) —
+                        // surface them instead of a generic failure.
+                        return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                    }
+                    return r.json();
+                })
                 .then(function (view) {
                     document.getElementById('wl-add-symbol').value = '';
                     document.getElementById('wl-add-high').value = '';
@@ -4773,7 +4780,10 @@
                     setTimeout(loadWatchlist, 8000);
                     setTimeout(loadWatchlist, 30000);
                 })
-                .catch(function () { wlSetStatus('Could not add ' + sym + '.'); });
+                .catch(function (err) {
+                    var detail = err && err.message ? ' — ' + err.message : ' (is the app still running?)';
+                    wlSetStatus('Could not add ' + sym + detail);
+                });
         }
 
         function removeWatchlistSymbol(sym) {

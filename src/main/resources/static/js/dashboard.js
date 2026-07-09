@@ -5133,11 +5133,19 @@
             return /^\d{4}-\d{2}-\d{2}$/.test(ts) ? new Date(ts + 'T12:00:00') : new Date(ts);
         }
 
-        function wlAxisLabel(ts, oneDay) {
+        // Axis-label mode by popup window: 'time' (1D), 'monthday' (multi-day/-month),
+        // or 'monthyear' (≥1Y — a month/day-only tick is ambiguous across years).
+        var WL_LONG_WINDOWS = { '1Y': 1, '2Y': 1, '3Y': 1, '5Y': 1, '10Y': 1, 'MAX': 1 };
+        function wlLabelMode(window) {
+            if (window === '1D') return 'time';
+            return WL_LONG_WINDOWS[window] ? 'monthyear' : 'monthday';
+        }
+
+        function wlAxisLabel(ts, mode) {
             var d = wlParseTs(ts);
-            return oneDay
-                ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-                : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+            if (mode === 'time') return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            if (mode === 'monthyear') return d.toLocaleDateString([], { month: 'short', year: '2-digit' });
+            return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
         }
 
         function renderWlChart(s) {
@@ -5146,7 +5154,7 @@
             var labels = pts.map(function (p) { return p.t; });
             var data = pts.map(function (p) { return parseFloat(p.p); });
             var isIntraday = s.granularity === 'intraday';
-            var oneDay = s.window === '1D';
+            var labelMode = wlLabelMode(s.window);
             if (wlChart) { wlChart.destroy(); }
             // Category (evenly-spaced) axis rather than a time axis: this compresses out the
             // overnight/weekend gaps so multi-day charts have no long diagonal lines between
@@ -5162,7 +5170,7 @@
                     scales: {
                         x: { type: 'category',
                             ticks: { maxTicksLimit: 8, autoSkip: true, maxRotation: 0,
-                                callback: function (value, index) { return wlAxisLabel(labels[index], oneDay); } } },
+                                callback: function (value, index) { return wlAxisLabel(labels[index], labelMode); } } },
                         y: { ticks: { maxTicksLimit: 6 } }
                     },
                     plugins: { legend: { display: false },

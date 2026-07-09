@@ -295,9 +295,11 @@ public class WatchlistService {
     /**
      * Price series for the popup chart. Windows {@code 1D}/{@code 3D}/{@code 5D}/{@code 10D}/
      * {@code 15D} come from 1-minute intraday bars (downsampled to ~5-minute buckets beyond
-     * 5 days to stay light); {@code 30D} falls back to daily closes, since intraday retention
-     * only reaches 15 days. Daily points use the raw close the user saw that day
-     * ({@code close × splitFactor}).
+     * 5 days to stay light); everything longer ({@code 30D}, {@code 2M}/{@code 3M}/{@code 6M},
+     * {@code 1Y}…{@code 10Y}, {@code MAX}) falls back to daily closes, since intraday retention
+     * only reaches 15 days. {@code 30D} uses the raw close the user saw that day
+     * ({@code close × splitFactor}); longer daily windows use split-adjusted close so splits
+     * don't draw a cliff. See {@link #dailyWindowStart}.
      */
     public Series series(String symbolRaw, String windowRaw) {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase();
@@ -305,13 +307,19 @@ public class WatchlistService {
         if (symbol.isEmpty()) return new Series(symbol, window, "daily", List.of());
         String ticker = tickerFor(symbol);
 
-        if ("30D".equals(window)) {
-            List<PriceBar> bars = priceRepo.getPriceHistory(ticker,
-                    LocalDate.now().minusDays(31), LocalDate.now());
+        LocalDate dailyFrom = dailyWindowStart(window);
+        if (dailyFrom != null) {
+            // 30D keeps the raw close the user saw that day (close × splitFactor); the
+            // longer windows use split-adjusted close so a stock split doesn't draw an
+            // artificial cliff — the latest bar's splitFactor is 1, so both conventions
+            // agree at the right edge (today's price still matches the row).
+            boolean raw = "30D".equals(window);
+            List<PriceBar> bars = priceRepo.getPriceHistory(ticker, dailyFrom, LocalDate.now());
             List<Point> pts = new ArrayList<>(bars.size());
             for (PriceBar b : bars) {
+                double price = raw ? b.close() * b.splitFactor() : b.close();
                 pts.add(new Point(b.date().toString(),
-                        BigDecimal.valueOf(b.close() * b.splitFactor()).setScale(PRICE_SCALE, RoundingMode.HALF_UP)));
+                        BigDecimal.valueOf(price).setScale(PRICE_SCALE, RoundingMode.HALF_UP)));
             }
             return new Series(symbol, window, "daily", pts);
         }
@@ -335,6 +343,28 @@ public class WatchlistService {
                     BigDecimal.valueOf(b.close()).setScale(PRICE_SCALE, RoundingMode.HALF_UP)));
         }
         return new Series(symbol, window, "intraday", pts);
+    }
+
+    /**
+     * Start date for a daily-close window, or {@code null} for the intraday windows
+     * (1D–15D). {@code MAX} reaches back further than any stored history, so it just
+     * returns everything on file.
+     */
+    private static LocalDate dailyWindowStart(String window) {
+        LocalDate today = LocalDate.now();
+        return switch (window) {
+            case "30D" -> today.minusDays(31);
+            case "2M"  -> today.minusMonths(2);
+            case "3M"  -> today.minusMonths(3);
+            case "6M"  -> today.minusMonths(6);
+            case "1Y"  -> today.minusYears(1);
+            case "2Y"  -> today.minusYears(2);
+            case "3Y"  -> today.minusYears(3);
+            case "5Y"  -> today.minusYears(5);
+            case "10Y" -> today.minusYears(10);
+            case "MAX" -> today.minusYears(50);
+            default    -> null;
+        };
     }
 
     /**

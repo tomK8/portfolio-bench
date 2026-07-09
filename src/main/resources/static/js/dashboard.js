@@ -4645,12 +4645,38 @@
             }
             table.style.display = 'none';
             panel.style.display = '';
-            if (!wlReturnsLoaded) {
-                panel.innerHTML = '<p class="muted" style="padding:0.5rem">Loading…</p>';
-                fetch('/watchlist/returns').then(function (r) { return r.json(); })
-                    .then(function (data) { wlReturnsLoaded = true; renderWatchlistReturns(data); })
-                    .catch(function () { panel.innerHTML = '<p class="muted">Could not load returns.</p>'; });
-            }
+            if (!wlReturnsLoaded) loadWlReturns(false);
+        }
+
+        var wlReturnsLoading = false;
+
+        // Loads the returns heatmap. A fetch can die transiently (the dev server hot-restarts
+        // under the tab — same failure mode the stats table self-heals from in wlPollTick), so
+        // a first failure retries once after a short pause; after that the 30s poll keeps
+        // retrying while the returns view is visible. wlReturnsLoaded is only set once a
+        // render actually succeeded, so a failed attempt is always retryable.
+        function loadWlReturns(isRetry) {
+            if (wlReturnsLoading) return;
+            wlReturnsLoading = true;
+            var panel = document.getElementById('wl-returns-panel');
+            panel.innerHTML = '<p class="muted" style="padding:0.5rem">Loading…</p>';
+            fetch('/watchlist/returns').then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function (data) {
+                wlReturnsLoading = false;
+                renderWatchlistReturns(data);
+                wlReturnsLoaded = true;
+            }).catch(function () {
+                wlReturnsLoading = false;
+                if (!isRetry) {
+                    setTimeout(function () {
+                        if (wlCurrentView === 'returns' && !wlReturnsLoaded) loadWlReturns(true);
+                    }, 2500);
+                } else {
+                    panel.innerHTML = '<p class="muted" style="padding:0.5rem">Could not load returns — retrying shortly.</p>';
+                }
+            });
         }
 
         function wlSetStatus(msg) {
@@ -4659,6 +4685,7 @@
 
         function loadWatchlist() {
             wlReturnsLoaded = false;
+            if (wlCurrentView === 'returns') loadWlReturns(false);  // refresh the visible heatmap too
             wlSetStatus('Loading…');
             fetch('/watchlist').then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -4697,7 +4724,10 @@
             // Self-heal: if the last full load failed (e.g. the server hot-restarted under the tab),
             // the quote poll has no rows to patch — retry the full load until it renders.
             if (!wlLoadedOk) { loadWatchlist(); return; }
-            if (wlCurrentView !== 'stats') return;         // returns heatmap doesn't move intraday
+            if (wlCurrentView !== 'stats') {               // returns heatmap doesn't move intraday,
+                if (!wlReturnsLoaded) loadWlReturns(true); // but self-heal it if its load failed
+                return;
+            }
             fetch('/watchlist/quotes').then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();

@@ -123,4 +123,30 @@ class MomentumAnalysisServiceTest {
         svc.saveUniverse(List.of("aapl", "msft", "aapl"));   // lower-case + dup
         assertEquals(List.of("AAPL", "MSFT"), svc.universe());   // benchmarks not mixed in
     }
+
+    @Test
+    void universeHistoryRemembersEverySavedListNewestLast() {
+        var repo = new PriceHistoryRepository(new JdbcConnectionFactory(dbDir));
+        var svc = service(repo);
+        String builtIn = String.join(",", MomentumConfig.builder().build().universe());
+
+        svc.saveUniverse(List.of("AAPL", "MSFT"));
+        svc.saveUniverse(List.of("XLB", "XLE", "XLF"));
+        assertEquals(List.of(builtIn, "AAPL,MSFT", "XLB,XLE,XLF"), svc.universeHistory());
+
+        // Re-saving an old list bumps it to newest instead of duplicating it.
+        svc.saveUniverse(List.of("AAPL", "MSFT"));
+        assertEquals(List.of(builtIn, "XLB,XLE,XLF", "AAPL,MSFT"), svc.universeHistory());
+    }
+
+    @Test
+    void universeHistoryIncludesActiveUniverseBeforeAnyExplicitSave() {
+        var repo = new PriceHistoryRepository(new JdbcConnectionFactory(dbDir));
+        var svc = service(repo);
+
+        // Fresh install: the active universe is the built-in default — exactly one hint.
+        List<String> history = svc.universeHistory();
+        assertEquals(1, history.size());
+        assertEquals(String.join(",", svc.universe()), history.get(0));
+    }
 }

@@ -2104,8 +2104,9 @@
     <div id="mo-banner" class="mo-banner" style="display:none;"></div>
 
     <div class="benchmark-controls swing-controls">
-        <label style="flex: 1 1 100%;">Universe:
-            <input id="mo-universe" type="text" style="width: 90%;" value=""/></label>
+        <label style="flex: 1 1 100%;" title="saved lists appear as suggestions — focus the empty box or press ↓">Universe:
+            <input id="mo-universe" type="text" style="width: 90%;" value="" list="mo-universe-hints" autocomplete="off"/></label>
+        <datalist id="mo-universe-hints"></datalist>
     </div>
     <div class="benchmark-controls swing-controls">
         <label title="portfolio sizes run as separate variants">Top N: <input id="mo-topns" type="text" size="6" value="3,4,5"/></label>

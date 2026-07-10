@@ -6349,6 +6349,28 @@
                 e.preventDefault();
                 downloadMomentumCsv();
             });
+            loadMomentumSymbols();
+        }
+
+        /** Prefill the Universe input with the stored list and fill the saved-lists datalist. */
+        function loadMomentumSymbols() {
+            fetch('/momentum/symbols')
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (res) {
+                    var input = document.getElementById('mo-universe');
+                    if (!input.value.trim() && res.universe) input.value = res.universe.join(',');
+                    renderMomentumHints(res.history);
+                })
+                .catch(function () { /* hints are a convenience — never block the tab */ });
+        }
+
+        /** Saved lists as <option>s, newest first so the most recent list tops the dropdown. */
+        function renderMomentumHints(history) {
+            if (!history) return;
+            document.getElementById('mo-universe-hints').innerHTML =
+                history.slice().reverse().map(function (h) {
+                    return '<option value="' + escapeHtml(h) + '"></option>';
+                }).join('');
         }
 
         function moVal(id) { return (document.getElementById(id).value || '').trim(); }
@@ -6413,6 +6435,7 @@
             }).then(function (r) { return r.json(); })
                 .then(function (res) {
                     document.getElementById('mo-universe').value = (res.universe || []).join(',');
+                    renderMomentumHints(res.history);
                     moStatus('Universe saved (' + (res.universe || []).length + ' names); backfilling new ones.');
                 })
                 .catch(function (e) { moStatus('Save failed: ' + e.message); });

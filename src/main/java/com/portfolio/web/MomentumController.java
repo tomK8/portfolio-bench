@@ -97,6 +97,17 @@ public class MomentumController {
         backfillInBackground();
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("universe", saved);
+        out.put("history", momentumService.universeHistory());
+        return out;
+    }
+
+    /** Current universe + saved-list history — prefills the Universe input and its hint datalist. */
+    @GetMapping("/momentum/symbols")
+    @ResponseBody
+    public Map<String, Object> getSymbols() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("universe", momentumService.universe());
+        out.put("history", momentumService.universeHistory());
         return out;
     }
 

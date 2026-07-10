@@ -45,6 +45,13 @@ public class MomentumAnalysisService {
     public static final String MOMENTUM_SYMBOLS_KEY = "momentum_symbols";
     /** The ranked universe only (user-editable) — distinct from the fetch set, which adds benchmarks. */
     public static final String MOMENTUM_UNIVERSE_KEY = "momentum_universe";
+    /**
+     * Every universe ever saved (one comma-joined list per line, newest last, capped) — feeds the
+     * Universe input's hint datalist so previously saved lists are recallable. Browser form
+     * history proved unreliable for this (it only remembers values from submitted forms).
+     */
+    public static final String UNIVERSE_HISTORY_KEY = "momentum_universe_history";
+    private static final int UNIVERSE_HISTORY_MAX = 20;
 
     static final int DEEP_LOOKBACK_YEARS = 45;
     private static final LocalDate EPOCH = LocalDate.of(1970, 1, 1);
@@ -383,6 +390,35 @@ public class MomentumAnalysisService {
         if (clean.isEmpty()) return universe();
         MomentumConfig cfg = MomentumConfig.builder().universe(new ArrayList<>(clean)).build();
         syncFetchUniverse(cfg);
+        rememberUniverse(String.join(",", clean));
         return new ArrayList<>(clean);
+    }
+
+    /**
+     * Previously saved universes, one comma-joined list per entry, newest last. The built-in
+     * default and the currently active universe are always present (oldest / newest position
+     * respectively) even before anything was explicitly saved, so switching to a custom list
+     * never loses the way back to the stock one.
+     */
+    public List<String> universeHistory() {
+        List<String> out = new ArrayList<>(kv.getStringSet(UNIVERSE_HISTORY_KEY));
+        String builtIn = String.join(",", MomentumConfig.builder().build().universe());
+        if (!out.contains(builtIn)) out.add(0, builtIn);
+        String current = String.join(",", universe());
+        if (!out.contains(current)) out.add(current);
+        return out;
+    }
+
+    /** Append to the saved-list history; re-saving an existing list bumps it to newest. */
+    private void rememberUniverse(String joined) {
+        Set<String> hist = new LinkedHashSet<>(kv.getStringSet(UNIVERSE_HISTORY_KEY));
+        hist.remove(joined);
+        hist.add(joined);
+        while (hist.size() > UNIVERSE_HISTORY_MAX) {
+            var it = hist.iterator();
+            it.next();
+            it.remove();
+        }
+        kv.putStringSet(UNIVERSE_HISTORY_KEY, hist);
     }
 }

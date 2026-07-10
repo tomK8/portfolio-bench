@@ -1107,6 +1107,7 @@
     <button class="tab" data-panel="panel-swing" type="button">Swing stats</button>
     <button class="tab" data-panel="panel-trend" type="button">Trend filter</button>
     <button class="tab" data-panel="panel-momentum" type="button">Momentum</button>
+    <button class="tab" data-panel="panel-range" type="button">Range floor</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -2166,6 +2167,113 @@
                     <select id="mo-log-variant" style="font-size:0.8rem;"></select>
                     <button type="button" class="sw-csv-btn" id="mo-log-csv">CSV</button></summary>
                 <table id="mo-log" class="swing-tbl"></table>
+            </details>
+        </div>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-range">
+    <div id="rg-prereg" class="swing-span" style="border-left: 3px solid #b0862f;"></div>
+
+    <details style="margin: 0.6rem 0;">
+        <summary class="swing-h" style="cursor:pointer;">§0 — How to read this report</summary>
+        <p class="muted" style="max-width: 72rem;">
+            <b>Arm A</b> is the strategy: buy £10k of a name when it closes at the bottom decile of
+            its trailing one-year range (having first spent ten sessions above that floor), sell at
+            +10%. <b>Arm B</b> buys the same £10k on the day of Arm A's first signal and simply
+            holds. <b>Arm C</b> makes the same number of £10k purchases on random dates in the same
+            window and holds — repeated 1,000 times, giving a distribution; Arm A's <b>bootstrap
+            percentile</b> says where the strategy lands in that distribution (50 = indistinguishable
+            from random timing; cells inside the 25–75 band are dimmed). <b>Arm D</b> buys at the
+            <i>top</i> decile instead — if D beats A, the cohort trends and doesn't mean-revert.
+            <b>Censored</b> trades are positions still open when the data ends: counted and marked to
+            market, never pretended to be wins or losses. <b>Max adverse excursion</b> is the worst
+            unrealised loss a trade sat through before exiting — what "hold until it bounces"
+            actually required. Two capital bases are shown because they answer different questions:
+            <b>return on allocated capital</b> counts idle-cash drag against the strategy;
+            <b>return per pound-year deployed</b> measures timing skill only while money is in the
+            market. The verdict line requires Arm A to beat both Arm B and Arm C's median — otherwise
+            it says so in plain words.
+        </p>
+    </details>
+
+    <div class="benchmark-controls swing-controls">
+        <label style="flex: 1 1 100%;">Family A (exchanges):
+            <input id="rg-familya" type="text" style="width: 60%;" value="LSEG.L,DB1.DE,ICE,CME,NDAQ"/></label>
+        <label style="flex: 1 1 100%;">Family B (data/publishing):
+            <input id="rg-familyb" type="text" style="width: 60%;" value="MSCI,SPGI,MCO,FDS,REL.L,WKL.AS,TRI"/></label>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label title="trailing-window percentile that defines the entry floor, %">Entry pctl: <input id="rg-entrypct" type="text" size="3" value="10"/></label>
+        <label title="take profit from fill, %">TP %: <input id="rg-tp" type="text" size="3" value="10"/></label>
+        <label title="trading-mode hard stop, %">SL %: <input id="rg-sl" type="text" size="3" value="15"/></label>
+        <label title="variant exit at this trailing percentile, %">Exit pctl: <input id="rg-exitpct" type="text" size="3" value="75"/></label>
+        <label title="trailing window, sessions">Window: <input id="rg-window" type="text" size="4" value="252"/></label>
+        <label title="consecutive closes above the floor required to arm an entry">Above run: <input id="rg-aboverun" type="text" size="3" value="10"/></label>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label title="flat annual rate on undeployed cash, %">rf %: <input id="rg-rf" type="text" size="3" value="4"/></label>
+        <label title="fixed notional per entry, GBP">Notional £: <input id="rg-notional" type="text" size="6" value="10000"/></label>
+        <label title="commission + spread per side, basis points">Cost bps: <input id="rg-cost" type="text" size="3" value="10"/></label>
+        <label title="trailing regime window, months">Trailing m: <input id="rg-trailing" type="text" size="3" value="24"/></label>
+        <label title="pooled entries within this many calendar days = one episode">Dedup d: <input id="rg-dedup" type="text" size="3" value="7"/></label>
+        <label title="bootstrap iterations">Bootstrap: <input id="rg-bootstrap" type="text" size="5" value="1000"/></label>
+        <label title="RNG seed (reproducible)">Seed: <input id="rg-seed" type="text" size="4" value="42"/></label>
+        <button id="rg-backfill" type="button" title="Fetch daily history for cohort names not in the DB yet">Backfill</button>
+        <button id="rg-run" type="button">Run</button>
+        <span id="rg-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="rg-empty" class="muted" style="margin-top: 1rem;">
+        Click <b>Run</b> to compute. First run needs a <b>Backfill</b> to fetch daily history for
+        the cohort.
+    </div>
+
+    <div id="rg-header-wrap" style="display:none; margin-top: 0.8rem;">
+        <div id="rg-exploratory" class="mo-banner" style="display:none;"></div>
+        <div id="rg-warnings"></div>
+        <div id="rg-verdicts" style="margin-top: 0.5rem;"></div>
+        <div id="rg-fxnote" class="muted" style="font-size: 0.8rem; margin-top: 0.4rem;"></div>
+    </div>
+
+    <div id="rg-data-wrap" style="display:none; margin-top: 1rem;">
+        <details>
+            <summary class="swing-h" style="cursor:pointer;">Data panel — spans, currencies, hygiene</summary>
+            <div style="overflow-x:auto;"><table id="rg-data" class="swing-tbl"></table></div>
+        </details>
+    </div>
+
+    <div id="rg-arms-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Arms — A (band) vs B (buy&amp;hold) vs C (random dates) vs D (reversed)
+            <span class="muted swing-sub">accumulation mode; pooled/family in GBP, per-name local; costs itemised</span></h3>
+        <div style="overflow-x:auto;"><table id="rg-arms" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="rg-trades-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Trade statistics
+            <span class="muted swing-sub">events = TP + Pctl + SL + Ambiguous + Open, every table; MAE and underwater include open positions</span></h3>
+        <div style="overflow-x:auto;"><table id="rg-trades" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="rg-grid-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Sensitivity grid — bootstrap percentile (return per pound-year deployed)
+            <span class="muted swing-sub">entry percentile × TP; pre-registered cell outlined; inside-IQR dimmed; report, never select</span></h3>
+        <div id="rg-grid"></div>
+    </div>
+
+    <div id="rg-featured-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h" id="rg-featured-title">Featured</h3>
+        <div style="max-width: 1100px;"><canvas id="rg-featured-chart" height="110"></canvas></div>
+        <div style="overflow-x:auto; margin-top: 0.5rem;"><table id="rg-featured-trades" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="rg-log-wrap" style="display:none; margin-top: 1rem;">
+        <div class="swing-eventlog">
+            <details>
+                <summary class="swing-h" style="cursor:pointer;">Event log — every trade, both modes
+                    <select id="rg-log-symbol" style="font-size:0.8rem;"></select>
+                    <button type="button" class="sw-csv-btn" id="rg-log-csv">CSV</button></summary>
+                <table id="rg-log" class="swing-tbl"></table>
             </details>
         </div>
     </div>

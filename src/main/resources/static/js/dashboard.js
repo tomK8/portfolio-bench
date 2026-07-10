@@ -159,6 +159,7 @@
             if (panelId === 'panel-swing') setupSwing();
             if (panelId === 'panel-trend') setupTrend();
             if (panelId === 'panel-momentum') setupMomentum();
+            if (panelId === 'panel-range') setupRange();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
@@ -6719,6 +6720,398 @@
                     e.turnover, e.cost, e.cashWeight].join(','));
             });
             downloadCsv('momentum-' + v.label.replace(/\s+/g, '') + '.csv', lines.join('\n'));
+        }
+
+        /* ==================== Range floor tab ==================== */
+
+        var rgInit = false, rgReport = null, rgFeaturedChart = null;
+
+        function setupRange() {
+            if (rgInit) return;
+            rgInit = true;
+            document.getElementById('rg-run').addEventListener('click', runRange);
+            document.getElementById('rg-backfill').addEventListener('click', backfillRange);
+            document.getElementById('rg-log-symbol').addEventListener('change', renderRangeLog);
+            document.getElementById('rg-log-csv').addEventListener('click', function (e) {
+                e.preventDefault();
+                downloadRangeCsv();
+            });
+        }
+
+        function rgVal(id) { return (document.getElementById(id).value || '').trim(); }
+        function rgStatus(msg) { document.getElementById('rg-status').textContent = msg || ''; }
+        function rgPct(v, dp) {
+            if (v === null || v === undefined || !isFinite(v)) return '—';
+            return (v * 100).toFixed(dp === undefined ? 1 : dp) + '%';
+        }
+        function rgNum(v, dp) {
+            if (v === null || v === undefined || !isFinite(v)) return '—';
+            return (+v).toFixed(dp === undefined ? 2 : dp);
+        }
+        function rgMoney(v) {
+            if (v === null || v === undefined || !isFinite(v)) return '—';
+            return '£' + Math.round(v).toLocaleString();
+        }
+
+        function buildRangeQuery() {
+            var map = {
+                familyA: rgVal('rg-familya'), familyB: rgVal('rg-familyb'),
+                entryPct: rgVal('rg-entrypct'), tp: rgVal('rg-tp'), sl: rgVal('rg-sl'),
+                exitPct: rgVal('rg-exitpct'), window: rgVal('rg-window'),
+                aboveRun: rgVal('rg-aboverun'), rf: rgVal('rg-rf'),
+                notional: rgVal('rg-notional'), commissionBps: rgVal('rg-cost'),
+                trailingMonths: rgVal('rg-trailing'), dedupDays: rgVal('rg-dedup'),
+                bootstrap: rgVal('rg-bootstrap'), seed: rgVal('rg-seed')
+            };
+            var parts = [];
+            Object.keys(map).forEach(function (k) {
+                if (map[k] !== '') parts.push(k + '=' + encodeURIComponent(map[k]));
+            });
+            return parts.join('&');
+        }
+
+        function runRange() {
+            rgStatus('Computing (bootstraps per scope + grid cell)…');
+            fetch('/range?' + buildRangeQuery())
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (rep) {
+                    rgReport = rep;
+                    document.getElementById('rg-empty').style.display = 'none';
+                    renderRangePrereg();
+                    renderRangeHeader();
+                    renderRangeData();
+                    renderRangeArms();
+                    renderRangeTrades();
+                    renderRangeGrid();
+                    renderRangeFeatured();
+                    populateRangeLogSelect();
+                    renderRangeLog();
+                    ['rg-header-wrap', 'rg-data-wrap', 'rg-arms-wrap', 'rg-trades-wrap',
+                        'rg-grid-wrap', 'rg-featured-wrap', 'rg-log-wrap']
+                        .forEach(function (id) { document.getElementById(id).style.display = 'block'; });
+                    rgStatus('Updated ' + new Date().toLocaleTimeString()
+                        + ' · seed ' + rep.config.randomSeed);
+                })
+                .catch(function (e) { rgStatus('Error: ' + e.message); });
+        }
+
+        function backfillRange() {
+            rgStatus('Backfill started (daily history per missing symbol)…');
+            fetch('/range/backfill', { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function () { rgStatus('Backfill running. Re-run once prices land.'); })
+                .catch(function (e) { rgStatus('Backfill failed: ' + e.message); });
+        }
+
+        function renderRangePrereg() {
+            var el = document.getElementById('rg-prereg');
+            el.innerHTML = '<b>Pre-registration</b><br>'
+                + (rgReport.preRegistration || []).map(function (l) { return escapeHtml(l); }).join('<br>');
+        }
+
+        function renderRangeHeader() {
+            var banner = document.getElementById('rg-exploratory');
+            if (rgReport.exploratory) {
+                banner.textContent = 'EXPLORATORY RUN — parameters differ from the pre-registered '
+                    + 'defaults: ' + rgReport.exploratoryChanges.join(', ')
+                    + '. Conclusions from this run are not pre-registered.';
+                banner.style.display = 'block';
+            } else {
+                banner.style.display = 'none';
+            }
+            var w = document.getElementById('rg-warnings');
+            w.innerHTML = (rgReport.warnings || []).map(function (m) {
+                return '<div class="swing-warn">' + escapeHtml(m) + '</div>';
+            }).join('');
+            var v = document.getElementById('rg-verdicts');
+            v.innerHTML = (rgReport.verdicts || []).map(function (m) {
+                var bad = m.indexOf('added nothing') >= 0;
+                return '<div class="swing-span" style="border-left:3px solid '
+                    + (bad ? '#c0392b' : '#2ca02c') + ';">' + escapeHtml(m) + '</div>';
+            }).join('');
+            document.getElementById('rg-fxnote').textContent = rgReport.fxNote || '';
+        }
+
+        function renderRangeData() {
+            var rows = (rgReport.data || []).map(function (d) {
+                var flags = [];
+                if (d.missing) flags.push('NO DATA');
+                if (d.shortHistory) flags.push('< 10y');
+                (d.dataErrors || []).forEach(function (e) {
+                    flags.push(e.date + ' ' + rgPct(e.movePct));
+                });
+                return { cells: [
+                    { t: d.symbol, lbl: true }, { t: d.family }, { t: d.currency || '—' },
+                    { t: d.from || '—' }, { t: d.to || '—' },
+                    { t: d.years == null ? '—' : d.years.toFixed(1) }, { t: d.bars },
+                    { t: flags.length ? flags.join('; ') : 'ok',
+                      cls: flags.length ? 'swing-warn' : '' }
+                ] };
+            });
+            document.getElementById('rg-data').innerHTML = swingTable(
+                ['Symbol', 'Fam', 'Ccy', 'From', 'To', 'Years', 'Bars', 'Flags'], rows);
+        }
+
+        function rgArmCells(a) {
+            if (!a) return [{ t: '—' }, { t: '—' }, { t: '—' }];
+            return [
+                { t: rgPct(a.returnOnAllocatedAnn), cls: moCls(a.returnOnAllocatedAnn) },
+                { t: rgPct(a.returnOnDeployed), cls: moCls(a.returnOnDeployed) },
+                { t: a.purchases + (a.openPositions ? ' (' + a.openPositions + ' open)' : '') }
+            ];
+        }
+
+        function renderRangeArms() {
+            var rows = [];
+            (rgReport.scopes || []).forEach(function (sc) {
+                ['full', 'trailing'].forEach(function (wk) {
+                    var w = sc[wk];
+                    if (!w) return;
+                    var dim = w.thin ? 'swing-smalln-cell' : '';
+                    var c = w.armC;
+                    var pctlA = c ? c.actualPctlAllocatedAnn : null;
+                    var pctlD = c ? c.actualPctlDeployed : null;
+                    var cells = [
+                        { t: escapeHtml(sc.scope), lbl: true },
+                        { t: w.label }, { t: sc.currencyBasis },
+                        { t: w.episodes + (w.thin ? ' ⚠' : '') }
+                    ]
+                        .concat(rgArmCells(w.armA))
+                        .concat(rgArmCells(w.armB))
+                        .concat([
+                            { t: c && c.roAllocatedAnn ? rgPct(c.roAllocatedAnn.median) : '—' },
+                            { t: pctlA == null ? '—' : rgNum(pctlA, 0),
+                              cls: pctlA != null && pctlA >= 25 && pctlA <= 75 ? 'swing-smalln-cell' : '' },
+                            { t: c && c.roDeployed ? rgPct(c.roDeployed.median) : '—' },
+                            { t: pctlD == null ? '—' : rgNum(pctlD, 0),
+                              cls: pctlD != null && pctlD >= 25 && pctlD <= 75 ? 'swing-smalln-cell' : '' }
+                        ])
+                        .concat(w.armD ? [{ t: rgPct(w.armD.returnOnAllocatedAnn),
+                            cls: moCls(w.armD.returnOnAllocatedAnn) }] : [{ t: '—' }])
+                        .concat([
+                            { t: w.armA ? rgMoney(w.armA.stampPaid) : '—' },
+                            { t: w.armA ? rgMoney(w.armA.commissionPaid) : '—' },
+                            { t: w.armsNote ? escapeHtml(w.armsNote) : '' }
+                        ]);
+                    rows.push({ cells: cells, cls: dim });
+                });
+            });
+            document.getElementById('rg-arms').innerHTML = swingTable(
+                ['Scope', 'Window', 'Ccy', 'Episodes',
+                 'A RoA/yr', 'A RoD', 'A buys',
+                 'B RoA/yr', 'B RoD', 'B buys',
+                 'C med RoA/yr', 'A pctl', 'C med RoD', 'A pctl',
+                 'D RoA/yr', 'Stamp', 'Comm', 'Note'], rows);
+        }
+
+        function rgStatsCells(st, label) {
+            if (!st) return null;
+            return [
+                { t: label }, { t: st.events }, { t: st.tp }, { t: st.pctl }, { t: st.sl },
+                { t: st.ambiguous }, { t: st.open },
+                { t: rgPct(st.meanTrRet), cls: moCls(st.meanTrRet) },
+                { t: rgPct(st.meanTrRetConservative), cls: moCls(st.meanTrRetConservative) },
+                { t: st.maeDist ? rgPct(st.maeDist.median) : '—' },
+                { t: st.maeDist ? rgPct(st.maeDist.min) : '—', cls: 'swing-neg' },
+                { t: st.underwaterSessionsDist ? rgNum(st.underwaterSessionsDist.median, 0) : '—' },
+                { t: st.daysHeldDist ? rgNum(st.daysHeldDist.median, 0) : '—' }
+            ];
+        }
+
+        function renderRangeTrades() {
+            var rows = [];
+            (rgReport.scopes || []).forEach(function (sc) {
+                ['full', 'trailing'].forEach(function (wk) {
+                    var w = sc[wk];
+                    if (!w || !w.accumulation || !w.accumulation.events) return;
+                    var dim = w.thin ? 'swing-smalln-cell' : '';
+                    [['accumulation', w.accumulation],
+                     ['acc, P75 exit', w.pctlExitVariant],
+                     ['trading (SL)', w.trading]].forEach(function (pair, i) {
+                        var cells = rgStatsCells(pair[1], pair[0]);
+                        if (!cells) return;
+                        rows.push({ cls: dim, cells: [
+                            { t: i === 0 ? escapeHtml(sc.scope) : '', lbl: true },
+                            { t: i === 0 ? w.label : '' }
+                        ].concat(cells) });
+                    });
+                });
+            });
+            document.getElementById('rg-trades').innerHTML = swingTable(
+                ['Scope', 'Window', 'Mode', 'Events', 'TP', 'Pctl', 'SL', 'Amb', 'Open',
+                 'Mean TR ret', 'Cons', 'MAE med', 'MAE worst', 'UW sess med', 'Days med'], rows);
+        }
+
+        function renderRangeGrid() {
+            var cells = rgReport.sensitivity || [];
+            var host = document.getElementById('rg-grid');
+            if (!cells.length) {
+                host.innerHTML = '<p class="muted">Grid unavailable this run.</p>';
+                return;
+            }
+            var scopes = [], modes = [];
+            cells.forEach(function (c) {
+                if (scopes.indexOf(c.scope) < 0) scopes.push(c.scope);
+                if (modes.indexOf(c.mode) < 0) modes.push(c.mode);
+            });
+            var html = '';
+            scopes.forEach(function (scope) {
+                modes.forEach(function (mode) {
+                    var sub = cells.filter(function (c) { return c.scope === scope && c.mode === mode; });
+                    if (!sub.length) return;
+                    var ps = [], tps = [];
+                    sub.forEach(function (c) {
+                        if (ps.indexOf(c.entryPct) < 0) ps.push(c.entryPct);
+                        if (tps.indexOf(c.tp) < 0) tps.push(c.tp);
+                    });
+                    ps.sort(function (a, b) { return a - b; });
+                    tps.sort(function (a, b) { return a - b; });
+                    html += '<h4 class="swing-h" style="margin-top:0.6rem;">' + escapeHtml(scope)
+                        + ' — ' + mode + '</h4><table class="swing-tbl"><tr><th class="lbl">Entry \\ TP</th>';
+                    tps.forEach(function (tp) { html += '<th>' + rgPct(tp, 0) + '</th>'; });
+                    html += '</tr>';
+                    ps.forEach(function (p) {
+                        html += '<tr><td class="lbl">P' + Math.round(p * 100) + '</td>';
+                        tps.forEach(function (tp) {
+                            var c = sub.filter(function (x) { return x.entryPct === p && x.tp === tp; })[0];
+                            if (!c) { html += '<td>—</td>'; return; }
+                            var cls = (c.insideIqr || c.thin) ? 'swing-smalln-cell' : '';
+                            var style = c.preRegistered ? ' style="border:2px solid #b0862f;"' : '';
+                            var txt = c.pctlDeployed == null ? '—' : rgNum(c.pctlDeployed, 0);
+                            html += '<td class="' + cls + '"' + style + ' title="events ' + c.events
+                                + ', episodes ' + c.episodes + ', A RoD ' + rgPct(c.armARoD)
+                                + ', C med ' + rgPct(c.cMedianRoD) + '">'
+                                + txt + '<span class="muted" style="font-size:0.68rem;"> ('
+                                + c.episodes + 'ep)</span></td>';
+                        });
+                        html += '</tr>';
+                    });
+                    html += '</table>';
+                });
+            });
+            host.innerHTML = html;
+        }
+
+        function renderRangeFeatured() {
+            var f = rgReport.featured;
+            var wrap = document.getElementById('rg-featured-wrap');
+            if (!f) { wrap.style.display = 'none'; return; }
+            document.getElementById('rg-featured-title').textContent =
+                'Featured: ' + f.symbol + ' — entries, underwater stretches, exits'
+                + (f.currency ? ' (' + f.currency + ')' : '');
+            var labels = f.dates || [];
+            var markerData = { entry: [], tp: [], pctl: [], sl: [], open: [], ambiguous: [] };
+            Object.keys(markerData).forEach(function (k) {
+                markerData[k] = labels.map(function () { return null; });
+            });
+            (f.markers || []).forEach(function (m) {
+                var i = nearestLabelIdx(labels, m.date);
+                if (i >= 0 && markerData[m.kind]) markerData[m.kind][i] = m.price;
+            });
+            var ds = [{
+                label: f.symbol, data: f.closes, borderColor: '#1f77b4',
+                borderWidth: 1.2, pointRadius: 0, tension: 0, fill: false
+            }];
+            var markerStyles = {
+                entry: ['#2ca02c', 'triangle', 'entry'],
+                tp: ['#1f77b4', 'rectRot', 'TP exit'],
+                pctl: ['#9467bd', 'rectRot', 'P75 exit'],
+                sl: ['#c0392b', 'rectRot', 'stop'],
+                open: ['#e8a33d', 'circle', 'still open (censored)'],
+                ambiguous: ['#888', 'crossRot', 'ambiguous']
+            };
+            Object.keys(markerStyles).forEach(function (k) {
+                if (!markerData[k].some(function (v) { return v != null; })) return;
+                ds.push({
+                    label: markerStyles[k][2], data: markerData[k], showLine: false,
+                    pointStyle: markerStyles[k][1], pointRadius: 6, pointHoverRadius: 8,
+                    borderColor: markerStyles[k][0], backgroundColor: markerStyles[k][0]
+                });
+            });
+            if (rgFeaturedChart) rgFeaturedChart.destroy();
+            rgFeaturedChart = new Chart(document.getElementById('rg-featured-chart'), {
+                type: 'line',
+                data: { labels: labels, datasets: ds },
+                options: {
+                    animation: false, spanGaps: true,
+                    scales: { x: { ticks: { maxTicksLimit: 14 } } },
+                    plugins: { legend: { position: 'bottom' } }
+                }
+            });
+
+            var trades = (rgReport.events || []).filter(function (e) {
+                return e.symbol === f.symbol && e.mode === 'accumulation';
+            });
+            var rows = trades.map(function (t) {
+                return { cells: [
+                    { t: t.entryDate, lbl: true }, { t: rgNum(t.fill) },
+                    { t: 'P' + (t.pctlRank == null ? '—' : Math.round(t.pctlRank * 100)) },
+                    { t: t.exitType, cls: t.exitType === 'OPEN' ? 'swing-warn' : '' },
+                    { t: t.exitDate }, { t: t.exitFill == null ? '—' : rgNum(t.exitFill) },
+                    { t: rgPct(t.trRet), cls: moCls(t.trRet) },
+                    { t: rgPct(t.mae), cls: 'swing-neg' },
+                    { t: t.underwaterSessions }, { t: t.daysHeld }, { t: rgMoney(t.costsPaidGbp) }
+                ] };
+            });
+            document.getElementById('rg-featured-trades').innerHTML = swingTable(
+                ['Entry', 'Fill', 'Rank', 'Exit', 'Exit date', 'Exit fill', 'TR ret',
+                 'MAE', 'UW sess', 'Days', 'Costs'], rows);
+        }
+
+        function nearestLabelIdx(labels, date) {
+            for (var i = 0; i < labels.length; i++) {
+                if (labels[i] >= date) return i;
+            }
+            return labels.length ? labels.length - 1 : -1;
+        }
+
+        function populateRangeLogSelect() {
+            var sel = document.getElementById('rg-log-symbol');
+            var symbols = [];
+            (rgReport.events || []).forEach(function (e) {
+                if (symbols.indexOf(e.symbol) < 0) symbols.push(e.symbol);
+            });
+            sel.innerHTML = '<option value="">All symbols</option>'
+                + symbols.map(function (s) { return '<option>' + s + '</option>'; }).join('');
+        }
+
+        function rangeLogRows() {
+            var sym = document.getElementById('rg-log-symbol').value;
+            return (rgReport.events || []).filter(function (e) {
+                return !sym || e.symbol === sym;
+            });
+        }
+
+        function renderRangeLog() {
+            var rows = rangeLogRows().map(function (e) {
+                return { cells: [
+                    { t: e.symbol, lbl: true }, { t: e.mode }, { t: e.entryDate },
+                    { t: rgNum(e.level) },
+                    { t: e.pctlRank == null ? '—' : Math.round(e.pctlRank * 100) },
+                    { t: rgNum(e.fill) },
+                    { t: e.exitType, cls: e.exitType === 'OPEN' ? 'swing-warn' : '' },
+                    { t: e.exitDate }, { t: e.exitFill == null ? '—' : rgNum(e.exitFill) },
+                    { t: rgPct(e.trRet), cls: moCls(e.trRet) },
+                    { t: rgPct(e.mae), cls: 'swing-neg' },
+                    { t: e.underwaterSessions }, { t: e.daysHeld }, { t: rgMoney(e.costsPaidGbp) }
+                ] };
+            });
+            document.getElementById('rg-log').innerHTML = swingTable(
+                ['Symbol', 'Mode', 'Entry', 'Level', 'Rank', 'Fill', 'Exit', 'Exit date',
+                 'Exit fill', 'TR ret', 'MAE', 'UW sess', 'Days', 'Costs £'], rows);
+        }
+
+        function downloadRangeCsv() {
+            var lines = ['symbol,mode,entry_date,level,pctl_rank,fill,exit_type,exit_date,'
+                + 'exit_fill,price_ret,tr_ret,mae,underwater_sessions,days_held,costs_gbp'];
+            rangeLogRows().forEach(function (e) {
+                lines.push([e.symbol, e.mode, e.entryDate, e.level, e.pctlRank, e.fill,
+                    e.exitType, e.exitDate, e.exitFill, e.priceRet, e.trRet, e.mae,
+                    e.underwaterSessions, e.daysHeld, e.costsPaidGbp].map(function (v) {
+                    return v == null ? '' : v;
+                }).join(','));
+            });
+            downloadCsv('range-events.csv', lines.join('\n'));
         }
 
         // Small table builder shared by the momentum renderers.

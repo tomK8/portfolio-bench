@@ -84,13 +84,13 @@ public class CorrelationService {
 
         Weights weights = currentWeights();
         if (weights.symbolWeights.isEmpty()) {
-            return CorrelationReport.empty(window);
+            return CorrelationReport.empty(window, weights.fxExcluded);
         }
 
         Map<String, NavigableMap<LocalDate, Double>> returns = loadReturns(weights.symbolWeights.keySet());
         Universe universe = pickUniverse(returns, window);
         if (universe.symbols.isEmpty()) {
-            return CorrelationReport.empty(window);
+            return CorrelationReport.empty(window, mergeMissing(universe.dropped, weights.fxExcluded));
         }
 
         // Latest-window correlation matrix on the common-date intersection.
@@ -176,7 +176,14 @@ public class CorrelationService {
                 timelines.divRatio,
                 pairs.top,
                 pairs.bottom,
-                new ArrayList<>(universe.dropped));
+                mergeMissing(universe.dropped, weights.fxExcluded));
+    }
+
+    /** Union of history-dropped and FX-excluded symbols, order-preserving, de-duplicated. */
+    private static List<String> mergeMissing(List<String> dropped, List<String> fxExcluded) {
+        List<String> out = new ArrayList<>(dropped);
+        for (String s : fxExcluded) if (!out.contains(s)) out.add(s);
+        return out;
     }
 
     private static int clampWindow(int w) {
@@ -228,10 +235,15 @@ public class CorrelationService {
                 intradayRepo.loadLatestIntradayPrices(tickerBySymbol.values());
 
         Map<String, BigDecimal> symbolWeights = new LinkedHashMap<>();
+        List<String> fxExcluded = new ArrayList<>();
         for (String sym : live) {
             IntradayPrice ip = byTicker.get(tickerBySymbol.get(sym));
             BigDecimal gbp = valueGbp(sym, sharesBySymbol.get(sym), ip, rates);
-            if (gbp == null || gbp.signum() <= 0) continue;
+            if (gbp == null || gbp.signum() <= 0) {
+                // Distinguish "no FX rate" (surfaced to the user) from "no intraday price".
+                if (ip != null && missingFxRate(ip, rates)) fxExcluded.add(sym);
+                continue;
+            }
             symbolWeights.put(sym, gbp);
         }
 
@@ -241,7 +253,16 @@ public class CorrelationService {
         }
         if (cashGbp.signum() < 0) cashGbp = BigDecimal.ZERO;
 
-        return new Weights(symbolWeights, cashGbp);
+        return new Weights(symbolWeights, cashGbp, fxExcluded);
+    }
+
+    /** True iff {@code ip} is priced in a non-GBP currency for which {@code rates} has no rate. */
+    private static boolean missingFxRate(IntradayPrice ip, Map<String, BigDecimal> rates) {
+        String ccy = ip.currency();
+        if ("GBp".equals(ccy)) ccy = "GBP";
+        if ("GBP".equals(ccy)) return false;
+        BigDecimal rate = rates.get(ccy);
+        return rate == null || rate.signum() == 0;
     }
 
     private BigDecimal valueGbp(String symbol, BigDecimal shares, IntradayPrice ip,
@@ -591,7 +612,8 @@ public class CorrelationService {
 
     // ---- Internal types ----------------------------------------------------
 
-    record Weights(Map<String, BigDecimal> symbolWeights, BigDecimal cashGbp) {
+    record Weights(Map<String, BigDecimal> symbolWeights, BigDecimal cashGbp,
+                   List<String> fxExcluded) {
     }
 
     record Universe(List<String> symbols, List<LocalDate> dates, List<String> dropped) {
@@ -631,10 +653,14 @@ public class CorrelationService {
                                     List<String> missingSymbols) {
 
         public static CorrelationReport empty(int window) {
+            return empty(window, List.of());
+        }
+
+        public static CorrelationReport empty(int window, List<String> missingSymbols) {
             return new CorrelationReport(window, LocalDate.now().toString(),
                     List.of(), Map.of(), List.of(), Map.of(),
                     BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                    List.of(), List.of(), List.of(), List.of(), List.of());
+                    List.of(), List.of(), List.of(), List.of(), missingSymbols);
         }
     }
 }

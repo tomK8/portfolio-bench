@@ -27,7 +27,10 @@ public class FrankfurterFxClient implements FxRateProvider, HistoricalFxRateProv
             "https://api.frankfurter.dev/v1/latest?from=GBP&to=USD,EUR";
     private static final String SERIES_URL_FMT =
             "https://api.frankfurter.dev/v1/%s..%s?base=GBP&symbols=%s";
-    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(20);
+    /** The live "latest" endpoint fails fast — a stale cache backs it (see {@code CachingFxRateProvider}). */
+    private static final Duration LATEST_TIMEOUT = Duration.ofSeconds(5);
+    /** Multi-year series fetches legitimately take longer; no cache backs them, so keep a generous budget. */
+    private static final Duration SERIES_TIMEOUT = Duration.ofSeconds(20);
 
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
@@ -36,7 +39,7 @@ public class FrankfurterFxClient implements FxRateProvider, HistoricalFxRateProv
 
     @Override
     public Map<String, BigDecimal> fetchRates() throws Exception {
-        JsonNode rates = getJson(LATEST_URL).path("rates");
+        JsonNode rates = getJson(LATEST_URL, LATEST_TIMEOUT).path("rates");
 
         Map<String, BigDecimal> out = new HashMap<>();
         out.put("GBP", BigDecimal.ONE);
@@ -52,7 +55,7 @@ public class FrankfurterFxClient implements FxRateProvider, HistoricalFxRateProv
     public Map<LocalDate, BigDecimal> fetchRateSeries(String currency, LocalDate start, LocalDate end)
             throws Exception {
         String url = String.format(SERIES_URL_FMT, start, end, currency);
-        JsonNode rates = getJson(url).path("rates");
+        JsonNode rates = getJson(url, SERIES_TIMEOUT).path("rates");
 
         // {"rates":{"2025-10-03":{"USD":1.3447}, ...}}
         Map<LocalDate, BigDecimal> series = new TreeMap<>();
@@ -67,9 +70,9 @@ public class FrankfurterFxClient implements FxRateProvider, HistoricalFxRateProv
         return series;
     }
 
-    private JsonNode getJson(String url) throws Exception {
+    private JsonNode getJson(String url, Duration timeout) throws Exception {
         HttpRequest req = HttpRequest.newBuilder(URI.create(url))
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(timeout)
                 .GET()
                 .build();
         HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());

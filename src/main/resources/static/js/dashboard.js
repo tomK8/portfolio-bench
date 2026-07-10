@@ -3385,7 +3385,8 @@
             var missing = document.getElementById('corr-missing');
             if (d.missingSymbols && d.missingSymbols.length) {
                 missing.innerHTML = '<h4>Symbols excluded</h4><p>Insufficient price history' +
-                        ' in the lookback window — needs ≥ 70% coverage. Excluded: <code>' +
+                        ' in the lookback window (needs ≥ 70% coverage), or no live FX rate to' +
+                        ' value the position. Excluded: <code>' +
                         d.missingSymbols.join(', ') + '</code></p>';
                 missing.style.display = 'block';
             } else {

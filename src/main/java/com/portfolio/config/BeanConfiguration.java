@@ -1,6 +1,7 @@
 package com.portfolio.config;
 
 import com.portfolio.ExcelReportWriter;
+import com.portfolio.adapter.CachingFxRateProvider;
 import com.portfolio.adapter.CikRegistry;
 import com.portfolio.adapter.EdgarEarningsFetcher;
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
@@ -32,6 +33,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.nio.file.Path;
+import java.time.Duration;
 
 /**
  * The only place outside the web layer that knows about Spring. Wires the
@@ -58,9 +60,10 @@ public class BeanConfiguration {
         return configured.isBlank() ? DEFAULT_DB_DIR : Path.of(configured);
     }
 
+    /** Live GBP FX rates, TTL-cached with stale-on-failure fallback (see the decorator). */
     @Bean
     public FxRateProvider fxRateProvider() {
-        return new FrankfurterFxClient();
+        return new CachingFxRateProvider(new FrankfurterFxClient(), Duration.ofMinutes(15));
     }
 
     @Bean

@@ -1107,6 +1107,7 @@
     <button class="tab" data-panel="panel-swing" type="button">Swing stats</button>
     <button class="tab" data-panel="panel-trend" type="button">Trend filter</button>
     <button class="tab" data-panel="panel-momentum" type="button">Momentum</button>
+    <button class="tab" data-panel="panel-mosig" type="button">Mom. signals</button>
     <button class="tab" data-panel="panel-range" type="button">Range floor</button>
 </div>
 
@@ -2168,6 +2169,84 @@
                     <select id="mo-log-variant" style="font-size:0.8rem;"></select>
                     <button type="button" class="sw-csv-btn" id="mo-log-csv">CSV</button></summary>
                 <table id="mo-log" class="swing-tbl"></table>
+            </details>
+        </div>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-mosig">
+    <div id="ms-context" class="swing-span" style="border-left: 3px solid #b0862f;"></div>
+    <div id="ms-prereg" style="margin-top: 0.5rem;"></div>
+
+    <details style="margin: 0.6rem 0;">
+        <summary class="swing-h" style="cursor:pointer;">§0 — The five variants in plain English</summary>
+        <div id="ms-plain" class="muted" style="max-width: 72rem;"></div>
+    </details>
+
+    <div class="benchmark-controls swing-controls">
+        <label title="portfolio sizes run as separate comparisons">Top N: <input id="ms-topns" type="text" size="6" value="3,4,5"/></label>
+        <label title="per-trade cost each way, basis points">Cost bps: <input id="ms-cost" type="text" size="4" value="10"/></label>
+        <label title="flat annual risk-free rate, %">rf %: <input id="ms-rf" type="text" size="3" value="4"/></label>
+        <label title="months held out as the recent out-of-sample block">Holdout m: <input id="ms-holdout" type="text" size="3" value="12"/></label>
+        <label title="random bootstrap iterations per N (shared by all five variants)">Bootstrap: <input id="ms-bootstrap" type="text" size="5" value="1000"/></label>
+        <label title="bootstrap RNG seed (reproducible)">Seed: <input id="ms-seed" type="text" size="4" value="42"/></label>
+        <label title="N used by the episode panel (must be one of Top N)">Episode N: <input id="ms-episoden" type="text" size="2" value="4"/></label>
+        <button id="ms-backfill" type="button" title="Fetch daily history for cohort names not in the DB yet">Backfill</button>
+        <button id="ms-run" type="button">Run</button>
+        <span id="ms-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="ms-empty" class="muted" style="margin-top: 1rem;">
+        Click <b>Run</b> to compute the five-variant signal comparison on the pinned asset-class
+        universe (17 ETFs). The universe is part of the pre-registration and is not editable here.
+    </div>
+
+    <div id="ms-header-wrap" style="display:none; margin-top: 0.8rem;">
+        <div id="ms-banner" class="mo-banner" style="display:none;"></div>
+        <div id="ms-header" class="swing-span"></div>
+        <div id="ms-warnings"></div>
+    </div>
+
+    <div id="ms-pred-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Predictions, recorded before the run
+            <span class="muted swing-sub">scored afterwards — calibration, not victory laps; hover a mark for the numbers</span></h3>
+        <div style="overflow-x:auto;"><table id="ms-pred" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="ms-h2h-wrap" style="display:none; margin-top: 1rem;"></div>
+
+    <div id="ms-episodes-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Episode panel
+            <span class="muted swing-sub" id="ms-episodes-sub">NON-DECISIONAL — shown for understanding; zero weight in the adoption verdict</span></h3>
+        <div style="overflow-x:auto;"><table id="ms-episodes" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="ms-diag-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Overlay diagnostics
+            <select id="ms-diag-n" style="font-size:0.8rem;"></select>
+            <span class="muted swing-sub">how often V4's gate bound and when V5's stop fired</span></h3>
+        <div id="ms-gate" style="margin-top: 0.4rem;"></div>
+        <div id="ms-stopyears" style="margin-top: 0.4rem;"></div>
+        <h4 class="swing-h" style="margin-top:0.7rem;">V5 whipsaws
+            <span class="muted swing-sub">stopped then re-entered within 2 rebalances; negative TR gap = re-entered cheaper (the stop helped)</span>
+            <button type="button" class="sw-csv-btn" id="ms-stops-csv">Stops CSV</button></h4>
+        <div style="overflow-x:auto;"><table id="ms-whipsaw" class="swing-tbl"></table></div>
+    </div>
+
+    <div id="ms-grid-wrap" style="display:none; margin-top: 1rem;">
+        <h3 class="swing-h">Monthly returns
+            <select id="ms-grid-variant" style="font-size:0.8rem;"></select>
+            <span class="muted swing-sub">green ≥ 0, red &lt; 0; holdout months outlined</span></h3>
+        <div style="overflow-x:auto;"><table id="ms-grid" class="swing-tbl mo-grid"></table></div>
+    </div>
+
+    <div id="ms-log-wrap" style="display:none; margin-top: 1rem;">
+        <div class="swing-eventlog">
+            <details>
+                <summary class="swing-h" style="cursor:pointer;">Rebalance event log
+                    <select id="ms-log-variant" style="font-size:0.8rem;"></select>
+                    <button type="button" class="sw-csv-btn" id="ms-log-csv">CSV</button></summary>
+                <table id="ms-log" class="swing-tbl"></table>
             </details>
         </div>
     </div>

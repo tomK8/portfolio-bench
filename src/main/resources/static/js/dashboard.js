@@ -159,6 +159,7 @@
             if (panelId === 'panel-swing') setupSwing();
             if (panelId === 'panel-trend') setupTrend();
             if (panelId === 'panel-momentum') setupMomentum();
+            if (panelId === 'panel-mosig') setupMomentumSignals();
             if (panelId === 'panel-range') setupRange();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
@@ -6743,6 +6744,406 @@
                     e.turnover, e.cost, e.cashWeight].join(','));
             });
             downloadCsv('momentum-' + v.label.replace(/\s+/g, '') + '.csv', lines.join('\n'));
+        }
+
+        /* ==================== Momentum signals tab ==================== */
+
+        var msInit = false, msReport = null;
+
+        function setupMomentumSignals() {
+            if (msInit) return;
+            msInit = true;
+            document.getElementById('ms-run').addEventListener('click', runMosig);
+            document.getElementById('ms-backfill').addEventListener('click', backfillMosig);
+            document.getElementById('ms-diag-n').addEventListener('change', renderMosigDiag);
+            document.getElementById('ms-grid-variant').addEventListener('change', renderMosigGrid);
+            document.getElementById('ms-log-variant').addEventListener('change', renderMosigLog);
+            document.getElementById('ms-log-csv').addEventListener('click', function (e) {
+                e.preventDefault();
+                downloadMosigCsv();
+            });
+            document.getElementById('ms-stops-csv').addEventListener('click', function (e) {
+                e.preventDefault();
+                downloadMosigStopsCsv();
+            });
+        }
+
+        function msVal(id) { return (document.getElementById(id).value || '').trim(); }
+        function msStatus(msg) { document.getElementById('ms-status').textContent = msg || ''; }
+
+        function runMosig() {
+            msStatus('Computing (five variants × N, one bootstrap per N)…');
+            var map = {
+                topNs: msVal('ms-topns'), cost: msVal('ms-cost'), rf: msVal('ms-rf'),
+                holdoutMonths: msVal('ms-holdout'), bootstrap: msVal('ms-bootstrap'),
+                seed: msVal('ms-seed'), episodeN: msVal('ms-episoden')
+            };
+            var parts = [];
+            Object.keys(map).forEach(function (k) {
+                if (map[k] !== '') parts.push(k + '=' + encodeURIComponent(map[k]));
+            });
+            fetch('/momentum-signals?' + parts.join('&'))
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (rep) {
+                    msReport = rep;
+                    document.getElementById('ms-empty').style.display = 'none';
+                    renderMosigHeader();
+                    renderMosigPredictions();
+                    renderMosigHeadToHead();
+                    renderMosigEpisodes();
+                    populateMosigSelects();
+                    renderMosigDiag();
+                    renderMosigGrid();
+                    renderMosigLog();
+                    ['ms-header-wrap', 'ms-pred-wrap', 'ms-h2h-wrap', 'ms-episodes-wrap',
+                        'ms-diag-wrap', 'ms-grid-wrap', 'ms-log-wrap']
+                        .forEach(function (id) { document.getElementById(id).style.display = 'block'; });
+                    msStatus('Updated ' + new Date().toLocaleTimeString());
+                })
+                .catch(function (e) { msStatus('Error: ' + e.message); });
+        }
+
+        function backfillMosig() {
+            msStatus('Backfill started…');
+            fetch('/momentum-signals/backfill', { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function () { msStatus('Backfill running. Re-run once prices land.'); })
+                .catch(function (e) { msStatus('Backfill failed: ' + e.message); });
+        }
+
+        function renderMosigHeader() {
+            var r = msReport;
+            document.getElementById('ms-context').innerHTML =
+                '<div><b>Context.</b> ' + escapeHtml(r.contextHeader) + '</div>';
+            document.getElementById('ms-prereg').innerHTML = '<div class="swing-span" style="border-left: 3px solid #2c6fb0;">'
+                + '<b>Pre-registration (verbatim):</b>'
+                + (r.preRegistration || []).map(function (p) {
+                    return '<div style="margin-top:0.3rem;">• ' + escapeHtml(p) + '</div>';
+                }).join('') + '</div>';
+            document.getElementById('ms-plain').innerHTML =
+                (r.plainEnglish || []).map(function (sent, i) {
+                    return '<div style="margin-top:0.2rem;">' + (i + 1) + '. ' + escapeHtml(sent) + '</div>';
+                }).join('');
+
+            var banner = document.getElementById('ms-banner');
+            banner.textContent = '⚠ ' + r.survivorshipCaveat;
+            banner.style.display = 'block';
+
+            var html = '';
+            if (r.analysisStart) {
+                html += '<div><b>Analysis start:</b> ' + r.analysisStart + ' — ' + r.analysisStartReason + '</div>';
+                html += '<div><b>Fit:</b> ' + r.fitFrom + ' → ' + r.fitTo
+                    + (r.holdoutAvailable ? ' &nbsp;|&nbsp; <b style="color:#b0862f;">Holdout:</b> '
+                        + r.holdoutFrom + ' → ' + r.holdoutTo
+                        + ' <i>(partially spent — see contamination disclosure)</i>'
+                        : ' &nbsp;|&nbsp; <i>no holdout window</i>')
+                    + ' &nbsp;|&nbsp; <b>seed</b> ' + r.bootstrapSeed + '</div>';
+            }
+            if ((r.missingSymbols || []).length) {
+                html += '<div class="swing-warn">No price history (excluded): ' + r.missingSymbols.join(', ')
+                    + ' — run Backfill.</div>';
+            }
+            if ((r.gaps || []).length) {
+                html += '<div class="muted" style="font-size:0.78rem;">Forward-fill gaps: '
+                    + r.gaps.map(function (g) { return g.symbol + ' ' + g.from + '→' + g.to + ' (' + g.sessions + 'd)'; }).join(' · ')
+                    + '</div>';
+            }
+            html += '<div class="muted" style="font-size:0.75rem; margin-top:0.2rem;">'
+                + (r.symbolSpans || []).map(function (s) {
+                    return s.symbol + (s.ranked ? '' : ' (bench)') + ' ' + s.from + '→' + s.to + ' (' + s.bars + ')';
+                }).join(' · ') + '</div>';
+            document.getElementById('ms-header').innerHTML = html;
+            document.getElementById('ms-warnings').innerHTML = (r.warnings || []).map(function (w) {
+                return '<div class="swing-warn">' + escapeHtml(w) + '</div>';
+            }).join('');
+        }
+
+        function renderMosigPredictions() {
+            var groups = msReport.groups || [];
+            var head = ['Prediction'].concat(groups.map(function (g) { return 'N=' + g.n; }));
+            var rows = (msReport.predictions || []).map(function (p) {
+                var cells = [{ t: escapeHtml(p.text), lbl: true }];
+                (p.marks || []).forEach(function (m) {
+                    cells.push({
+                        t: m.pass ? '✓ PASS' : '✗ FAIL',
+                        cls: m.pass ? 'swing-pos' : 'swing-neg',
+                        title: (m.detail || '').replace(/"/g, '&quot;')
+                    });
+                });
+                return { cells: cells };
+            });
+            document.getElementById('ms-pred').innerHTML = swingTable(head, rows);
+        }
+
+        function renderMosigHeadToHead() {
+            var r = msReport;
+            var html = '';
+            (r.groups || []).forEach(function (g) {
+                html += '<h3 class="swing-h">Head-to-head · Top ' + g.n
+                    + ' <span class="muted swing-sub">fit ' + r.fitFrom + '→' + r.fitTo
+                    + (r.holdoutAvailable ? ' · holdout ' + r.holdoutFrom + '→' + r.holdoutTo : '')
+                    + ' · challengers judged only by the pre-registered rule</span></h3>';
+                var head = ['Variant', 'CAGR', 'Vol', 'Sharpe', 'MaxDD', 'Calmar', 'Turnover',
+                    'Cost drag', 'Boot pct', 'HO CAGR', 'HO Sharpe', 'HO MaxDD', 'HO Calmar',
+                    'HO turn', '2026 YTD'];
+                var rows = (g.variants || []).map(function (v) { return mosigH2hRow(v); });
+                (r.benchmarks || []).forEach(function (b) {
+                    rows.push(mosigBenchRow(b));
+                });
+                html += '<div style="overflow-x:auto;"><table class="swing-tbl">'
+                    + swingTable(head, rows) + '</table></div>';
+                (g.variants || []).forEach(function (v) {
+                    if (!v.verdict) return;
+                    var txt = escapeHtml(v.verdict)
+                        .replace(/^ADOPT/, '<span style="color:#2ca02c;font-weight:bold;">ADOPT</span>')
+                        .replace(/^REJECT/, '<span style="font-weight:bold;">REJECT</span>')
+                        .replace(/POST-HOC/, '<span style="color:#b0862f;font-weight:bold;">POST-HOC</span>');
+                    html += '<div class="mo-verdict">• <b>' + escapeHtml(v.label) + '</b> — ' + txt + '</div>';
+                });
+            });
+            document.getElementById('ms-h2h-wrap').innerHTML = html;
+        }
+
+        function mosigH2hRow(v) {
+            var f = v.fit, h = v.holdout;
+            var boot = v.bootstrap;
+            var bootCell = { t: '—' };
+            if (boot) {
+                bootCell = {
+                    t: Math.round(boot.cagrPercentile * 100) + 'th',
+                    cls: boot.cagrInsideIqr ? 'mo-dim' : (boot.cagrPercentile > 0.75 ? 'swing-pos' : '')
+                };
+            }
+            var ddTitle = f.maxDrawdownPeak ? f.maxDrawdownPeak + ' → ' + f.maxDrawdownTrough : '';
+            return {
+                cls: v.key === 'V1' ? 'swing-baseline' : '',
+                cells: [
+                    { t: escapeHtml(v.label), lbl: true, title: (v.description || '').replace(/"/g, '&quot;') },
+                    { t: fmtPct(f.cagr), cls: moCls(f.cagr) },
+                    { t: fmtPct(f.annVol) },
+                    { t: moNum(f.sharpe) },
+                    { t: fmtPct(f.maxDrawdown), cls: 'swing-neg', title: ddTitle },
+                    { t: moNum(f.calmar) },
+                    { t: fmtPct(v.fitTurnover) },
+                    { t: v.costDragCagrPct == null ? '—' : moNum(v.costDragCagrPct, 2) + ' pp' },
+                    bootCell,
+                    { t: h ? fmtPct(h.cagr) : '—', cls: h ? moCls(h.cagr) : '' },
+                    { t: h ? moNum(h.sharpe) : '—' },
+                    { t: h ? fmtPct(h.maxDrawdown) : '—', cls: h ? 'swing-neg' : '' },
+                    { t: h ? moNum(h.calmar) : '—' },
+                    { t: h ? fmtPct(v.holdoutTurnover) : '—' },
+                    { t: v.ytd2026 == null ? '—' : fmtPct(v.ytd2026), cls: moCls(v.ytd2026) }
+                ]
+            };
+        }
+
+        function mosigBenchRow(b) {
+            var f = b.fit, h = b.holdout;
+            return {
+                cls: 'swing-baseline',
+                cells: [
+                    { t: b.symbol + ' (B&H)', lbl: true },
+                    { t: fmtPct(f.cagr), cls: moCls(f.cagr) },
+                    { t: fmtPct(f.annVol) },
+                    { t: moNum(f.sharpe) },
+                    { t: fmtPct(f.maxDrawdown), cls: 'swing-neg' },
+                    { t: moNum(f.calmar) },
+                    { t: '—' }, { t: '—' }, { t: '—' },
+                    { t: h ? fmtPct(h.cagr) : '—', cls: h ? moCls(h.cagr) : '' },
+                    { t: h ? moNum(h.sharpe) : '—' },
+                    { t: h ? fmtPct(h.maxDrawdown) : '—', cls: h ? 'swing-neg' : '' },
+                    { t: h ? moNum(h.calmar) : '—' },
+                    { t: '—' }, { t: '—' }
+                ]
+            };
+        }
+
+        function renderMosigEpisodes() {
+            var r = msReport;
+            document.getElementById('ms-episodes-sub').textContent =
+                'NON-DECISIONAL — zero weight in the verdict · shown at N=' + r.episodeN;
+            var head = ['Episode', 'Variant', 'Window ret', 'GLD', 'Holdings (positioning + each in-window rebalance)'];
+            var lastEp = null;
+            var rows = (r.episodes || []).map(function (e) {
+                var epCell = e.episode === lastEp ? '' : escapeHtml(e.episode);
+                lastEp = e.episode;
+                return {
+                    cells: [
+                        { t: epCell, lbl: true },
+                        { t: e.variantKey, lbl: true },
+                        { t: e.windowReturn == null ? '—' : fmtPct(e.windowReturn), cls: moCls(e.windowReturn) },
+                        { t: (e.gldNotes || []).map(escapeHtml).join('; ') || '—', lbl: true },
+                        { t: '<span style="font-size:0.72rem;">'
+                            + (e.holdings || []).map(escapeHtml).join('<br>') + '</span>' }
+                    ]
+                };
+            });
+            document.getElementById('ms-episodes').innerHTML = swingTable(head, rows);
+        }
+
+        function populateMosigSelects() {
+            var groups = msReport.groups || [];
+            document.getElementById('ms-diag-n').innerHTML = groups.map(function (g, gi) {
+                return '<option value="' + gi + '">Top ' + g.n + '</option>';
+            }).join('');
+            var opts = '';
+            groups.forEach(function (g, gi) {
+                (g.variants || []).forEach(function (v, vi) {
+                    opts += '<option value="' + gi + ':' + vi + '">Top ' + g.n + ' · ' + v.key + '</option>';
+                });
+            });
+            document.getElementById('ms-grid-variant').innerHTML = opts;
+            document.getElementById('ms-log-variant').innerHTML = opts;
+        }
+
+        function mosigSelectedVariant(selectId) {
+            var val = document.getElementById(selectId).value || '0:0';
+            var parts = val.split(':');
+            var g = (msReport.groups || [])[+parts[0]];
+            return g ? (g.variants || [])[+parts[1]] : null;
+        }
+
+        function renderMosigDiag() {
+            var gi = +document.getElementById('ms-diag-n').value || 0;
+            var g = (msReport.groups || [])[gi];
+            if (!g) return;
+            var v4 = null, v5 = null;
+            (g.variants || []).forEach(function (v) {
+                if (v.key === 'V4') v4 = v;
+                if (v.key === 'V5') v5 = v;
+            });
+
+            var gateHtml = '<b>V4 gate binding</b> <span class="muted">(slot-months the rf gate kept in cash)</span>: ';
+            if (v4 && v4.gateBindsByYear && Object.keys(v4.gateBindsByYear).length) {
+                gateHtml += Object.keys(v4.gateBindsByYear).sort().map(function (y) {
+                    return y + ': <b>' + v4.gateBindsByYear[y] + '</b>';
+                }).join(' · ') + ' &nbsp;→&nbsp; total <b>' + v4.gateBindsTotal + '</b> slot-months';
+            } else {
+                gateHtml += 'never bound';
+            }
+            document.getElementById('ms-gate').innerHTML = gateHtml;
+
+            var stopHtml = '<b>V5 stops per year</b>: ';
+            if (v5 && v5.stopsByYear && Object.keys(v5.stopsByYear).length) {
+                stopHtml += Object.keys(v5.stopsByYear).sort().map(function (y) {
+                    return y + ': <b>' + v5.stopsByYear[y] + '</b>';
+                }).join(' · ') + ' &nbsp;→&nbsp; total <b>' + (v5.stops || []).length
+                    + '</b> stops, <b>' + (v5.whipsaws || []).length + '</b> whipsaws';
+            } else {
+                stopHtml += 'none fired';
+            }
+            document.getElementById('ms-stopyears').innerHTML = stopHtml;
+
+            var head = ['Stop date', 'Symbol', 'Stop DD', 'Re-entered', 'Txn cost', 'TR gap stop→re-entry'];
+            var rows = (v5 ? v5.whipsaws || [] : []).map(function (w) {
+                return {
+                    cells: [
+                        { t: w.stopDate, lbl: true },
+                        { t: w.symbol, lbl: true },
+                        { t: fmtPct(w.stopDrawdownPct), cls: 'swing-neg' },
+                        { t: w.reentryDate },
+                        { t: moNum(w.txnCostBps, 1) + ' bps' },
+                        { t: w.trGapPct == null ? '—' : fmtPct(w.trGapPct),
+                          cls: w.trGapPct > 0 ? 'swing-neg' : 'swing-pos',
+                          title: 'positive = bought back higher than the stop close (whipsaw cost)' }
+                    ]
+                };
+            });
+            document.getElementById('ms-whipsaw').innerHTML = rows.length
+                ? swingTable(head, rows)
+                : '<tr><td class="lbl muted">no whipsaws — no stop was followed by re-entry within 2 rebalances</td></tr>';
+        }
+
+        function renderMosigGrid() {
+            var v = mosigSelectedVariant('ms-grid-variant');
+            if (!v) return;
+            var months = {};
+            Object.assign(months, v.fit.months);
+            var holdoutKeys = {};
+            if (v.holdout && v.holdout.months) {
+                Object.keys(v.holdout.months).forEach(function (k) {
+                    months[k] = v.holdout.months[k];
+                    holdoutKeys[k] = true;
+                });
+            }
+            var keys = Object.keys(months).sort();
+            if (!keys.length) { document.getElementById('ms-grid').innerHTML = ''; return; }
+            var years = [];
+            var byYear = {};
+            keys.forEach(function (k) {
+                var y = k.slice(0, 4), m = +k.slice(5, 7);
+                if (!byYear[y]) { byYear[y] = {}; years.push(y); }
+                byYear[y][m] = { v: months[k], holdout: holdoutKeys[k] };
+            });
+            var mn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            var html = '<tr><th class="lbl">Year</th>';
+            mn.forEach(function (m) { html += '<th>' + m + '</th>'; });
+            html += '<th>Year</th></tr>';
+            years.forEach(function (y) {
+                html += '<tr><td class="lbl">' + y + '</td>';
+                var yf = 1, any = false;
+                for (var m = 1; m <= 12; m++) {
+                    var cell = byYear[y][m];
+                    if (!cell) { html += '<td></td>'; continue; }
+                    any = true;
+                    yf *= 1 + cell.v;
+                    html += '<td style="' + moGridStyle(cell.v, cell.holdout) + '" title="' + y + '-'
+                        + ('0' + m).slice(-2) + (cell.holdout ? ' (holdout)' : '') + '">'
+                        + (cell.v * 100).toFixed(1) + '</td>';
+                }
+                html += '<td class="' + moCls(yf - 1) + '"><b>' + (any ? (yf - 1) * 100 : 0).toFixed(1) + '</b></td></tr>';
+            });
+            document.getElementById('ms-grid').innerHTML = html;
+        }
+
+        function renderMosigLog() {
+            var v = mosigSelectedVariant('ms-log-variant');
+            if (!v) return;
+            var head = ['Date', 'Sec', 'Elig', 'In', 'Out', 'Holdings (rank:score)', 'Turnover', 'Cost', 'Cash'];
+            var rows = (v.log || []).map(function (e) {
+                return {
+                    cls: e.section === 'holdout' ? 'swing-baseline' : '',
+                    cells: [
+                        { t: e.date, lbl: true },
+                        { t: e.section },
+                        { t: e.eligible },
+                        { t: (e.in || []).join(' ') || '—', lbl: true },
+                        { t: (e.out || []).join(' ') || '—', lbl: true },
+                        { t: (e.heldRanks || []).join(' '), lbl: true },
+                        { t: fmtPct(e.turnover) },
+                        { t: fmtPct(e.cost) },
+                        { t: fmtPct(e.cashWeight) }
+                    ]
+                };
+            });
+            document.getElementById('ms-log').innerHTML = swingTable(head, rows);
+        }
+
+        function downloadMosigCsv() {
+            var v = mosigSelectedVariant('ms-log-variant');
+            if (!v) return;
+            var lines = ['date,section,eligible,in,out,holdings,turnover,cost,cash'];
+            (v.log || []).forEach(function (e) {
+                lines.push([e.date, e.section, e.eligible,
+                    '"' + (e.in || []).join(' ') + '"', '"' + (e.out || []).join(' ') + '"',
+                    '"' + (e.heldRanks || []).join(' ') + '"',
+                    e.turnover, e.cost, e.cashWeight].join(','));
+            });
+            downloadCsv('momentum-signals-' + v.key + '.csv', lines.join('\n'));
+        }
+
+        function downloadMosigStopsCsv() {
+            var gi = +document.getElementById('ms-diag-n').value || 0;
+            var g = (msReport.groups || [])[gi];
+            if (!g) return;
+            var v5 = null;
+            (g.variants || []).forEach(function (v) { if (v.key === 'V5') v5 = v; });
+            if (!v5) return;
+            var lines = ['date,section,symbol,weightSold,cost,drawdownPct'];
+            (v5.stops || []).forEach(function (e) {
+                lines.push([e.date, e.section, e.symbol, e.weightSold, e.cost, e.drawdownPct].join(','));
+            });
+            downloadCsv('momentum-signals-stops-top' + g.n + '.csv', lines.join('\n'));
         }
 
         /* ==================== Range floor tab ==================== */

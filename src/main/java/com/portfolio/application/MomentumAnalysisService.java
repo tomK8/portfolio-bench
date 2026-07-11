@@ -248,8 +248,9 @@ public class MomentumAnalysisService {
 
     // ---- helpers ------------------------------------------------------------
 
-    private Map<String, Double> indexMonths(MomentumSeries s, MomentumConfig cfg,
-                                            int startIdx, int fromK, int toK) {
+    /** Shared with {@link MomentumSignalsService} — the regime index's monthly returns. */
+    static Map<String, Double> indexMonths(MomentumSeries s, MomentumConfig cfg,
+                                           int startIdx, int fromK, int toK) {
         int ri = s.indexOf(cfg.regimeSymbol());
         if (ri < 0) return Map.of();
         RotationBacktester.Result bh = RotationBacktester.buyAndHold(s, ri, startIdx, startIdx + toK);
@@ -285,8 +286,9 @@ public class MomentumAnalysisService {
         return n == 0 ? 0 : sum / n;
     }
 
-    private List<MomentumReport.RebalanceRow> logRows(RotationBacktester.Result r,
-                                                      LocalDate fitEnd, boolean holdout) {
+    /** Shared with {@link MomentumSignalsService} — rebalance events as exportable rows. */
+    static List<MomentumReport.RebalanceRow> logRows(RotationBacktester.Result r,
+                                                     LocalDate fitEnd, boolean holdout) {
         List<MomentumReport.RebalanceRow> rows = new ArrayList<>();
         for (RotationBacktester.RebalanceEvent e : r.events()) {
             String section = e.date().isAfter(fitEnd) ? "holdout" : "fit";
@@ -299,7 +301,8 @@ public class MomentumAnalysisService {
         return rows;
     }
 
-    private List<MomentumReport.SymbolSpan> spans(MomentumSeries s, MomentumConfig cfg) {
+    /** Shared with {@link MomentumSignalsService} — data span per configured symbol. */
+    static List<MomentumReport.SymbolSpan> spans(MomentumSeries s, MomentumConfig cfg) {
         Set<String> ranked = new LinkedHashSet<>(cfg.universe());
         List<MomentumReport.SymbolSpan> out = new ArrayList<>();
         Set<String> all = new LinkedHashSet<>(cfg.universe());

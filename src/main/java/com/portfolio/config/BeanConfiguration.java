@@ -547,6 +547,15 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public MomentumSignalsService momentumSignalsService(PriceHistoryRepository priceHistoryRepository,
+                                                         YahooTickerMap yahooTickerMap,
+                                                         KeyValueStore keyValueStore,
+                                                         PriceFetchJob priceFetchJob) {
+        return new MomentumSignalsService(priceHistoryRepository, yahooTickerMap,
+                keyValueStore, priceFetchJob);
+    }
+
+    @Bean
     public RangeAnalysisService rangeAnalysisService(PriceHistoryRepository priceHistoryRepository,
                                                      YahooTickerMap yahooTickerMap,
                                                      HistoricalFxRateProvider historicalFxRateProvider,

@@ -45,13 +45,24 @@ public final class RotationBacktester {
     }
 
     /**
+     * A trailing-stop exit (V5 overlay): the holding closed at or below {@code peak × (1 − stop)}
+     * and was sold at that close. {@code drawdownPct} is {@code close/peak − 1} (split-adjusted
+     * closes — what a real stop order watches); the freed weight sat in cash until the next
+     * rebalance. {@code barIdx} is the series bar of the exit, for TR-space whipsaw accounting.
+     */
+    public record StopEvent(LocalDate date, int barIdx, String symbol, double weightSold,
+                            double cost, double close, double peak, double drawdownPct) {
+    }
+
+    /**
      * Daily results from {@code startIdx} to {@code endIdx}. {@code equity[k]} / {@code dailyRet[k]}
      * refer to series bar {@code startIdx + k}. The initial entry's cost is folded into bar 0
      * ({@code dailyRet[0] = −cost}, {@code equity[0] = 1 − cost}), so window returns compound
-     * cleanly from a base of 1 and fit/holdout slices partition exactly.
+     * cleanly from a base of 1 and fit/holdout slices partition exactly. {@code stops} is empty
+     * unless the run had a trailing-stop overlay.
      */
     public record Result(int startIdx, double[] equity, double[] dailyRet,
-                         List<RebalanceEvent> events) {
+                         List<RebalanceEvent> events, List<StopEvent> stops) {
     }
 
     private RotationBacktester() {
@@ -65,6 +76,21 @@ public final class RotationBacktester {
     /** Hold the {@code n} weakest — the reversed-signal sanity check. */
     public static Selector bottomN(int n) {
         return ranked -> ranked.subList(Math.max(0, ranked.size() - n), ranked.size());
+    }
+
+    /**
+     * Top-{@code n} with an absolute gate (V4): a selected name is only held if its own score
+     * exceeds {@code minScore} (the rf accrual over the momentum window). A failing slot stays in
+     * cash — the caller passes {@code slots = n} so the shortfall isn't redistributed.
+     */
+    public static Selector gatedTopN(int n, double minScore) {
+        return ranked -> {
+            List<Momentum.Ranked> out = new ArrayList<>();
+            for (Momentum.Ranked r : ranked.subList(0, Math.min(n, ranked.size()))) {
+                if (r.score() > minScore) out.add(r);
+            }
+            return out;
+        };
     }
 
     /** Hold every eligible name — the equal-weight universe baseline. */
@@ -113,7 +139,16 @@ public final class RotationBacktester {
             dailyRet[i - startIdx] = r;
             equity[i - startIdx] = eq;
         }
-        return new Result(startIdx, equity, dailyRet, List.of());
+        return new Result(startIdx, equity, dailyRet, List.of(), List.of());
+    }
+
+    /**
+     * Run one full backtest with the incumbent signal (12-1 from the config) and no stop overlay —
+     * the original entry point; every existing caller (variants, controls, bootstrap) routes here.
+     */
+    public static Result run(MomentumSeries s, MomentumConfig cfg, Selector selector,
+                             Integer slots, int startIdx, int endIdx) {
+        return run(s, cfg, Ranker.incumbent(cfg), selector, slots, startIdx, endIdx, null);
     }
 
     /**
@@ -122,19 +157,29 @@ public final class RotationBacktester {
      * chosen (the EW baseline). {@code endIdx} caps the run (inclusive) — pass
      * {@code s.size() - 1} for the full window; the holdout-separation test relies on a truncated
      * run matching the full run over the shared window.
+     *
+     * <p>{@code trailingStopPct} (nullable) is the V5 overlay: between rebalances, a holding whose
+     * split-adjusted close falls to or below {@code (1 − stop) × its highest close since entry} is
+     * sold at that close (cost charged on the weight sold), the slot idling in cash until the next
+     * rebalance. On a rebalance day the rebalance supersedes — no separate stop trade is booked.
+     * The peak includes the entry close and resets on every fresh entry, so a stopped name that
+     * re-ranks top-N later re-enters with a new peak (whipsaw cost is part of what's measured).
      */
-    public static Result run(MomentumSeries s, MomentumConfig cfg, Selector selector,
-                             Integer slots, int startIdx, int endIdx) {
+    public static Result run(MomentumSeries s, MomentumConfig cfg, Ranker ranker, Selector selector,
+                             Integer slots, int startIdx, int endIdx, Double trailingStopPct) {
         int n = endIdx - startIdx + 1;
         double[] equity = new double[n];
         double[] dailyRet = new double[n];
         List<RebalanceEvent> events = new ArrayList<>();
+        List<StopEvent> stops = new ArrayList<>();
 
         Set<Integer> rebalanceIdx = new LinkedHashSet<>();
         for (int i : s.monthEndIdx()) if (i >= startIdx && i <= endIdx) rebalanceIdx.add(i);
 
         int m = s.universeCount();
         double[] w = new double[m];
+        double[] peak = new double[m];   // highest close since entry, NaN when not held
+        java.util.Arrays.fill(peak, Double.NaN);
         double cash = 1.0;
         double eq = 1.0;
         equity[0] = 1.0;
@@ -162,8 +207,44 @@ public final class RotationBacktester {
                 cash = grownCash / total;
             }
 
-            if (rebalanceIdx.contains(i)) {
-                List<Momentum.Ranked> ranked = Momentum.rank(s, i, cfg.lookbackSessions(), cfg.skipSessions());
+            boolean rebalanceDay = rebalanceIdx.contains(i);
+
+            if (trailingStopPct != null && i > startIdx && !held.isEmpty()) {
+                // Peaks absorb every session's close (rebalance days included); the trigger check
+                // is skipped on rebalance days — there the ranking decides.
+                for (int idx : held) {
+                    double c = s.close(idx, i);
+                    if (Double.isNaN(c)) continue;   // frozen name: no price to read today
+                    if (Double.isNaN(peak[idx]) || c > peak[idx]) peak[idx] = c;
+                }
+                if (!rebalanceDay) {
+                    List<Integer> triggered = new ArrayList<>();
+                    for (int idx : held) {
+                        double c = s.close(idx, i);
+                        if (Double.isNaN(c) || Double.isNaN(peak[idx])) continue;
+                        if (c <= peak[idx] * (1 - trailingStopPct)) triggered.add(idx);
+                    }
+                    double soldWeight = 0;
+                    for (int idx : triggered) {
+                        double c = s.close(idx, i);
+                        stops.add(new StopEvent(s.dateAt(i), i, s.nameOf(idx), w[idx],
+                                costPerSide * w[idx], c, peak[idx], c / peak[idx] - 1));
+                        soldWeight += w[idx];
+                        cash += w[idx];
+                        w[idx] = 0;
+                        peak[idx] = Double.NaN;
+                        held.remove(idx);
+                    }
+                    if (soldWeight > 0) {
+                        double cost = costPerSide * soldWeight;
+                        eq *= 1 - cost;
+                        dailyRet[i - startIdx] = (1 + dailyRet[i - startIdx]) * (1 - cost) - 1;
+                    }
+                }
+            }
+
+            if (rebalanceDay) {
+                List<Momentum.Ranked> ranked = ranker.rank(s, i);
                 List<Momentum.Ranked> chosen = selector.select(ranked);
                 double perName = chosen.isEmpty() ? 0
                         : 1.0 / (slots == null ? chosen.size() : Math.max(slots, chosen.size()));
@@ -188,6 +269,13 @@ public final class RotationBacktester {
                 }
                 for (int idx : held) if (!newHeld.contains(idx)) out.add(s.nameOf(idx));
 
+                if (trailingStopPct != null) {
+                    // Fresh entries start their peak at the entry close; exits release theirs.
+                    // Kept names keep the peak they've been accumulating.
+                    for (int idx : newHeld) if (!held.contains(idx)) peak[idx] = s.close(idx, i);
+                    for (int idx : held) if (!newHeld.contains(idx)) peak[idx] = Double.NaN;
+                }
+
                 events.add(new RebalanceEvent(s.dateAt(i), ranked.size(), in, out,
                         List.copyOf(chosen), deltaSum / 2, cost, 1 - invested));
 
@@ -200,6 +288,6 @@ public final class RotationBacktester {
 
             equity[i - startIdx] = eq;
         }
-        return new Result(startIdx, equity, dailyRet, events);
+        return new Result(startIdx, equity, dailyRet, events, stops);
     }
 }

@@ -132,6 +132,22 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   turnover + cost drag, a 200d-MA regime split and momentum-crash diagnostics per variant; expanding
   window; exportable rebalance log. See the Momentum section below.
 
+- **Mom. signals** — `GET /momentum-signals` → JSON, rendered as tables under the Tools group.
+  Five-variant signal-speed/overlay comparison on a **pinned 17-ETF asset-class universe**
+  (sector SPDRs + EFA/EEM/TLT/IEF/GLD/REIT): V1 incumbent 12-1 (must reproduce the Momentum tab
+  bit-for-bit — asserted in tests), V2 6-1 (same 252-session *eligibility*, so signal speed isn't
+  confounded with universe breadth), V3 equal-weight 3-1/6-1/12-1 cross-sectional z-blend, V4
+  12-1 + absolute rf gate (a top-N slot idles in cash when the name's own 12-1 return ≤ the rf
+  accrual over the window), V5 12-1 + 15% trailing stop off the peak close since entry (sells at
+  that close, cash to next rebalance, free re-entry — whipsaw cost is part of what's measured).
+  Verdicts follow a **pre-registered adoption rule** (beat V1 on Sharpe AND Calmar, in fit AND
+  holdout, at the same N) printed verbatim, with a contamination disclosure (variants designed
+  after peeking at 2025-26) and an ex-2026 POST-HOC re-check of any holdout edge; five
+  pre-recorded predictions get per-N pass/fail marks. Episode panel (2008/2011/2020/2022/
+  2026-gold, with GLD derate/gate/stop dates) is explicitly **non-decisional**. One shared
+  random-N bootstrap per N ranks all five variants (the control is selection-agnostic). See the
+  Momentum-signals section below.
+
 - **Range floor** — `GET /range` → JSON, rendered as tables + an annotated chart under the Tools
   group. Pre-registered backtest of a percentile-floor range strategy on a fixed 12-name
   information-infrastructure cohort (Family A exchanges: LSEG.L, DB1.DE, ICE, CME, NDAQ; Family B
@@ -176,6 +192,8 @@ no `System.out` in production code.
 | Trend backfill        | `POST /trend/backfill`     | `TrendAnalysisService`    |
 | Momentum              | `GET /momentum`            | `MomentumAnalysisService` |
 | Momentum mutate/backfill | `POST /momentum/{symbols,backfill}` | `MomentumAnalysisService` |
+| Momentum signals      | `GET /momentum-signals`    | `MomentumSignalsService`  |
+| Momentum signals backfill | `POST /momentum-signals/backfill` | `MomentumSignalsService` |
 | Range floor           | `GET /range`               | `RangeAnalysisService`    |
 | Range backfill        | `POST /range/backfill`     | `RangeAnalysisService`    |
 
@@ -649,6 +667,54 @@ ledger.
   **only — never by `report()`** (an exploratory `?universe=` sweep can't drop names from nightly
   maintenance); `ensureBackfilled` deep-fetches missing/shallow coverage (45y, same rationale as
   Trend). No FX — unit-less return ratios throughout.
+
+## Momentum-signals comparison
+
+Five-variant signal-speed/overlay comparison (Mom. signals tab) on the pinned 17-ETF asset-class
+universe, judged by a pre-registered adoption rule. Extends the momentum harness — no second
+accounting path.
+
+- **Ranker abstraction.** `domain.momentum.Ranker` is the only thing variants may differ in
+  (plus the two overlays); `Ranker.incumbent(cfg)` delegates to `Momentum.rank` verbatim, so the
+  generalized `RotationBacktester.run(…, Ranker, …, trailingStopPct)` overload with the incumbent
+  ranker is **bit-identical** to the original path (asserted at domain and service level — the V1
+  reproduction requirement; the old 6-arg `run` delegates, all existing callers unchanged).
+  `SignalRankers.lookbackSkip` (V2: 126/21 scoring, `eligibilityLookback` 252 held constant so a
+  faster signal doesn't also get a broader early universe) and `SignalRankers.compositeZ` (V3:
+  population-σ cross-sectional z per component over the eligible set, degenerate component → 0,
+  composite = mean of z's; hand-checked in `SignalVariantsTest`).
+- **Overlays.** V4 = `RotationBacktester.gatedTopN(n, hurdle)` with `hurdle = (1+rfDaily)^(lookback−skip)−1`
+  (compounded-daily rf accrual, matching the cash leg) and `slots = n` so a gated slot stays in
+  cash; gate re-evaluates held names (no grandfathering); binds derived from events as
+  `min(n, eligible) − held`. V5 = `trailingStopPct` inside the daily loop: peaks track
+  split-adjusted `close` (what a real stop order watches — P&L stays in adj space), include the
+  entry close, absorb every session incl. rebalance days; the trigger check is **skipped on
+  rebalance days** (the ranking supersedes); at-or-through fills at that close, cost on the
+  weight sold, `StopEvent`s surface in `Result.stops` (censoring/turnover conventions unchanged).
+  Whipsaw = stop then re-entry within 2 rebalances; reported with txn cost (bps) + TR gap
+  stop→re-entry (negative = re-entered cheaper). V5 turnover includes stop sells (`weightSold/2`).
+- **Shared control.** `RotationBootstrap.samples`/`of` split lets one random-N distribution per N
+  (seed `randomSeed+N`, fit window only) rank all five variants — the control is
+  selection-agnostic (ranking orders the eligible set, never changes membership), and overlays are
+  deliberately not applied inside draws: the bootstrap prices selection skill on one yardstick.
+- **`MomentumSignalsService`** (application) pins `SIGNALS_UNIVERSE` (17 ETFs incl. REIT, listed
+  2021 — enters as history accrues) and assembles `MomentumSignalsReport`: context + 3-bullet
+  pre-registration + ≤10-sentence §0 all **verbatim constants**; per-N `VariantRow`s (fit/holdout
+  stats, turnover, cost drag, shared-bootstrap percentiles, regime, crash, 2026-YTD, logs); the
+  **adoption verdict** (challenger must beat V1 on Sharpe AND Calmar in fit AND holdout, same N;
+  NaN comparisons fail conservatively — undefined holdout Calmar keeps the incumbent); the
+  **POST-HOC flag** recomputes the holdout leg on the ex-2026 slice (`CONTAMINATED_FROM`
+  2026-01-01; contiguous tail, so the same stats path serves it) — an edge that only exists with
+  2026 included is flagged whatever the rule says; five **predictions** scored per N with stated
+  thresholds (`SHARPE_NOISE` 0.10, |ΔCAGR| ≤ 1pp, YTD ∈ (0,10%)); the **episode panel**
+  (5 fixed windows × 5 variants at `episodeN`, default middle N) lists positioning + in-window
+  holdings and GLD derate/gate/stop dates, labelled non-decisional. Helpers (`logRows`, `spans`,
+  `indexMonths`) shared from `MomentumAnalysisService` (package-private statics). KV
+  `momentum_signals_symbols` (universe ∪ benchmarks ∪ regime) unioned into
+  `PriceFetchSupport.tickersToFetch`; written by constructor seed + `ensureBackfilled` only
+  (standard 30y fetch — the cohort lists post-1993). No universe editing endpoint — the pin is
+  part of the pre-registration. First adoption run (2026-07): all challengers REJECT at every N;
+  the incumbent stands.
 
 ## Range-floor backtest
 

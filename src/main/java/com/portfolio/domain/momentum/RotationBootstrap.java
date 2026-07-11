@@ -30,8 +30,16 @@ public record RotationBootstrap(
         double sharpePercentile,
         double maxDrawdownPercentile) {
 
-    public static RotationBootstrap run(MomentumSeries s, MomentumConfig cfg, int n,
-                                        int startIdx, int fitEndIdx, MomentumStats actual) {
+    /**
+     * The raw per-iteration outcomes, kept so several variants at the same N can be ranked against
+     * one shared distribution (the control is selection-agnostic — the ranking only orders the
+     * eligible set, it doesn't change membership, so one distribution serves every signal).
+     */
+    public record Samples(int iterations, long seed, double[] cagrs, double[] sharpes, double[] dds) {
+    }
+
+    public static Samples samples(MomentumSeries s, MomentumConfig cfg, int n,
+                                  int startIdx, int fitEndIdx) {
         long seed = cfg.randomSeed() + n;
         Random rng = new Random(seed);
         int iters = cfg.bootstrapIterations();
@@ -46,11 +54,21 @@ public record RotationBootstrap(
             sharpes[it] = st.sharpe();
             dds[it] = st.maxDrawdown();
         }
-        return new RotationBootstrap(iters, seed,
-                Stats.dist(cagrs), Stats.dist(sharpes), Stats.dist(dds),
-                Stats.fractionAtMost(cagrs, actual.cagr()),
-                Stats.fractionAtMost(sharpes, actual.sharpe()),
-                Stats.fractionAtMost(dds, actual.maxDrawdown()));
+        return new Samples(iters, seed, cagrs, sharpes, dds);
+    }
+
+    /** Rank one variant's actual fit stats inside an already-drawn distribution. */
+    public static RotationBootstrap of(Samples smp, MomentumStats actual) {
+        return new RotationBootstrap(smp.iterations(), smp.seed(),
+                Stats.dist(smp.cagrs()), Stats.dist(smp.sharpes()), Stats.dist(smp.dds()),
+                Stats.fractionAtMost(smp.cagrs(), actual.cagr()),
+                Stats.fractionAtMost(smp.sharpes(), actual.sharpe()),
+                Stats.fractionAtMost(smp.dds(), actual.maxDrawdown()));
+    }
+
+    public static RotationBootstrap run(MomentumSeries s, MomentumConfig cfg, int n,
+                                        int startIdx, int fitEndIdx, MomentumStats actual) {
+        return of(samples(s, cfg, n, startIdx, fitEndIdx), actual);
     }
 
     /** Inside the interquartile range on CAGR — the "indistinguishable from random" dimming cue. */

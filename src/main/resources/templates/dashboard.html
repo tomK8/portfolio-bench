@@ -568,9 +568,9 @@
         /* The §7 matrix is small — anchor it to the text column instead of centring it in the viewport. */
         #sw-corr-wrap .full-bleed { padding-left: max(1.5rem, calc(50vw - 50%)); }
         #sw-corr-wrap .full-bleed > table { margin-left: 0; }
-        /* Trend tab: every table anchored to the text column; they grow rightwards as needed. */
-        #panel-trend .full-bleed { padding-left: max(1.5rem, calc(50vw - 50%)); }
-        #panel-trend .full-bleed > table { margin-left: 0; }
+        /* Trend + Range tabs: every table anchored to the text column; they grow rightwards as needed. */
+        #panel-trend .full-bleed, #panel-range .full-bleed { padding-left: max(1.5rem, calc(50vw - 50%)); }
+        #panel-trend .full-bleed > table, #panel-range .full-bleed > table { margin-left: 0; }
         #panel-trend .swing-regimes { justify-content: flex-start; padding-left: max(1.5rem, calc(50vw - 50%)); }
         table.corr-matrix th.corr-axis { background: #f6f7f9; font-weight: 600; position: sticky; }
         html[data-theme="dark"] .swing-tbl th { background: #23262b; }
@@ -2380,7 +2380,7 @@
                 <summary class="swing-h" style="cursor:pointer;">Event log — every trade, both modes
                     <select id="rg-log-symbol" style="font-size:0.8rem;"></select>
                     <button type="button" class="sw-csv-btn" id="rg-log-csv">CSV</button></summary>
-                <table id="rg-log" class="swing-tbl"></table>
+                <div class="full-bleed"><table id="rg-log" class="swing-tbl"></table></div>
             </details>
         </div>
     </div>

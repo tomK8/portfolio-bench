@@ -532,7 +532,10 @@
         #panel-swing table.annual-table { font-size: 0.78rem; }
         #panel-swing table.annual-table th, #panel-swing table.annual-table td { padding: 0.12rem 0.4rem; }
         .swing-block { margin: 0.6rem 0 1rem; }
-        .swing-regimes { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; overflow-x: auto; }
+        .swing-regimes { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; overflow-x: auto;
+            justify-content: safe center;
+            margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw);
+            padding: 0 1.5rem; box-sizing: border-box; }
         .swing-regime-col { flex: 1 1 620px; min-width: 560px; }
         .swing-span { font-size: 0.82rem; margin: 0.5rem 0; padding: 0.3rem 0.5rem; background: #f6f7f9; border-radius: 4px; }
         .swing-warn { color: #c0392b; font-weight: 600; }
@@ -589,6 +592,23 @@
         .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
         html[data-theme="dark"] .wl-view-toggle button { border-color: #444; color: #ccc; }
         html[data-theme="dark"] .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
+        /* Wide-table breakout: escape the 960px body cap, centre the table in the viewport,
+           and only scroll when even the full screen can't fit it. */
+        .full-bleed {
+            overflow-x: auto;
+            margin-left: calc(50% - 50vw);
+            margin-right: calc(50% - 50vw);
+            padding: 0 1.5rem;
+            box-sizing: border-box;
+        }
+        .full-bleed > table { margin-left: auto; margin-right: auto; }
+        /* The collapsible logs are their own scroll boxes (display:block tables) — bleed them too. */
+        #tr-tradelog, #mo-log, #ms-log {
+            margin-left: calc(50% - 50vw);
+            margin-right: calc(50% - 50vw);
+            padding: 0 1.5rem;
+            box-sizing: border-box;
+        }
         /* Break out of the 960px body cap so the heatmap can use the whole viewport. */
         #wl-returns-panel {
             overflow-x: auto;
@@ -1735,7 +1755,7 @@
         Hierarchically clustered by (1−ρ) so high-correlation blocks sit on the diagonal.
         Red = positive, blue = negative, white = uncorrelated.
     </p>
-    <div id="corr-heatmap-wrap" style="overflow-x: auto;">
+    <div id="corr-heatmap-wrap" class="full-bleed">
         <table id="corr-heatmap" class="corr-heatmap"></table>
     </div>
 
@@ -1955,7 +1975,7 @@
             <button type="button" data-corr="down">Down days only</button>
         </div>
         <div id="sw-corr-caption" class="muted swing-sub" style="margin: 0.3rem 0;"></div>
-        <div style="overflow-x:auto;">
+        <div class="full-bleed">
             <table id="sw-corr-heatmap" class="corr-matrix"></table>
         </div>
         <h4 class="swing-h" style="margin-top: 0.9rem;">Average pairwise correlation over time</h4>
@@ -2043,12 +2063,12 @@
 
     <div id="tr-grid-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Headline grid <span class="muted swing-sub" id="tr-grid-sub"></span></h3>
-        <div style="overflow-x:auto;"><table id="tr-grid" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="tr-grid" class="swing-tbl"></table></div>
     </div>
 
     <div id="tr-sens-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Sensitivity <span class="muted swing-sub">one dimension varied off the headline at a time — CAGR unless noted</span></h3>
-        <div style="overflow-x:auto;"><table id="tr-sens" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="tr-sens" class="swing-tbl"></table></div>
     </div>
 
     <div id="tr-anchor-wrap" style="display:none; margin-top: 1rem;">
@@ -2058,12 +2078,12 @@
 
     <div id="tr-boot-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Random-exposure bootstrap <span class="muted swing-sub">same time-in fraction + switch count, random timing; percentile = share of random schedules the rule beats</span></h3>
-        <div style="overflow-x:auto;"><table id="tr-boot" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="tr-boot" class="swing-tbl"></table></div>
     </div>
 
     <div id="tr-whip-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Whipsaw accounting <span class="muted swing-sub">the cost side, explicit: trips re-entered higher and what they cost vs staying in</span></h3>
-        <div style="overflow-x:auto;"><table id="tr-whip" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="tr-whip" class="swing-tbl"></table></div>
     </div>
 
     <div id="tr-detail-wrap" style="display:none; margin-top: 1rem;">
@@ -2073,9 +2093,9 @@
             </label>
         </div>
         <h4 class="swing-h">Named episodes <span class="muted swing-sub">strategy vs buy-and-hold where it mattered; uncovered windows flagged, never dropped</span></h4>
-        <div style="overflow-x:auto;"><table id="tr-episodes" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="tr-episodes" class="swing-tbl"></table></div>
         <h4 class="swing-h">Calendar years</h4>
-        <div style="overflow-x:auto;"><table id="tr-annual" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="tr-annual" class="swing-tbl"></table></div>
         <h4 class="swing-h">Whipsaw per decade</h4>
         <table id="tr-decades" class="swing-tbl"></table>
         <details class="swing-eventlog" id="tr-tradelog-details">
@@ -2142,24 +2162,24 @@
 
     <div id="mo-fit-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Fit window <span class="muted swing-sub" id="mo-fit-sub"></span></h3>
-        <div style="overflow-x:auto;"><table id="mo-fit" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="mo-fit" class="swing-tbl"></table></div>
         <h4 class="swing-h" style="margin-top:0.7rem;">200d-MA regime split <span class="muted swing-sub">annualised return / Sharpe / months, by QQQ vs its 200d MA at the positioning date</span></h4>
-        <div style="overflow-x:auto;"><table id="mo-regime-tbl" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="mo-regime-tbl" class="swing-tbl"></table></div>
         <h4 class="swing-h" style="margin-top:0.7rem;">Momentum-crash diagnostics <span class="muted swing-sub">worst 3 months (with QQQ that month) + strategy return in the 3 months after each ≥15% index drawdown</span></h4>
-        <div style="overflow-x:auto;"><table id="mo-crash-tbl" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="mo-crash-tbl" class="swing-tbl"></table></div>
     </div>
 
     <div id="mo-grid-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Monthly returns
             <select id="mo-grid-variant" style="font-size:0.8rem;"></select>
             <span class="muted swing-sub">green ≥ 0, red &lt; 0; holdout months shaded</span></h3>
-        <div style="overflow-x:auto;"><table id="mo-grid" class="swing-tbl mo-grid"></table></div>
+        <div class="full-bleed"><table id="mo-grid" class="swing-tbl mo-grid"></table></div>
     </div>
 
     <div id="mo-holdout-wrap" style="display:none; margin-top: 1rem; border-top: 2px solid #b0862f; padding-top: 0.6rem;">
         <h3 class="swing-h" style="color:#b0862f;">HOLDOUT — last 12 months, out of sample
             <span class="muted swing-sub" id="mo-holdout-sub"></span></h3>
-        <div style="overflow-x:auto;"><table id="mo-holdout" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="mo-holdout" class="swing-tbl"></table></div>
     </div>
 
     <div id="mo-log-wrap" style="display:none; margin-top: 1rem;">
@@ -2210,7 +2230,7 @@
     <div id="ms-pred-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Predictions, recorded before the run
             <span class="muted swing-sub">scored afterwards — calibration, not victory laps; hover a mark for the numbers</span></h3>
-        <div style="overflow-x:auto;"><table id="ms-pred" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="ms-pred" class="swing-tbl"></table></div>
     </div>
 
     <div id="ms-h2h-wrap" style="display:none; margin-top: 1rem;"></div>
@@ -2218,7 +2238,7 @@
     <div id="ms-episodes-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Episode panel
             <span class="muted swing-sub" id="ms-episodes-sub">NON-DECISIONAL — shown for understanding; zero weight in the adoption verdict</span></h3>
-        <div style="overflow-x:auto;"><table id="ms-episodes" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="ms-episodes" class="swing-tbl"></table></div>
     </div>
 
     <div id="ms-diag-wrap" style="display:none; margin-top: 1rem;">
@@ -2230,14 +2250,14 @@
         <h4 class="swing-h" style="margin-top:0.7rem;">V5 whipsaws
             <span class="muted swing-sub">stopped then re-entered within 2 rebalances; negative TR gap = re-entered cheaper (the stop helped)</span>
             <button type="button" class="sw-csv-btn" id="ms-stops-csv">Stops CSV</button></h4>
-        <div style="overflow-x:auto;"><table id="ms-whipsaw" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="ms-whipsaw" class="swing-tbl"></table></div>
     </div>
 
     <div id="ms-grid-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Monthly returns
             <select id="ms-grid-variant" style="font-size:0.8rem;"></select>
             <span class="muted swing-sub">green ≥ 0, red &lt; 0; holdout months outlined</span></h3>
-        <div style="overflow-x:auto;"><table id="ms-grid" class="swing-tbl mo-grid"></table></div>
+        <div class="full-bleed"><table id="ms-grid" class="swing-tbl mo-grid"></table></div>
     </div>
 
     <div id="ms-log-wrap" style="display:none; margin-top: 1rem;">
@@ -2319,20 +2339,20 @@
     <div id="rg-data-wrap" style="display:none; margin-top: 1rem;">
         <details>
             <summary class="swing-h" style="cursor:pointer;">Data panel — spans, currencies, hygiene</summary>
-            <div style="overflow-x:auto;"><table id="rg-data" class="swing-tbl"></table></div>
+            <div class="full-bleed"><table id="rg-data" class="swing-tbl"></table></div>
         </details>
     </div>
 
     <div id="rg-arms-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Arms — A (band) vs B (buy&amp;hold) vs C (random dates) vs D (reversed)
             <span class="muted swing-sub">accumulation mode; pooled/family in GBP, per-name local; costs itemised</span></h3>
-        <div style="overflow-x:auto;"><table id="rg-arms" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="rg-arms" class="swing-tbl"></table></div>
     </div>
 
     <div id="rg-trades-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h">Trade statistics
             <span class="muted swing-sub">events = TP + Pctl + SL + Ambiguous + Open, every table; MAE and underwater include open positions</span></h3>
-        <div style="overflow-x:auto;"><table id="rg-trades" class="swing-tbl"></table></div>
+        <div class="full-bleed"><table id="rg-trades" class="swing-tbl"></table></div>
     </div>
 
     <div id="rg-grid-wrap" style="display:none; margin-top: 1rem;">
@@ -2344,7 +2364,7 @@
     <div id="rg-featured-wrap" style="display:none; margin-top: 1rem;">
         <h3 class="swing-h" id="rg-featured-title">Featured</h3>
         <div style="max-width: 1100px;"><canvas id="rg-featured-chart" height="110"></canvas></div>
-        <div style="overflow-x:auto; margin-top: 0.5rem;"><table id="rg-featured-trades" class="swing-tbl"></table></div>
+        <div class="full-bleed" style="margin-top: 0.5rem;"><table id="rg-featured-trades" class="swing-tbl"></table></div>
     </div>
 
     <div id="rg-log-wrap" style="display:none; margin-top: 1rem;">

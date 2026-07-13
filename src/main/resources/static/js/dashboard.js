@@ -6890,7 +6890,7 @@
                 (r.benchmarks || []).forEach(function (b) {
                     rows.push(mosigBenchRow(b));
                 });
-                html += '<div style="overflow-x:auto;"><table class="swing-tbl">'
+                html += '<div class="full-bleed"><table class="swing-tbl">'
                     + swingTable(head, rows) + '</table></div>';
                 (g.variants || []).forEach(function (v) {
                     if (!v.verdict) return;

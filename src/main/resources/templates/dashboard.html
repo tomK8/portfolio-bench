@@ -563,8 +563,11 @@
         .swing-eventlog .swing-tbl { display: block; max-height: 320px; overflow: auto; margin-top: 0.3rem; }
         html[data-theme="dark"] .swing-family-head { color: #ddd; border-top-color: #333; }
         html[data-theme="dark"] .swing-unverified { color: #f87171; }
-        table.corr-matrix { border-collapse: collapse; font-size: 0.72rem; }
-        table.corr-matrix th, table.corr-matrix td { padding: 0.15rem 0.4rem; text-align: center; border: 1px solid #eee; }
+        table.corr-matrix { border-collapse: collapse; font-size: 0.95rem; }
+        table.corr-matrix th, table.corr-matrix td { padding: 0.3rem 0.7rem; text-align: center; border: 1px solid #eee; }
+        /* The §7 matrix is small — anchor it to the text column instead of centring it in the viewport. */
+        #sw-corr-wrap .full-bleed { padding-left: max(1.5rem, calc(50vw - 50%)); }
+        #sw-corr-wrap .full-bleed > table { margin-left: 0; }
         table.corr-matrix th.corr-axis { background: #f6f7f9; font-weight: 600; position: sticky; }
         html[data-theme="dark"] .swing-tbl th { background: #23262b; }
         html[data-theme="dark"] .swing-tbl th, html[data-theme="dark"] .swing-tbl td { border-color: #333; }

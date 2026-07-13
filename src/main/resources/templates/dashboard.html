@@ -580,6 +580,10 @@
         .mo-verdict .mo-tag-signal { color: #2ca02c; font-weight: 600; }
         .mo-verdict .mo-tag-random { color: #b0862f; font-weight: 600; }
         .swing-tbl td.mo-dim, .swing-tbl tr.mo-dim td { opacity: 0.5; }
+        /* Episode panel: multi-line holdings sit far right of the variant label — stripe rows so
+           the eye can track across. nth-child(even) = data rows 1,3,5… (row 1 is the header). */
+        #ms-episodes tr:nth-child(even) td { background: #f8f8f8; }
+        html[data-theme="dark"] #ms-episodes tr:nth-child(even) td { background: #1e2026; }
         .mo-grid td { min-width: 2.6rem; text-align: center; }
         .mo-grid td.lbl { text-align: left; font-weight: 600; }
         html[data-theme="dark"] .mo-banner { background: #3a1c1f; border-color: #5a2a2f; color: #f3b0b6; }

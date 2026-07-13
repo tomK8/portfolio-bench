@@ -568,6 +568,10 @@
         /* The §7 matrix is small — anchor it to the text column instead of centring it in the viewport. */
         #sw-corr-wrap .full-bleed { padding-left: max(1.5rem, calc(50vw - 50%)); }
         #sw-corr-wrap .full-bleed > table { margin-left: 0; }
+        /* Trend tab: every table anchored to the text column; they grow rightwards as needed. */
+        #panel-trend .full-bleed { padding-left: max(1.5rem, calc(50vw - 50%)); }
+        #panel-trend .full-bleed > table { margin-left: 0; }
+        #panel-trend .swing-regimes { justify-content: flex-start; padding-left: max(1.5rem, calc(50vw - 50%)); }
         table.corr-matrix th.corr-axis { background: #f6f7f9; font-weight: 600; position: sticky; }
         html[data-theme="dark"] .swing-tbl th { background: #23262b; }
         html[data-theme="dark"] .swing-tbl th, html[data-theme="dark"] .swing-tbl td { border-color: #333; }

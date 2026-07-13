@@ -540,7 +540,8 @@
         .swing-span { font-size: 0.82rem; margin: 0.5rem 0; padding: 0.3rem 0.5rem; background: #f6f7f9; border-radius: 4px; }
         .swing-warn { color: #c0392b; font-weight: 600; }
         .swing-regime-head { font-weight: 600; font-size: 0.85rem; margin: 0.6rem 0 0.2rem; color: #1f77b4; }
-        .swing-tbl { border-collapse: collapse; font-size: 0.78rem; font-variant-numeric: tabular-nums; margin-bottom: 0.5rem; }
+        /* width overrides the global table{width:100%}: as wide as the data, never wider. */
+        .swing-tbl { border-collapse: collapse; font-size: 0.78rem; font-variant-numeric: tabular-nums; margin-bottom: 0.5rem; width: fit-content; }
         .swing-tbl th, .swing-tbl td { border: 1px solid #e3e3e3; padding: 0.12rem 0.45rem; text-align: right; white-space: nowrap; }
         .swing-tbl th { background: #f6f7f9; font-weight: 600; }
         .swing-tbl td.lbl, .swing-tbl th.lbl { text-align: left; }
@@ -601,14 +602,9 @@
             padding: 0 1.5rem;
             box-sizing: border-box;
         }
-        .full-bleed > table { margin-left: auto; margin-right: auto; }
-        /* The collapsible logs are their own scroll boxes (display:block tables) — bleed them too. */
-        #tr-tradelog, #mo-log, #ms-log {
-            margin-left: calc(50% - 50vw);
-            margin-right: calc(50% - 50vw);
-            padding: 0 1.5rem;
-            box-sizing: border-box;
-        }
+        /* fit-content overrides the global table{width:100%} — exactly as wide as the data,
+           never wider; wider-than-viewport still scrolls via the wrapper. */
+        .full-bleed > table { width: fit-content; margin-left: auto; margin-right: auto; }
         /* Break out of the 960px body cap so the heatmap can use the whole viewport. */
         #wl-returns-panel {
             overflow-x: auto;
@@ -2101,7 +2097,7 @@
         <details class="swing-eventlog" id="tr-tradelog-details">
             <summary>Trade log <span class="muted swing-sub" id="tr-tradelog-count"></span>
                 <button type="button" class="sw-csv-btn" id="tr-tradelog-csv">CSV</button></summary>
-            <table id="tr-tradelog" class="swing-tbl"></table>
+            <div class="full-bleed"><table id="tr-tradelog" class="swing-tbl"></table></div>
         </details>
     </div>
 </section>
@@ -2188,7 +2184,7 @@
                 <summary class="swing-h" style="cursor:pointer;">Rebalance event log
                     <select id="mo-log-variant" style="font-size:0.8rem;"></select>
                     <button type="button" class="sw-csv-btn" id="mo-log-csv">CSV</button></summary>
-                <table id="mo-log" class="swing-tbl"></table>
+                <div class="full-bleed"><table id="mo-log" class="swing-tbl"></table></div>
             </details>
         </div>
     </div>
@@ -2266,7 +2262,7 @@
                 <summary class="swing-h" style="cursor:pointer;">Rebalance event log
                     <select id="ms-log-variant" style="font-size:0.8rem;"></select>
                     <button type="button" class="sw-csv-btn" id="ms-log-csv">CSV</button></summary>
-                <table id="ms-log" class="swing-tbl"></table>
+                <div class="full-bleed"><table id="ms-log" class="swing-tbl"></table></div>
             </details>
         </div>
     </div>

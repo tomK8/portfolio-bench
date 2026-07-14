@@ -15,6 +15,9 @@ import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.*;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.application.EarningsService;
+import com.portfolio.parser.AJBellOrdersParser;
+import com.portfolio.parser.IIOrdersParser;
+import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
@@ -34,6 +37,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 
 /**
  * The only place outside the web layer that knows about Spring. Wires the
@@ -121,6 +125,14 @@ public class BeanConfiguration {
     public PortfolioGatherer portfolioGatherer(FxRateProvider fxRateProvider,
                                                HoldingFileLocator holdingFileLocator) {
         return new PortfolioGatherer(fxRateProvider, holdingFileLocator);
+    }
+
+    @Bean
+    public OpenOrdersService openOrdersService(HoldingFileLocator holdingFileLocator) {
+        return new OpenOrdersService(holdingFileLocator, List.of(
+                new AJBellOrdersParser(),
+                new IIOrdersParser(),
+                new RothOrdersParser()));
     }
 
     @Bean

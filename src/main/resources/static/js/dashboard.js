@@ -5,7 +5,7 @@
                 if (t === '—' || t === '') return null;
                 // U+2212 (typographic minus, used by the display formatters) → ASCII '-';
                 // parseFloat returns NaN on it, which made every negative sort as null.
-                var s = t.replace(/−/g, '-').replace(/[£$€p%\s]/g, '').replace(/,/g, '');
+                var s = t.replace(/−/g, '-').replace(/[£$€p%~\s]/g, '').replace(/,/g, '');
                 var suffix = s.slice(-1);
                 var n = parseFloat(s);
                 if (!isFinite(n)) return null;
@@ -102,7 +102,7 @@
         // ────────────────────────────────────────────────────────────────────────
 
         document.body.addEventListener('htmx:afterSettle', function () {
-            ['#portfolio-result', '#portfolio-cash-result'].forEach(function (sel) {
+            ['#portfolio-result', '#portfolio-cash-result', '#orders-result'].forEach(function (sel) {
                 document.querySelectorAll(sel + ' table').forEach(function (table) {
                     if (!table.dataset.sortAttached) {
                         table.dataset.sortAttached = '1';
@@ -111,6 +111,14 @@
                 });
             });
         });
+
+        // Open orders — a cheap local disk read, so re-fetch on each activation to reflect any
+        // freshly exported order files (the sticky-head table gets sort attached via afterSettle).
+        function loadOrders() {
+            if (window.htmx) {
+                htmx.ajax('GET', '/orders', {target: '#orders-result', swap: 'innerHTML'});
+            }
+        }
 
         var TAB_KEY = 'portfolio-bench.active-tab';
         var GROUP_KEY_PREFIX = 'portfolio-bench.last-sub.';
@@ -147,6 +155,7 @@
                 p.classList.toggle('active', p.id === panelId);
             });
 
+            if (panelId === 'panel-orders') loadOrders();
             if (panelId === 'panel-contributions') loadContributionsChart();
             if (panelId === 'panel-value') loadValueChart();
             if (panelId === 'panel-allocation') setupAllocationPanel();

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<div th:fragment="result">
+
+    <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>
+
+    <div class="note" th:if="${orders.empty}">
+        No order files found in <code>~/Downloads</code>. Export your resting orders — AJ Bell
+        <code>activeorders*.csv</code>, II order history (UUID <code>.csv</code>), Citi Roth
+        <code>Order+Status*.xlsx</code> — and reload this tab.
+    </div>
+
+    <div th:unless="${orders.empty}">
+
+        <p class="muted" th:if="${!orders.sources.isEmpty()}"
+           th:text="'Sources: ' + ${#strings.listJoin(orders.sources, ', ')}">Sources</p>
+
+        <div th:if="${!orders.warnings.isEmpty()}" class="value-warnings">
+            <h4>Could not read some order files</h4>
+            <ul>
+                <li th:each="w : ${orders.warnings}" th:text="${w}">warning</li>
+            </ul>
+        </div>
+
+        <div class="note" th:if="${orders.orders.isEmpty()}">
+            No open orders — every order in the exported files has been filled, cancelled or expired.
+        </div>
+
+        <table class="sticky-head" th:unless="${orders.orders.isEmpty()}">
+            <thead>
+            <tr>
+                <th class="txt" data-sort="text">Broker</th>
+                <th class="txt" data-sort="text">Symbol</th>
+                <th class="txt" data-sort="text">Name</th>
+                <th class="txt" data-sort="text">Side</th>
+                <th class="txt" data-sort="text">Type</th>
+                <th data-sort="num">Qty</th>
+                <th data-sort="num">Price</th>
+                <th data-sort="num">Amount</th>
+                <th class="txt" data-sort="text">Date entered</th>
+                <th class="txt" data-sort="text">Expiry</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="o : ${orders.orders}">
+                <td class="txt" th:text="${o.broker}">Broker</td>
+                <td class="txt" th:text="${o.symbol != null ? o.symbol : '—'}">SYM</td>
+                <td class="txt" th:text="${o.name != null ? o.name : '—'}">—</td>
+                <td class="txt"
+                    th:classappend="${o.side != null ? (#strings.equalsIgnoreCase(o.side, 'Buy') ? 'val-pos' : (#strings.equalsIgnoreCase(o.side, 'Sell') ? 'val-neg' : '')) : ''}"
+                    th:text="${o.side != null ? o.side : '—'}">Side</td>
+                <td class="txt" th:text="${o.orderType != null ? o.orderType : '—'}">Type</td>
+                <td th:text="${#numbers.formatDecimal(o.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>
+                <td th:text="${o.price != null ? (o.priceEstimated ? '~' : '') + o.currencySymbol + #numbers.formatDecimal(o.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:text="${o.amount != null ? o.currencySymbol + #numbers.formatDecimal(o.amount, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td class="txt" th:text="${o.dateEntered != null ? o.dateEntered.toString() : '—'}">—</td>
+                <td class="txt"
+                    th:text="${o.expiry != null ? o.expiry.toString() : (o.duration != null ? o.duration : '—')}">—</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <p class="muted" th:if="${!#lists.isEmpty(orders.orders.?[priceEstimated])}"
+           style="margin-top: 0.6rem; font-size: 0.85rem">
+            ~ II doesn't export the resting limit price, so it's estimated as order value ÷ quantity.
+            It's slightly off — the ~£2.99 dealing fee (and, on USD orders, an FX charge levied in
+            GBP) is folded into the order value.
+        </p>
+    </div>
+
+</div>
+
+</body>
+</html>

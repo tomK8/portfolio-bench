@@ -69,6 +69,16 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
 - **From cash ledger** — `POST /sync-from-cash` → `fragments/portfolio-ledger`. Slimmer
   table (no separate "Market Value £" / "RT Market Value £" columns — single combined
   value column). Drops positions without an intraday price.
+- **Portfolio % column** (both tables above + the Excel `Portfolio` sheet): each row's
+  `marketValueGbp ÷ totals.totalGbp`. On-screen it's computed in the Thymeleaf fragment as
+  double division (guarded against null/zero total — no BigDecimal divide that could throw on
+  a non-terminating quotient). In Excel it's a live formula `=IFERROR(E{row}/$E${totalRow},"")`
+  (percent-styled) on every equity + cash row so it re-computes if the II SIPP cash input is
+  edited; summary rows (Cash header / Total Cash / TOTAL) carry no %. See
+  `ExcelReportWriter.writeAggregatedSheet` (`AGG_PCT` = last column).
+- **Open orders** — `GET /orders` → `fragments/orders` (htmx, re-fetched on each tab click).
+  Resting orders across brokers parsed on demand from the newest order-status export per broker
+  in the input dir (no DB, no FX). See the Open-orders section below.
 - **Contributions** — `GET /contributions` → JSON, rendered by Chart.js. Cumulative
   per-account + Total.
 - **Value over time** — `GET /portfolio-value` → JSON, Chart.js. Monthly portfolio GBP
@@ -174,6 +184,8 @@ no `System.out` in production code.
 |-----------------------|----------------------------|---------------------------|
 | Sync portfolio        | `POST /sync`               | `SyncPortfolioService`    |
 | Sync from cash ledger | `POST /sync-from-cash`     | `SyncFromCashService`     |
+| Open orders           | `GET /orders`              | `OpenOrdersService`       |
+| Open orders → Excel   | `GET /orders/export`       | `OpenOrdersService` + `ExcelReportWriter` |
 | Export Excel          | `POST /export`             | `ExportExcelService`      |
 | Import cash statement | `POST /import-cash`        | `ImportCashService`       |
 | Import gilt prices    | `POST /import-gilt-prices` | `ImportGiltPricesService` |
@@ -271,6 +283,51 @@ tracking — see the class doc), reconciles the reconstructed share count agains
 file, and logs WARN on disagreement >0.01 shares. Per-symbol amounts flow into `AggHolding`'s
 `dividendGbp` / `totalGainGbp` / `totalGainPct`. Portfolio-level totals (`PortfolioMetrics`) are
 price-appreciation only — dividends are **not** folded into the saved snapshot.
+
+## Open orders
+
+Read-only view of resting orders across brokers (Open orders tab, under the Holdings group).
+`OpenOrdersService` locates the newest order-status export per broker in the input dir (reusing
+`HoldingFileLocator.findMostRecent(Predicate<Path>)` — same "newest file wins" rule as holdings),
+parses each, and keeps only non-terminal statuses. No DB, no FX — a pure disk read, so it always
+reflects the last export in `~/Downloads`. Everything is normalised into one framework-free
+`domain.model.OpenOrder` record (broker, symbol, name, side, orderType, quantity, price, amount,
+currency, dateEntered, expiry, duration, status, reference); absent fields are null → "—".
+
+- `parser/OrderParser` — interface (`sourceName`, `supports`, `parse`). Parsers return **all** rows;
+  the open/closed filter lives in `OpenOrdersService.isOpen` (a denylist of terminal statuses —
+  dealt/executed/filled/cancelled/expired/…; anything else, incl. an unseen "still working" status,
+  is shown rather than dropped).
+- `AJBellOrdersParser` — `activeorders*.csv`. The export names the instrument but carries no
+  ticker, so `symbol` is mapped from the name by keyword (`NAME_TO_SYMBOL`: EQQQ / LSEG / REL — the
+  same internal symbols used elsewhere; add a line when a new AJ Bell name appears), falling back to
+  null → "—" when unmapped; `name` keeps the full text. Prices are London pence ("53800p") →
+  normalised to pounds so the row is single-currency (GBP). Statuses: "In progress" (open), "Dealt"
+  (filled).
+- `IIOrdersParser` — UUID `.csv`, **header-sniffed** (`Submitted` + `Settlement Date` + `Status`) to
+  distinguish from II holdings/cash UUID CSVs. `Type` bundles side+ordertype ("SELL/LIMIT"); currency
+  from the `Amount` £/$ prefix; no expiry. The resting **limit price isn't exported**, so it's
+  estimated as `amount ÷ quantity` with `priceEstimated=true` — the UI prefixes "~" and shows a
+  footnote (the ~£2.99 dealing fee, plus an FX charge in GBP on USD orders, is folded into the
+  amount, so an exact price can't be recovered). Open = "PENDING".
+- `RothOrdersParser` — Citi `Order+Status*.xlsx` (POI, `DataFormatter`). Header row located by
+  scanning (metadata preamble above it). All USD + GTC (`duration` = "GTC", `expiry` null). Open =
+  "Open".
+
+Wiring: three parsers are listed in the `openOrdersService` bean (`BeanConfiguration`); the order of
+that list is the broker grouping in the table. `OrdersController` (`GET /orders`) renders
+`fragments/orders :: result`; the table is a sticky-head sortable table (sort attached via the
+`htmx:afterSettle` handler, which now also watches `#orders-result`; `parseVal` strips "~" so
+estimated prices still sort numerically). No parser registration in `PortfolioGatherer` — the order
+pipeline is independent of the holdings/cash pipelines (and the II sniff keeps them from
+cross-matching).
+
+**Excel download.** The panel's "Download Excel" button hits `GET /orders/export`, which re-parses
+(so it's always current) and streams a single-sheet workbook via
+`ExcelReportWriter.ordersWorkbook(List<OpenOrder>)` — bytes straight to the browser, never written
+to disk (unlike `/export`). Price/Amount are real numbers formatted with the row's currency symbol
+via a per-cell number format (mixed £/$ reads naturally, stays sortable); II estimated prices carry
+a literal "~" in the format (`"~$"#,##0.00`), mirroring the screen while keeping the numeric value.
 
 ## Adding a new parser
 

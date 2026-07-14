@@ -4,6 +4,7 @@ import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PortfolioAggregator;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.Holding;
+import com.portfolio.domain.model.OpenOrder;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
@@ -14,6 +15,7 @@ import org.apache.poi.xssf.usermodel.XSSFColor;
 import org.apache.poi.xssf.usermodel.XSSFFont;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigDecimal;
@@ -23,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -675,5 +678,84 @@ public class ExcelReportWriter {
             writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
             write(wb, outputPath);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Open orders workbook (streamed straight to the browser, not written to disk)
+    // -------------------------------------------------------------------------
+
+    /** Single-sheet workbook of the given open orders, returned as bytes for a direct download. */
+    public byte[] ordersWorkbook(List<OpenOrder> orders) throws IOException {
+        try (Workbook wb = new XSSFWorkbook();
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            writeOrdersSheet(wb.createSheet("Open Orders"), orders, wb);
+            wb.write(bos);
+            return bos.toByteArray();
+        }
+    }
+
+    private static void writeOrdersSheet(Sheet sheet, List<OpenOrder> orders, Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle qtyNum = numericStyle(wb, false);
+        Map<String, CellStyle> moneyStyles = new HashMap<>();   // reuse one style per number format
+
+        String[] headers = {"Broker", "Symbol", "Name", "Side", "Type", "Quantity",
+                "Price", "Amount", "Date entered", "Expiry"};
+        Row hdr = sheet.createRow(0);
+        for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
+
+        int rowNum = 1;
+        for (OpenOrder o : orders) {
+            Row row = sheet.createRow(rowNum++);
+            styledCell(row, 0, o.broker(), text);
+            styledCell(row, 1, dashIfNull(o.symbol()), text);
+            styledCell(row, 2, dashIfNull(o.name()), text);
+            styledCell(row, 3, dashIfNull(o.side()), text);
+            styledCell(row, 4, dashIfNull(o.orderType()), text);
+            if (o.quantity() != null) setNumeric(row, 5, o.quantity(), qtyNum);
+            if (o.price() != null) setMoney(row, 6, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
+            if (o.amount() != null) setMoney(row, 7, o.amount(), o.currency(), false, wb, moneyStyles);
+            styledCell(row, 8, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            String expiry = o.expiry() != null ? o.expiry().toString()
+                    : (o.duration() != null ? o.duration() : "");
+            styledCell(row, 9, expiry, text);
+        }
+        sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
+        autoSizeColumns(sheet, headers.length);
+    }
+
+    private static String dashIfNull(String s) {
+        return s != null ? s : "—";
+    }
+
+    /**
+     * Numeric money cell formatted with the currency symbol via the cell's number format (so a
+     * mixed-currency sheet reads naturally and the value stays a real number). Estimated prices
+     * (II) get a literal "~" prefix in the format — matching the on-screen convention — while the
+     * underlying value stays numeric.
+     */
+    private static void setMoney(Row row, int col, BigDecimal value, String currency,
+                                 boolean estimated, Workbook wb, Map<String, CellStyle> cache) {
+        String prefix = (estimated ? "~" : "") + currencySymbolFor(currency);
+        String fmt = prefix.isEmpty() ? "#,##0.00" : "\"" + prefix + "\"#,##0.00";
+        CellStyle style = cache.computeIfAbsent(fmt, f -> {
+            CellStyle s = wb.createCellStyle();
+            s.setDataFormat(wb.createDataFormat().getFormat(f));
+            return s;
+        });
+        Cell cell = row.createCell(col);
+        cell.setCellValue(value.setScale(4, RoundingMode.HALF_UP).doubleValue());
+        cell.setCellStyle(style);
+    }
+
+    private static String currencySymbolFor(String ccy) {
+        if (ccy == null) return "";
+        return switch (ccy) {
+            case "GBP", "GBp" -> "£";
+            case "USD" -> "$";
+            case "EUR" -> "€";
+            default -> "";
+        };
     }
 }

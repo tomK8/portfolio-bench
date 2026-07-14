@@ -1105,6 +1105,7 @@
 <div class="tabs tabs-secondary active" data-group="group-holdings">
     <button class="tab active" data-panel="panel-holdings" type="button">Files</button>
     <button class="tab" data-panel="panel-cash" type="button">Cash ledger</button>
+    <button class="tab" data-panel="panel-orders" type="button">Open orders</button>
     <button class="tab" data-panel="panel-live" type="button">Live</button>
     <button class="tab" data-panel="panel-position" type="button">Position</button>
     <button class="tab" data-panel="panel-allocation" type="button">Allocation</button>
@@ -1159,6 +1160,21 @@
     <section class="result-panel">
         <h2>Aggregated portfolio (from broker holdings files)</h2>
         <div id="portfolio-result"></div>
+    </section>
+</section>
+
+<section class="tab-panel" id="panel-orders">
+    <p class="muted" style="margin-top: 0">
+        Resting (open) orders across brokers, parsed from the latest order-status exports in
+        <code>~/Downloads</code> — AJ Bell <code>activeorders*.csv</code>, II order history
+        (UUID <code>.csv</code>), Citi Roth <code>Order+Status*.xlsx</code>. Read-only; filled,
+        cancelled and expired orders are excluded.
+    </p>
+    <div class="actions">
+        <button type="button" onclick="window.location.href='/orders/export'">Download Excel</button>
+    </div>
+    <section class="result-panel">
+        <div id="orders-result"></div>
     </section>
 </section>
 

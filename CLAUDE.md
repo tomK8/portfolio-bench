@@ -75,10 +75,14 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   a non-terminating quotient). In Excel it's a live formula `=IFERROR(E{row}/$E${totalRow},"")`
   (percent-styled) on every equity + cash row so it re-computes if the II SIPP cash input is
   edited; summary rows (Cash header / Total Cash / TOTAL) carry no %. See
-  `ExcelReportWriter.writeAggregatedSheet` (`AGG_PCT` = last column).
-- **Open orders** — `GET /orders` → `fragments/orders` (htmx, re-fetched on each tab click).
-  Resting orders across brokers parsed on demand from the newest order-status export per broker
-  in the input dir (no DB, no FX). See the Open-orders section below.
+  `ExcelReportWriter.writeAggregatedSheet` (`AGG_PCT` = last column). Both report workbooks set
+  `wb.setForceFormulaRecalculation(true)` — POI writes formula cells with no cached value, so
+  without the fullCalcOnLoad flag the Portfolio % column (and every total/return, which are also
+  formulas) opens **blank** in a viewer that doesn't auto-recalc.
+- **Open orders** — `GET /orders` → `fragments/orders` (htmx, re-fetched on each tab click), plus
+  a "Download Excel" button (`POST /orders/export`). Resting orders across brokers parsed on demand
+  from the newest order-status export per broker in the input dir; a current FX snapshot fills the
+  Amount GBP column. See the Open-orders section below.
 - **Contributions** — `GET /contributions` → JSON, rendered by Chart.js. Cumulative
   per-account + Total.
 - **Value over time** — `GET /portfolio-value` → JSON, Chart.js. Monthly portfolio GBP
@@ -185,7 +189,7 @@ no `System.out` in production code.
 | Sync portfolio        | `POST /sync`               | `SyncPortfolioService`    |
 | Sync from cash ledger | `POST /sync-from-cash`     | `SyncFromCashService`     |
 | Open orders           | `GET /orders`              | `OpenOrdersService`       |
-| Open orders → Excel   | `GET /orders/export`       | `OpenOrdersService` + `ExcelReportWriter` |
+| Open orders → Excel   | `POST /orders/export`      | `OpenOrdersService.export` (→ ~/Documents) |
 | Export Excel          | `POST /export`             | `ExportExcelService`      |
 | Import cash statement | `POST /import-cash`        | `ImportCashService`       |
 | Import gilt prices    | `POST /import-gilt-prices` | `ImportGiltPricesService` |
@@ -289,10 +293,13 @@ price-appreciation only — dividends are **not** folded into the saved snapshot
 Read-only view of resting orders across brokers (Open orders tab, under the Holdings group).
 `OpenOrdersService` locates the newest order-status export per broker in the input dir (reusing
 `HoldingFileLocator.findMostRecent(Predicate<Path>)` — same "newest file wins" rule as holdings),
-parses each, and keeps only non-terminal statuses. No DB, no FX — a pure disk read, so it always
-reflects the last export in `~/Downloads`. Everything is normalised into one framework-free
-`domain.model.OpenOrder` record (broker, symbol, name, side, orderType, quantity, price, amount,
-currency, dateEntered, expiry, duration, status, reference); absent fields are null → "—".
+parses each, and keeps only non-terminal statuses. Otherwise a pure disk read — the one non-file
+dependency is a current FX snapshot (`FxRateProvider`) used to fill each order's GBP amount
+(degrades to null + a warning if the fetch fails). Everything is normalised into one framework-free
+`domain.model.OpenOrder` record (broker, symbol, name, side, orderType, quantity, price,
+priceEstimated, amount, currency, dateEntered, expiry, duration, status, reference, amountGbp);
+absent fields are null → "—". Parsers build FX-free orders; the service enriches each with
+`amountGbp` via `withAmountGbp` (`toGbp` divides by the rate — units of foreign ccy per GBP).
 
 - `parser/OrderParser` — interface (`sourceName`, `supports`, `parse`). Parsers return **all** rows;
   the open/closed filter lives in `OpenOrdersService.isOpen` (a denylist of terminal statuses —
@@ -312,7 +319,7 @@ currency, dateEntered, expiry, duration, status, reference); absent fields are n
   amount, so an exact price can't be recovered). Open = "PENDING".
 - `RothOrdersParser` — Citi `Order+Status*.xlsx` (POI, `DataFormatter`). Header row located by
   scanning (metadata preamble above it). All USD + GTC (`duration` = "GTC", `expiry` null). Open =
-  "Open".
+  "Open". The order value isn't exported but the (exact) limit price is, so amount = price × qty.
 
 Wiring: three parsers are listed in the `openOrdersService` bean (`BeanConfiguration`); the order of
 that list is the broker grouping in the table. `OrdersController` (`GET /orders`) renders
@@ -322,12 +329,15 @@ estimated prices still sort numerically). No parser registration in `PortfolioGa
 pipeline is independent of the holdings/cash pipelines (and the II sniff keeps them from
 cross-matching).
 
-**Excel download.** The panel's "Download Excel" button hits `GET /orders/export`, which re-parses
-(so it's always current) and streams a single-sheet workbook via
-`ExcelReportWriter.ordersWorkbook(List<OpenOrder>)` — bytes straight to the browser, never written
-to disk (unlike `/export`). Price/Amount are real numbers formatted with the row's currency symbol
-via a per-cell number format (mixed £/$ reads naturally, stays sortable); II estimated prices carry
-a literal "~" in the format (`"~$"#,##0.00`), mirroring the screen while keeping the numeric value.
+**Excel download.** The panel's "Download Excel" button (`POST /orders/export`) calls
+`OpenOrdersService.export()`, which re-parses (so it's always current) and writes a single-sheet
+`Open Orders-YYYYMMDD.xlsx` to the **output dir (~/Documents)** — same place the portfolio exports
+land, not the browser's download folder — then reuses the shared `fragments/export` result fragment
+to report the path. Sheet built by `ExcelReportWriter.ordersWorkbook(List<OpenOrder>)`: Price /
+Amount / Amount GBP are real numbers formatted with the row's currency symbol via a per-cell number
+format (mixed £/$ reads naturally, stays sortable); II estimated prices carry a literal "~" in the
+format (`"~$"#,##0.00`), mirroring the screen while keeping the numeric value. (The Files-tab
+portfolio button was renamed to "Download Excel" too — both write to ~/Documents.)
 
 ## Adding a new parser
 

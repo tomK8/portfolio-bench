@@ -95,7 +95,8 @@ public class AJBellOrdersParser implements OrderParser {
                         date(get(r, "Expiry date")),
                         null,
                         get(r, "Status"),
-                        get(r, "Reference")));
+                        get(r, "Reference"),
+                        null));
             }
         }
         return orders;

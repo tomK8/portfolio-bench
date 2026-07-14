@@ -39,6 +39,7 @@
                 <th data-sort="num">Qty</th>
                 <th data-sort="num">Price</th>
                 <th data-sort="num">Amount</th>
+                <th data-sort="num">Amount £</th>
                 <th class="txt" data-sort="text">Date entered</th>
                 <th class="txt" data-sort="text">Expiry</th>
             </tr>
@@ -55,6 +56,7 @@
                 <td th:text="${#numbers.formatDecimal(o.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>
                 <td th:text="${o.price != null ? (o.priceEstimated ? '~' : '') + o.currencySymbol + #numbers.formatDecimal(o.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td th:text="${o.amount != null ? o.currencySymbol + #numbers.formatDecimal(o.amount, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:text="${o.amountGbp != null ? '£' + #numbers.formatDecimal(o.amountGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td class="txt" th:text="${o.dateEntered != null ? o.dateEntered.toString() : '—'}">—</td>
                 <td class="txt"
                     th:text="${o.expiry != null ? o.expiry.toString() : (o.duration != null ? o.duration : '—')}">—</td>

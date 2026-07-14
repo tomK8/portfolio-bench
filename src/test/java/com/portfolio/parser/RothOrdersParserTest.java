@@ -45,6 +45,8 @@ class RothOrdersParserTest {
         assertEquals("Limit", snps.orderType());
         assertEquals(0, new BigDecimal("6").compareTo(snps.quantity()));
         assertEquals(0, new BigDecimal("460.00").compareTo(snps.price()));
+        // amount is derived (not exported): price 460 × qty 6 = 2760
+        assertEquals(0, new BigDecimal("2760.00").compareTo(snps.amount()));
         assertEquals("USD", snps.currency());
         assertEquals(LocalDate.of(2026, 7, 14), snps.dateEntered());
         assertNull(snps.expiry());

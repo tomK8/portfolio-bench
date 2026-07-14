@@ -1151,10 +1151,10 @@
             <input name="iiSippCashUsd" th:value="${iiSippCashUsd}" type="text" value="0" size="10"/>
         </label>
         <button hx-post="/sync" hx-target="#portfolio-result" type="submit">Aggregated Portfolio</button>
-        <button hx-post="/export" hx-target="#export-result" type="submit">Export Excel</button>
+        <button hx-post="/export" hx-target="#export-result" type="submit">Download Excel</button>
     </form>
     <section class="result-panel">
-        <h2>Export Excel</h2>
+        <h2>Download Excel</h2>
         <div id="export-result"></div>
     </section>
     <section class="result-panel">
@@ -1171,8 +1171,9 @@
         cancelled and expired orders are excluded.
     </p>
     <div class="actions">
-        <button type="button" onclick="window.location.href='/orders/export'">Download Excel</button>
+        <button hx-post="/orders/export" hx-target="#orders-export-result" type="button">Download Excel</button>
     </div>
+    <div id="orders-export-result"></div>
     <section class="result-panel">
         <div id="orders-result"></div>
     </section>

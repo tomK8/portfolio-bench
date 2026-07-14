@@ -1,11 +1,13 @@
 package com.portfolio.application;
 
+import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.application.OpenOrdersService.OrdersReport;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
+import com.portfolio.port.FxRateProvider;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -14,18 +16,28 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.OutputStream;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class OpenOrdersServiceTest {
 
+    // 1 GBP = 1.25 USD (units of foreign ccy per GBP, the app convention → native ÷ rate = GBP).
+    private static final FxRateProvider FX =
+            () -> Map.of("GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"));
+
+    @TempDir
+    Path outDir;
+
     private OpenOrdersService service(Path inputDir) {
         return new OpenOrdersService(new HoldingFileLocator(inputDir),
-                List.of(new AJBellOrdersParser(), new IIOrdersParser(), new RothOrdersParser()));
+                List.of(new AJBellOrdersParser(), new IIOrdersParser(), new RothOrdersParser()),
+                FX, new ExcelReportWriter(), outDir);
     }
 
     @Test
@@ -68,6 +80,52 @@ class OpenOrdersServiceTest {
         assertEquals("AJ Bell SIPP", brokers.get(0));
         assertEquals("II SIPP", brokers.get(1));
         assertEquals("Roth IRA", brokers.get(2));
+
+        // II NVDA amount $11,467.84 → ÷1.25 = £9,174.27
+        OpenOrder nvda = find(report.orders(), "NVDA");
+        assertEquals(0, new BigDecimal("9174.27").compareTo(nvda.amountGbp()));
+
+        // Roth SNPS amount is derived (price 460 × qty 6 = $2,760) → ÷1.25 = £2,208.00
+        OpenOrder snps = find(report.orders(), "SNPS");
+        assertEquals(0, new BigDecimal("2760").compareTo(snps.amount()));
+        assertEquals(0, new BigDecimal("2208.00").compareTo(snps.amountGbp()));
+    }
+
+    @Test
+    void exportWritesDatedXlsxToOutputDir(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("activeorders.csv"), """
+                "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"
+                "RELX PLC","44626CC3LTC","Sell","Limit","100","2596.5","2600p","01/07/2026","22/09/2026","In progress"
+                """);
+
+        ExportResult result = service(dir).export();
+
+        assertFalse(result.empty());
+        assertEquals(1, result.files().size());
+        Path written = Path.of(result.files().get(0));
+        assertTrue(Files.exists(written));
+        assertEquals(outDir, written.getParent(), "written to the output dir, not Downloads");
+        assertTrue(written.getFileName().toString().startsWith("Open Orders-"));
+    }
+
+    @Test
+    void exportIsNothingWhenNoOrderFiles(@TempDir Path dir) {
+        assertTrue(service(dir).export().empty());
+    }
+
+    @Test
+    void toGbp_dividesByRateAndPassesGbpThrough() {
+        Map<String, BigDecimal> rates = Map.of("GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"));
+        assertEquals(0, new BigDecimal("80.00").compareTo(
+                OpenOrdersService.toGbp(new BigDecimal("100"), "USD", rates)));
+        assertEquals(0, new BigDecimal("100.00").compareTo(
+                OpenOrdersService.toGbp(new BigDecimal("100"), "GBP", rates)));
+        assertNull(OpenOrdersService.toGbp(new BigDecimal("100"), "EUR", rates), "no rate → null");
+        assertNull(OpenOrdersService.toGbp(null, "USD", rates));
+    }
+
+    private static OpenOrder find(List<OpenOrder> orders, String symbol) {
+        return orders.stream().filter(o -> symbol.equals(o.symbol())).findFirst().orElseThrow();
     }
 
     @Test

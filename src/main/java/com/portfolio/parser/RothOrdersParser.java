@@ -62,6 +62,11 @@ public class RothOrdersParser implements OrderParser {
                 BigDecimal qty = decimal(str(row, col, "Quantity"));
                 if (symbol == null || symbol.isBlank() || qty == null) continue;
 
+                // Roth doesn't export the order value, but it exports the (exact) limit price, so
+                // derive amount = price × qty.
+                BigDecimal price = decimal(str(row, col, "Price"));
+                BigDecimal amount = price != null ? price.multiply(qty) : null;
+
                 orders.add(new OpenOrder(
                         sourceName(),
                         symbol,
@@ -69,14 +74,15 @@ public class RothOrdersParser implements OrderParser {
                         str(row, col, "Transaction"),
                         str(row, col, "Order Type"),
                         qty,
-                        decimal(str(row, col, "Price")),
+                        price,
                         false,
-                        null,
+                        amount,
                         "USD",
                         date(str(row, col, "Date")),
                         null,
                         str(row, col, "Duration"),
                         str(row, col, "Status"),
+                        null,
                         null));
             }
         }

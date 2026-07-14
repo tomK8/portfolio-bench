@@ -128,11 +128,17 @@ public class BeanConfiguration {
     }
 
     @Bean
-    public OpenOrdersService openOrdersService(HoldingFileLocator holdingFileLocator) {
+    public OpenOrdersService openOrdersService(HoldingFileLocator holdingFileLocator,
+                                               FxRateProvider fxRateProvider,
+                                               ExcelReportWriter excelReportWriter,
+                                               @Value("${portfolio.output-dir:}") String outputDir) {
+        Path dir = outputDir.isBlank()
+                ? Path.of(System.getProperty("user.home"), "Documents")
+                : Path.of(outputDir);
         return new OpenOrdersService(holdingFileLocator, List.of(
                 new AJBellOrdersParser(),
                 new IIOrdersParser(),
-                new RothOrdersParser()));
+                new RothOrdersParser()), fxRateProvider, excelReportWriter, dir);
     }
 
     @Bean

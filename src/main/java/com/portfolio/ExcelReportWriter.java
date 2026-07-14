@@ -663,6 +663,7 @@ public class ExcelReportWriter {
                     wb.createSheet("Portfolio Raw"), holdings, gbpRates, portfolioInputRef, dividendsBySymbol, wb);
             for (Map.Entry<String, Path> e : rawSources.entrySet())
                 writeRawSheet(e.getValue(), wb.createSheet(e.getKey()));
+            wb.setForceFormulaRecalculation(true);   // else formula cells (incl. Portfolio %) open blank
             write(wb, outputPath);
         }
     }
@@ -676,6 +677,7 @@ public class ExcelReportWriter {
                                    BigDecimal iiSippCash) throws IOException {
         try (Workbook wb = new XSSFWorkbook()) {
             writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
+            wb.setForceFormulaRecalculation(true);   // else formula cells (incl. Portfolio %) open blank
             write(wb, outputPath);
         }
     }
@@ -701,7 +703,7 @@ public class ExcelReportWriter {
         Map<String, CellStyle> moneyStyles = new HashMap<>();   // reuse one style per number format
 
         String[] headers = {"Broker", "Symbol", "Name", "Side", "Type", "Quantity",
-                "Price", "Amount", "Date entered", "Expiry"};
+                "Price", "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
 
@@ -716,10 +718,11 @@ public class ExcelReportWriter {
             if (o.quantity() != null) setNumeric(row, 5, o.quantity(), qtyNum);
             if (o.price() != null) setMoney(row, 6, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
             if (o.amount() != null) setMoney(row, 7, o.amount(), o.currency(), false, wb, moneyStyles);
-            styledCell(row, 8, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            if (o.amountGbp() != null) setMoney(row, 8, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 9, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 9, expiry, text);
+            styledCell(row, 10, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);

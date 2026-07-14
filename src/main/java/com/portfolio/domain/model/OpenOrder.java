@@ -28,7 +28,9 @@ public record OpenOrder(
         LocalDate expiry,       // dated good-till; null for GTC / when not exported
         String duration,        // e.g. "GTC" when the broker states a duration rather than a date
         String status,          // raw broker status (e.g. "In progress", "PENDING", "Open")
-        String reference        // broker order reference; null when none
+        String reference,       // broker order reference; null when none
+        BigDecimal amountGbp    // `amount` converted to GBP at current FX; enriched by the service,
+                                // so parsers leave it null. null when amount/FX is unavailable.
 ) {
     /** Convenience for views — the leading symbol for {@link #currency} ($/£/€), or "" if unknown. */
     public String currencySymbol() {
@@ -39,5 +41,11 @@ public record OpenOrder(
             case "EUR" -> "€";
             default -> "";
         };
+    }
+
+    /** Copy with {@link #amountGbp} set — parsers build FX-free orders, the service enriches them. */
+    public OpenOrder withAmountGbp(BigDecimal gbp) {
+        return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
+                amount, currency, dateEntered, expiry, duration, status, reference, gbp);
     }
 }

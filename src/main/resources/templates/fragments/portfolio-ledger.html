@@ -44,6 +44,7 @@
                 <th data-sort="num">Quantity</th>
                 <th data-sort="num">Price</th>
                 <th data-sort="num">Market Value £</th>
+                <th data-sort="num">Portfolio %</th>
                 <th data-sort="num">Gain (£)</th>
                 <th data-sort="num">Gain %</th>
                 <th data-sort="num">Dividends (£)</th>
@@ -62,6 +63,9 @@
                     th:text="${h.latestPrice != null ? #numbers.formatDecimal(h.latestPrice, 1, 'COMMA', 4, 'POINT') : '—'}">—
                 </td>
                 <td th:text="${#numbers.formatDecimal(h.marketValueGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+                <td th:text="${(result.totals.totalGbp != null and result.totals.totalGbp.signum() != 0 and h.marketValueGbp != null)
+                        ? #numbers.formatPercent(h.marketValueGbp.doubleValue() / result.totals.totalGbp.doubleValue(), 1, 2) : '—'}">—
+                </td>
                 <td th:classappend="${h.gainGbp != null ? (h.gainGbp.signum() > 0 ? 'val-pos' : (h.gainGbp.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
                     th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
                 </td>

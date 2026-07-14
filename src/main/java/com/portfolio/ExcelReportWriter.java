@@ -59,7 +59,8 @@ public class ExcelReportWriter {
     private static final int AGG_TOTAL_GAIN = 8;  // I  Total Gain (£) = gain + dividends
     private static final int AGG_TOTAL_GAIN_PCT = 9;  // J  Total Gain % = (gain + dividends) / cost
     private static final int AGG_SOURCES = 10;  // K
-    private static final int AGG_COLS = 11;
+    private static final int AGG_PCT = 11;  // L  Portfolio % = row Market Value GBP / portfolio total
+    private static final int AGG_COLS = 12;
 
     private static final byte[] GREEN = {(byte) 0, (byte) 176, (byte) 80};
     private static final byte[] RED = {(byte) 255, (byte) 0, (byte) 0};
@@ -77,6 +78,7 @@ public class ExcelReportWriter {
         CellStyle boldText = boldTextStyle(wb);
         CellStyle boldNum = numericStyle(wb, true);
         CellStyle inputCell = inputCellStyle(wb);
+        CellStyle pctData = pctStyle(wb, false);
 
         List<AggHolding> equities = rows.stream().filter(h -> !"CASH".equals(h.securityId())).collect(Collectors.toList());
         List<AggHolding> cashList = rows.stream().filter(h -> "CASH".equals(h.securityId())).collect(Collectors.toList());
@@ -107,15 +109,22 @@ public class ExcelReportWriter {
         // Header
         String[] headers = {"Security ID", "Quantity", "Avg Price Paid", "Exchange Currency",
                 "Market Value GBP", "Gain (£)", "Gain/Loss %", "Dividends (£)",
-                "Total Gain (£)", "Total Gain %", "Sources"};
+                "Total Gain (£)", "Total Gain %", "Sources", "Portfolio %"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
         sheet.setAutoFilter(new CellRangeAddress(0, nEquity, 0, AGG_COLS - 1));
 
+        // Portfolio % = this row's Market Value GBP (col E) ÷ the portfolio TOTAL (col E, total row).
+        // Written as a live Excel formula so it re-computes if the user edits the II SIPP cash input.
+        String portfolioTotalRef = "$E$" + (totalPoiRow + 1);
+
         // Equity rows
         int rowNum = 1;
         for (AggHolding h : equities) {
-            writeAggRow(sheet.createRow(rowNum++), h, dataText, dataNum, wb);
+            Row row = sheet.createRow(rowNum++);
+            writeAggRow(row, h, dataText, dataNum, wb);
+            formulaCell(row, AGG_PCT,
+                    "IFERROR(E" + (row.getRowNum() + 1) + "/" + portfolioTotalRef + ",\"\")", pctData);
         }
 
         // Cash section header
@@ -144,6 +153,8 @@ public class ExcelReportWriter {
                 setNumeric(row, AGG_MKTGBP, h.marketValueGbp(), dataNum);
                 styledCell(row, AGG_SOURCES, h.sources(), dataText);
             }
+            formulaCell(row, AGG_PCT,
+                    "IFERROR(E" + (row.getRowNum() + 1) + "/" + portfolioTotalRef + ",\"\")", pctData);
         }
         if (!wroteGbpCash) {
             Row row = sheet.createRow(rowNum);
@@ -153,6 +164,8 @@ public class ExcelReportWriter {
             setNumeric(row, AGG_AVG, BigDecimal.ONE, dataNum);
             formulaCell(row, AGG_MKTGBP, inputCellRef, dataNum);
             styledCell(row, AGG_SOURCES, II_SIPP, dataText);
+            formulaCell(row, AGG_PCT,
+                    "IFERROR(E" + (row.getRowNum() + 1) + "/" + portfolioTotalRef + ",\"\")", pctData);
         }
 
         // Total Cash row

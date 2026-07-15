@@ -42,6 +42,63 @@ class PriceStatsTest {
     }
 
     @Test
+    void dailyVol_isAnnualizedVolWithoutRootT() {
+        List<PriceBar> bars = series(100, 110, 100, 110, 100);
+        BigDecimal daily = PriceStats.dailyVol(bars, 30);
+        BigDecimal annual = PriceStats.annualizedVol(bars, 30);
+        assertNotNull(daily);
+        // annualizedVol == dailyVol × √252 (the only difference between the two; each rounded to 8dp)
+        assertEquals(annual.doubleValue(), daily.doubleValue() * Math.sqrt(252.0), 1e-6);
+
+        double r = Math.log(1.1);
+        double expectedDaily = Math.sqrt(4 * r * r / 3.0);   // same hand-computed stdev, no √252
+        assertEquals(expectedDaily, daily.doubleValue(), 1e-8);
+    }
+
+    @Test
+    void dailyVol_null_whenTooFewReturns() {
+        assertNull(PriceStats.dailyVol(series(100.0), 10));
+        assertNull(PriceStats.dailyVol(List.of(), 10));
+    }
+
+    @Test
+    void sigmaDistance_signAndScale() {
+        // dailyVol 2%/day, horizon 5 → σ_5 = 0.02·√5 ≈ 0.0447214.
+        BigDecimal vol = new BigDecimal("0.02");
+        // limit 5% above current: ln(105/100)=0.0487902 → /0.0447214 ≈ 1.0910.
+        BigDecimal up = PriceStats.sigmaDistance(new BigDecimal("100"), new BigDecimal("105"), vol, 5);
+        assertNotNull(up);
+        assertEquals(0.0487902 / (0.02 * Math.sqrt(5)), up.doubleValue(), 1e-3);
+        assertTrue(up.signum() > 0, "limit above the market → positive");
+        // limit below current → negative, symmetric magnitude for the reciprocal ratio.
+        BigDecimal down = PriceStats.sigmaDistance(new BigDecimal("105"), new BigDecimal("100"), vol, 5);
+        assertTrue(down.signum() < 0);
+        // null guards
+        assertNull(PriceStats.sigmaDistance(null, new BigDecimal("100"), vol, 5));
+        assertNull(PriceStats.sigmaDistance(new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ZERO, 5));
+    }
+
+    @Test
+    void touchProbability_reflectionPrinciple() {
+        // At the barrier (d=0) → certain touch.
+        assertEquals(1.0, PriceStats.touchProbability(BigDecimal.ZERO).doubleValue(), 1e-9);
+        // 1σ away → 2·Φ(−1) ≈ 0.31731; sign-independent.
+        assertEquals(0.3173, PriceStats.touchProbability(new BigDecimal("1")).doubleValue(), 1e-3);
+        assertEquals(0.3173, PriceStats.touchProbability(new BigDecimal("-1")).doubleValue(), 1e-3);
+        // 3σ away → 2·Φ(−3) ≈ 0.0027, well under 1.
+        assertEquals(0.0027, PriceStats.touchProbability(new BigDecimal("3")).doubleValue(), 1e-3);
+        assertNull(PriceStats.touchProbability(null));
+    }
+
+    @Test
+    void normalCdf_knownValues() {
+        assertEquals(0.5, PriceStats.normalCdf(0.0), 1e-6);
+        assertEquals(0.8413447, PriceStats.normalCdf(1.0), 1e-5);
+        assertEquals(0.1586553, PriceStats.normalCdf(-1.0), 1e-5);
+        assertEquals(0.9772499, PriceStats.normalCdf(2.0), 1e-5);
+    }
+
+    @Test
     void annualizedVol_matchesHandComputedStdev() {
         // Alternating +10% / -10%(ish) returns: log returns are +ln(1.1), then price back etc.
         // Use a simple series with a known daily log-return stdev.

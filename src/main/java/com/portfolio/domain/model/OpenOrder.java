@@ -33,8 +33,16 @@ public record OpenOrder(
                                 // so parsers leave it null. null when amount/FX is unavailable.
         BigDecimal currentPrice,// latest live price per share, in `currency` units; enriched by the
                                 // service from the intraday/daily feed. null when unavailable.
-        BigDecimal distancePct  // signed (currentPrice − price) / price as a fraction — how far the
+        BigDecimal distancePct, // signed (currentPrice − price) / price as a fraction — how far the
                                 // market sits from the limit. null when either side is missing/zero.
+        BigDecimal dailyVol10,  // realized daily volatility over the last 10 sessions (NOT annualised),
+                                // a fraction; enriched from the symbol's daily series. null when unknown.
+        BigDecimal dailyVol30,  // realized daily volatility over the last 30 sessions (NOT annualised).
+        BigDecimal sigmaToLimit,// signed distance current→limit in 5-session σ units (ln(limit/current)
+                                // ÷ dailyVol×√5). null when price/current/vol unavailable.
+        BigDecimal touchProb5d  // probability the market touches the limit within 5 sessions
+                                // (driftless first-passage, 2·Φ(−|sigmaToLimit|)); a fraction. null when
+                                // sigmaToLimit is unavailable.
 ) {
     /** Convenience for views — the leading symbol for {@link #currency} ($/£/€), or "" if unknown. */
     public String currencySymbol() {
@@ -51,7 +59,7 @@ public record OpenOrder(
     public OpenOrder withAmountGbp(BigDecimal gbp) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, gbp,
-                currentPrice, distancePct);
+                currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d);
     }
 
     /**
@@ -62,6 +70,18 @@ public record OpenOrder(
     public OpenOrder withCurrentPrice(BigDecimal current, BigDecimal distance) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
-                current, distance);
+                current, distance, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d);
+    }
+
+    /**
+     * Copy with the volatility columns set — realized daily σ over 10 / 30 sessions (not annualised),
+     * the signed 5-session σ distance from the market to the limit, and the 5-session touch
+     * probability. Enriched by the service, mirroring {@link #withCurrentPrice}.
+     */
+    public OpenOrder withVolatility(BigDecimal dv10, BigDecimal dv30, BigDecimal sigmaToLimit,
+                                    BigDecimal touchProb5d) {
+        return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
+                amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
+                currentPrice, distancePct, dv10, dv30, sigmaToLimit, touchProb5d);
     }
 }

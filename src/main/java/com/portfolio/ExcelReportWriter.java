@@ -704,9 +704,16 @@ public class ExcelReportWriter {
 
         CellStyle pctStyle = wb.createCellStyle();
         pctStyle.setDataFormat(wb.createDataFormat().getFormat("+0.00%;-0.00%"));
+        CellStyle volPctStyle = wb.createCellStyle();       // RV10 / RV30 — unsigned daily σ
+        volPctStyle.setDataFormat(wb.createDataFormat().getFormat("0.00%"));
+        CellStyle touchPctStyle = wb.createCellStyle();      // touch probability
+        touchPctStyle.setDataFormat(wb.createDataFormat().getFormat("0.0%"));
+        CellStyle sigmaStyle = wb.createCellStyle();         // signed σ distance to limit
+        sigmaStyle.setDataFormat(wb.createDataFormat().getFormat("+0.00;-0.00"));
 
         String[] headers = {"Broker", "Symbol", "Name", "Side", "Type", "Quantity",
-                "Price", "Current", "Vs limit", "Amount", "Amount GBP", "Date entered", "Expiry"};
+                "Price", "Current", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
+                "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
 
@@ -721,17 +728,17 @@ public class ExcelReportWriter {
             if (o.quantity() != null) setNumeric(row, 5, o.quantity(), qtyNum);
             if (o.price() != null) setMoney(row, 6, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
             if (o.currentPrice() != null) setMoney(row, 7, o.currentPrice(), o.currency(), false, wb, moneyStyles);
-            if (o.distancePct() != null) {
-                Cell d = row.createCell(8);
-                d.setCellValue(o.distancePct().doubleValue());
-                d.setCellStyle(pctStyle);
-            }
-            if (o.amount() != null) setMoney(row, 9, o.amount(), o.currency(), false, wb, moneyStyles);
-            if (o.amountGbp() != null) setMoney(row, 10, o.amountGbp(), "GBP", false, wb, moneyStyles);
-            styledCell(row, 11, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            if (o.distancePct() != null) setStyled(row, 8, o.distancePct(), pctStyle);
+            if (o.dailyVol10() != null) setStyled(row, 9, o.dailyVol10(), volPctStyle);
+            if (o.dailyVol30() != null) setStyled(row, 10, o.dailyVol30(), volPctStyle);
+            if (o.sigmaToLimit() != null) setStyled(row, 11, o.sigmaToLimit(), sigmaStyle);
+            if (o.touchProb5d() != null) setStyled(row, 12, o.touchProb5d(), touchPctStyle);
+            if (o.amount() != null) setMoney(row, 13, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 14, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 15, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 12, expiry, text);
+            styledCell(row, 16, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);
@@ -739,6 +746,13 @@ public class ExcelReportWriter {
 
     private static String dashIfNull(String s) {
         return s != null ? s : "—";
+    }
+
+    /** Numeric cell carrying a raw fraction/number, formatted by a caller-supplied style. */
+    private static void setStyled(Row row, int col, BigDecimal value, CellStyle style) {
+        Cell cell = row.createCell(col);
+        cell.setCellValue(value.doubleValue());
+        cell.setCellStyle(style);
     }
 
     /**

@@ -4,6 +4,7 @@ import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.PriceStats;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.domain.model.PriceBar;
@@ -23,6 +24,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -53,6 +55,14 @@ public class OpenOrdersService {
 
     /** How many calendar days back to walk for a daily-close fallback when no intraday quote exists. */
     private static final int DAILY_FALLBACK_DAYS = 6;
+
+    /** Realized-daily-vol windows (in sessions): RV10 (short) + RV30 (long). */
+    private static final int RV_SHORT = 10;
+    private static final int RV_LONG = 30;
+    /** Horizon (sessions) for the σ-distance-to-limit and touch-probability columns. */
+    private static final int TOUCH_HORIZON_SESSIONS = 5;
+    /** Calendar-day lookback loaded per symbol to compute the daily-vol windows (≈ 60 sessions of margin). */
+    private static final int VOL_LOOKBACK_DAYS = 90;
 
     private final HoldingFileLocator fileLocator;
     private final List<OrderParser> parsers;
@@ -142,13 +152,16 @@ public class OpenOrdersService {
     }
 
     /**
-     * Fill each order's {@link OpenOrder#currentPrice()} (in the order's own currency units) and the
-     * signed {@link OpenOrder#distancePct()} of the market from the limit. Prices come from the
-     * bulk-loaded latest intraday quote (a single query for all symbols), falling back to the most
-     * recent stored daily close within {@link #DAILY_FALLBACK_DAYS}. A listing quoted in a different
-     * currency than the order (or in {@code GBp} pence vs the order's GBP pounds) is cross-converted
-     * through the same FX snapshot so the number lands in the order's currency. Degrades silently —
-     * an order we can't price keeps null columns ("—").
+     * Fill each order's live-price and volatility columns. Live price: {@link OpenOrder#currentPrice()}
+     * (in the order's own currency) and the signed {@link OpenOrder#distancePct()} from the limit,
+     * from the bulk-loaded latest intraday quote (one query for all symbols), falling back to the most
+     * recent stored daily close within {@link #DAILY_FALLBACK_DAYS}; a listing quoted in a different
+     * currency (or {@code GBp} pence vs GBP pounds) is cross-converted through the FX snapshot.
+     * Volatility: realized daily σ over the {@link #RV_SHORT}/{@link #RV_LONG}-session windows (not
+     * annualised) from the symbol's daily series, plus — when a limit and a live price both exist — the
+     * signed {@link #TOUCH_HORIZON_SESSIONS}-session σ distance to the limit and the driftless
+     * first-passage touch probability. σ figures are currency-free return ratios, so they need no FX.
+     * Degrades silently — anything we can't compute stays null ("—").
      */
     private void enrichWithCurrentPrice(List<OpenOrder> orders, Map<String, BigDecimal> rates) {
         Set<String> tickers = new LinkedHashSet<>();
@@ -159,11 +172,15 @@ public class OpenOrdersService {
         if (tickers.isEmpty()) return;
 
         Map<String, IntradayPrice> latest = intraday.loadLatestIntradayPrices(tickers);
+        Map<String, BigDecimal[]> dailyVols = loadDailyVols(tickers);   // ticker → [RV10, RV30]
 
         for (int i = 0; i < orders.size(); i++) {
             OpenOrder o = orders.get(i);
             String tk = tickerFor(o.symbol());
             if (tk == null) continue;
+
+            BigDecimal[] vols = dailyVols.getOrDefault(tk, new BigDecimal[]{null, null});
+            BigDecimal dv10 = vols[0], dv30 = vols[1];
 
             BigDecimal rawClose = null;
             String rawCcy = null;
@@ -178,15 +195,41 @@ public class OpenOrdersService {
                     rawCcy = bar.currency();
                 }
             }
-            if (rawClose == null) continue;
 
-            BigDecimal current = priceInCurrency(rawClose, rawCcy, o.currency(), rates);
-            if (current == null) continue;
-            BigDecimal distance = (o.price() != null && o.price().signum() != 0)
-                    ? current.subtract(o.price()).divide(o.price(), 6, RoundingMode.HALF_UP)
-                    : null;
-            orders.set(i, o.withCurrentPrice(current.setScale(4, RoundingMode.HALF_UP), distance));
+            BigDecimal current = rawClose == null ? null : priceInCurrency(rawClose, rawCcy, o.currency(), rates);
+            if (current != null) {
+                BigDecimal distance = (o.price() != null && o.price().signum() != 0)
+                        ? current.subtract(o.price()).divide(o.price(), 6, RoundingMode.HALF_UP)
+                        : null;
+                o = o.withCurrentPrice(current.setScale(4, RoundingMode.HALF_UP), distance);
+            }
+
+            // σ distance / touch prob need a limit and a live price; the short window is the near-term
+            // vol estimate, falling back to the 30-session one when the 10-session window is too thin.
+            BigDecimal baseVol = dv10 != null ? dv10 : dv30;
+            BigDecimal sigmaToLimit = PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS);
+            BigDecimal touchProb = PriceStats.touchProbability(sigmaToLimit);
+            orders.set(i, o.withVolatility(dv10, dv30, sigmaToLimit, touchProb));
         }
+    }
+
+    /**
+     * Realized daily σ (not annualised) over the RV10 / RV30 windows for each ticker, from one daily
+     * history read per symbol. Returns {@code [RV10, RV30]}; either entry is null when the series is
+     * too short. Currency-free — volatility is a return ratio, so a {@code .L} pence series needs no
+     * conversion.
+     */
+    private Map<String, BigDecimal[]> loadDailyVols(Set<String> tickers) {
+        LocalDate to = LocalDate.now();
+        LocalDate from = to.minusDays(VOL_LOOKBACK_DAYS);
+        Map<String, BigDecimal[]> out = new HashMap<>();
+        for (String tk : tickers) {
+            List<PriceBar> bars = history.getPriceHistory(tk, from, to);
+            out.put(tk, new BigDecimal[]{
+                    PriceStats.dailyVol(bars, RV_SHORT),
+                    PriceStats.dailyVol(bars, RV_LONG)});
+        }
+        return out;
     }
 
     /** Yahoo ticker for an order symbol; null when the order carries no symbol. Bonds map to themselves. */

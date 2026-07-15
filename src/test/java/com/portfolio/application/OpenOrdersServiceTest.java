@@ -101,6 +101,43 @@ class OpenOrdersServiceTest {
     }
 
     @Test
+    void enrichesVolatilityColumnsFromDailyHistory(@TempDir Path dir) throws Exception {
+        // An II order on NVDA (US ticker maps to itself). Seed a jagged daily series ending today so
+        // the daily-close fallback fills `current` and the RV windows are non-zero.
+        Files.writeString(dir.resolve("2bc3405a-877c-4bf3-ac16-8dcb5303b89a.csv"), """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                14/07/2026 16:52,27726IDT248,SELL/LIMIT,NVDA,NVIDIA Corp,50,n/a,"$11,000.00",PENDING
+                """);
+
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        List<com.portfolio.domain.model.PriceBar> bars = new java.util.ArrayList<>();
+        java.time.LocalDate d = java.time.LocalDate.now().minusDays(50);
+        double px = 200.0;
+        for (int i = 0; i < 40; i++) {
+            // alternate ±2% so the daily σ is a clean, non-zero, known-ish magnitude
+            px *= (i % 2 == 0) ? 1.02 : (1 / 1.02);
+            bars.add(new com.portfolio.domain.model.PriceBar("NVDA", d, px, px, px, px, px, 1.0, 1L, "USD"));
+            d = d.plusDays(1);
+        }
+        history.savePriceBars(bars);
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                new IntradayPriceRepository(connections), history, new YahooTickerMap());
+
+        OpenOrder nvda = find(service.load().orders(), "NVDA");
+        assertNotNull(nvda.dailyVol10(), "RV10 computed from daily history");
+        assertNotNull(nvda.dailyVol30(), "RV30 computed from daily history");
+        assertTrue(nvda.dailyVol10().signum() > 0);
+        assertNotNull(nvda.currentPrice(), "daily-close fallback fills current");
+        assertNotNull(nvda.sigmaToLimit(), "σ distance computed from current + limit + RV10");
+        assertNotNull(nvda.touchProb5d());
+        double p = nvda.touchProb5d().doubleValue();
+        assertTrue(p >= 0.0 && p <= 1.0, "touch probability is a valid probability");
+    }
+
+    @Test
     void exportWritesDatedXlsxToOutputDir(@TempDir Path dir) throws Exception {
         Files.writeString(dir.resolve("activeorders.csv"), """
                 "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"

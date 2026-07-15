@@ -702,8 +702,11 @@ public class ExcelReportWriter {
         CellStyle qtyNum = numericStyle(wb, false);
         Map<String, CellStyle> moneyStyles = new HashMap<>();   // reuse one style per number format
 
+        CellStyle pctStyle = wb.createCellStyle();
+        pctStyle.setDataFormat(wb.createDataFormat().getFormat("+0.00%;-0.00%"));
+
         String[] headers = {"Broker", "Symbol", "Name", "Side", "Type", "Quantity",
-                "Price", "Amount", "Amount GBP", "Date entered", "Expiry"};
+                "Price", "Current", "Vs limit", "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
 
@@ -717,12 +720,18 @@ public class ExcelReportWriter {
             styledCell(row, 4, dashIfNull(o.orderType()), text);
             if (o.quantity() != null) setNumeric(row, 5, o.quantity(), qtyNum);
             if (o.price() != null) setMoney(row, 6, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
-            if (o.amount() != null) setMoney(row, 7, o.amount(), o.currency(), false, wb, moneyStyles);
-            if (o.amountGbp() != null) setMoney(row, 8, o.amountGbp(), "GBP", false, wb, moneyStyles);
-            styledCell(row, 9, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            if (o.currentPrice() != null) setMoney(row, 7, o.currentPrice(), o.currency(), false, wb, moneyStyles);
+            if (o.distancePct() != null) {
+                Cell d = row.createCell(8);
+                d.setCellValue(o.distancePct().doubleValue());
+                d.setCellStyle(pctStyle);
+            }
+            if (o.amount() != null) setMoney(row, 9, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 10, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 11, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 10, expiry, text);
+            styledCell(row, 12, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);

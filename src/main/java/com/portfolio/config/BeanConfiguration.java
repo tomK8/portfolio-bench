@@ -8,6 +8,7 @@ import com.portfolio.adapter.EdgarFundamentalsFetcher;
 import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.GiltPriceFetcher;
 import com.portfolio.adapter.HoldingFileLocator;
+import com.portfolio.adapter.NasdaqEarningsFetcher;
 import com.portfolio.adapter.SmtpAlertNotifier;
 import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooQuoteSummaryFetcher;
@@ -18,6 +19,7 @@ import com.portfolio.application.EarningsService;
 import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
+import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
@@ -28,6 +30,7 @@ import com.portfolio.persistence.SnapshotRepository;
 import com.portfolio.persistence.TradeNotesRepository;
 import com.portfolio.persistence.WatchlistRepository;
 import com.portfolio.port.AlertNotifier;
+import com.portfolio.port.EarningsCalendarFeed;
 import com.portfolio.port.EarningsCalendarProvider;
 import com.portfolio.port.FxRateProvider;
 import com.portfolio.port.HistoricalFxRateProvider;
@@ -131,6 +134,9 @@ public class BeanConfiguration {
     public OpenOrdersService openOrdersService(HoldingFileLocator holdingFileLocator,
                                                FxRateProvider fxRateProvider,
                                                ExcelReportWriter excelReportWriter,
+                                               IntradayPriceRepository intradayPriceRepository,
+                                               PriceHistoryRepository priceHistoryRepository,
+                                               YahooTickerMap yahooTickerMap,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -138,7 +144,8 @@ public class BeanConfiguration {
         return new OpenOrdersService(holdingFileLocator, List.of(
                 new AJBellOrdersParser(),
                 new IIOrdersParser(),
-                new RothOrdersParser()), fxRateProvider, excelReportWriter, dir);
+                new RothOrdersParser()), fxRateProvider, excelReportWriter, dir,
+                intradayPriceRepository, priceHistoryRepository, yahooTickerMap);
     }
 
     @Bean
@@ -530,6 +537,25 @@ public class BeanConfiguration {
                                            EarningsDateRepository earningsDateRepository,
                                            KeyValueStore keyValueStore) {
         return new EarningsService(earningsCalendarProvider, earningsDateRepository, keyValueStore);
+    }
+
+    // ---- Earnings calendar (Nasdaq feed) ------------------------------------
+
+    @Bean
+    public EarningsCalendarFeed earningsCalendarFeed() {
+        return new NasdaqEarningsFetcher();
+    }
+
+    @Bean
+    public EarningsCalendarRepository earningsCalendarRepository(JdbcConnectionFactory connections) {
+        return new EarningsCalendarRepository(connections);
+    }
+
+    @Bean
+    public EarningsCalendarService earningsCalendarService(EarningsCalendarFeed earningsCalendarFeed,
+                                                           EarningsCalendarRepository earningsCalendarRepository,
+                                                           KeyValueStore keyValueStore) {
+        return new EarningsCalendarService(earningsCalendarFeed, earningsCalendarRepository, keyValueStore);
     }
 
     @Bean

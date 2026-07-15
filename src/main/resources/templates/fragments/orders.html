@@ -38,6 +38,8 @@
                 <th class="txt" data-sort="text">Type</th>
                 <th data-sort="num">Qty</th>
                 <th data-sort="num">Price</th>
+                <th data-sort="num" title="Latest live price, in the order's currency">Current</th>
+                <th data-sort="num" title="(current − limit) ÷ limit — how far the market sits from your limit price">vs limit</th>
                 <th data-sort="num">Amount</th>
                 <th data-sort="num">Amount £</th>
                 <th class="txt" data-sort="text">Date entered</th>
@@ -55,6 +57,9 @@
                 <td class="txt" th:text="${o.orderType != null ? o.orderType : '—'}">Type</td>
                 <td th:text="${#numbers.formatDecimal(o.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>
                 <td th:text="${o.price != null ? (o.priceEstimated ? '~' : '') + o.currencySymbol + #numbers.formatDecimal(o.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:text="${o.currentPrice != null ? o.currencySymbol + #numbers.formatDecimal(o.currentPrice, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:classappend="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? 'val-pos' : (o.distancePct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                    th:text="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>
                 <td th:text="${o.amount != null ? o.currencySymbol + #numbers.formatDecimal(o.amount, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td th:text="${o.amountGbp != null ? '£' + #numbers.formatDecimal(o.amountGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td class="txt" th:text="${o.dateEntered != null ? o.dateEntered.toString() : '—'}">—</td>

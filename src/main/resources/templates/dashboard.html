@@ -574,6 +574,25 @@
         #panel-mosig .full-bleed { padding-left: max(1.5rem, calc(50vw - 50%)); }
         #panel-trend .full-bleed > table, #panel-range .full-bleed > table,
         #panel-momentum .full-bleed > table, #panel-mosig .full-bleed > table { margin-left: 0; }
+        /* Earnings tab: per-day sections. */
+        .ea-day { margin: 0 0 0.9rem; }
+        .ea-day-head { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.25rem; display: flex;
+            align-items: baseline; gap: 0.5rem; }
+        .ea-day-head .ea-rel { color: #2c6fbb; }
+        .ea-day-head .ea-count { color: #888; font-weight: 400; font-size: 0.8rem; }
+        .ea-day.ea-today .ea-day-head { border-left: 3px solid #2c6fbb; padding-left: 0.4rem; }
+        .ea-none { color: #999; font-size: 0.8rem; font-style: italic; }
+        .swing-tbl tr.ea-held td { background: #fff6e0; }
+        .ea-badge { display: inline-block; min-width: 2.6rem; text-align: center; font-size: 0.72rem;
+            padding: 0 0.3rem; border-radius: 3px; font-weight: 600; }
+        .ea-badge.ea-bmo { background: #e5f0ff; color: #1c5aa8; }
+        .ea-badge.ea-amc { background: #efe6fb; color: #6a3fb0; }
+        .ea-badge.ea-tbd { background: #eee; color: #777; }
+        html[data-theme="dark"] .ea-day-head .ea-rel { color: #6ab0f3; }
+        html[data-theme="dark"] .swing-tbl tr.ea-held td { background: #33290f; }
+        html[data-theme="dark"] .ea-badge.ea-bmo { background: #1c2d44; color: #7db3f0; }
+        html[data-theme="dark"] .ea-badge.ea-amc { background: #2b2140; color: #b491e8; }
+        html[data-theme="dark"] .ea-badge.ea-tbd { background: #2a2a2a; color: #999; }
         #panel-trend .swing-regimes { justify-content: flex-start; padding-left: max(1.5rem, calc(50vw - 50%)); }
         table.corr-matrix th.corr-axis { background: #f6f7f9; font-weight: 600; position: sticky; }
         html[data-theme="dark"] .swing-tbl th { background: #23262b; }
@@ -1140,6 +1159,7 @@
     <button class="tab" data-panel="panel-momentum" type="button">Momentum</button>
     <button class="tab" data-panel="panel-mosig" type="button">Mom. signals</button>
     <button class="tab" data-panel="panel-range" type="button">Range floor</button>
+    <button class="tab" data-panel="panel-earnings" type="button">Earnings</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -2404,6 +2424,46 @@
             </details>
         </div>
     </div>
+</section>
+
+<section class="tab-panel" id="panel-earnings">
+    <p class="muted" style="margin-top: 0">
+        Upcoming and just-past <b>earnings calendar</b> from Nasdaq — a rolling window around today
+        (default 2 days back, 3 forward). Each day lists every company scheduled to report with its
+        session (<b>BMO</b> before open / <b>AMC</b> after close / <b>TBD</b>), market cap, consensus
+        EPS estimate and last year's actual for the same quarter. Filter to the big names with the
+        market-cap floor. Your own holdings (from the latest sync) are <b>highlighted</b> and pulled
+        into a summary strip at the top, whatever their size. Rosters are cached, so a repeat view or
+        a Nasdaq hiccup still shows the last-known calendar; <b>Refresh</b> forces a re-pull.
+    </p>
+
+    <div class="benchmark-controls swing-controls">
+        <label title="calendar days before today">Back: <input id="ea-back" type="text" size="2" value="2"/></label>
+        <label title="calendar days after today">Forward: <input id="ea-forward" type="text" size="2" value="3"/></label>
+        <label title="only show names at or above this market cap in the per-day tables (your holdings always show)">Min cap:
+            <select id="ea-mincap">
+                <option value="">All</option>
+                <option value="2">≥ $2B</option>
+                <option value="10">≥ $10B</option>
+                <option value="50">≥ $50B</option>
+                <option value="200">≥ $200B</option>
+            </select>
+        </label>
+        <label title="show only days/rows that are your holdings"><input id="ea-mine" type="checkbox"/> My holdings only</label>
+        <button id="ea-run" type="button">Run</button>
+        <button id="ea-refresh" type="button" title="Force a fresh pull from Nasdaq (bypass cache)">Refresh</button>
+        <span id="ea-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="ea-empty" class="muted" style="margin-top: 1rem;">Click <b>Run</b> to load the calendar.</div>
+
+    <div id="ea-mine-wrap" style="display:none; margin-top: 0.8rem;">
+        <div class="swing-span" id="ea-mine-summary"></div>
+    </div>
+
+    <div id="ea-warnings" style="margin-top: 0.5rem;"></div>
+    <div id="ea-days" style="margin-top: 0.6rem;"></div>
+    <div id="ea-source" class="muted" style="font-size: 0.78rem; margin-top: 0.6rem;"></div>
 </section>
 
 <section class="tab-panel" id="panel-snapshots">

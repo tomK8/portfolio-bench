@@ -170,6 +170,7 @@
             if (panelId === 'panel-momentum') setupMomentum();
             if (panelId === 'panel-mosig') setupMomentumSignals();
             if (panelId === 'panel-range') setupRange();
+            if (panelId === 'panel-earnings') setupEarnings();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
@@ -7563,6 +7564,116 @@
                 html += '</tr>';
             });
             return html;
+        }
+
+        // ---- Earnings calendar tab ----------------------------------------
+        var earnInit = false, earnReport = null;
+
+        function setupEarnings() {
+            if (earnInit) return;
+            earnInit = true;
+            document.getElementById('ea-run').addEventListener('click', function () { runEarnings(false); });
+            document.getElementById('ea-refresh').addEventListener('click', function () { runEarnings(true); });
+            document.getElementById('ea-mincap').addEventListener('change', function () { runEarnings(false); });
+            document.getElementById('ea-mine').addEventListener('change', renderEarnings);
+            runEarnings(false); // auto-load on first open
+        }
+
+        function eaVal(id) { return (document.getElementById(id).value || '').trim(); }
+        function eaStatus(m) { document.getElementById('ea-status').textContent = m || ''; }
+
+        function runEarnings(refresh) {
+            eaStatus(refresh ? 'Refreshing from Nasdaq…' : 'Loading…');
+            var q = 'back=' + encodeURIComponent(eaVal('ea-back') || '2')
+                + '&forward=' + encodeURIComponent(eaVal('ea-forward') || '3');
+            var cap = eaVal('ea-mincap');
+            if (cap) q += '&minCapB=' + encodeURIComponent(cap);
+            if (refresh) q += '&refresh=true';
+            fetch('/earnings?' + q)
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (rep) {
+                    earnReport = rep;
+                    document.getElementById('ea-empty').style.display = 'none';
+                    renderEarnings();
+                    eaStatus('Updated ' + new Date().toLocaleTimeString());
+                })
+                .catch(function (e) { eaStatus('Error: ' + e.message); });
+        }
+
+        function eaCap(v) {
+            if (v == null) return '—';
+            var a = Math.abs(v);
+            if (a >= 1e12) return '$' + (v / 1e12).toFixed(2) + 'T';
+            if (a >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+            if (a >= 1e6) return '$' + (v / 1e6).toFixed(0) + 'M';
+            return '$' + v.toLocaleString();
+        }
+        function eaEps(v) {
+            if (v == null) return '—';
+            return v < 0 ? '-$' + Math.abs(v).toFixed(2) : '$' + v.toFixed(2);
+        }
+        function eaTimeBadge(t) {
+            var cls = t === 'BMO' ? 'ea-bmo' : (t === 'AMC' ? 'ea-amc' : 'ea-tbd');
+            return '<span class="ea-badge ' + cls + '">' + escapeHtml(t || 'TBD') + '</span>';
+        }
+
+        function renderEarnings() {
+            var rep = earnReport;
+            if (!rep) return;
+            var held = {};
+            (rep.heldSymbols || []).forEach(function (s) { held[s] = true; });
+            var mineOnly = document.getElementById('ea-mine').checked;
+
+            // Summary strip: the user's own holdings across the window (unfiltered by market cap).
+            var mine = rep.myHoldings || [];
+            document.getElementById('ea-mine-summary').innerHTML = mine.length
+                ? '<b>Your holdings reporting in this window:</b> ' + mine.map(function (e) {
+                    return escapeHtml(e.symbol) + ' <span class="muted">(' + e.date
+                        + (e.time && e.time !== 'TBD' ? ' ' + e.time : '') + ')</span>';
+                }).join(' · ')
+                : '<b>Your holdings:</b> none reporting in this window.';
+            document.getElementById('ea-mine-wrap').style.display = 'block';
+
+            var warn = rep.warnings || [];
+            document.getElementById('ea-warnings').innerHTML = warn.length
+                ? '<div class="mo-banner">' + warn.map(escapeHtml).join('<br>') + '</div>' : '';
+
+            var html = '';
+            (rep.days || []).forEach(function (day) {
+                var rows = (day.events || []).filter(function (e) {
+                    return !mineOnly || held[(e.symbol || '').toUpperCase()];
+                });
+                var isToday = day.label === 'Today';
+                html += '<div class="ea-day' + (isToday ? ' ea-today' : '') + '">';
+                html += '<div class="ea-day-head"><span>' + escapeHtml(day.weekday) + ' ' + day.date + '</span>'
+                    + '<span class="ea-rel">' + escapeHtml(day.label) + '</span>'
+                    + '<span class="ea-count">' + rows.length + (rows.length === 1 ? ' report' : ' reports') + '</span></div>';
+                if (!rows.length) {
+                    html += '<div class="ea-none">' + (mineOnly ? 'none of your holdings' : 'no scheduled reports') + '</div>';
+                } else {
+                    html += '<div class="full-bleed"><table class="swing-tbl">';
+                    html += '<tr><th class="lbl">Symbol</th><th class="lbl">Company</th><th>Time</th>'
+                        + '<th>Mkt cap</th><th>EPS est</th><th>#Est</th><th>LY EPS</th></tr>';
+                    rows.forEach(function (e) {
+                        var isHeld = held[(e.symbol || '').toUpperCase()];
+                        html += '<tr' + (isHeld ? ' class="ea-held"' : '') + '>';
+                        html += '<td class="lbl">' + (isHeld ? '★ ' : '') + escapeHtml(e.symbol) + '</td>';
+                        html += '<td class="lbl">' + escapeHtml(e.companyName || '—') + '</td>';
+                        html += '<td>' + eaTimeBadge(e.time) + '</td>';
+                        html += '<td>' + eaCap(e.marketCap) + '</td>';
+                        html += '<td>' + eaEps(e.epsForecast) + '</td>';
+                        html += '<td>' + (e.numEstimates == null ? '—' : e.numEstimates) + '</td>';
+                        html += '<td>' + eaEps(e.lastYearEps) + '</td>';
+                        html += '</tr>';
+                    });
+                    html += '</table></div>';
+                }
+                html += '</div>';
+            });
+            document.getElementById('ea-days').innerHTML = html;
+            document.getElementById('ea-source').textContent =
+                'Source: ' + (rep.source || 'Nasdaq')
+                + '. Estimates are consensus; BMO=before open, AMC=after close, TBD=unspecified.';
         }
 
     }());

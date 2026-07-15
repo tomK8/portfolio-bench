@@ -2,11 +2,15 @@ package com.portfolio.application;
 
 import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.HoldingFileLocator;
+import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.OpenOrdersService.OrdersReport;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
+import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.JdbcConnectionFactory;
+import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.port.FxRateProvider;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -35,9 +39,14 @@ class OpenOrdersServiceTest {
     Path outDir;
 
     private OpenOrdersService service(Path inputDir) {
+        // A temp (empty) DB — the live-price enrichment finds no quotes and leaves those columns null,
+        // which is all these tests need. The repos create their tables in their constructors.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(inputDir.resolve("db"));
         return new OpenOrdersService(new HoldingFileLocator(inputDir),
                 List.of(new AJBellOrdersParser(), new IIOrdersParser(), new RothOrdersParser()),
-                FX, new ExcelReportWriter(), outDir);
+                FX, new ExcelReportWriter(), outDir,
+                new IntradayPriceRepository(connections), new PriceHistoryRepository(connections),
+                new YahooTickerMap());
     }
 
     @Test
@@ -111,6 +120,26 @@ class OpenOrdersServiceTest {
     @Test
     void exportIsNothingWhenNoOrderFiles(@TempDir Path dir) {
         assertTrue(service(dir).export().empty());
+    }
+
+    @Test
+    void priceInCurrency_convertsPenceAndCrossCurrency() {
+        Map<String, BigDecimal> rates = Map.of("GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"));
+        // GBp pence → GBP pounds for a GBP order (÷100).
+        assertEquals(0, new BigDecimal("5.38").compareTo(
+                OpenOrdersService.priceInCurrency(new BigDecimal("538"), "GBp", "GBP", rates)));
+        // Same currency passes through unchanged.
+        assertEquals(0, new BigDecimal("224.86").compareTo(
+                OpenOrdersService.priceInCurrency(new BigDecimal("224.86"), "USD", "USD", rates)));
+        // USD listing → GBP order: 100 USD ÷ 1.25 = 80 GBP.
+        assertEquals(0, new BigDecimal("80").compareTo(
+                OpenOrdersService.priceInCurrency(new BigDecimal("100"), "USD", "GBP", rates)));
+        // GBP listing → USD order: 80 GBP × 1.25 = 100 USD.
+        assertEquals(0, new BigDecimal("100").compareTo(
+                OpenOrdersService.priceInCurrency(new BigDecimal("80"), "GBP", "USD", rates)));
+        // Missing rate → null (no misleading number).
+        assertNull(OpenOrdersService.priceInCurrency(new BigDecimal("10"), "EUR", "GBP", rates));
+        assertNull(OpenOrdersService.priceInCurrency(null, "USD", "GBP", rates));
     }
 
     @Test

@@ -82,7 +82,8 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
 - **Open orders** — `GET /orders` → `fragments/orders` (htmx, re-fetched on each tab click), plus
   a "Download Excel" button (`POST /orders/export`). Resting orders across brokers parsed on demand
   from the newest order-status export per broker in the input dir; a current FX snapshot fills the
-  Amount GBP column. See the Open-orders section below.
+  Amount GBP column, and a live intraday/daily quote fills the **Current** price + **vs limit** %
+  columns (how far the market sits from each resting limit). See the Open-orders section below.
 - **Contributions** — `GET /contributions` → JSON, rendered by Chart.js. Cumulative
   per-account + Total.
 - **Value over time** — `GET /portfolio-value` → JSON, Chart.js. Monthly portfolio GBP
@@ -181,6 +182,15 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   outlined; any overridden parameter flags the run EXPLORATORY. Per-name results local-currency;
   pooled arms GBP via daily Frankfurter FX. See the Range section below.
 
+- **Earnings** — `GET /earnings` → JSON, rendered as per-day tables under the Tools group. A rolling
+  earnings calendar (default 2 days back, 3 forward) from Nasdaq's public JSON feed: each day lists
+  every company scheduled to report with its session (BMO/AMC/TBD), market cap, consensus EPS
+  estimate + estimate count and last year's same-quarter actual. A market-cap floor filters to the
+  "major" names; the user's own holdings (the `held_symbols` KV set from the last /sync) are
+  highlighted and pulled into a summary strip regardless of size. Forward-looking with estimates —
+  the half the EDGAR filing-date proxy (Swing §D) can't serve. Rosters are cached and degrade to
+  last-known on a feed outage. See the Earnings section below.
+
 Charts load lazily on first tab click. Logging is SLF4J + Logback (`logback-spring.xml`);
 no `System.out` in production code.
 
@@ -212,6 +222,7 @@ no `System.out` in production code.
 | Momentum signals backfill | `POST /momentum-signals/backfill` | `MomentumSignalsService` |
 | Range floor           | `GET /range`               | `RangeAnalysisService`    |
 | Range backfill        | `POST /range/backfill`     | `RangeAnalysisService`    |
+| Earnings calendar     | `GET /earnings`            | `EarningsCalendarService` |
 
 ## Holding fields
 
@@ -293,13 +304,24 @@ price-appreciation only — dividends are **not** folded into the saved snapshot
 Read-only view of resting orders across brokers (Open orders tab, under the Holdings group).
 `OpenOrdersService` locates the newest order-status export per broker in the input dir (reusing
 `HoldingFileLocator.findMostRecent(Predicate<Path>)` — same "newest file wins" rule as holdings),
-parses each, and keeps only non-terminal statuses. Otherwise a pure disk read — the one non-file
-dependency is a current FX snapshot (`FxRateProvider`) used to fill each order's GBP amount
-(degrades to null + a warning if the fetch fails). Everything is normalised into one framework-free
-`domain.model.OpenOrder` record (broker, symbol, name, side, orderType, quantity, price,
-priceEstimated, amount, currency, dateEntered, expiry, duration, status, reference, amountGbp);
-absent fields are null → "—". Parsers build FX-free orders; the service enriches each with
-`amountGbp` via `withAmountGbp` (`toGbp` divides by the rate — units of foreign ccy per GBP).
+parses each, and keeps only non-terminal statuses. Otherwise a mostly-disk read — the non-file
+dependencies are a current FX snapshot (`FxRateProvider`, fills each order's GBP amount) and the
+stored price feeds (`IntradayPriceRepository` + `PriceHistoryRepository`, fill the live-price
+columns); all degrade to null + a warning rather than failing the view. Everything is normalised
+into one framework-free `domain.model.OpenOrder` record (broker, symbol, name, side, orderType,
+quantity, price, priceEstimated, amount, currency, dateEntered, expiry, duration, status, reference,
+amountGbp, currentPrice, distancePct); absent fields are null → "—". Parsers build enrichment-free
+orders; the service adds `amountGbp` via `withAmountGbp` (`toGbp` divides by the rate — units of
+foreign ccy per GBP) and the two live-price columns via `withCurrentPrice`.
+
+- **Live-price columns (`Current` + `vs limit`).** `enrichWithCurrentPrice` bulk-loads the latest
+  intraday quote for every order symbol (one query; daily-close fallback within `DAILY_FALLBACK_DAYS`),
+  resolves the symbol to its Yahoo ticker via `YahooTickerMap` (bonds map to themselves), and expresses
+  the quote in the **order's own currency** through `priceInCurrency` — the same GBp-pence→GBP-pounds
+  shift and cross-currency-via-GBP conversion the rest of the app uses (a listing quoted differently
+  from the order is FX-crossed; a missing rate yields null, never a wrong number). `distancePct` =
+  signed `(current − limit) / price` (positive = market above the resting limit), rendered as a
+  green/red % and percent-formatted in Excel. Unenriched orders (no symbol, no quote) keep "—".
 
 - `parser/OrderParser` — interface (`sourceName`, `supports`, `parse`). Parsers return **all** rows;
   the open/closed filter lives in `OpenOrdersService.isOpen` (a denylist of terminal statuses —
@@ -334,10 +356,11 @@ cross-matching).
 `Open Orders-YYYYMMDD.xlsx` to the **output dir (~/Documents)** — same place the portfolio exports
 land, not the browser's download folder — then reuses the shared `fragments/export` result fragment
 to report the path. Sheet built by `ExcelReportWriter.ordersWorkbook(List<OpenOrder>)`: Price /
-Amount / Amount GBP are real numbers formatted with the row's currency symbol via a per-cell number
-format (mixed £/$ reads naturally, stays sortable); II estimated prices carry a literal "~" in the
-format (`"~$"#,##0.00`), mirroring the screen while keeping the numeric value. (The Files-tab
-portfolio button was renamed to "Download Excel" too — both write to ~/Documents.)
+Current / Amount / Amount GBP are real numbers formatted with the row's currency symbol via a
+per-cell number format (mixed £/$ reads naturally, stays sortable); II estimated prices carry a
+literal "~" in the format (`"~$"#,##0.00`), mirroring the screen while keeping the numeric value; the
+`Vs limit` column is a signed percent (`+0.00%;-0.00%`). (The Files-tab portfolio button was renamed
+to "Download Excel" too — both write to ~/Documents.)
 
 ## Adding a new parser
 
@@ -831,3 +854,40 @@ data says so. Read-only; never touches the ledger.
   `PriceFetchSupport.tickersToFetch`; written by constructor seed + `ensureBackfilled` **only —
   never by `report()`**. Standard 30y fetch suffices (no deep-lookback special case — the cohort
   all lists post-1996).
+
+## Earnings calendar
+
+Read-only earnings calendar (Earnings tab, under Tools). `GET /earnings` → JSON, rendered client-side
+as one table per day over a `[today−back, today+forward]` window (default 2/3). Unlike the EDGAR
+filing-date proxy behind Swing §D (`EarningsCalendarProvider`, backward-looking "which past dates did
+symbol X file"), this is a **forward-looking, market-wide** calendar with consensus EPS estimates —
+deliberately a **separate port** (`port/EarningsCalendarFeed`, `forDate(LocalDate)`).
+
+- `port/EarningsCalendarFeed` — `forDate(date)` returns `List<EarningsEvent>`; **three-valued**: a
+  non-null (possibly empty) list is a successful read (`[]` = no reports, e.g. a weekend), `null` =
+  fetch failure. The service needs that distinction to avoid caching an empty roster over good data.
+- `adapter/NasdaqEarningsFetcher` — one GET per date to `api.nasdaq.com/api/calendar/earnings?date=`.
+  Browser-UA (default Java UA gets 403, same as `GiltPriceFetcher`/dividenddata). Jackson;
+  `parse(JsonNode,date)` is a static, unit-tested pure function. All feed fields are display strings
+  (`"$665,246,306,497"`, `"$7.98"`, `"($0.11)"`) → parsed to real numbers (`parseNumber` treats
+  `(x)` as −x, strips `$ , %`; `"$0"` is a real zero, blank/`N/A` → null). `time` normalises
+  `time-pre-market`→`BMO` / `time-after-hours`→`AMC` / else `TBD`. Rows without a symbol are dropped.
+- `domain.model.EarningsEvent` — pure record (date, symbol, companyName, time, marketCap [whole USD],
+  epsForecast, numEstimates, lastYearEps). `marketCap`/EPS are native USD (US-market calendar, no FX).
+  "Held" is **not** a field — the report ships the held-symbol set and the client tags rows, keeping
+  the record a pure feed row.
+- `persistence/EarningsCalendarRepository` — cache. Two tables: `earnings_calendar` (row per
+  `(date,symbol)`) + `earnings_calendar_fetch` (per-date `fetched_at` + count — the bookkeeping that
+  lets a **zero-report day** be cached distinctly from "never fetched"). `save` replaces-per-date in
+  one transaction (a company dropped from the roster disappears). Reads degrade (log + empty).
+- `application/EarningsCalendarService` — window walk with cache policy: **past** dates cache forever
+  (settled roster); **today/future** re-fetch once cache ages past `REFRESH_TTL` (3h — estimates/roster
+  still move). `refresh=true` (the Refresh button) bypasses freshness. Live-fetch failure degrades to
+  cached rows + a warning, never throws. Window clamped to `MAX_BACK/MAX_FORWARD` (14) so a stray param
+  can't fan out. Market-cap floor filters the per-day tables (the "major" filter) but **never**
+  `myHoldings`. Held set = `held_symbols` KV (the /sync-persisted holdings); US internal symbols equal
+  their US tickers so a direct membership test suffices.
+- `web/EarningsController` — `GET /earnings?back=&forward=&minCapB=&refresh=`. `minCapB` is `$`
+  **billions** (UI select), converted to whole dollars. No backfill/mutation endpoints — a pure feed
+  read, independent of the price/cash pipelines (like Open orders). Not wired into
+  `PriceFetchSupport` (no Yahoo prices involved).

@@ -2,8 +2,14 @@ package com.portfolio.application;
 
 import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.HoldingFileLocator;
+import com.portfolio.adapter.YahooTickerMap;
+import com.portfolio.domain.Instruments;
+import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.OpenOrder;
+import com.portfolio.domain.model.PriceBar;
 import com.portfolio.parser.OrderParser;
+import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.port.FxRateProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +23,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -44,20 +51,30 @@ public class OpenOrdersService {
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
+    /** How many calendar days back to walk for a daily-close fallback when no intraday quote exists. */
+    private static final int DAILY_FALLBACK_DAYS = 6;
+
     private final HoldingFileLocator fileLocator;
     private final List<OrderParser> parsers;
     private final FxRateProvider fxRateProvider;
     private final ExcelReportWriter excelReportWriter;
     private final Path outputDir;
+    private final IntradayPriceRepository intraday;
+    private final PriceHistoryRepository history;
+    private final YahooTickerMap tickerMap;
 
     public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
                              FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
-                             Path outputDir) {
+                             Path outputDir, IntradayPriceRepository intraday,
+                             PriceHistoryRepository history, YahooTickerMap tickerMap) {
         this.fileLocator = fileLocator;
         this.parsers = parsers;
         this.fxRateProvider = fxRateProvider;
         this.excelReportWriter = excelReportWriter;
         this.outputDir = outputDir;
+        this.intraday = intraday;
+        this.history = history;
+        this.tickerMap = tickerMap;
     }
 
     /**
@@ -120,7 +137,105 @@ public class OpenOrdersService {
             }
         }
 
+        enrichWithCurrentPrice(orders, rates);
         return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty());
+    }
+
+    /**
+     * Fill each order's {@link OpenOrder#currentPrice()} (in the order's own currency units) and the
+     * signed {@link OpenOrder#distancePct()} of the market from the limit. Prices come from the
+     * bulk-loaded latest intraday quote (a single query for all symbols), falling back to the most
+     * recent stored daily close within {@link #DAILY_FALLBACK_DAYS}. A listing quoted in a different
+     * currency than the order (or in {@code GBp} pence vs the order's GBP pounds) is cross-converted
+     * through the same FX snapshot so the number lands in the order's currency. Degrades silently —
+     * an order we can't price keeps null columns ("—").
+     */
+    private void enrichWithCurrentPrice(List<OpenOrder> orders, Map<String, BigDecimal> rates) {
+        Set<String> tickers = new LinkedHashSet<>();
+        for (OpenOrder o : orders) {
+            String tk = tickerFor(o.symbol());
+            if (tk != null) tickers.add(tk);
+        }
+        if (tickers.isEmpty()) return;
+
+        Map<String, IntradayPrice> latest = intraday.loadLatestIntradayPrices(tickers);
+
+        for (int i = 0; i < orders.size(); i++) {
+            OpenOrder o = orders.get(i);
+            String tk = tickerFor(o.symbol());
+            if (tk == null) continue;
+
+            BigDecimal rawClose = null;
+            String rawCcy = null;
+            IntradayPrice ip = latest.get(tk);
+            if (ip != null) {
+                rawClose = BigDecimal.valueOf(ip.close());
+                rawCcy = ip.currency();
+            } else {
+                PriceBar bar = latestDailyClose(tk);
+                if (bar != null) {
+                    rawClose = BigDecimal.valueOf(bar.close());
+                    rawCcy = bar.currency();
+                }
+            }
+            if (rawClose == null) continue;
+
+            BigDecimal current = priceInCurrency(rawClose, rawCcy, o.currency(), rates);
+            if (current == null) continue;
+            BigDecimal distance = (o.price() != null && o.price().signum() != 0)
+                    ? current.subtract(o.price()).divide(o.price(), 6, RoundingMode.HALF_UP)
+                    : null;
+            orders.set(i, o.withCurrentPrice(current.setScale(4, RoundingMode.HALF_UP), distance));
+        }
+    }
+
+    /** Yahoo ticker for an order symbol; null when the order carries no symbol. Bonds map to themselves. */
+    private String tickerFor(String symbol) {
+        if (symbol == null || symbol.isBlank()) return null;
+        return Instruments.isBond(symbol) ? symbol.toUpperCase() : tickerMap.tickerFor(symbol);
+    }
+
+    /** Most recent stored daily close for {@code ticker} within the fallback window, or null. */
+    private PriceBar latestDailyClose(String ticker) {
+        LocalDate day = LocalDate.now();
+        for (int i = 0; i < DAILY_FALLBACK_DAYS; i++) {
+            PriceBar bar = history.getPriceOn(ticker, day);
+            if (bar != null) return bar;
+            day = day.minusDays(1);
+        }
+        return null;
+    }
+
+    /**
+     * Express a raw quote (in {@code rawCcy}) in {@code target} currency's major units. Handles the
+     * {@code GBp} pence → GBP pounds shift, returns as-is when currencies already match, and otherwise
+     * cross-converts via GBP using the FX snapshot (rates are units of foreign ccy per 1 GBP, so
+     * native→GBP divides and GBP→target multiplies). Null when a needed rate is missing.
+     */
+    static BigDecimal priceInCurrency(BigDecimal raw, String rawCcy, String target,
+                                      Map<String, BigDecimal> rates) {
+        if (raw == null || rawCcy == null || target == null) return null;
+        BigDecimal value = raw;
+        String from = rawCcy;
+        if ("GBp".equals(from)) {
+            value = value.movePointLeft(2);
+            from = "GBP";
+        }
+        String to = "GBp".equals(target) ? "GBP" : target;
+        if (from.equals(to)) return value;
+
+        BigDecimal gbp;
+        if ("GBP".equals(from)) {
+            gbp = value;
+        } else {
+            BigDecimal r = rates.get(from);
+            if (r == null || r.signum() == 0) return null;
+            gbp = value.divide(r, 10, RoundingMode.HALF_UP);
+        }
+        if ("GBP".equals(to)) return gbp;
+        BigDecimal tr = rates.get(to);
+        if (tr == null || tr.signum() == 0) return null;
+        return gbp.multiply(tr);
     }
 
     private static String displayKey(OpenOrder o) {

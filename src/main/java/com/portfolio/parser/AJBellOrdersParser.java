@@ -23,9 +23,11 @@ import java.util.regex.Pattern;
  * Parses AJ Bell SIPP {@code activeorders*.csv} exports.
  *
  * <p>Header: {@code Investment,Reference,Type,Order type,Quantity,Amount,Price,Date entered,
- * Expiry date,Status}. The export names the instrument (no ticker), so {@code name} is populated
- * and {@code symbol} left null. Prices are London pence ("53800p") — normalised to pounds so the
- * row carries a single GBP currency alongside the pound-denominated Amount.
+ * Expiry date,Status}. The export names the instrument (no ticker), so the name is mapped to the
+ * app's internal symbol by keyword; an <em>unmapped</em> name is passed straight through as the
+ * {@code symbol} so it shows up in the (only) identifier column — the cue to add a mapping here and
+ * fix it. Prices are London pence ("53800p") — normalised to pounds so the row carries a single GBP
+ * currency alongside the pound-denominated Amount.
  */
 public class AJBellOrdersParser implements OrderParser {
 
@@ -46,7 +48,7 @@ public class AJBellOrdersParser implements OrderParser {
         NAME_TO_SYMBOL.put("relx", "REL");
     }
 
-    /** Internal symbol for an AJ Bell investment name, or null when unmapped (shows "—"). */
+    /** Internal symbol for an AJ Bell investment name, or null when unmapped. */
     static String symbolFor(String investmentName) {
         if (investmentName == null) return null;
         String lower = investmentName.toLowerCase();
@@ -54,6 +56,16 @@ public class AJBellOrdersParser implements OrderParser {
             if (lower.contains(e.getKey())) return e.getValue();
         }
         return null;
+    }
+
+    /**
+     * The identifier shown in the Symbol column: the mapped internal symbol when known, else the raw
+     * investment name (so an unmapped name is visible and can be turned into a {@link #NAME_TO_SYMBOL}
+     * entry rather than silently vanishing). It won't resolve to a live quote until mapped — fine.
+     */
+    static String symbolOrName(String investmentName) {
+        String mapped = symbolFor(investmentName);
+        return mapped != null ? mapped : investmentName;
     }
 
     @Override
@@ -82,7 +94,7 @@ public class AJBellOrdersParser implements OrderParser {
 
                 orders.add(new OpenOrder(
                         sourceName(),
-                        symbolFor(name),
+                        symbolOrName(name),
                         name,
                         get(r, "Type"),
                         get(r, "Order type"),

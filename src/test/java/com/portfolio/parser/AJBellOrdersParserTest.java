@@ -56,4 +56,20 @@ class AJBellOrdersParserTest {
         assertEquals("LSEG", orders.get(1).symbol());
         assertEquals(0, new BigDecimal("81.50").compareTo(orders.get(1).price()));
     }
+
+    @Test
+    void parse_unmappedNameFallsIntoSymbolField(@TempDir Path dir) throws Exception {
+        // No NAME_TO_SYMBOL entry for this instrument → the raw name surfaces in the Symbol column
+        // (the cue to add a mapping), rather than showing "—".
+        Path f = dir.resolve("activeorders.csv");
+        Files.writeString(f, """
+                "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"
+                "Some Brand New ETF PLC","44626CZZZZZ","Buy","Limit","10","1000.00","10000p","07/07/2026","28/08/2026","In progress"
+                """);
+
+        List<OpenOrder> orders = parser.parse(f);
+        assertEquals(1, orders.size());
+        assertEquals("Some Brand New ETF PLC", orders.get(0).symbol(),
+                "unmapped name falls through to the symbol field");
+    }
 }

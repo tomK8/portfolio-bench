@@ -711,7 +711,7 @@ public class ExcelReportWriter {
         CellStyle sigmaStyle = wb.createCellStyle();         // signed σ distance to limit
         sigmaStyle.setDataFormat(wb.createDataFormat().getFormat("+0.00;-0.00"));
 
-        String[] headers = {"Broker", "Symbol", "Name", "Side", "Type", "Quantity",
+        String[] headers = {"Broker", "Symbol", "Side", "Type", "Quantity",
                 "Price", "Current", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
                 "P(touch 20d)", "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
@@ -722,24 +722,23 @@ public class ExcelReportWriter {
             Row row = sheet.createRow(rowNum++);
             styledCell(row, 0, o.broker(), text);
             styledCell(row, 1, dashIfNull(o.symbol()), text);
-            styledCell(row, 2, dashIfNull(o.name()), text);
-            styledCell(row, 3, dashIfNull(o.side()), text);
-            styledCell(row, 4, dashIfNull(o.orderType()), text);
-            if (o.quantity() != null) setNumeric(row, 5, o.quantity(), qtyNum);
-            if (o.price() != null) setMoney(row, 6, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
-            if (o.currentPrice() != null) setMoney(row, 7, o.currentPrice(), o.currency(), false, wb, moneyStyles);
-            if (o.distancePct() != null) setStyled(row, 8, o.distancePct(), pctStyle);
-            if (o.dailyVol10() != null) setStyled(row, 9, o.dailyVol10(), volPctStyle);
-            if (o.dailyVol30() != null) setStyled(row, 10, o.dailyVol30(), volPctStyle);
-            if (o.sigmaToLimit() != null) setStyled(row, 11, o.sigmaToLimit(), sigmaStyle);
-            if (o.touchProb5d() != null) setStyled(row, 12, o.touchProb5d(), touchPctStyle);
-            if (o.touchProb20d() != null) setStyled(row, 13, o.touchProb20d(), touchPctStyle);
-            if (o.amount() != null) setMoney(row, 14, o.amount(), o.currency(), false, wb, moneyStyles);
-            if (o.amountGbp() != null) setMoney(row, 15, o.amountGbp(), "GBP", false, wb, moneyStyles);
-            styledCell(row, 16, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            styledCell(row, 2, dashIfNull(o.side()), text);
+            styledCell(row, 3, dashIfNull(o.orderType()), text);
+            if (o.quantity() != null) setNumeric(row, 4, o.quantity(), qtyNum);
+            if (o.price() != null) setMoney(row, 5, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
+            if (o.currentPrice() != null) setMoney(row, 6, o.currentPrice(), o.currency(), false, wb, moneyStyles);
+            if (o.distancePct() != null) setStyled(row, 7, o.distancePct(), pctStyle);
+            if (o.dailyVol10() != null) setStyled(row, 8, o.dailyVol10(), volPctStyle);
+            if (o.dailyVol30() != null) setStyled(row, 9, o.dailyVol30(), volPctStyle);
+            if (o.sigmaToLimit() != null) setStyled(row, 10, o.sigmaToLimit(), sigmaStyle);
+            if (o.touchProb5d() != null) setStyled(row, 11, o.touchProb5d(), touchPctStyle);
+            if (o.touchProb20d() != null) setStyled(row, 12, o.touchProb20d(), touchPctStyle);
+            if (o.amount() != null) setMoney(row, 13, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 14, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 15, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 17, expiry, text);
+            styledCell(row, 16, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);

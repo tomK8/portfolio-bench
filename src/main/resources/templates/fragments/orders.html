@@ -33,7 +33,6 @@
             <tr>
                 <th class="txt" data-sort="text">Broker</th>
                 <th class="txt" data-sort="text">Symbol</th>
-                <th class="txt" data-sort="text">Name</th>
                 <th class="txt" data-sort="text">Side</th>
                 <th class="txt" data-sort="text">Type</th>
                 <th data-sort="num">Qty</th>
@@ -55,7 +54,6 @@
             <tr th:each="o : ${orders.orders}">
                 <td class="txt" th:text="${o.broker}">Broker</td>
                 <td class="txt" th:text="${o.symbol != null ? o.symbol : '—'}">SYM</td>
-                <td class="txt" th:text="${o.name != null ? o.name : '—'}">—</td>
                 <td class="txt"
                     th:classappend="${o.side != null ? (#strings.equalsIgnoreCase(o.side, 'Buy') ? 'val-pos' : (#strings.equalsIgnoreCase(o.side, 'Sell') ? 'val-neg' : '')) : ''}"
                     th:text="${o.side != null ? o.side : '—'}">Side</td>

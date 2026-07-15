@@ -345,11 +345,13 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   dealt/executed/filled/cancelled/expired/…; anything else, incl. an unseen "still working" status,
   is shown rather than dropped).
 - `AJBellOrdersParser` — `activeorders*.csv`. The export names the instrument but carries no
-  ticker, so `symbol` is mapped from the name by keyword (`NAME_TO_SYMBOL`: EQQQ / LSEG / REL — the
-  same internal symbols used elsewhere; add a line when a new AJ Bell name appears), falling back to
-  null → "—" when unmapped; `name` keeps the full text. Prices are London pence ("53800p") →
-  normalised to pounds so the row is single-currency (GBP). Statuses: "In progress" (open), "Dealt"
-  (filled).
+  ticker, so `symbol` is mapped from the name by keyword (`symbolOrName` over `NAME_TO_SYMBOL`:
+  EQQQ / LSEG / REL — the same internal symbols used elsewhere; add a line when a new AJ Bell name
+  appears). An **unmapped** name falls straight through as the `symbol` (the table has no Name
+  column), so a new instrument shows its full name in the Symbol column — the cue to add a mapping —
+  rather than "—"; it just won't resolve to a live quote until mapped. `name` still carries the full
+  text on the record (unused by the view). Prices are London pence ("53800p") → normalised to pounds
+  so the row is single-currency (GBP). Statuses: "In progress" (open), "Dealt" (filled).
 - `IIOrdersParser` — UUID `.csv`, **header-sniffed** (`Submitted` + `Settlement Date` + `Status`) to
   distinguish from II holdings/cash UUID CSVs. `Type` bundles side+ordertype ("SELL/LIMIT"); currency
   from the `Amount` £/$ prefix; no expiry. The resting **limit price isn't exported**, so it's

@@ -43,7 +43,8 @@
                 <th data-sort="num" title="Realized daily volatility over the last 10 sessions (sample stdev of daily log returns, not annualised)">RV10</th>
                 <th data-sort="num" title="Realized daily volatility over the last 30 sessions (not annualised)">RV30</th>
                 <th data-sort="num" title="Signed distance from the current price to your limit, in 5-session σ units: ln(limit ÷ current) ÷ (RV10 × √5). + = limit above the market">σ→lim</th>
-                <th data-sort="num" title="Probability the market touches your limit within 5 sessions — driftless first-passage 2·Φ(−|σ→lim|)">P(touch)</th>
+                <th data-sort="num" title="Probability the market touches your limit within 5 sessions — driftless first-passage 2·Φ(−|σ→lim|)">P(5d)</th>
+                <th data-sort="num" title="Probability the market touches your limit within 20 sessions — same first-passage estimate, σ scaled to a 20-session horizon">P(20d)</th>
                 <th data-sort="num">Amount</th>
                 <th data-sort="num">Amount £</th>
                 <th class="txt" data-sort="text">Date entered</th>
@@ -68,6 +69,7 @@
                 <td th:text="${o.dailyVol30 != null ? #numbers.formatDecimal(o.dailyVol30.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>
                 <td th:text="${o.sigmaToLimit != null ? (o.sigmaToLimit.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.sigmaToLimit, 1, 'COMMA', 2, 'POINT') + 'σ' : '—'}">—</td>
                 <td th:text="${o.touchProb5d != null ? #numbers.formatDecimal(o.touchProb5d.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '—'}">—</td>
+                <td th:text="${o.touchProb20d != null ? #numbers.formatDecimal(o.touchProb20d.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '—'}">—</td>
                 <td th:text="${o.amount != null ? o.currencySymbol + #numbers.formatDecimal(o.amount, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td th:text="${o.amountGbp != null ? '£' + #numbers.formatDecimal(o.amountGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td class="txt" th:text="${o.dateEntered != null ? o.dateEntered.toString() : '—'}">—</td>

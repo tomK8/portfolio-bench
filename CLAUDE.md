@@ -310,8 +310,8 @@ stored price feeds (`IntradayPriceRepository` + `PriceHistoryRepository`, fill t
 columns); all degrade to null + a warning rather than failing the view. Everything is normalised
 into one framework-free `domain.model.OpenOrder` record (broker, symbol, name, side, orderType,
 quantity, price, priceEstimated, amount, currency, dateEntered, expiry, duration, status, reference,
-amountGbp, currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d); absent
-fields are null → "—". Parsers build enrichment-free orders; the service adds `amountGbp` via
+amountGbp, currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
+touchProb20d); absent fields are null → "—". Parsers build enrichment-free orders; the service adds `amountGbp` via
 `withAmountGbp` (`toGbp` divides by the rate — units of foreign ccy per GBP), the two live-price
 columns via `withCurrentPrice`, and the four volatility columns via `withVolatility`.
 
@@ -324,19 +324,21 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   signed `(current − limit) / price` (positive = market above the resting limit), rendered as a
   green/red % and percent-formatted in Excel. Unenriched orders (no symbol, no quote) keep "—".
 
-- **Volatility columns (`RV10` / `RV30` / `σ→lim` / `P(touch)`).** Same `enrichWithCurrentPrice` pass.
-  `loadDailyVols` reads each symbol's daily series once (`VOL_LOOKBACK_DAYS` = 90 calendar days) and
+- **Volatility columns (`RV10` / `RV30` / `σ→lim` / `P(5d)` / `P(20d)`).** Same `enrichWithCurrentPrice`
+  pass. `loadDailyVols` reads each symbol's daily series once (`VOL_LOOKBACK_DAYS` = 90 calendar days) and
   computes **realized daily volatility, not annualised** over the last `RV_SHORT`=10 and `RV_LONG`=30
   sessions via `PriceStats.dailyVol` (sample stdev of daily log returns; `annualizedVol` is now just
   this × √252, sharing one `dailyVolRaw` engine). Vol is a return **ratio**, so it's currency-free — a
   `.L` pence series needs no FX. `PriceStats.sigmaDistance(current, limit, dailyVol, 5)` = signed
   `ln(limit/current) ÷ (dailyVol×√5)` — how many 5-session σ the limit sits from the market (+ above,
   − below), using RV10 as the near-term σ (falls back to RV30 when the 10-session window is too thin).
-  `PriceStats.touchProbability` = the driftless first-passage `2·Φ(−|σ→lim|)` (standard-normal CDF via a
-  Numerical-Recipes `erfc`), the probability the market touches the limit within 5 sessions; capped to
-  [0,1], = 1 at the barrier. σ/touch need a limit **and** a live price; RV10/RV30 need only the daily
-  series, so a name with no live quote still shows its RVs. Excel formats: RV10/RV30 `0.00%`, σ→lim
-  `+0.00;-0.00`, P(touch) `0.0%`.
+  `PriceStats.touchProbability` = the driftless first-passage `2·Φ(−|d|)` (standard-normal CDF via a
+  Numerical-Recipes `erfc`), the probability the market touches the limit at least once within the
+  horizon; capped to [0,1], = 1 at the barrier. Two horizons — `TOUCH_HORIZON_SESSIONS` 5 (also the
+  σ→lim column) and `..._LONG` 20 — share **one** base vol, so P(20d) ≥ P(5d) always (same barrier,
+  more time; only the √horizon scaling differs). σ/touch need a limit **and** a live price; RV10/RV30
+  need only the daily series, so a name with no live quote still shows its RVs. Excel formats:
+  RV10/RV30 `0.00%`, σ→lim `+0.00;-0.00`, both P(touch) `0.0%`.
 
 - `parser/OrderParser` — interface (`sourceName`, `supports`, `parse`). Parsers return **all** rows;
   the open/closed filter lives in `OpenOrdersService.isOpen` (a denylist of terminal statuses —
@@ -375,9 +377,9 @@ Current / Amount / Amount GBP are real numbers formatted with the row's currency
 per-cell number format (mixed £/$ reads naturally, stays sortable); II estimated prices carry a
 literal "~" in the format (`"~$"#,##0.00`), mirroring the screen while keeping the numeric value; the
 `Vs limit` column is a signed percent (`+0.00%;-0.00%`); the `RV10`/`RV30` daily-vol columns are
-`0.00%`, `σ→lim (5d)` a signed plain number (`+0.00;-0.00`) and `P(touch 5d)` a `0.0%` percent (all
-via `setStyled`, raw fraction/number in the cell). (The Files-tab portfolio button was renamed
-to "Download Excel" too — both write to ~/Documents.)
+`0.00%`, `σ→lim (5d)` a signed plain number (`+0.00;-0.00`) and `P(touch 5d)`/`P(touch 20d)` a `0.0%`
+percent (all via `setStyled`, raw fraction/number in the cell). (The Files-tab portfolio button was
+renamed to "Download Excel" too — both write to ~/Documents.)
 
 ## Adding a new parser
 

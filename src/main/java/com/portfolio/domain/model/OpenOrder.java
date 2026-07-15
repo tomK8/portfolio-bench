@@ -40,9 +40,11 @@ public record OpenOrder(
         BigDecimal dailyVol30,  // realized daily volatility over the last 30 sessions (NOT annualised).
         BigDecimal sigmaToLimit,// signed distance current→limit in 5-session σ units (ln(limit/current)
                                 // ÷ dailyVol×√5). null when price/current/vol unavailable.
-        BigDecimal touchProb5d  // probability the market touches the limit within 5 sessions
+        BigDecimal touchProb5d, // probability the market touches the limit within 5 sessions
                                 // (driftless first-passage, 2·Φ(−|sigmaToLimit|)); a fraction. null when
                                 // sigmaToLimit is unavailable.
+        BigDecimal touchProb20d // same touch probability over a 20-session horizon (σ scaled by √20
+                                // off the same daily vol); a fraction. null when unavailable.
 ) {
     /** Convenience for views — the leading symbol for {@link #currency} ($/£/€), or "" if unknown. */
     public String currencySymbol() {
@@ -59,7 +61,8 @@ public record OpenOrder(
     public OpenOrder withAmountGbp(BigDecimal gbp) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, gbp,
-                currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d);
+                currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
+                touchProb20d);
     }
 
     /**
@@ -70,18 +73,18 @@ public record OpenOrder(
     public OpenOrder withCurrentPrice(BigDecimal current, BigDecimal distance) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
-                current, distance, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d);
+                current, distance, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d, touchProb20d);
     }
 
     /**
      * Copy with the volatility columns set — realized daily σ over 10 / 30 sessions (not annualised),
-     * the signed 5-session σ distance from the market to the limit, and the 5-session touch
-     * probability. Enriched by the service, mirroring {@link #withCurrentPrice}.
+     * the signed 5-session σ distance from the market to the limit, and the 5- and 20-session touch
+     * probabilities. Enriched by the service, mirroring {@link #withCurrentPrice}.
      */
     public OpenOrder withVolatility(BigDecimal dv10, BigDecimal dv30, BigDecimal sigmaToLimit,
-                                    BigDecimal touchProb5d) {
+                                    BigDecimal touchProb5d, BigDecimal touchProb20d) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
-                currentPrice, distancePct, dv10, dv30, sigmaToLimit, touchProb5d);
+                currentPrice, distancePct, dv10, dv30, sigmaToLimit, touchProb5d, touchProb20d);
     }
 }

@@ -133,8 +133,12 @@ class OpenOrdersServiceTest {
         assertNotNull(nvda.currentPrice(), "daily-close fallback fills current");
         assertNotNull(nvda.sigmaToLimit(), "σ distance computed from current + limit + RV10");
         assertNotNull(nvda.touchProb5d());
+        assertNotNull(nvda.touchProb20d());
         double p = nvda.touchProb5d().doubleValue();
         assertTrue(p >= 0.0 && p <= 1.0, "touch probability is a valid probability");
+        // longer horizon can only raise the touch probability (same barrier, more time)
+        assertTrue(nvda.touchProb20d().doubleValue() >= p - 1e-9,
+                "P(touch 20d) ≥ P(touch 5d) for the same limit");
     }
 
     @Test

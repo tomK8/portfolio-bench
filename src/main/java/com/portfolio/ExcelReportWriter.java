@@ -713,7 +713,7 @@ public class ExcelReportWriter {
 
         String[] headers = {"Broker", "Symbol", "Name", "Side", "Type", "Quantity",
                 "Price", "Current", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
-                "Amount", "Amount GBP", "Date entered", "Expiry"};
+                "P(touch 20d)", "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
 
@@ -733,12 +733,13 @@ public class ExcelReportWriter {
             if (o.dailyVol30() != null) setStyled(row, 10, o.dailyVol30(), volPctStyle);
             if (o.sigmaToLimit() != null) setStyled(row, 11, o.sigmaToLimit(), sigmaStyle);
             if (o.touchProb5d() != null) setStyled(row, 12, o.touchProb5d(), touchPctStyle);
-            if (o.amount() != null) setMoney(row, 13, o.amount(), o.currency(), false, wb, moneyStyles);
-            if (o.amountGbp() != null) setMoney(row, 14, o.amountGbp(), "GBP", false, wb, moneyStyles);
-            styledCell(row, 15, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            if (o.touchProb20d() != null) setStyled(row, 13, o.touchProb20d(), touchPctStyle);
+            if (o.amount() != null) setMoney(row, 14, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 15, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 16, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 16, expiry, text);
+            styledCell(row, 17, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);

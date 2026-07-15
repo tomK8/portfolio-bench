@@ -59,8 +59,9 @@ public class OpenOrdersService {
     /** Realized-daily-vol windows (in sessions): RV10 (short) + RV30 (long). */
     private static final int RV_SHORT = 10;
     private static final int RV_LONG = 30;
-    /** Horizon (sessions) for the σ-distance-to-limit and touch-probability columns. */
+    /** Horizons (sessions) for the touch-probability columns; the σ-distance column uses the short one. */
     private static final int TOUCH_HORIZON_SESSIONS = 5;
+    private static final int TOUCH_HORIZON_SESSIONS_LONG = 20;
     /** Calendar-day lookback loaded per symbol to compute the daily-vol windows (≈ 60 sessions of margin). */
     private static final int VOL_LOOKBACK_DAYS = 90;
 
@@ -206,10 +207,13 @@ public class OpenOrdersService {
 
             // σ distance / touch prob need a limit and a live price; the short window is the near-term
             // vol estimate, falling back to the 30-session one when the 10-session window is too thin.
+            // Both touch probabilities share one base vol — they differ only by the √horizon scaling.
             BigDecimal baseVol = dv10 != null ? dv10 : dv30;
             BigDecimal sigmaToLimit = PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS);
             BigDecimal touchProb = PriceStats.touchProbability(sigmaToLimit);
-            orders.set(i, o.withVolatility(dv10, dv30, sigmaToLimit, touchProb));
+            BigDecimal touchProb20 = PriceStats.touchProbability(
+                    PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS_LONG));
+            orders.set(i, o.withVolatility(dv10, dv30, sigmaToLimit, touchProb, touchProb20));
         }
     }
 

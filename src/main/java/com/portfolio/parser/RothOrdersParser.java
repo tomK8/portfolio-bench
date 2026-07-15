@@ -83,7 +83,7 @@ public class RothOrdersParser implements OrderParser {
                         str(row, col, "Duration"),
                         str(row, col, "Status"),
                         null,
-                        null, null, null, null, null, null, null));
+                        null, null, null, null, null, null, null, null));
             }
         }
         return orders;

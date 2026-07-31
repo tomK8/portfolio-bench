@@ -105,7 +105,7 @@ public class SyncPortfolioService {
         for (String sym : missingIntraday) log.warn("No intraday price for held symbol {}", sym);
         List<SyncResult.AssetRecon> assetRecon = reconcileAssets(aggregated, latestBySymbol, gathered.rates());
         return new SyncResult(aggregated, totals, gathered.rates(), iiSippCash, sources, false,
-                recon, missingIntraday, assetRecon);
+                recon, missingIntraday, List.of(), assetRecon);
     }
 
     /**

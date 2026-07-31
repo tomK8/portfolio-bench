@@ -23,7 +23,7 @@ import java.util.List;
  * market cap. Forward-looking (unlike the EDGAR filing-date proxy), which is what the Earnings tab's
  * "+N days" half needs.
  *
- * <p>Like {@link GiltPriceFetcher} against dividenddata.co.uk, the default Java {@code User-Agent} is
+ * <p>Like {@link GiltPriceFetcher} against its source page, the default Java {@code User-Agent} is
  * refused (403), so a browser UA is sent. All fields arrive as display strings ({@code "$7.98"},
  * {@code "$665,246,306,497"}, {@code "($0.11)"}) and are parsed into real numbers here so the report
  * can sort and threshold on them.

@@ -68,7 +68,9 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   |diff| > £50 (threshold in `SyncPortfolioService.CASH_DRIFT_WARN_GBP`).
 - **From cash ledger** — `POST /sync-from-cash` → `fragments/portfolio-ledger`. Slimmer
   table (no separate "Market Value £" / "RT Market Value £" columns — single combined
-  value column). Drops positions without an intraday price.
+  value column). Drops positions without an intraday price — except bonds, which fall back to
+  the latest `price_history` close (surfaced in a "Daily-close fallback" panel with the close
+  date) so a dead gilt feed doesn't drop gilts from the totals.
 - **Portfolio % column** (both tables above + the Excel `Portfolio` sheet): each row's
   `marketValueGbp ÷ totals.totalGbp`. On-screen it's computed in the Thymeleaf fragment as
   double division (guarded against null/zero total — no BigDecimal divide that could throw on
@@ -430,12 +432,16 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
   Yahoo only serves ~7 days of 1-minute history per request, so the 15-day window *accumulates*
   as ticks append rather than backfilling in one shot. Feeds the watchlist popup's 1D–15D
   intraday charts. Pruned after each fetch tick. Every minute + startup.
-- `GiltPriceFetchJob` → also `price_intraday`, one HTTP GET to `dividenddata.co.uk/uk-gilts-prices-yields.py`.
-  Hourly + startup. Symbols are `"GILT {coupon}% {year}"` (no Yahoo ticker map). Currency `"GBP"`.
-  Rides the intraday job's prune for retention. Dividenddata returns 403 to the default Java
-  `User-Agent`; `GiltPriceFetcher` sends a browser UA. Each tick also **upserts** today's row
-  into `price_history` so the daily series self-accumulates even when the app isn't running
-  all day — last-write-wins.
+- `GiltPriceFetchJob` → also `price_intraday`, one HTTP GET to
+  `hl.co.uk/shares/corporate-bonds-gilts/bond-prices/uk-gilts` (HL; conventional gilts only —
+  index-linked are on a separate page, not fetched). Previously scraped dividenddata.co.uk,
+  which went behind a Cloudflare JS challenge in July 2026 (no header combination passes a
+  managed challenge — if HL 403s someday, check for the same before fiddling with UAs).
+  Hourly + startup. Symbols are `"GILT {coupon}% {year}"` (no Yahoo ticker map; HL's
+  zero-padded coupons "4.750" are trimmed to the broker form "4.75"). Currency `"GBP"`.
+  Rides the intraday job's prune for retention. `GiltPriceFetcher` sends a browser UA.
+  Each tick also **upserts** today's row into `price_history` so the daily series
+  self-accumulates even when the app isn't running all day — last-write-wins.
 - `ImportGiltPricesService` → bulk historical import for gilts from manually downloaded
   `~/Downloads/Tradeweb_FTSE_ClosePrices*.csv`. Runs on startup (daemon) and on demand via
   `POST /import-gilt-prices`. Upserts into `price_history`, archives consumed files to the
@@ -888,7 +894,7 @@ deliberately a **separate port** (`port/EarningsCalendarFeed`, `forDate(LocalDat
   non-null (possibly empty) list is a successful read (`[]` = no reports, e.g. a weekend), `null` =
   fetch failure. The service needs that distinction to avoid caching an empty roster over good data.
 - `adapter/NasdaqEarningsFetcher` — one GET per date to `api.nasdaq.com/api/calendar/earnings?date=`.
-  Browser-UA (default Java UA gets 403, same as `GiltPriceFetcher`/dividenddata). Jackson;
+  Browser-UA (default Java UA gets 403, same as `GiltPriceFetcher`). Jackson;
   `parse(JsonNode,date)` is a static, unit-tested pure function. All feed fields are display strings
   (`"$665,246,306,497"`, `"$7.98"`, `"($0.11)"`) → parsed to real numbers (`parseNumber` treats
   `(x)` as −x, strips `$ , %`; `"$0"` is a real zero, blank/`N/A` → null). `time` normalises

@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Currency;
@@ -52,6 +53,7 @@ import java.util.Map;
 public class SyncFromCashService {
 
     private static final Logger log = LoggerFactory.getLogger(SyncFromCashService.class);
+    private static final ZoneId LONDON = ZoneId.of("Europe/London");
 
     private static final Map<String, String> ACCOUNT_LABELS = Map.of(
             "AJBell", "AJ Bell SIPP",
@@ -100,11 +102,25 @@ public class SyncFromCashService {
         // view (compare against the holdings RT total) silently substituting cost basis would
         // make totals diverge for any position we can't price live. The dropped symbols are
         // surfaced in the result so the dashboard can flag them — a held position with no
-        // intraday quote is always worth investigating.
+        // intraday quote is always worth investigating. Exception: bonds fall back to the
+        // latest stored daily close (surfaced with its date). The gilt feed is a scrape that
+        // has died before, gilts barely move day to day, and a last-known close beats dropping
+        // the position from the totals; equities keep the hard drop because for them a missing
+        // intraday quote means a broken Yahoo mapping worth surfacing loudly.
         List<AggHolding> aggregated = new ArrayList<>();
         List<String> missingIntraday = new ArrayList<>();
+        List<String> dailyCloseFallbacks = new ArrayList<>();
         for (Position p : positions) {
             IntradayPrice ip = latestBySymbol.get(p.securityId().toUpperCase());
+            if (ip == null && Instruments.isBond(p.securityId())) {
+                ip = latestDailyClose(p.securityId().toUpperCase());
+                if (ip != null) {
+                    dailyCloseFallbacks.add(p.securityId() + " (close from "
+                            + ip.ts().atZone(LONDON).toLocalDate() + ")");
+                    log.warn("No intraday price for bond {} — using daily close from {}",
+                            p.securityId(), ip.ts().atZone(LONDON).toLocalDate());
+                }
+            }
             if (ip == null) {
                 missingIntraday.add(p.securityId());
                 log.warn("No intraday price for held symbol {}", p.securityId());
@@ -128,7 +144,21 @@ public class SyncFromCashService {
         if (sources.isEmpty()) sources.add("cash ledger");
 
         return new SyncResult(aggregated, totals, rates, BigDecimal.ZERO, sources, false,
-                List.of(), missingIntraday, List.of());
+                List.of(), missingIntraday, dailyCloseFallbacks, List.of());
+    }
+
+    /**
+     * Latest stored daily close for a symbol, wrapped as an {@link IntradayPrice} timestamped
+     * at that date so it can flow through the same valuation path as a live quote. Null when
+     * the symbol has no daily history either.
+     */
+    private IntradayPrice latestDailyClose(String symbol) {
+        LocalDate d = priceHistory.getLatestPriceDate(symbol);
+        if (d == null) return null;
+        var bar = priceHistory.getPriceOn(symbol, d);
+        if (bar == null) return null;
+        String ccy = bar.currency() != null ? bar.currency() : "GBP";
+        return new IntradayPrice(d.atStartOfDay(LONDON).toInstant(), bar.close(), ccy);
     }
 
     // ---- Holding construction ----------------------------------------------

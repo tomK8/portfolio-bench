@@ -36,6 +36,16 @@
             </ul>
         </div>
 
+        <div th:if="${result.dailyCloseFallbacks != null and !result.dailyCloseFallbacks.isEmpty()}"
+             class="value-warnings">
+            <h4>Daily-close fallback</h4>
+            <p>No cached intraday quote — these positions are valued at their latest stored
+                daily close instead (the gilt price feed may be down or stale):</p>
+            <ul>
+                <li th:each="s : ${result.dailyCloseFallbacks}"><code th:text="${s}">SYM</code></li>
+            </ul>
+        </div>
+
         <table class="sticky-head">
             <thead>
             <tr>

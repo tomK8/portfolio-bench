@@ -4728,8 +4728,11 @@
             document.getElementById('wl-status').textContent = msg || '';
         }
 
+        var wlFullLoadInFlight = false;
         function loadWatchlist() {
-            wlReturnsLoaded = false;
+            if (wlFullLoadInFlight) return;                 // don't stack concurrent full loads
+            wlFullLoadInFlight = true;                       // (Refresh spam + the 30s self-heal could
+            wlReturnsLoaded = false;                         //  otherwise flap Loading…/could-not-load)
             if (wlCurrentView === 'returns') loadWlReturns(false);  // refresh the visible heatmap too
             wlSetStatus('Loading…');
             fetch('/watchlist').then(function (r) {
@@ -4738,10 +4741,11 @@
             }).then(function (view) {
                 renderWatchlist(view.rows || []);          // sets wlLoadedOk
                 wlSetStatus('');
-            }).catch(function () {
+            }).catch(function (err) {
                 wlLoadedOk = false;                         // the poll will retry the full load
-                wlSetStatus('Could not load watchlist.');
-            });
+                var detail = err && err.message ? ' (' + err.message + ')' : '';
+                wlSetStatus('Could not load watchlist' + detail + ' — retrying shortly.');
+            }).finally(function () { wlFullLoadInFlight = false; });
         }
 
         // ── Near-real-time poll ─────────────────────────────────────────────────
@@ -4841,6 +4845,26 @@
             return null;
         }
 
+        // Update just one row's alert colour from a freshly-returned view, WITHOUT rebuilding the
+        // table. An inline threshold save fires on blur — often while the user has already clicked
+        // into the next field — so re-rendering the tbody here would destroy the focused <input>
+        // and drop their keystrokes (the "my edit didn't save" bug). Patch the class only; every
+        // input keeps its value, focus and change-listener.
+        function wlPatchRowState(view, sym) {
+            var rows = (view && view.rows) || [];
+            var r = null;
+            for (var i = 0; i < rows.length; i++) { if (rows[i].symbol === sym) { r = rows[i]; break; } }
+            if (!r) return null;
+            var tbody = document.querySelector('#watchlist-table tbody');
+            if (tbody) {
+                var trs = tbody.querySelectorAll('tr');
+                for (var j = 0; j < trs.length; j++) {
+                    if (trs[j].dataset.sym === sym) { trs[j].className = rowAlertClass(r); break; }
+                }
+            }
+            return r;
+        }
+
         function addWatchlistSymbol() {
             var sym = document.getElementById('wl-add-symbol').value.trim().toUpperCase();
             if (!sym) return;
@@ -4923,13 +4947,20 @@
             body.set('priceAbove', priceAbove == null ? '' : priceAbove);
             body.set('priceBelow', priceBelow == null ? '' : priceBelow);
             fetch('/watchlist/threshold', { method: 'POST', body: body })
-                .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-                .then(function (view) {
-                    renderWatchlist(view.rows || []);
-                    var hint = wlTargetHeadsUp(view, sym);
-                    if (hint) wlSetStatus(hint);
+                .then(function (r) {
+                    // Surface the real server message (GlobalExceptionAdvice sends plain text) rather
+                    // than a generic failure, so a genuine persistence error isn't silently swallowed.
+                    if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                    return r.json();
                 })
-                .catch(function () { wlSetStatus('Could not update thresholds for ' + sym + '.'); });
+                .then(function (view) {
+                    wlPatchRowState(view, sym);                 // recolour in place; never rebuild here
+                    wlSetStatus(wlTargetHeadsUp(view, sym) || '');
+                })
+                .catch(function (err) {
+                    var detail = err && err.message ? ' — ' + err.message : '';
+                    wlSetStatus('Could not update ' + sym + detail + ' — try again.');
+                });
         }
 
         // Optional `field` tags the cell with data-f so the near-real-time poll can patch it in place.

@@ -24,12 +24,16 @@ import java.util.Properties;
  * (or via {@code sqlite3 .backup}).
  *
  * <p>Every connection also carries a {@code busy_timeout}: with WAL this only arbitrates
- * writer-vs-writer, e.g. a user action (a watchlist add) landing mid-write of a background
- * price job waits instead of failing instantly with SQLITE_BUSY.
+ * writer-vs-writer, e.g. a user action (a watchlist add / threshold edit) landing mid-write of a
+ * background price job waits instead of failing instantly with SQLITE_BUSY. It's set generously
+ * (15s): normal bulk writes are chunked (500 rows/commit) so the lock is released frequently and a
+ * UI write slips in within a chunk boundary, but a rarer long writer (first-run backfill, an
+ * adj_close rebuild, a big Tradeweb import) could otherwise blow past a short timeout and surface
+ * to the user as a failed save or "could not load". Waiting a few extra seconds beats failing.
  */
 public class JdbcConnectionFactory {
 
-    private static final int BUSY_TIMEOUT_MS = 5_000;
+    private static final int BUSY_TIMEOUT_MS = 15_000;
 
     private final Path dbDir;
     private final Path dbPath;

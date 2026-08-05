@@ -4861,18 +4861,36 @@
                 });
         }
 
+        // Surface a failed mutation instead of swallowing it. A transient SQLITE_BUSY (or any 4xx/5xx)
+        // returns a plain-text body (GlobalExceptionAdvice); show it so the user can retry rather than
+        // seeing a dead button. The existing rows keep their wired listeners (no re-render on failure),
+        // so a retry works as soon as the DB is free.
         function removeWatchlistSymbol(sym) {
             var body = new URLSearchParams(); body.set('symbol', sym);
             fetch('/watchlist/remove', { method: 'POST', body: body })
-                .then(function (r) { return r.json(); })
-                .then(function (view) { renderWatchlist(view.rows || []); });
+                .then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                    return r.json();
+                })
+                .then(function (view) { renderWatchlist(view.rows || []); })
+                .catch(function (err) {
+                    var detail = err && err.message ? ' — ' + err.message : '';
+                    wlSetStatus('Could not remove ' + sym + detail + ' — try again.');
+                });
         }
 
         function moveWatchlistSymbol(sym, dir) {
             var body = new URLSearchParams(); body.set('symbol', sym); body.set('dir', dir);
             fetch('/watchlist/move', { method: 'POST', body: body })
-                .then(function (r) { return r.json(); })
-                .then(function (view) { renderWatchlist(view.rows || []); });
+                .then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                    return r.json();
+                })
+                .then(function (view) { renderWatchlist(view.rows || []); })
+                .catch(function (err) {
+                    var detail = err && err.message ? ' — ' + err.message : '';
+                    wlSetStatus('Could not reorder ' + sym + detail + ' — try again.');
+                });
         }
 
         function saveWatchlistThreshold(sym, highPct, movePct, priceAbove, priceBelow) {

@@ -28,6 +28,7 @@ public class PriceFetchJob {
 
     private static final int LOOKBACK_YEARS = 30;
     private static final long THROTTLE_MS = 500;   // be polite to Yahoo: ≤1 request / 500ms
+    private static final int FRESH_LOOKBACK_DAYS = 4;   // history newer than this skips a re-add backfill
 
     private final CashTransactionRepository cashRepo;
     private final PriceHistoryRepository priceRepo;
@@ -111,6 +112,26 @@ public class PriceFetchJob {
      */
     public int fetchSingle(String symbol) {
         return fetchSingle(symbol, LOOKBACK_YEARS);
+    }
+
+    /**
+     * Watchlist-add helper: only backfill when the symbol's daily history is missing or stale.
+     * A name that's already covered — held, or removed-then-re-added the same day — skips the
+     * ~{@value #LOOKBACK_YEARS}-year re-fetch entirely, so the add's single small SQLite write
+     * doesn't contend with a redundant multi-thousand-row upsert on the one writer (the source of
+     * the "add once, then everything blocks until refresh" contention). "Fresh" = a stored close
+     * within {@value #FRESH_LOOKBACK_DAYS} days (spans a Fri→Mon weekend plus a holiday). Bonds are
+     * no-ops (not on Yahoo). Returns the row count written; 0 means skipped or nothing to fetch.
+     */
+    public int fetchSingleIfStale(String symbol) {
+        if (com.portfolio.domain.Instruments.isBond(symbol)) return 0;
+        String ticker = tickers.tickerFor(symbol);
+        LocalDate latest = priceRepo.getLatestPriceDate(ticker);
+        if (latest != null && !latest.isBefore(LocalDate.now().minusDays(FRESH_LOOKBACK_DAYS))) {
+            log.info("fetchSingle skipped {} — history already fresh (latest {})", symbol, latest);
+            return 0;
+        }
+        return fetchSingle(symbol);
     }
 
     /**

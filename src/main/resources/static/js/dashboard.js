@@ -4820,6 +4820,27 @@
             td.textContent = wlVolText(frac);
         }
 
+        // Heads-up when a just-set target is already satisfied by the live price — e.g. an Above
+        // level that sits at/below the current price (or a Below level at/above it). Such a target
+        // is valid (it fires on the next tick, like a marketable limit order), but it's also the
+        // tell-tale of a value typed into the wrong column, so we flag it rather than block it.
+        function wlTargetHeadsUp(view, sym) {
+            var rows = (view && view.rows) || [];
+            var r = null;
+            for (var i = 0; i < rows.length; i++) { if (rows[i].symbol === sym) { r = rows[i]; break; } }
+            if (!r || r.currentPrice == null) return null;
+            var cp = parseFloat(r.currentPrice);
+            if (r.priceAbove != null && cp >= parseFloat(r.priceAbove)) {
+                return '⚠ Above ' + fmtPrice(r.priceAbove, r.currency) + ' is already true — price ' +
+                    fmtPrice(r.currentPrice, r.currency) + '. Alerts on next tick. Did you mean Below?';
+            }
+            if (r.priceBelow != null && cp <= parseFloat(r.priceBelow)) {
+                return '⚠ Below ' + fmtPrice(r.priceBelow, r.currency) + ' is already true — price ' +
+                    fmtPrice(r.currentPrice, r.currency) + '. Alerts on next tick. Did you mean Above?';
+            }
+            return null;
+        }
+
         function addWatchlistSymbol() {
             var sym = document.getElementById('wl-add-symbol').value.trim().toUpperCase();
             if (!sym) return;
@@ -4850,7 +4871,8 @@
                     document.getElementById('wl-add-above').value = '';
                     document.getElementById('wl-add-below').value = '';
                     renderWatchlist(view.rows || []);
-                    wlSetStatus(sym + ' added — data fills in as the backfill completes.');
+                    wlSetStatus(wlTargetHeadsUp(view, sym) ||
+                        (sym + ' added — data fills in as the backfill completes.'));
                     // Poll a couple of times so a freshly-added row picks up its backfilled prices.
                     setTimeout(loadWatchlist, 8000);
                     setTimeout(loadWatchlist, 30000);
@@ -4902,7 +4924,11 @@
             body.set('priceBelow', priceBelow == null ? '' : priceBelow);
             fetch('/watchlist/threshold', { method: 'POST', body: body })
                 .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-                .then(function (view) { renderWatchlist(view.rows || []); })
+                .then(function (view) {
+                    renderWatchlist(view.rows || []);
+                    var hint = wlTargetHeadsUp(view, sym);
+                    if (hint) wlSetStatus(hint);
+                })
                 .catch(function () { wlSetStatus('Could not update thresholds for ' + sym + '.'); });
         }
 
@@ -5160,8 +5186,8 @@
             stats.appendChild(wlStat('52wk high', r.week52High == null ? '—' : fmtPrice(r.week52High, r.currency)));
             stats.appendChild(wlStat('52wk low', r.week52Low == null ? '—' : fmtPrice(r.week52Low, r.currency)));
             stats.appendChild(wlStat('% vs high', wlPctText(r.pctFromHigh)));
-            if (r.priceAbove != null) stats.appendChild(wlStat('≥ target', fmtPrice(r.priceAbove, r.currency)));
-            if (r.priceBelow != null) stats.appendChild(wlStat('≤ target', fmtPrice(r.priceBelow, r.currency)));
+            if (r.priceAbove != null) stats.appendChild(wlStat('Above', fmtPrice(r.priceAbove, r.currency)));
+            if (r.priceBelow != null) stats.appendChild(wlStat('Below', fmtPrice(r.priceBelow, r.currency)));
             stats.appendChild(wlStat('P/E', r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1)));
             stats.appendChild(wlStat('Beta', r.beta == null ? '—' : parseFloat(r.beta).toFixed(2)));
             if (r.held) {

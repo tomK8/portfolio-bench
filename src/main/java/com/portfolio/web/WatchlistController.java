@@ -2,6 +2,7 @@ package com.portfolio.web;
 
 import com.portfolio.application.PortfolioFundamentalsService;
 import com.portfolio.application.PriceFetchJob;
+import com.portfolio.application.WatchlistAlertJob;
 import com.portfolio.application.WatchlistService;
 import com.portfolio.domain.Instruments;
 import com.portfolio.application.WatchlistService.QuoteView;
@@ -39,6 +40,7 @@ public class WatchlistController {
     private final WatchlistRepository watchlistRepo;
     private final PriceFetchJob priceFetchJob;
     private final PortfolioFundamentalsService fundamentalsService;
+    private final WatchlistAlertJob watchlistAlertJob;
 
     // Single-thread so two quick adds queue instead of racing each other's SQLite writes.
     private final ExecutorService backfillExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -50,11 +52,13 @@ public class WatchlistController {
     public WatchlistController(WatchlistService watchlistService,
                                WatchlistRepository watchlistRepo,
                                PriceFetchJob priceFetchJob,
-                               PortfolioFundamentalsService fundamentalsService) {
+                               PortfolioFundamentalsService fundamentalsService,
+                               WatchlistAlertJob watchlistAlertJob) {
         this.watchlistService = watchlistService;
         this.watchlistRepo = watchlistRepo;
         this.priceFetchJob = priceFetchJob;
         this.fundamentalsService = fundamentalsService;
+        this.watchlistAlertJob = watchlistAlertJob;
     }
 
     @GetMapping("/watchlist")
@@ -81,6 +85,7 @@ public class WatchlistController {
         if (sym.isEmpty()) throw new IllegalArgumentException("Symbol is required.");
         watchlistRepo.add(sym, parsePct(highPct, "high threshold"), parsePct(movePct, "move threshold"),
                 parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
+        watchlistAlertJob.clearFiredFor(sym);   // new/changed triggers re-arm today (no stale dedup)
         backfillInBackground(sym);
         return watchlistService.view();
     }
@@ -95,6 +100,7 @@ public class WatchlistController {
         watchlistRepo.updateThresholds(symbol, parsePct(highPct, "high threshold"),
                 parsePct(movePct, "move threshold"),
                 parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
+        watchlistAlertJob.clearFiredFor(symbol);   // a corrected target re-arms same-day
         return watchlistService.view();
     }
 
@@ -102,6 +108,7 @@ public class WatchlistController {
     @ResponseBody
     public WatchlistView remove(@RequestParam("symbol") String symbol) {
         watchlistRepo.remove(symbol);
+        watchlistAlertJob.clearFiredFor(symbol);   // drop any fired flags for a symbol no longer watched
         return watchlistService.view();
     }
 

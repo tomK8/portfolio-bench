@@ -1845,8 +1845,10 @@
         fires: <b class="wl-pos">green</b>/<b class="wl-neg">red</b> = a big move today (up/down),
         <b style="color:#1f77b4">blue</b> = near the 52-week high, pulsing = both. Set each
         symbol's alert triggers inline: % from 52-wk high, |today's move|, and absolute price
-        targets (≥ and ≤, in the price's own currency). Leave any of them blank to disable that
-        trigger. Email alerts fire once per day per signal when SMTP is configured. Click a row
+        targets — an <b>Above</b> level (alerts when the price rises to or above it) and a
+        <b>Below</b> level (alerts when it falls to or below it), in the price's own currency.
+        Leave any of them blank to disable that trigger. Email alerts fire once per day per signal
+        when SMTP is configured. Click a row
         for the price chart and fundamentals.
         Prices, momentum, short-horizon vol and row colour auto-refresh every 30s while this tab
         is open (data is ~1 minute fresh, from the intraday feed); the position and fundamentals
@@ -1857,8 +1859,8 @@
         <datalist id="wl-gilt-hints"></datalist>
         <label>Near-high %: <input id="wl-add-high" type="text" size="4" placeholder="3"/></label>
         <label>Move %: <input id="wl-add-move" type="text" size="4" placeholder="10"/></label>
-        <label title="Alert when the price rises to or above this level (price's own currency)">≥ Target: <input id="wl-add-above" type="text" size="6" placeholder="—"/></label>
-        <label title="Alert when the price falls to or below this level (price's own currency)">≤ Target: <input id="wl-add-below" type="text" size="6" placeholder="—"/></label>
+        <label title="Alert when the price rises to or above this level (price's own currency)">Above: <input id="wl-add-above" type="text" size="6" placeholder="—"/></label>
+        <label title="Alert when the price falls to or below this level (price's own currency)">Below: <input id="wl-add-below" type="text" size="6" placeholder="—"/></label>
         <button id="wl-add-btn" type="button">Add</button>
         <button id="wl-refresh-btn" type="button">Refresh</button>
         <span id="wl-view-toggle" class="wl-view-toggle" style="display:none;">
@@ -1894,8 +1896,8 @@
             <th data-sort="num" title="Unrealized gain on the holding, GBP">Gain</th>
             <th title="Alert when within this % of the 52-week high">Near-hi %</th>
             <th title="Alert when |today's move| exceeds this %">Move %</th>
-            <th title="Alert when the price rises to or above this level (price's own currency)">≥ Target</th>
-            <th title="Alert when the price falls to or below this level (price's own currency)">≤ Target</th>
+            <th title="Alert when the price rises to or above this level (price's own currency)">Above</th>
+            <th title="Alert when the price falls to or below this level (price's own currency)">Below</th>
             <th></th>
         </tr></thead>
         <tbody></tbody>

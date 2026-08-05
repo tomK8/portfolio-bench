@@ -613,6 +613,9 @@
            the eye can track across. nth-child(even) = data rows 1,3,5… (row 1 is the header). */
         #ms-episodes tr:nth-child(even) td { background: #f3f4f6; }
         html[data-theme="dark"] #ms-episodes tr:nth-child(even) td { background: #232832; }
+        /* Open orders: zebra-stripe data rows (many numeric columns to track across). */
+        #orders-table tbody tr:nth-child(even) td { background: #f3f4f6; }
+        html[data-theme="dark"] #orders-table tbody tr:nth-child(even) td { background: #232832; }
         .mo-grid td { min-width: 2.6rem; text-align: center; }
         .mo-grid td.lbl { text-align: left; font-weight: 600; }
         html[data-theme="dark"] .mo-banner { background: #3a1c1f; border-color: #5a2a2f; color: #f3b0b6; }
@@ -1850,7 +1853,8 @@
         columns update on a manual <b>Refresh</b> or when you re-open the tab.
     </p>
     <div class="benchmark-controls">
-        <label>Symbol: <input id="wl-add-symbol" type="text" size="8" placeholder="e.g. NVDA"/></label>
+        <label title="Type a ticker (e.g. NVDA), or type GILT to pick a gilt for a buy-limit alert">Symbol: <input id="wl-add-symbol" type="text" size="16" list="wl-gilt-hints" placeholder="e.g. NVDA or GILT…"/></label>
+        <datalist id="wl-gilt-hints"></datalist>
         <label>Near-high %: <input id="wl-add-high" type="text" size="4" placeholder="3"/></label>
         <label>Move %: <input id="wl-add-move" type="text" size="4" placeholder="10"/></label>
         <label title="Alert when the price rises to or above this level (price's own currency)">≥ Target: <input id="wl-add-above" type="text" size="6" placeholder="—"/></label>
@@ -2565,6 +2569,8 @@
     </p>
     <div class="attr-controls">
         <div class="attr-presets" id="attr-presets">
+            <button class="attr-preset" data-preset="5d" type="button">5d</button>
+            <button class="attr-preset" data-preset="10d" type="button">10d</button>
             <button class="attr-preset" data-preset="1m" type="button">1m</button>
             <button class="attr-preset" data-preset="3m" type="button">3m</button>
             <button class="attr-preset" data-preset="6m" type="button">6m</button>

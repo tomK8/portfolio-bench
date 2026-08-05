@@ -104,6 +104,17 @@ public class WatchlistController {
         return watchlistService.view();
     }
 
+    /**
+     * The conventional gilts currently priced (from {@code GiltPriceFetchJob}) — feeds the
+     * Watchlist add-box autocomplete so a gilt buy-limit alert is entered by picking a valid,
+     * priced name (e.g. {@code GILT 4.75% 2043}) rather than typing one.
+     */
+    @GetMapping("/watchlist/gilts")
+    @ResponseBody
+    public java.util.List<String> gilts() {
+        return watchlistService.giltSymbols();
+    }
+
     @GetMapping("/watchlist/series")
     @ResponseBody
     public Series series(@RequestParam("symbol") String symbol,

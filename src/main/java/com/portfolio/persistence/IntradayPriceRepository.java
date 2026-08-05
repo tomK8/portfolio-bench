@@ -125,6 +125,27 @@ public class IntradayPriceRepository {
     }
 
     /**
+     * The distinct gilt symbols currently priced in {@code price_intraday} — i.e. the conventional
+     * gilts {@link com.portfolio.application.GiltPriceFetchJob} scrapes hourly from HL, stored as
+     * {@code "GILT {coupon}% {year}"}. Feeds the Watchlist add-box autocomplete so a gilt buy-limit
+     * alert can be entered by picking a valid name rather than typing one (a mistyped coupon/year
+     * would silently never join a price and never fire). Read path — degrades to empty on failure.
+     */
+    public List<String> distinctGiltSymbols() {
+        List<String> out = new java.util.ArrayList<>();
+        if (!connections.dbExists()) return out;
+        try (Connection conn = connections.open();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT DISTINCT symbol FROM price_intraday WHERE symbol LIKE 'GILT %' ORDER BY symbol")) {
+            while (rs.next()) out.add(rs.getString(1));
+        } catch (Exception e) {
+            log.warn("Could not load distinct gilt symbols", e);
+        }
+        return out;
+    }
+
+    /**
      * All stored 1-minute bars for one ticker at or after {@code from}, oldest first. Feeds the
      * watchlist popup's fine-grained price chart for the sub-15-day windows. Retention (see
      * {@link com.portfolio.application.IntradayPriceFetchJob#RETENTION_DAYS}) bounds how far

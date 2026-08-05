@@ -28,7 +28,7 @@
             No open orders — every order in the exported files has been filled, cancelled or expired.
         </div>
 
-        <table class="sticky-head" th:unless="${orders.orders.isEmpty()}">
+        <table id="orders-table" class="sticky-head" th:unless="${orders.orders.isEmpty()}">
             <thead>
             <tr>
                 <th class="txt" data-sort="text">Broker</th>

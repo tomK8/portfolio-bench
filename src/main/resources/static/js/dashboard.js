@@ -1727,6 +1727,8 @@
             var to = new Date();
             var from = new Date();
             switch (preset) {
+                case '5d': from.setDate(from.getDate() - 5); break;
+                case '10d': from.setDate(from.getDate() - 10); break;
                 case '1m': from.setMonth(from.getMonth() - 1); break;
                 case '3m': from.setMonth(from.getMonth() - 3); break;
                 case '6m': from.setMonth(from.getMonth() - 6); break;
@@ -4651,9 +4653,27 @@
                 });
                 document.getElementById('wl-view-stats').addEventListener('click', function () { switchWlView('stats'); });
                 document.getElementById('wl-view-returns').addEventListener('click', function () { switchWlView('returns'); });
+                loadGiltHints();
             }
             loadWatchlist();
             wlStartPolling();
+        }
+
+        /**
+         * Populate the Symbol box's autocomplete with the conventional gilts currently priced
+         * (GET /watchlist/gilts). Lets a gilt buy-limit alert be entered by picking a valid,
+         * priced name (e.g. "GILT 4.75% 2043") — a mistyped coupon/year joins no price and would
+         * silently never fire. Optional nicety, so failures are swallowed.
+         */
+        function loadGiltHints() {
+            fetch('/watchlist/gilts').then(function (r) {
+                return r.ok ? r.json() : [];
+            }).then(function (gilts) {
+                document.getElementById('wl-gilt-hints').innerHTML =
+                    (gilts || []).map(function (g) {
+                        return '<option value="' + escapeHtml(g) + '"></option>';
+                    }).join('');
+            }).catch(function () { /* autocomplete is optional */ });
         }
 
         function switchWlView(view) {

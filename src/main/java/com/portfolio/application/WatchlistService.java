@@ -290,6 +290,16 @@ public class WatchlistService {
         return nativeVal.divide(rate, 10, RoundingMode.HALF_UP);
     }
 
+    /**
+     * The gilt names currently priced (conventional gilts scraped hourly by
+     * {@link GiltPriceFetchJob}, keyed {@code "GILT {coupon}% {year}"}). Feeds the Watchlist
+     * add-box autocomplete so a gilt buy-limit alert is entered by picking a valid, priced name
+     * rather than typing one — a mistyped symbol joins no price and would silently never fire.
+     */
+    public List<String> giltSymbols() {
+        return intradayRepo.distinctGiltSymbols();
+    }
+
     // ---- Popup price series -------------------------------------------------
 
     /**

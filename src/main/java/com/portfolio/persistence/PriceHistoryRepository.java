@@ -61,28 +61,44 @@ public class PriceHistoryRepository {
         }
     }
 
+    /**
+     * Commit bulk writes in chunks of this many rows rather than one transaction for the whole
+     * batch. SQLite has a single writer for the entire database file, so a multi-thousand-row
+     * backfill committed atomically holds that lock for seconds and starves interactive writes
+     * (a watchlist add/remove) until it finishes. Committing every chunk releases the lock
+     * frequently so those small writes interleave. Price backfills are idempotent/incremental,
+     * so a failure that leaves earlier chunks committed self-heals on the next fetch.
+     */
+    private static final int WRITE_CHUNK_ROWS = 500;
+
     public int savePriceBars(List<PriceBar> bars) {
         if (bars.isEmpty()) return 0;
         String fetchedAt = Instant.now().toString();
-        // One transaction for the whole batch — a multi-decade backfill is ~11k rows per
-        // ticker, and per-row autocommit made each row its own fsync-ed write transaction.
+        int inserted = 0;
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT OR IGNORE INTO price_history " +
                              "(symbol, date, open, high, low, close, adj_close, split_factor, volume, currency, fetched_at) " +
                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             conn.setAutoCommit(false);
+            int inBatch = 0;
             for (PriceBar b : bars) {
                 bindBar(ps, b, fetchedAt);
                 ps.addBatch();
+                if (++inBatch >= WRITE_CHUNK_ROWS) {
+                    for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+                    conn.commit();
+                    inBatch = 0;
+                }
             }
-            int inserted = 0;
-            for (int n : ps.executeBatch()) if (n > 0) inserted += n;
-            conn.commit();
+            if (inBatch > 0) {
+                for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+                conn.commit();
+            }
             return inserted;
         } catch (Exception e) {
             log.warn("Could not save price bars", e);
-            return 0;
+            return inserted;
         }
     }
 
@@ -109,13 +125,20 @@ public class PriceHistoryRepository {
                              "volume = excluded.volume, currency = excluded.currency, " +
                              "fetched_at = excluded.fetched_at")) {
             conn.setAutoCommit(false);
+            int touched = 0, inBatch = 0;
             for (PriceBar b : bars) {
                 bindBar(ps, b, fetchedAt);
                 ps.addBatch();
+                if (++inBatch >= WRITE_CHUNK_ROWS) {   // release the DB-wide writer lock between chunks
+                    for (int n : ps.executeBatch()) if (n > 0) touched += n;
+                    conn.commit();
+                    inBatch = 0;
+                }
             }
-            int touched = 0;
-            for (int n : ps.executeBatch()) if (n > 0) touched += n;
-            conn.commit();
+            if (inBatch > 0) {
+                for (int n : ps.executeBatch()) if (n > 0) touched += n;
+                conn.commit();
+            }
             return touched;
         } catch (Exception e) {
             log.warn("Could not upsert price bars", e);

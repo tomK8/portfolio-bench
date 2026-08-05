@@ -52,17 +52,26 @@ public class IntradayPriceRepository {
         }
     }
 
+    /**
+     * Commit bulk writes in chunks rather than one transaction for the whole batch: SQLite's
+     * single database-wide writer lock, held across a multi-thousand-row batch, starves
+     * interactive writes (a watchlist add/remove) until the batch finishes. Chunked commits
+     * release it frequently so those small writes interleave. INSERT-OR-IGNORE is idempotent,
+     * so earlier chunks surviving a mid-batch failure is harmless.
+     */
+    private static final int WRITE_CHUNK_ROWS = 500;
+
     public int saveIntradayBars(List<IntradayBar> bars) {
         if (bars.isEmpty()) return 0;
         String fetchedAt = Instant.now().toString();
-        // One transaction for the whole batch — per-row autocommit turned a bulk fetch into
-        // thousands of fsync-ed write transactions, each excluding readers.
+        int inserted = 0;
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT OR IGNORE INTO price_intraday " +
                              "(symbol, ts, close, volume, currency, fetched_at) " +
                              "VALUES (?, ?, ?, ?, ?, ?)")) {
             conn.setAutoCommit(false);
+            int inBatch = 0;
             for (IntradayBar b : bars) {
                 ps.setString(1, b.symbol());
                 ps.setString(2, b.ts().toString());
@@ -72,14 +81,20 @@ public class IntradayPriceRepository {
                 ps.setString(5, b.currency());
                 ps.setString(6, fetchedAt);
                 ps.addBatch();
+                if (++inBatch >= WRITE_CHUNK_ROWS) {
+                    for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+                    conn.commit();
+                    inBatch = 0;
+                }
             }
-            int inserted = 0;
-            for (int n : ps.executeBatch()) if (n > 0) inserted += n;
-            conn.commit();
+            if (inBatch > 0) {
+                for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+                conn.commit();
+            }
             return inserted;
         } catch (Exception e) {
             log.warn("Could not save intraday bars", e);
-            return 0;
+            return inserted;
         }
     }
 

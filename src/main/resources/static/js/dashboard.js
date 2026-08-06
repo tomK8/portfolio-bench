@@ -4728,6 +4728,13 @@
             document.getElementById('wl-status').textContent = msg || '';
         }
 
+        // Optimistic overlay of just-saved threshold edits, keyed by symbol → {high,move,above,below}.
+        // Guards against a slow, concurrently-issued /watchlist reload whose server read predates the
+        // save commit reverting the input to a stale value (see wl-edit-sync.js for the full why).
+        // The single writer of these fields is this client, so its own last save wins until it saves
+        // again (or the save fails, or the page is reloaded).
+        var wlPending = {};
+
         var wlFullLoadInFlight = false;
         function loadWatchlist() {
             if (wlFullLoadInFlight) return;                 // don't stack concurrent full loads
@@ -4913,6 +4920,7 @@
         // so a retry works as soon as the DB is free.
         function removeWatchlistSymbol(sym) {
             var body = new URLSearchParams(); body.set('symbol', sym);
+            delete wlPending[sym];                          // gone — no overlay to defend
             fetch('/watchlist/remove', { method: 'POST', body: body })
                 .then(function (r) {
                     if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
@@ -4946,6 +4954,10 @@
             body.set('movePct', movePct);
             body.set('priceAbove', priceAbove == null ? '' : priceAbove);
             body.set('priceBelow', priceBelow == null ? '' : priceBelow);
+            // Record the optimistic truth BEFORE the request goes out. Until a render carries these
+            // values back from the server, any reload is treated as a stale read and must not revert
+            // the inputs (see wl-edit-sync.js resolve). Replaced by the next save; cleared on failure.
+            wlPending[sym] = WlEditSync.savedThresholds(highPct, movePct, priceAbove, priceBelow);
             fetch('/watchlist/threshold', { method: 'POST', body: body })
                 .then(function (r) {
                     // Surface the real server message (GlobalExceptionAdvice sends plain text) rather
@@ -4958,8 +4970,12 @@
                     wlSetStatus(wlTargetHeadsUp(view, sym) || '');
                 })
                 .catch(function (err) {
+                    // The save genuinely failed — drop the optimistic overlay so we stop showing a
+                    // value that didn't persist, and pull the real server state back onto the screen.
+                    delete wlPending[sym];
                     var detail = err && err.message ? ' — ' + err.message : '';
                     wlSetStatus('Could not update ' + sym + detail + ' — try again.');
+                    loadWatchlist();
                 });
         }
 
@@ -5096,12 +5112,46 @@
             });
         }
 
+        // Find a threshold input by symbol+kind without a CSS selector — symbols contain '%' and
+        // spaces (gilts), which are a minefield to escape in querySelector.
+        function wlFindThrInput(tbody, sym, kind) {
+            if (!tbody) return null;
+            var trs = tbody.querySelectorAll('tr');
+            for (var i = 0; i < trs.length; i++) {
+                if (trs[i].dataset.sym === sym) {
+                    return trs[i].querySelector('.wl-thr-input[data-kind="' + kind + '"]');
+                }
+            }
+            return null;
+        }
+
+        // Snapshot the threshold input the user is currently editing (focus + caret + their
+        // in-progress text) so a full rebuild can put it back exactly, keystrokes intact.
+        function wlCaptureFocusedInput(tbody) {
+            var ae = document.activeElement;
+            if (!ae || !ae.classList || !ae.classList.contains('wl-thr-input')) return null;
+            if (!tbody || !tbody.contains(ae)) return null;
+            var snap = { sym: ae.dataset.sym, kind: ae.dataset.kind, value: ae.value, start: null, end: null };
+            try { snap.start = ae.selectionStart; snap.end = ae.selectionEnd; } catch (e) { /* ok */ }
+            return snap;
+        }
+
+        function wlRestoreFocusedInput(tbody, snap) {
+            if (!snap) return;
+            var inp = wlFindThrInput(tbody, snap.sym, snap.kind);
+            if (!inp) return;                              // its symbol left the list
+            inp.value = snap.value;                        // keep what they were typing, not the render
+            inp.focus();
+            if (snap.start != null) { try { inp.setSelectionRange(snap.start, snap.end); } catch (e) { /* ok */ } }
+        }
+
         function renderWatchlist(rows) {
             wlLoadedOk = true;                             // reaching a render means the fetch succeeded
             var table = document.getElementById('watchlist-table');
             var empty = document.getElementById('wl-empty');
             var toggle = document.getElementById('wl-view-toggle');
             var tbody = table.querySelector('tbody');
+            var focusSnap = wlCaptureFocusedInput(tbody);  // preserve a mid-edit input across the rebuild
             tbody.innerHTML = '';
             if (!rows.length) {
                 table.style.display = 'none';
@@ -5122,13 +5172,12 @@
                 tr.dataset.sym = r.symbol;
                 var price = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
                 var pe = r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1);
-                // Blank (empty input) means "no alert for this trigger" — a disabled threshold
-                // is stored as 0, shown as an empty cell.
-                var highV = (r.highThresholdPct == null || parseFloat(r.highThresholdPct) <= 0) ? '' : parseFloat(r.highThresholdPct);
-                var moveV = (r.moveThresholdPct == null || parseFloat(r.moveThresholdPct) <= 0) ? '' : parseFloat(r.moveThresholdPct);
-                // Price levels are already surfaced as null when disabled (server-side levelOrNull).
-                var aboveV = (r.priceAbove == null) ? '' : parseFloat(r.priceAbove);
-                var belowV = (r.priceBelow == null) ? '' : parseFloat(r.priceBelow);
+                // Threshold cells. Blank means "trigger disabled" (stored as 0). A stale reload must
+                // not revert a just-saved edit: resolve() returns the optimistic overlay values until
+                // a render actually echoes them back from the server. Values are canonical strings.
+                var highV, moveV, aboveV, belowV;
+                var thr = WlEditSync.resolve(r, wlPending[r.symbol]).values;
+                highV = thr.high; moveV = thr.move; aboveV = thr.above; belowV = thr.below;
                 var symCell = '<td><b>' + r.symbol + '</b>' +
                     (r.missingData ? ' <span class="muted" style="font-size:0.75rem">(fetching…)</span>' : '') +
                     (r.held ? ' <span class="muted" title="You hold this" style="font-size:0.75rem">●</span>' : '') + '</td>';
@@ -5182,7 +5231,14 @@
                     var below = row.querySelector('.wl-thr-input[data-kind="below"]').value.trim();
                     saveWatchlistThreshold(sym, high, move, above, below);
                 });
+                // Enter commits: the inputs aren't in a <form>, so Enter otherwise does nothing and
+                // the edit sits unsaved until the field happens to blur. Blur fires the change save.
+                inp.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') this.blur();
+                });
             });
+
+            wlRestoreFocusedInput(tbody, focusSnap);        // put a mid-edit input (+caret) back
 
             if (!wlSortAttached) { wlSortAttached = true; attachSort(table); }
         }

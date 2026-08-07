@@ -124,10 +124,12 @@ public class WatchlistRepository {
             ps.setDouble(4, orDisabled(priceBelow).doubleValue());
             ps.setString(5, sym);
             if (ps.executeUpdate() == 0) {
-                throw new IllegalStateException(sym + " is not on the watchlist.");
+                // The symbol was removed between the edit and this save landing — e.g. the user hit ×
+                // while an inline edit's blur-triggered save was still in flight. A threshold update
+                // for a row that no longer exists is a genuine no-op, not an error: throwing here would
+                // send the client down its error path and flap the just-deleted row back on screen.
+                log.debug("Threshold update for {} affected no rows (not on the watchlist) — ignored.", sym);
             }
-        } catch (IllegalStateException e) {
-            throw e;
         } catch (Exception e) {
             throw new IllegalStateException("Could not update thresholds for " + sym + ".", e);
         }

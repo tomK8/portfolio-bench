@@ -7,7 +7,9 @@ import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -71,6 +73,21 @@ class WatchlistRepositoryTest {
         assertEquals(0, new BigDecimal("10").compareTo(e.moveThresholdPct()));
         assertEquals(0, new BigDecimal("250").compareTo(e.priceAbove()));
         assertEquals(0, new BigDecimal("190").compareTo(e.priceBelow()));
+    }
+
+    @Test
+    void updatingThresholdsForARemovedSymbolIsABenignNoOp(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        // Reproduces the delete/save race: the user hits × (DELETE lands) while an inline edit's
+        // blur-triggered save is still in flight, so the UPDATE hits zero rows. That must NOT throw —
+        // a throw drives the client's error path and flaps the just-deleted row back on screen — and
+        // must not resurrect the row.
+        repo.add("TSLA", null, null, null, new BigDecimal("200"));
+        repo.remove("TSLA");
+        assertDoesNotThrow(() -> repo.updateThresholds("TSLA", new BigDecimal("5"),
+                new BigDecimal("8"), new BigDecimal("300"), new BigDecimal("150")));
+        assertFalse(repo.loadAll().stream().anyMatch(e -> e.symbol().equals("TSLA")),
+                "a no-op update must not recreate the removed row");
     }
 
     @Test

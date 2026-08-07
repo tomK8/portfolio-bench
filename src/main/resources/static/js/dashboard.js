@@ -4793,25 +4793,42 @@
             }).catch(function () { /* transient; the next tick retries */ });
         }
 
+        // Build a symbol → <tr> index by iterating rows (never querySelector: watchlist symbols
+        // contain '%' and spaces for gilts, a minefield to escape in a selector). Shared by the
+        // quote poll, the full reconcile and the optimistic remove.
+        function wlRowMap(tbody) {
+            var map = {};
+            var trs = tbody.children;
+            for (var i = 0; i < trs.length; i++) map[trs[i].dataset.sym] = trs[i];
+            return map;
+        }
+
+        // Patch only the fast-moving (intraday) cells of a row in place: price, momentum, 5D/10D
+        // vol, distance-from-high/low, and the row alert colour. Touches no <input> and no slow
+        // column, so it's safe over a row the user is editing, and is shared by the 30s quote poll
+        // and the full reconcile. Reads only fields common to both Row and QuoteRow.
+        function wlPatchQuoteCells(tr, r) {
+            var priceCell = tr.querySelector('td[data-f="price"]');
+            if (priceCell) priceCell.textContent = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
+            wlPatchPct(tr, 'todayPct', r.todayPct, true);
+            wlPatchPct(tr, 'pct2d', r.pct2d, true);
+            wlPatchPct(tr, 'pct3d', r.pct3d, true);
+            wlPatchPct(tr, 'pct5d', r.pct5d, true);
+            wlPatchPct(tr, 'pct30d', r.pct30d, true);
+            wlPatchPct(tr, 'pctFromHigh', r.pctFromHigh, false);
+            wlPatchPct(tr, 'pctFromLow', r.pctFromLow, false);
+            wlPatchVol(tr, 'vol5d', r.vol5d);
+            wlPatchVol(tr, 'vol10d', r.vol10d);
+            tr.className = rowAlertClass(r);               // recolour by the fresh alert flags
+        }
+
         function wlApplyQuotes(rows) {
             var tbody = document.querySelector('#watchlist-table tbody');
             if (!tbody) return;
+            var map = wlRowMap(tbody);
             rows.forEach(function (q) {
-                var tr = tbody.querySelector('tr[data-sym="' + q.symbol + '"]');
-                if (!tr) return;                           // symbol set changed since last full load
-                if (document.activeElement && tr.contains(document.activeElement)) return;  // mid-edit
-                var priceCell = tr.querySelector('td[data-f="price"]');
-                if (priceCell) priceCell.textContent = q.currentPrice == null ? '—' : fmtPrice(q.currentPrice, q.currency);
-                wlPatchPct(tr, 'todayPct', q.todayPct, true);
-                wlPatchPct(tr, 'pct2d', q.pct2d, true);
-                wlPatchPct(tr, 'pct3d', q.pct3d, true);
-                wlPatchPct(tr, 'pct5d', q.pct5d, true);
-                wlPatchPct(tr, 'pct30d', q.pct30d, true);
-                wlPatchPct(tr, 'pctFromHigh', q.pctFromHigh, false);
-                wlPatchPct(tr, 'pctFromLow', q.pctFromLow, false);
-                wlPatchVol(tr, 'vol5d', q.vol5d);
-                wlPatchVol(tr, 'vol10d', q.vol10d);
-                tr.className = rowAlertClass(q);           // recolour by the fresh alert flags
+                var tr = map[q.symbol];                     // absent → symbol set changed since last full load
+                if (tr) wlPatchQuoteCells(tr, q);
             });
         }
 
@@ -4921,6 +4938,10 @@
         function removeWatchlistSymbol(sym) {
             var body = new URLSearchParams(); body.set('symbol', sym);
             delete wlPending[sym];                          // gone — no overlay to defend
+            // Optimistically drop the row now so × feels instant; the reconcile confirms on success,
+            // and a failure re-syncs from the server so a wrongly-removed row comes straight back.
+            var tbody = document.querySelector('#watchlist-table tbody');
+            if (tbody) { var m = wlRowMap(tbody); if (m[sym]) m[sym].remove(); }
             fetch('/watchlist/remove', { method: 'POST', body: body })
                 .then(function (r) {
                     if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
@@ -4929,7 +4950,8 @@
                 .then(function (view) { renderWatchlist(view.rows || []); })
                 .catch(function (err) {
                     var detail = err && err.message ? ' — ' + err.message : '';
-                    wlSetStatus('Could not remove ' + sym + detail + ' — try again.');
+                    wlSetStatus('Could not remove ' + sym + detail + ' — restoring.');
+                    loadWatchlist();
                 });
         }
 
@@ -4994,12 +5016,13 @@
             return frac == null ? '<td class="na"' + fa + '>—</td>' : '<td' + fa + '>' + wlVolText(frac) + '</td>';
         }
 
-        function wlGbpCell(v, colour) {
-            if (v == null) return '<td class="na">—</td>';
+        function wlGbpCell(v, colour, field) {
+            var fa = field ? ' data-f="' + field + '"' : '';
+            if (v == null) return '<td class="na"' + fa + '>—</td>';
             var n = parseFloat(v);
             var cls = colour ? (n >= 0 ? ' class="wl-pos"' : ' class="wl-neg"') : '';
             var s = (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
-            return '<td' + cls + '>' + s + '</td>';
+            return '<td' + cls + fa + '>' + s + '</td>';
         }
 
         function renderWatchlistReturns(data) {
@@ -5112,48 +5135,142 @@
             });
         }
 
-        // Find a threshold input by symbol+kind without a CSS selector — symbols contain '%' and
-        // spaces (gilts), which are a minefield to escape in querySelector.
-        function wlFindThrInput(tbody, sym, kind) {
-            if (!tbody) return null;
-            var trs = tbody.querySelectorAll('tr');
-            for (var i = 0; i < trs.length; i++) {
-                if (trs[i].dataset.sym === sym) {
-                    return trs[i].querySelector('.wl-thr-input[data-kind="' + kind + '"]');
-                }
-            }
-            return null;
+        // ---- Full-row build + in-place patch (keyed reconciliation) ----------------
+        // The grid is never torn down. Each symbol's <tr> — and critically its four threshold
+        // <input>s — is created once by wlBuildRow and thereafter patched in place by wlPatchRow.
+        // Inputs are never recreated and a focused input is never overwritten, so an in-progress
+        // edit can't lose focus, caret or keystrokes and a stale reload can't revert a saved value.
+        // This makes the old focus snapshot/restore dance (and its querySelector escaping) obsolete.
+
+        // Inner HTML of the symbol cell (name + "fetching…" + held ● markers).
+        function wlSymHtml(r) {
+            return '<b>' + r.symbol + '</b>' +
+                (r.missingData ? ' <span class="muted" style="font-size:0.75rem">(fetching…)</span>' : '') +
+                (r.held ? ' <span class="muted" title="You hold this" style="font-size:0.75rem">●</span>' : '');
         }
 
-        // Snapshot the threshold input the user is currently editing (focus + caret + their
-        // in-progress text) so a full rebuild can put it back exactly, keystrokes intact.
-        function wlCaptureFocusedInput(tbody) {
-            var ae = document.activeElement;
-            if (!ae || !ae.classList || !ae.classList.contains('wl-thr-input')) return null;
-            if (!tbody || !tbody.contains(ae)) return null;
-            var snap = { sym: ae.dataset.sym, kind: ae.dataset.kind, value: ae.value, start: null, end: null };
-            try { snap.start = ae.selectionStart; snap.end = ae.selectionEnd; } catch (e) { /* ok */ }
-            return snap;
+        // Full cell markup for a brand-new row. data-f tags let wlPatchRow find each cell later.
+        // Threshold inputs seed from resolve() so the optimistic overlay wins over a stale read.
+        function wlRowCellsHtml(r) {
+            var price = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
+            var pe = r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1);
+            var thr = WlEditSync.resolve(r, wlPending[r.symbol]).values;
+            return '<td data-f="sym">' + wlSymHtml(r) + '</td>' +
+                '<td data-f="price">' + price + '</td>' +
+                wlPctCell(r.todayPct, true, 'todayPct') +
+                wlPctCell(r.pct2d, true, 'pct2d') +
+                wlPctCell(r.pct3d, true, 'pct3d') +
+                wlPctCell(r.pct5d, true, 'pct5d') +
+                wlPctCell(r.pct30d, true, 'pct30d') +
+                wlPctCell(r.pctFromHigh, false, 'pctFromHigh') +
+                wlPctCell(r.pctFromLow, false, 'pctFromLow') +
+                wlVolCell(r.vol5d, 'vol5d') +
+                wlVolCell(r.vol10d, 'vol10d') +
+                wlVolCell(r.vol30d, 'vol30d') +
+                wlVolCell(r.vol1y, 'vol1y') +
+                '<td data-f="pe">' + pe + '</td>' +
+                wlGbpCell(r.held ? r.positionValueGbp : null, false, 'position') +
+                wlGbpCell(r.held ? r.gainGbp : null, true, 'gain') +
+                '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="high" type="text" value="' + thr.high + '"/></td>' +
+                '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="move" type="text" value="' + thr.move + '"/></td>' +
+                '<td><input class="wl-thr-input wl-price-input" data-sym="' + r.symbol + '" data-kind="above" type="text" value="' + thr.above + '"/></td>' +
+                '<td><input class="wl-thr-input wl-price-input" data-sym="' + r.symbol + '" data-kind="below" type="text" value="' + thr.below + '"/></td>' +
+                '<td class="wl-actions">' +
+                    '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="up" title="Move up">↑</button>' +
+                    '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="down" title="Move down">↓</button>' +
+                    '<button class="wl-remove" data-sym="' + r.symbol + '" title="Remove">×</button>' +
+                '</td>';
         }
 
-        function wlRestoreFocusedInput(tbody, snap) {
-            if (!snap) return;
-            var inp = wlFindThrInput(tbody, snap.sym, snap.kind);
-            if (!inp) return;                              // its symbol left the list
-            inp.value = snap.value;                        // keep what they were typing, not the render
-            inp.focus();
-            if (snap.start != null) { try { inp.setSelectionRange(snap.start, snap.end); } catch (e) { /* ok */ } }
+        // Create one fully-wired row. Its click/change/keydown/button listeners are attached once
+        // here and survive every later patch (the node is never replaced). The row keeps its latest
+        // server data on tr._wlRow so the popup opens with fresh values after any number of patches.
+        function wlBuildRow(r) {
+            var tr = document.createElement('tr');
+            tr.dataset.sym = r.symbol;
+            tr._wlRow = r;
+            tr.className = rowAlertClass(r);
+            tr.innerHTML = wlRowCellsHtml(r);
+            // Row click opens the popup, except when interacting with inputs/buttons.
+            tr.addEventListener('click', function (e) {
+                if (e.target.closest('input, button')) return;
+                openWlModal(tr._wlRow);
+            });
+            tr.querySelector('.wl-remove').addEventListener('click', function () {
+                removeWatchlistSymbol(this.dataset.sym);
+            });
+            tr.querySelectorAll('.wl-move').forEach(function (btn) {
+                btn.addEventListener('click', function () { moveWatchlistSymbol(this.dataset.sym, this.dataset.dir); });
+            });
+            tr.querySelectorAll('.wl-thr-input').forEach(function (inp) {
+                inp.addEventListener('change', function () {
+                    var row = this.closest('tr');
+                    var high = row.querySelector('.wl-thr-input[data-kind="high"]').value.trim();
+                    var move = row.querySelector('.wl-thr-input[data-kind="move"]').value.trim();
+                    var above = row.querySelector('.wl-thr-input[data-kind="above"]').value.trim();
+                    var below = row.querySelector('.wl-thr-input[data-kind="below"]').value.trim();
+                    saveWatchlistThreshold(this.dataset.sym, high, move, above, below);
+                });
+                // Enter commits: the inputs aren't in a <form>, so blur (which fires change) is the save.
+                inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') this.blur(); });
+            });
+            return tr;
         }
 
+        function wlPatchPe(tr, r) {
+            var td = tr.querySelector('td[data-f="pe"]');
+            if (td) td.textContent = r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1);
+        }
+
+        function wlPatchGbpCell(tr, field, v, colour) {
+            var td = tr.querySelector('td[data-f="' + field + '"]');
+            if (!td) return;
+            if (v == null) { td.className = 'na'; td.textContent = '—'; return; }
+            var n = parseFloat(v);
+            td.className = colour ? (n >= 0 ? 'wl-pos' : 'wl-neg') : '';
+            td.textContent = (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+        }
+
+        // Update the four threshold inputs from the server row, EXCEPT one the user is editing right
+        // now (never clobber a focused input). resolve() keeps a just-saved value on screen until the
+        // server echoes it back, so even a stale read can't revert it.
+        function wlPatchInputs(tr, r) {
+            var thr = WlEditSync.resolve(r, wlPending[r.symbol]).values;
+            WlEditSync.KINDS.forEach(function (kind) {
+                var inp = tr.querySelector('.wl-thr-input[data-kind="' + kind + '"]');
+                if (!inp || document.activeElement === inp) return;
+                inp.value = thr[kind];
+            });
+        }
+
+        // Patch every cell of an existing row in place: fast cells + slow columns + inputs.
+        function wlPatchRow(tr, r) {
+            tr._wlRow = r;
+            var symCell = tr.querySelector('td[data-f="sym"]');
+            if (symCell) symCell.innerHTML = wlSymHtml(r);
+            wlPatchQuoteCells(tr, r);                       // price, momentum, 5D/10D vol, colour
+            wlPatchVol(tr, 'vol30d', r.vol30d);
+            wlPatchVol(tr, 'vol1y', r.vol1y);
+            wlPatchPe(tr, r);
+            wlPatchGbpCell(tr, 'position', r.held ? r.positionValueGbp : null, false);
+            wlPatchGbpCell(tr, 'gain', r.held ? r.gainGbp : null, true);
+            wlPatchInputs(tr, r);
+        }
+
+        // Keyed reconciliation — the single render path for full loads, adds, removes and reorders.
+        // Existing rows are patched in place, new symbols are built and inserted, gone symbols are
+        // dropped, and order is fixed by moving existing nodes. The tbody is NEVER wiped, so inputs,
+        // focus, caret, listeners and the intraday cells all survive. Only a row whose position
+        // actually changed is moved, so a focused input isn't blurred by a needless reorder.
         function renderWatchlist(rows) {
             wlLoadedOk = true;                             // reaching a render means the fetch succeeded
             var table = document.getElementById('watchlist-table');
             var empty = document.getElementById('wl-empty');
             var toggle = document.getElementById('wl-view-toggle');
             var tbody = table.querySelector('tbody');
-            var focusSnap = wlCaptureFocusedInput(tbody);  // preserve a mid-edit input across the rebuild
-            tbody.innerHTML = '';
+
             if (!rows.length) {
+                while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
                 table.style.display = 'none';
                 empty.style.display = 'block';
                 toggle.style.display = 'none';
@@ -5161,84 +5278,19 @@
             }
             empty.style.display = 'none';
             toggle.style.display = '';
-            // Only show the stats table when in stats view.
-            if (wlCurrentView === 'stats') {
-                table.style.display = '';
-            }
+            if (wlCurrentView === 'stats') table.style.display = '';   // only shown in stats view
 
-            rows.forEach(function (r) {
-                var tr = document.createElement('tr');
-                tr.className = rowAlertClass(r);
-                tr.dataset.sym = r.symbol;
-                var price = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
-                var pe = r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1);
-                // Threshold cells. Blank means "trigger disabled" (stored as 0). A stale reload must
-                // not revert a just-saved edit: resolve() returns the optimistic overlay values until
-                // a render actually echoes them back from the server. Values are canonical strings.
-                var highV, moveV, aboveV, belowV;
-                var thr = WlEditSync.resolve(r, wlPending[r.symbol]).values;
-                highV = thr.high; moveV = thr.move; aboveV = thr.above; belowV = thr.below;
-                var symCell = '<td><b>' + r.symbol + '</b>' +
-                    (r.missingData ? ' <span class="muted" style="font-size:0.75rem">(fetching…)</span>' : '') +
-                    (r.held ? ' <span class="muted" title="You hold this" style="font-size:0.75rem">●</span>' : '') + '</td>';
-                tr.innerHTML = symCell +
-                    '<td data-f="price">' + price + '</td>' +
-                    wlPctCell(r.todayPct, true, 'todayPct') +
-                    wlPctCell(r.pct2d, true, 'pct2d') +
-                    wlPctCell(r.pct3d, true, 'pct3d') +
-                    wlPctCell(r.pct5d, true, 'pct5d') +
-                    wlPctCell(r.pct30d, true, 'pct30d') +
-                    wlPctCell(r.pctFromHigh, false, 'pctFromHigh') +
-                    wlPctCell(r.pctFromLow, false, 'pctFromLow') +
-                    wlVolCell(r.vol5d, 'vol5d') +
-                    wlVolCell(r.vol10d, 'vol10d') +
-                    wlVolCell(r.vol30d) +
-                    wlVolCell(r.vol1y) +
-                    '<td>' + pe + '</td>' +
-                    wlGbpCell(r.held ? r.positionValueGbp : null, false) +
-                    wlGbpCell(r.held ? r.gainGbp : null, true) +
-                    '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="high" type="text" value="' + highV + '"/></td>' +
-                    '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="move" type="text" value="' + moveV + '"/></td>' +
-                    '<td><input class="wl-thr-input wl-price-input" data-sym="' + r.symbol + '" data-kind="above" type="text" value="' + aboveV + '"/></td>' +
-                    '<td><input class="wl-thr-input wl-price-input" data-sym="' + r.symbol + '" data-kind="below" type="text" value="' + belowV + '"/></td>' +
-                    '<td class="wl-actions">' +
-                        '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="up" title="Move up">↑</button>' +
-                        '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="down" title="Move down">↓</button>' +
-                        '<button class="wl-remove" data-sym="' + r.symbol + '" title="Remove">×</button>' +
-                    '</td>';
-
-                // Row click opens the popup, except when interacting with inputs/buttons.
-                tr.addEventListener('click', function (e) {
-                    if (e.target.closest('input, button')) return;
-                    openWlModal(r);
-                });
-                tbody.appendChild(tr);
+            var existing = wlRowMap(tbody);
+            var seen = {};
+            rows.forEach(function (r, i) {
+                var tr = existing[r.symbol];
+                if (tr) wlPatchRow(tr, r); else tr = wlBuildRow(r);
+                seen[r.symbol] = true;
+                if (tbody.children[i] !== tr) tbody.insertBefore(tr, tbody.children[i] || null);
             });
-
-            tbody.querySelectorAll('.wl-remove').forEach(function (btn) {
-                btn.addEventListener('click', function () { removeWatchlistSymbol(this.dataset.sym); });
+            Object.keys(existing).forEach(function (sym) {
+                if (!seen[sym]) existing[sym].remove();     // symbol no longer on the list
             });
-            tbody.querySelectorAll('.wl-move').forEach(function (btn) {
-                btn.addEventListener('click', function () { moveWatchlistSymbol(this.dataset.sym, this.dataset.dir); });
-            });
-            tbody.querySelectorAll('.wl-thr-input').forEach(function (inp) {
-                inp.addEventListener('change', function () {
-                    var sym = this.dataset.sym;
-                    var row = this.closest('tr');
-                    var high = row.querySelector('.wl-thr-input[data-kind="high"]').value.trim();
-                    var move = row.querySelector('.wl-thr-input[data-kind="move"]').value.trim();
-                    var above = row.querySelector('.wl-thr-input[data-kind="above"]').value.trim();
-                    var below = row.querySelector('.wl-thr-input[data-kind="below"]').value.trim();
-                    saveWatchlistThreshold(sym, high, move, above, below);
-                });
-                // Enter commits: the inputs aren't in a <form>, so Enter otherwise does nothing and
-                // the edit sits unsaved until the field happens to blur. Blur fires the change save.
-                inp.addEventListener('keydown', function (e) {
-                    if (e.key === 'Enter') this.blur();
-                });
-            });
-
-            wlRestoreFocusedInput(tbody, focusSnap);        // put a mid-edit input (+caret) back
 
             if (!wlSortAttached) { wlSortAttached = true; attachSort(table); }
         }

@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
@@ -64,7 +65,23 @@ public class WatchlistController {
     @GetMapping("/watchlist")
     @ResponseBody
     public WatchlistView watchlist() {
-        return watchlistService.view();
+        // TEMP DIAGNOSTIC — remove with the watchlist reset investigation.
+        long t0 = System.currentTimeMillis();
+        WatchlistView v = watchlistService.view();
+        log.info("[WLDBG] GET /watchlist built rows={} in {}ms", v.rows().size(), System.currentTimeMillis() - t0);
+        return v;
+    }
+
+    /**
+     * TEMP DIAGNOSTIC sink — remove with the watchlist reset investigation. Browser-side watchlist
+     * events (edits, reconciles, saves, poll ticks) are POSTed here via {@code navigator.sendBeacon}
+     * so they interleave with the server-side jobs in one log file.
+     */
+    @PostMapping("/watchlist/_debuglog")
+    @ResponseBody
+    public String debugLog(@RequestBody(required = false) String body) {
+        log.info("[WLDBG-CLIENT] {}", body);
+        return "";
     }
 
     /** Lightweight near-real-time refresh (see {@link WatchlistService#quotes()}) — polled by the dashboard. */
@@ -97,11 +114,19 @@ public class WatchlistController {
                                    @RequestParam(name = "movePct", required = false) String movePct,
                                    @RequestParam(name = "priceAbove", required = false) String priceAbove,
                                    @RequestParam(name = "priceBelow", required = false) String priceBelow) {
+        // TEMP DIAGNOSTIC — remove with the watchlist reset investigation.
+        long t0 = System.currentTimeMillis();
+        log.info("[WLDBG] threshold IN sym={} high={} move={} above={} below={}",
+                symbol, highPct, movePct, priceAbove, priceBelow);
         watchlistRepo.updateThresholds(symbol, parsePct(highPct, "high threshold"),
                 parsePct(movePct, "move threshold"),
                 parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
+        log.info("[WLDBG] threshold updated sym={} in {}ms", symbol, System.currentTimeMillis() - t0);
         watchlistAlertJob.clearFiredFor(symbol);   // a corrected target re-arms same-day
-        return watchlistService.view();
+        WatchlistView v = watchlistService.view();
+        log.info("[WLDBG] threshold OUT sym={} totalMs={} rows={}",
+                symbol, System.currentTimeMillis() - t0, v.rows().size());
+        return v;
     }
 
     @PostMapping("/watchlist/remove")

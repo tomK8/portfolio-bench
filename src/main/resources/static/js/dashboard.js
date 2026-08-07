@@ -4628,7 +4628,7 @@
                 document.getElementById('wl-add-symbol').addEventListener('keydown', function (e) {
                     if (e.key === 'Enter') addWatchlistSymbol();
                 });
-                document.getElementById('wl-refresh-btn').addEventListener('click', loadWatchlist);
+                document.getElementById('wl-refresh-btn').addEventListener('click', function () { loadWatchlist('refresh-btn'); });
                 document.getElementById('wl-modal-close').addEventListener('click', closeWlModal);
                 document.getElementById('wl-modal').addEventListener('click', function (e) {
                     if (e.target.id === 'wl-modal') closeWlModal();
@@ -4655,7 +4655,7 @@
                 document.getElementById('wl-view-returns').addEventListener('click', function () { switchWlView('returns'); });
                 loadGiltHints();
             }
-            loadWatchlist();
+            loadWatchlist('setup');
             wlStartPolling();
         }
 
@@ -4735,8 +4735,26 @@
         // again (or the save fails, or the page is reloaded).
         var wlPending = {};
 
+        // ==== TEMP DIAGNOSTIC LOGGING — remove once the reset bug is found ==================
+        // Bridges browser-side watchlist events into the SERVER log (~/log/portfolio-bench.log) via
+        // sendBeacon, so client edits/reconciles/saves interleave with the background price jobs in
+        // one timeline. Also mirrors to the devtools console. Flip WL_DEBUG to false to silence.
+        var WL_DEBUG = true;
+        var wlLogSeq = 0;
+        function wlLog(event, data) {
+            if (!WL_DEBUG) return;
+            var rec = { seq: ++wlLogSeq, t: new Date().toISOString(), event: event, data: data || {} };
+            try { console.log('[WLDBG]', event, rec.data); } catch (e) { /* ignore */ }
+            try {
+                navigator.sendBeacon('/watchlist/_debuglog',
+                    new Blob([JSON.stringify(rec)], { type: 'application/json' }));
+            } catch (e) { /* best-effort */ }
+        }
+        // ====================================================================================
+
         var wlFullLoadInFlight = false;
-        function loadWatchlist() {
+        function loadWatchlist(reason) {
+            wlLog('loadWatchlist', { reason: reason || '?', inFlight: wlFullLoadInFlight });
             if (wlFullLoadInFlight) return;                 // don't stack concurrent full loads
             wlFullLoadInFlight = true;                       // (Refresh spam + the 30s self-heal could
             wlReturnsLoaded = false;                         //  otherwise flap Loading…/could-not-load)
@@ -4746,10 +4764,11 @@
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             }).then(function (view) {
-                renderWatchlist(view.rows || []);          // sets wlLoadedOk
+                renderWatchlist(view.rows || [], 'load:' + (reason || '?'));   // sets wlLoadedOk
                 wlSetStatus('');
             }).catch(function (err) {
                 wlLoadedOk = false;                         // the poll will retry the full load
+                wlLog('loadWatchlist.fail', { reason: reason || '?', err: String(err && err.message || err) });
                 var detail = err && err.message ? ' (' + err.message + ')' : '';
                 wlSetStatus('Could not load watchlist' + detail + ' — retrying shortly.');
             }).finally(function () { wlFullLoadInFlight = false; });
@@ -4779,11 +4798,12 @@
             if (document.getElementById('wl-modal').classList.contains('open')) return;  // user in the popup
             // Self-heal: if the last full load failed (e.g. the server hot-restarted under the tab),
             // the quote poll has no rows to patch — retry the full load until it renders.
-            if (!wlLoadedOk) { loadWatchlist(); return; }
+            if (!wlLoadedOk) { wlLog('poll.selfheal'); loadWatchlist('poll-selfheal'); return; }
             if (wlCurrentView !== 'stats') {               // returns heatmap doesn't move intraday,
                 if (!wlReturnsLoaded) loadWlReturns(true); // but self-heal it if its load failed
                 return;
             }
+            wlLog('poll.quotes');
             fetch('/watchlist/quotes').then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
@@ -4825,6 +4845,10 @@
         function wlApplyQuotes(rows) {
             var tbody = document.querySelector('#watchlist-table tbody');
             if (!tbody) return;
+            var ae = document.activeElement;
+            var editing = (ae && ae.classList && ae.classList.contains('wl-thr-input'))
+                ? { sym: ae.dataset.sym, kind: ae.dataset.kind, val: ae.value } : null;
+            wlLog('applyQuotes', { n: rows.length, editing: editing });
             var map = wlRowMap(tbody);
             rows.forEach(function (q) {
                 var tr = map[q.symbol];                     // absent → symbol set changed since last full load
@@ -4918,12 +4942,12 @@
                     document.getElementById('wl-add-move').value = '';
                     document.getElementById('wl-add-above').value = '';
                     document.getElementById('wl-add-below').value = '';
-                    renderWatchlist(view.rows || []);
+                    renderWatchlist(view.rows || [], 'add');
                     wlSetStatus(wlTargetHeadsUp(view, sym) ||
                         (sym + ' added — data fills in as the backfill completes.'));
                     // Poll a couple of times so a freshly-added row picks up its backfilled prices.
-                    setTimeout(loadWatchlist, 8000);
-                    setTimeout(loadWatchlist, 30000);
+                    setTimeout(function () { loadWatchlist('post-add-8s'); }, 8000);
+                    setTimeout(function () { loadWatchlist('post-add-30s'); }, 30000);
                 })
                 .catch(function (err) {
                     var detail = err && err.message ? ' — ' + err.message : ' (is the app still running?)';
@@ -4936,6 +4960,7 @@
         // seeing a dead button. The existing rows keep their wired listeners (no re-render on failure),
         // so a retry works as soon as the DB is free.
         function removeWatchlistSymbol(sym) {
+            wlLog('remove.begin', { sym: sym });
             var body = new URLSearchParams(); body.set('symbol', sym);
             delete wlPending[sym];                          // gone — no overlay to defend
             // Optimistically drop the row now so × feels instant; the reconcile confirms on success,
@@ -4947,22 +4972,24 @@
                     if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
                     return r.json();
                 })
-                .then(function (view) { renderWatchlist(view.rows || []); })
+                .then(function (view) { renderWatchlist(view.rows || [], 'remove'); })
                 .catch(function (err) {
+                    wlLog('remove.fail', { sym: sym, err: String(err && err.message || err) });
                     var detail = err && err.message ? ' — ' + err.message : '';
                     wlSetStatus('Could not remove ' + sym + detail + ' — restoring.');
-                    loadWatchlist();
+                    loadWatchlist('remove-fail');
                 });
         }
 
         function moveWatchlistSymbol(sym, dir) {
+            wlLog('move.begin', { sym: sym, dir: dir });
             var body = new URLSearchParams(); body.set('symbol', sym); body.set('dir', dir);
             fetch('/watchlist/move', { method: 'POST', body: body })
                 .then(function (r) {
                     if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
                     return r.json();
                 })
-                .then(function (view) { renderWatchlist(view.rows || []); })
+                .then(function (view) { renderWatchlist(view.rows || [], 'move'); })
                 .catch(function (err) {
                     var detail = err && err.message ? ' — ' + err.message : '';
                     wlSetStatus('Could not reorder ' + sym + detail + ' — try again.');
@@ -4980,6 +5007,9 @@
             // values back from the server, any reload is treated as a stale read and must not revert
             // the inputs (see wl-edit-sync.js resolve). Replaced by the next save; cleared on failure.
             wlPending[sym] = WlEditSync.savedThresholds(highPct, movePct, priceAbove, priceBelow);
+            var wlSaveT0 = Date.now();
+            wlLog('save.begin', { sym: sym, high: highPct, move: movePct, above: priceAbove, below: priceBelow,
+                pending: wlPending[sym] });
             fetch('/watchlist/threshold', { method: 'POST', body: body })
                 .then(function (r) {
                     // Surface the real server message (GlobalExceptionAdvice sends plain text) rather
@@ -4988,16 +5018,18 @@
                     return r.json();
                 })
                 .then(function (view) {
+                    wlLog('save.ok', { sym: sym, ms: Date.now() - wlSaveT0 });
                     wlPatchRowState(view, sym);                 // recolour in place; never rebuild here
                     wlSetStatus(wlTargetHeadsUp(view, sym) || '');
                 })
                 .catch(function (err) {
                     // The save genuinely failed — drop the optimistic overlay so we stop showing a
                     // value that didn't persist, and pull the real server state back onto the screen.
+                    wlLog('save.fail', { sym: sym, ms: Date.now() - wlSaveT0, err: String(err && err.message || err) });
                     delete wlPending[sym];
                     var detail = err && err.message ? ' — ' + err.message : '';
                     wlSetStatus('Could not update ' + sym + detail + ' — try again.');
-                    loadWatchlist();
+                    loadWatchlist('save-fail');
                 });
         }
 
@@ -5209,6 +5241,7 @@
                     var move = row.querySelector('.wl-thr-input[data-kind="move"]').value.trim();
                     var above = row.querySelector('.wl-thr-input[data-kind="above"]').value.trim();
                     var below = row.querySelector('.wl-thr-input[data-kind="below"]').value.trim();
+                    wlLog('change', { sym: this.dataset.sym, kind: this.dataset.kind, value: this.value });
                     saveWatchlistThreshold(this.dataset.sym, high, move, above, below);
                 });
                 // Enter commits: the inputs aren't in a <form>, so blur (which fires change) is the save.
@@ -5235,11 +5268,26 @@
         // now (never clobber a focused input). resolve() keeps a just-saved value on screen until the
         // server echoes it back, so even a stale read can't revert it.
         function wlPatchInputs(tr, r) {
-            var thr = WlEditSync.resolve(r, wlPending[r.symbol]).values;
+            var resolved = WlEditSync.resolve(r, wlPending[r.symbol]);
+            var thr = resolved.values;
             WlEditSync.KINDS.forEach(function (kind) {
                 var inp = tr.querySelector('.wl-thr-input[data-kind="' + kind + '"]');
-                if (!inp || document.activeElement === inp) return;
-                inp.value = thr[kind];
+                if (!inp) return;
+                if (document.activeElement === inp) {
+                    if (inp.value !== thr[kind]) {
+                        wlLog('patchInput.skipFocused', { sym: r.symbol, kind: kind, domVal: inp.value, wouldSet: thr[kind] });
+                    }
+                    return;                                   // never clobber what the user is typing
+                }
+                if (inp.value !== thr[kind]) {
+                    // The smoking gun: a reconcile is about to change a visible input value. Log the
+                    // full decision — did the optimistic overlay defend (pending) or did the server
+                    // value win (a revert)?
+                    wlLog('patchInput.overwrite', { sym: r.symbol, kind: kind, from: inp.value, to: thr[kind],
+                        hasPending: !!wlPending[r.symbol], serverVal: WlEditSync.rowDisplay(kind, r),
+                        confirmed: resolved.confirmed });
+                    inp.value = thr[kind];
+                }
             });
         }
 
@@ -5262,7 +5310,12 @@
         // dropped, and order is fixed by moving existing nodes. The tbody is NEVER wiped, so inputs,
         // focus, caret, listeners and the intraday cells all survive. Only a row whose position
         // actually changed is moved, so a focused input isn't blurred by a needless reorder.
-        function renderWatchlist(rows) {
+        function renderWatchlist(rows, trigger) {
+            var ae = document.activeElement;
+            var editing = (ae && ae.classList && ae.classList.contains('wl-thr-input'))
+                ? { sym: ae.dataset.sym, kind: ae.dataset.kind, val: ae.value } : null;
+            wlLog('reconcile.begin', { trigger: trigger || '?', n: rows.length,
+                pendingSyms: Object.keys(wlPending), editing: editing });
             wlLoadedOk = true;                             // reaching a render means the fetch succeeded
             var table = document.getElementById('watchlist-table');
             var empty = document.getElementById('wl-empty');

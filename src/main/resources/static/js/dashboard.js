@@ -4788,7 +4788,14 @@
 
         function wlStartPolling() {
             if (wlPollTimer) return;                       // idempotent — one interval per page
-            wlPollTimer = setInterval(wlPollTick, WL_POLL_MS);
+            // Use a literal fallback, NOT the bare WL_POLL_MS var. This function can run during
+            // page-init: when the watchlist is the restored active tab, the on-load activatePanel()
+            // calls setupWatchlist() → wlStartPolling() *before* `var WL_POLL_MS = 30000` (declared
+            // below) has been assigned. A hoisted-but-unassigned var reads `undefined`, and
+            // setInterval(fn, undefined) is treated as 0 → the browser clamps it to a ~4ms timer:
+            // a runaway poll that hammers the server every few ms, drops beacons, and makes inline
+            // edits race and revert. `|| 30000` pins the real cadence regardless of init order.
+            wlPollTimer = setInterval(wlPollTick, WL_POLL_MS || 30000);
         }
 
         function wlPollTick() {

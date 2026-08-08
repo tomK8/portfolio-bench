@@ -13,12 +13,14 @@ import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.CashTransactionRepository.CashBalance;
 import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.port.FxRateProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Currency;
@@ -60,15 +62,18 @@ public class SyncFromCashService {
     private final IntradayPriceRepository intraday;
     private final FxRateProvider fxRateProvider;
     private final YahooTickerMap tickerMap;
+    private final PriceHistoryRepository priceHistory;
 
     public SyncFromCashService(CashTransactionRepository repo,
                                IntradayPriceRepository intraday,
                                FxRateProvider fxRateProvider,
-                               YahooTickerMap tickerMap) {
+                               YahooTickerMap tickerMap,
+                               PriceHistoryRepository priceHistory) {
         this.repo = repo;
         this.intraday = intraday;
         this.fxRateProvider = fxRateProvider;
         this.tickerMap = tickerMap;
+        this.priceHistory = priceHistory;
     }
 
     public SyncResult sync() {
@@ -87,7 +92,9 @@ public class SyncFromCashService {
 
         List<Position> positions = new CashLedgerReconstructor().reconstruct(rows);
         Map<String, Attribution> attributed = new DividendAttributor().attributeBySymbol(rows);
-        Map<String, IntradayPrice> latestBySymbol = latestPricesBySymbol(positions);
+        Map<String, String> tickerBySymbol = tickerBySymbol(positions);
+        Map<String, IntradayPrice> latestBySymbol = latestPricesBySymbol(tickerBySymbol);
+        Map<String, BigDecimal> monthChangeBySymbol = monthChangeBySymbol(tickerBySymbol);
 
         // Drop positions with no intraday price: we can't value them, and per the design of this
         // view (compare against the holdings RT total) silently substituting cost basis would
@@ -103,7 +110,8 @@ public class SyncFromCashService {
                 log.warn("No intraday price for held symbol {}", p.securityId());
                 continue;
             }
-            aggregated.add(toAggHolding(p, ip, attributed, rates));
+            aggregated.add(toAggHolding(p, ip, attributed, rates,
+                    monthChangeBySymbol.get(p.securityId().toUpperCase())));
         }
         for (CashBalance cb : cashBalances) {
             aggregated.add(cashRow(cb, rates));
@@ -127,7 +135,8 @@ public class SyncFromCashService {
 
     private AggHolding toAggHolding(Position p, IntradayPrice ip,
                                     Map<String, Attribution> attributed,
-                                    Map<String, BigDecimal> rates) {
+                                    Map<String, BigDecimal> rates,
+                                    BigDecimal monthChangePct) {
         Currency ccy = resolveCurrency(p, ip);
         BigDecimal[] rt = realtime(p.securityId(), ccy, p.quantity(), ip, rates);
         BigDecimal latestPrice = rt[0], rtNative = rt[1], rtGbp = rt[2];
@@ -153,7 +162,7 @@ public class SyncFromCashService {
         }
         return new AggHolding(p.securityId(), p.quantity(), null,
                 marketValueGbp, gainGbp, gainPct, dividend, totalGain, totalGainPct,
-                ccy, srcStr.toString(), latestPrice, rtNative, rtGbp);
+                ccy, srcStr.toString(), latestPrice, rtNative, rtGbp, monthChangePct);
     }
 
     /**
@@ -179,7 +188,7 @@ public class SyncFromCashService {
         String src = ACCOUNT_LABELS.getOrDefault(cb.accountDbValue(), cb.accountDbValue());
         return new AggHolding("CASH", nativeAmount, BigDecimal.ONE, gbp,
                 null, null, BigDecimal.ZERO, null, null,
-                ccy, src, null, null, null);
+                ccy, src, null, null, null, null);
     }
 
     /**
@@ -228,7 +237,8 @@ public class SyncFromCashService {
         return new BigDecimal[]{price, rtNative, rtGbp};
     }
 
-    private Map<String, IntradayPrice> latestPricesBySymbol(List<Position> positions) {
+    /** Broker symbol (uppercase) → Yahoo ticker, for the intraday-price and month-change joins. */
+    private Map<String, String> tickerBySymbol(List<Position> positions) {
         Map<String, String> tickerBySymbol = new LinkedHashMap<>();
         for (Position p : positions) {
             String sym = p.securityId();
@@ -237,12 +247,28 @@ public class SyncFromCashService {
             String ticker = Instruments.isBond(sym) ? upper : tickerMap.tickerFor(sym);
             tickerBySymbol.putIfAbsent(upper, ticker);
         }
+        return tickerBySymbol;
+    }
+
+    private Map<String, IntradayPrice> latestPricesBySymbol(Map<String, String> tickerBySymbol) {
         if (tickerBySymbol.isEmpty()) return Map.of();
         Map<String, IntradayPrice> byTicker = intraday.loadLatestIntradayPrices(tickerBySymbol.values());
         Map<String, IntradayPrice> bySymbol = new HashMap<>();
         for (Map.Entry<String, String> e : tickerBySymbol.entrySet()) {
             IntradayPrice p = byTicker.get(e.getValue());
             if (p != null) bySymbol.put(e.getKey(), p);
+        }
+        return bySymbol;
+    }
+
+    /** Trailing ~1-month price change (fraction) per symbol, for the Price-column tint. */
+    private Map<String, BigDecimal> monthChangeBySymbol(Map<String, String> tickerBySymbol) {
+        if (tickerBySymbol.isEmpty()) return Map.of();
+        LocalDate today = LocalDate.now();
+        Map<String, BigDecimal> bySymbol = new HashMap<>();
+        for (Map.Entry<String, String> e : tickerBySymbol.entrySet()) {
+            BigDecimal chg = PriceMomentum.monthChange(priceHistory, e.getValue(), today);
+            if (chg != null) bySymbol.put(e.getKey(), chg);
         }
         return bySymbol;
     }

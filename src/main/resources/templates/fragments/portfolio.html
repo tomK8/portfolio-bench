@@ -93,7 +93,7 @@
             </div>
         </div>
 
-        <table>
+        <table class="sticky-head">
             <thead>
             <tr>
                 <th class="txt" data-sort="text">Security</th>
@@ -121,15 +121,21 @@
                 </td>
                 <td th:text="${h.rtMarketValue != null ? #numbers.formatDecimal(h.rtMarketValue, 1, 'COMMA', 2, 'POINT') : '—'}">—
                 </td>
-                <td th:text="${h.latestPrice != null ? #numbers.formatDecimal(h.latestPrice, 1, 'COMMA', 4, 'POINT') : '—'}">—
+                <td th:classappend="${h.monthChangePct != null ? (h.monthChangePct.signum() > 0 ? 'mom-pos' : (h.monthChangePct.signum() &lt; 0 ? 'mom-neg' : '')) : ''}"
+                    th:title="${h.monthChangePct != null ? '1-month price change: ' + #numbers.formatPercent(h.monthChangePct, 1, 2) : null}"
+                    th:text="${h.latestPrice != null ? #numbers.formatDecimal(h.latestPrice, 1, 'COMMA', 4, 'POINT') : '—'}">—
                 </td>
-                <td th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
+                <td th:classappend="${h.gainGbp != null ? (h.gainGbp.signum() > 0 ? 'val-pos' : (h.gainGbp.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                    th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
                 </td>
-                <td th:text="${h.gainPct != null ? #numbers.formatPercent(h.gainPct, 1, 2) : '—'}">—</td>
+                <td th:classappend="${h.gainPct != null ? (h.gainPct.signum() > 0 ? 'val-pos' : (h.gainPct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                    th:text="${h.gainPct != null ? #numbers.formatPercent(h.gainPct, 1, 2) : '—'}">—</td>
                 <td th:text="${#numbers.formatDecimal(h.dividendGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                <td th:text="${h.totalGainGbp != null ? #numbers.formatDecimal(h.totalGainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
+                <td th:classappend="${h.totalGainGbp != null ? (h.totalGainGbp.signum() > 0 ? 'val-pos' : (h.totalGainGbp.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                    th:text="${h.totalGainGbp != null ? #numbers.formatDecimal(h.totalGainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
                 </td>
-                <td th:text="${h.totalGainPct != null ? #numbers.formatPercent(h.totalGainPct, 1, 2) : '—'}">—</td>
+                <td th:classappend="${h.totalGainPct != null ? (h.totalGainPct.signum() > 0 ? 'val-pos' : (h.totalGainPct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                    th:text="${h.totalGainPct != null ? #numbers.formatPercent(h.totalGainPct, 1, 2) : '—'}">—</td>
                 <td class="txt" th:text="${h.sources}">src</td>
             </tr>
             </tbody>

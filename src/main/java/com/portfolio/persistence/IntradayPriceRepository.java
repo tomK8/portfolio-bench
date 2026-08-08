@@ -119,6 +119,35 @@ public class IntradayPriceRepository {
         return out;
     }
 
+    /**
+     * All stored 1-minute bars for one ticker at or after {@code from}, oldest first. Feeds the
+     * watchlist popup's fine-grained price chart for the sub-15-day windows. Retention (see
+     * {@link com.portfolio.application.IntradayPriceFetchJob#RETENTION_DAYS}) bounds how far
+     * back this can reach.
+     */
+    public List<IntradayBar> loadIntradaySeries(String ticker, Instant from) {
+        List<IntradayBar> out = new java.util.ArrayList<>();
+        if (!connections.dbExists()) return out;
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT symbol, ts, close, volume, currency FROM price_intraday " +
+                             "WHERE symbol = ? AND ts >= ? ORDER BY ts")) {
+            ps.setString(1, ticker);
+            ps.setString(2, from.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long vol = rs.getLong(4);
+                    Long volume = rs.wasNull() ? null : vol;
+                    out.add(new IntradayBar(rs.getString(1), Instant.parse(rs.getString(2)),
+                            rs.getDouble(3), volume, rs.getString(5)));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not load intraday series for {}", ticker, e);
+        }
+        return out;
+    }
+
     public int pruneIntradayBefore(Instant cutoff) {
         if (!connections.dbExists()) return 0;
         try (Connection conn = connections.open();

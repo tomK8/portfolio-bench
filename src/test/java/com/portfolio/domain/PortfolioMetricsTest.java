@@ -29,7 +29,8 @@ class PortfolioMetricsTest {
                 "test",
                 null,                           // latestPrice — unused
                 null,                           // rtMarketValue — unused
-                null);                          // rtMarketValueGbp — unused
+                null,                           // rtMarketValueGbp — unused
+                null);                          // monthChangePct — unused
     }
 
     private static void assertBigDecimalEquals(String expected, BigDecimal actual) {

@@ -153,6 +153,8 @@
             if (panelId === 'panel-dividends') loadDividends();
             if (panelId === 'panel-position') setupPosition();
             if (panelId === 'panel-correlations') setupCorrelations();
+            if (panelId === 'panel-watchlist') setupWatchlist();
+            if (panelId === 'panel-swing') setupSwing();
             if (panelId === 'panel-snapshots') setupSnapshots();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
@@ -1043,8 +1045,19 @@
             else showMwr();
         }
 
+        // 1w–6m are simple period returns, intrinsic to the TWR series (a sub-year IRR would
+        // annualise to a misleading number). Like Max drawdown, they're kept from the TWR
+        // summary in both TWR and MWR modes.
+        function paintShortWindows(s) {
+            setStat('returns-1w', s && s.trailing1w);
+            setStat('returns-1m', s && s.trailing1m);
+            setStat('returns-3m', s && s.trailing3m);
+            setStat('returns-6m', s && s.trailing6m);
+        }
+
         function showTwr() {
             var s = cachedTwrSummary;
+            paintShortWindows(s);
             setStat('returns-1y', s && s.trailing1y);
             setStat('returns-3y', s && s.trailing3y);
             setStat('returns-5y', s && s.trailing5y);
@@ -1070,8 +1083,10 @@
             } else {
                 paintMwr();
             }
-            // Max drawdown / drawdown date are intrinsic to the TWR series — keep them.
+            // Max drawdown / drawdown date and the 1w–6m period returns are intrinsic to the
+            // TWR series — keep them from the TWR summary in MWR mode.
             var s = cachedTwrSummary;
+            paintShortWindows(s);
             setStat('returns-maxdd', s && s.maxDrawdown);
             document.getElementById('returns-maxdd-date').textContent =
                     (s && s.maxDrawdownDate) ? 'on ' + s.maxDrawdownDate : '';
@@ -1294,9 +1309,13 @@
         function renderBenchmarkStats(sym, summary) {
             var box = document.getElementById('benchmark-stats');
             box.style.display = 'flex';
-            ['1y', '3y', '5y', 'since'].forEach(function (k) {
+            ['1w', '1m', '3m', '6m', '1y', '3y', '5y', 'since'].forEach(function (k) {
                 document.getElementById('benchmark-label-' + k).textContent = sym;
             });
+            setStat('bench-1w', summary && summary.trailing1w);
+            setStat('bench-1m', summary && summary.trailing1m);
+            setStat('bench-3m', summary && summary.trailing3m);
+            setStat('bench-6m', summary && summary.trailing6m);
             setStat('bench-1y', summary && summary.trailing1y);
             setStat('bench-3y', summary && summary.trailing3y);
             setStat('bench-5y', summary && summary.trailing5y);
@@ -2093,12 +2112,17 @@
 
         var snapshotInitialized = false;
         var snapshotRowsCache = [];
+        var snapshotExtra = [];          // user-added (non-held) symbols, for the remove control
         var snapshotRefreshTimer = null;
 
         function setupSnapshot() {
             if (snapshotInitialized) return;
             snapshotInitialized = true;
             document.getElementById('snapshot-reload').addEventListener('click', triggerSnapshotRefresh);
+            document.getElementById('snapshot-add-btn').addEventListener('click', addSnapshotSymbol);
+            document.getElementById('snapshot-add-symbol').addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') addSnapshotSymbol();
+            });
             document.getElementById('snapshot-detail-close').addEventListener('click', closeSnapshotDetail);
             document.getElementById('snapshot-detail-modal').addEventListener('click', function (e) {
                 if (e.target.id === 'snapshot-detail-modal') closeSnapshotDetail();
@@ -2111,10 +2135,39 @@
             var status = document.getElementById('snapshot-status');
             fetch('/portfolio-fundamentals').then(function (r) { return r.json(); })
                     .then(function (data) {
+                        snapshotExtra = data.extraSymbols || [];
                         renderSnapshot(data.rows || []);
                         status.textContent = formatLastUpdated(data.lastUpdatedAt);
                     })
                     .catch(function (e) { status.textContent = 'Error: ' + e.message; });
+        }
+
+        function addSnapshotSymbol() {
+            var input = document.getElementById('snapshot-add-symbol');
+            var sym = input.value.trim().toUpperCase();
+            if (!sym) return;
+            var status = document.getElementById('snapshot-status');
+            status.textContent = 'Adding ' + sym + ' — fetching fundamentals…';
+            var body = new URLSearchParams(); body.set('symbol', sym);
+            fetch('/portfolio-fundamentals/add', { method: 'POST', body: body })
+                    .then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error(t); }); return r.json(); })
+                    .then(function (data) {
+                        input.value = '';
+                        snapshotExtra = data.extraSymbols || [];
+                        renderSnapshot(data.rows || []);
+                        status.textContent = formatLastUpdated(data.lastUpdatedAt);
+                    })
+                    .catch(function () { status.textContent = 'Could not add ' + sym + '.'; });
+        }
+
+        function removeSnapshotSymbol(sym) {
+            var body = new URLSearchParams(); body.set('symbol', sym);
+            fetch('/portfolio-fundamentals/remove', { method: 'POST', body: body })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        snapshotExtra = data.extraSymbols || [];
+                        renderSnapshot(data.rows || []);
+                    });
         }
 
         function triggerSnapshotRefresh() {
@@ -2168,7 +2221,16 @@
                 var tr = document.createElement('tr');
                 tr.style.cursor = 'pointer';
                 tr.dataset.idx = idx;
-                tr.appendChild(td(row.symbol, 'txt'));
+                if (snapshotExtra.indexOf(row.symbol) >= 0) {
+                    // A user-added (not-held) row — carry a remove control in the symbol cell.
+                    var stc = document.createElement('td');
+                    stc.className = 'txt';
+                    stc.innerHTML = row.symbol +
+                            ' <button class="wl-remove snapshot-remove" data-sym="' + row.symbol + '" title="Remove">×</button>';
+                    tr.appendChild(stc);
+                } else {
+                    tr.appendChild(td(row.symbol, 'txt'));
+                }
                 tr.appendChild(td(fmtPrice(row.price, row.currency)));
                 tr.appendChild(td(fmtPrice(row.targetMeanPrice, row.currency)));
                 tr.appendChild(td(fmtRatio(row.trailingPe)));
@@ -2181,6 +2243,12 @@
                 tr.appendChild(td(fmtPrice(row.week52High, row.currency)));
                 tr.addEventListener('click', function () { openSnapshotDetail(idx); });
                 tbody.appendChild(tr);
+            });
+            tbody.querySelectorAll('.snapshot-remove').forEach(function (btn) {
+                btn.addEventListener('click', function (e) {
+                    e.stopPropagation();               // don't open the detail modal
+                    removeSnapshotSymbol(this.dataset.sym);
+                });
             });
             reapplyActiveSort(table);
         }
@@ -2257,32 +2325,12 @@
             return '';
         }
 
-        function openSnapshotDetail(idx) {
-            var row = snapshotRowsCache[idx];
-            if (!row) return;
-            document.getElementById('snapshot-detail-title').textContent =
-                    row.symbol + ' — fundamentals';
-            var sector = (row.labels && row.labels.sector) || '';
-            var industry = (row.labels && row.labels.industry) || '';
-            var rec = (row.labels && row.labels.recommendationKey) || '';
-            var subParts = [];
-            if (sector) subParts.push(sector);
-            if (industry) subParts.push(industry);
-            if (rec) subParts.push('Analyst consensus: ' + rec);
-            document.getElementById('snapshot-detail-sub').textContent = subParts.join(' · ');
-
-            // Financial-sector companies (banks, insurers, asset managers) use debt as their
-            // product and hold huge investment portfolios as assets, which breaks Yahoo's EV,
-            // Net Debt, EBITDA and FCF calculations — suppress those groups/fields for them.
-            var isFinancial = /financial|insurance|bank/i.test(sector);
-
-            // Group secondary fields by theme so the modal reads as a compact summary, not a
-            // wall of key=value pairs. Each group's rows are skipped entirely when every
-            // field is null or suppressed — so an ETF without dividends or analyst coverage
-            // doesn't get empty "—" boxes.
-            // Field tuple: [key, label, type, tooltip, noFinancial?, glossaryAnchor?]
-            // Group: { title, fields, noFinancial? } — noFinancial skips the whole group.
-            var groups = [
+        // Single home for the fundamentals field grouping (label, type, tooltip, anchor).
+        // Field tuple: [key, label, type, tooltip, noFinancial?, glossaryAnchor?].
+        // Group: { title, fields, noFinancial? } — noFinancial skips the whole group for
+        // banks/insurers where EV/Net Debt/EBITDA/FCF don't apply.
+        function fundamentalsFieldGroups() {
+            return [
                 { title: 'Valuation', fields: [
                     ['enterpriseToEbitda', 'EV/EBITDA', 'ratio', 'Enterprise Value ÷ EBITDA (TTM). Measures how expensive the business is relative to cash earnings before interest, taxes, depreciation and amortisation. Lower = cheaper; negative means EBITDA is negative.', true, 'ev-ebitda'],
                     ['priceToBook', 'P/B', 'ratio', 'Price ÷ Book Value per share. Compares market cap to net assets on the balance sheet. Below 1 may indicate undervaluation; most meaningful for asset-heavy businesses and financials.', false, 'pb'],
@@ -2335,6 +2383,13 @@
                     ['sharesOutstanding', 'Shares Outstanding', 'cap', 'Total shares in existence, including restricted shares. Used to compute market cap and per-share metrics.']
                 ]}
             ];
+        }
+
+        // Shared fundamentals renderer — grouped, human-labelled key/value HTML for one
+        // quoteSummary row. Used by both the Snapshot-diff detail modal and the Watchlist popup
+        // (the latter wraps the returned groups in a multi-column layout).
+        function fundamentalsHtml(row, isFinancial) {
+            var groups = fundamentalsFieldGroups();
             var html = '';
             groups.forEach(function (g) {
                 if (isFinancial && g.noFinancial) return;
@@ -2356,8 +2411,35 @@
                             '</div>' + inner + '</div>';
                 }
             });
-            if (!html) html = '<p class="muted">No secondary fields available for this ticker.</p>';
-            document.getElementById('snapshot-detail-body').innerHTML = html;
+            return html || '<p class="muted">No secondary fields available for this ticker.</p>';
+        }
+
+        function openSnapshotDetail(idx) {
+            var row = snapshotRowsCache[idx];
+            if (!row) return;
+            document.getElementById('snapshot-detail-title').textContent =
+                    row.symbol + ' — fundamentals';
+            var sector = (row.labels && row.labels.sector) || '';
+            var industry = (row.labels && row.labels.industry) || '';
+            var rec = (row.labels && row.labels.recommendationKey) || '';
+            var subParts = [];
+            if (sector) subParts.push(sector);
+            if (industry) subParts.push(industry);
+            if (rec) subParts.push('Analyst consensus: ' + rec);
+            document.getElementById('snapshot-detail-sub').textContent = subParts.join(' · ');
+
+            // Financial-sector companies (banks, insurers, asset managers) use debt as their
+            // product and hold huge investment portfolios as assets, which breaks Yahoo's EV,
+            // Net Debt, EBITDA and FCF calculations — suppress those groups/fields for them.
+            var isFinancial = /financial|insurance|bank/i.test(sector);
+
+            // Group secondary fields by theme so the modal reads as a compact summary, not a
+            // wall of key=value pairs. Each group's rows are skipped entirely when every
+            // field is null or suppressed — so an ETF without dividends or analyst coverage
+            // doesn't get empty "—" boxes.
+            // Field tuple: [key, label, type, tooltip, noFinancial?, glossaryAnchor?]
+            // Group: { title, fields, noFinancial? } — noFinancial skips the whole group.
+            document.getElementById('snapshot-detail-body').innerHTML = fundamentalsHtml(row, isFinancial);
             document.getElementById('snapshot-detail-modal').classList.add('open');
         }
 
@@ -3772,7 +3854,7 @@
         // FOMO / fear / conviction / etc. — pulls /trades on first activation,
         // renders the table and inline editor; saves via POST /trades/{rowid}/note.
 
-        var JOURNAL_TAGS = ['fomo', 'fear', 'greed', 'conviction', 'rebalance', 'hedge', 'news', 'thesis', 'correction'];
+        var JOURNAL_TAGS = ['fomo', 'fear', 'greed', 'conviction', 'rebalance', 'hedge', 'news', 'thesis', 'correction', 'voltrading'];
         var journalInitialized = false;
         var journalData = null;
         var journalFilter = { text: '', tag: '', onlyNoted: false };
@@ -4149,11 +4231,11 @@
                 if (isNew) {
                     tr = document.createElement('tr');
                     tr.dataset.symbol = row.symbol;
-                    for (var i = 0; i < 9; i++) tr.appendChild(document.createElement('td'));
+                    for (var i = 0; i < 12; i++) tr.appendChild(document.createElement('td'));
                     tr.cells[0].className = 'txt';
                     tr.cells[1].className = 'txt';
-                    tr.cells[7].className = 'txt';
-                    tr.cells[8].className = 'txt';
+                    tr.cells[10].className = 'txt';
+                    tr.cells[11].className = 'txt';
                     tbody.appendChild(tr);
                     existing[row.symbol] = tr;
                 }
@@ -4179,13 +4261,23 @@
             var changed = false;
             if (setNumericCell(tr.cells[2], row.symbol + '|qty', row.quantity, fmtLiveNum(row.quantity, 2), prevByKey, nextByKey)) changed = true;
             if (setNumericCell(tr.cells[3], row.symbol + '|last', nLast, nLast == null ? '—' : fmtLiveNum(nLast, 4), prevByKey, nextByKey)) changed = true;
+            applyMomClass(tr.cells[3], numOrNull(row.monthChangePct));
             if (setNumericCell(tr.cells[4], row.symbol + '|pct', nPct, nPct == null ? '—' : fmtLivePct(nPct), prevByKey, nextByKey)) changed = true;
             applyDeltaClass(tr.cells[4], nPct);
             if (setNumericCell(tr.cells[5], row.symbol + '|dayGbp', nDay, nDay == null ? '—' : (nDay >= 0 ? '+' : '−') + fmtLiveNum(Math.abs(nDay), 2), prevByKey, nextByKey)) changed = true;
             applyDeltaClass(tr.cells[5], nDay);
-            if (setNumericCell(tr.cells[6], row.symbol + '|pos', nPos, nPos == null ? '—' : fmtLiveNum(nPos, 2), prevByKey, nextByKey)) changed = true;
-            tr.cells[7].textContent = row.accounts || '';
-            renderQuoteTs(tr.cells[8], row.priceTs);
+            var n5 = numOrNull(row.change5dPct);
+            var n10 = numOrNull(row.change10dPct);
+            var n30 = numOrNull(row.monthChangePct);
+            if (setNumericCell(tr.cells[6], row.symbol + '|d5', n5, n5 == null ? '—' : fmtLivePct(n5), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[6], n5);
+            if (setNumericCell(tr.cells[7], row.symbol + '|d10', n10, n10 == null ? '—' : fmtLivePct(n10), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[7], n10);
+            if (setNumericCell(tr.cells[8], row.symbol + '|d30', n30, n30 == null ? '—' : fmtLivePct(n30), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[8], n30);
+            if (setNumericCell(tr.cells[9], row.symbol + '|pos', nPos, nPos == null ? '—' : fmtLiveNum(nPos, 2), prevByKey, nextByKey)) changed = true;
+            tr.cells[10].textContent = row.accounts || '';
+            renderQuoteTs(tr.cells[11], row.priceTs);
             return changed;
         }
 
@@ -4222,6 +4314,16 @@
             if (val == null) return;
             if (val > 0) td.classList.add('live-pos');
             else if (val < 0) td.classList.add('live-neg');
+        }
+
+        // Background tint on the Last-price cell by trailing ~1-month change (fraction), matching
+        // the holdings tables. Separate signal from the day's move — direction can differ.
+        function applyMomClass(td, val) {
+            td.classList.remove('mom-pos', 'mom-neg');
+            if (val == null) { td.removeAttribute('title'); return; }
+            if (val > 0) td.classList.add('mom-pos');
+            else if (val < 0) td.classList.add('mom-neg');
+            td.title = '1-month price change: ' + fmtLivePct(val);
         }
 
         function setText(id, value) {
@@ -4476,6 +4578,978 @@
                 scenarioTableSortAttached = true;
                 attachSort(document.getElementById('scenario-table'));
             }
+        }
+
+        // ---- Watchlist (volatility-trading monitor) -------------------------
+
+        var watchlistInited = false;
+        var wlChart = null;
+        var wlFundamentals = null;      // symbol -> quoteSummary, cached from /portfolio-fundamentals
+        var wlSortAttached = false;
+        var wlCurrentSymbol = null;
+        var wlReturnsLoaded = false;
+        var wlCurrentView = 'stats';    // 'stats' or 'returns'
+
+        function setupWatchlist() {
+            if (!watchlistInited) {
+                watchlistInited = true;
+                document.getElementById('wl-add-btn').addEventListener('click', addWatchlistSymbol);
+                document.getElementById('wl-add-symbol').addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') addWatchlistSymbol();
+                });
+                document.getElementById('wl-refresh-btn').addEventListener('click', loadWatchlist);
+                document.getElementById('wl-modal-close').addEventListener('click', closeWlModal);
+                document.getElementById('wl-modal').addEventListener('click', function (e) {
+                    if (e.target.id === 'wl-modal') closeWlModal();
+                });
+                document.addEventListener('keydown', function (e) {
+                    if (e.key === 'Escape' && document.getElementById('wl-modal').classList.contains('open')) {
+                        closeWlModal();
+                    }
+                });
+                document.getElementById('wl-fund-toggle').addEventListener('click', function () {
+                    var body = document.getElementById('wl-fund-body');
+                    var open = body.style.display !== 'none';
+                    body.style.display = open ? 'none' : 'block';
+                    this.classList.toggle('open', !open);
+                });
+                document.getElementById('wl-window-toggle').addEventListener('click', function (e) {
+                    var btn = e.target.closest('button[data-window]');
+                    if (!btn || !wlCurrentSymbol) return;
+                    this.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
+                    btn.classList.add('active');
+                    loadWlSeries(wlCurrentSymbol, btn.dataset.window);
+                });
+                document.getElementById('wl-view-stats').addEventListener('click', function () { switchWlView('stats'); });
+                document.getElementById('wl-view-returns').addEventListener('click', function () { switchWlView('returns'); });
+            }
+            loadWatchlist();
+        }
+
+        function switchWlView(view) {
+            wlCurrentView = view;
+            var isStats = view === 'stats';
+            document.getElementById('wl-view-stats').classList.toggle('active', isStats);
+            document.getElementById('wl-view-returns').classList.toggle('active', !isStats);
+            var table = document.getElementById('watchlist-table');
+            var panel = document.getElementById('wl-returns-panel');
+            if (isStats) {
+                panel.style.display = 'none';
+                table.style.display = '';
+                return;
+            }
+            table.style.display = 'none';
+            panel.style.display = '';
+            if (!wlReturnsLoaded) {
+                panel.innerHTML = '<p class="muted" style="padding:0.5rem">Loading…</p>';
+                fetch('/watchlist/returns').then(function (r) { return r.json(); })
+                    .then(function (data) { wlReturnsLoaded = true; renderWatchlistReturns(data); })
+                    .catch(function () { panel.innerHTML = '<p class="muted">Could not load returns.</p>'; });
+            }
+        }
+
+        function wlSetStatus(msg) {
+            document.getElementById('wl-status').textContent = msg || '';
+        }
+
+        function loadWatchlist() {
+            wlReturnsLoaded = false;
+            wlSetStatus('Loading…');
+            fetch('/watchlist').then(function (r) { return r.json(); })
+                .then(function (view) { renderWatchlist(view.rows || []); wlSetStatus(''); })
+                .catch(function () { wlSetStatus('Could not load watchlist.'); });
+        }
+
+        function addWatchlistSymbol() {
+            var sym = document.getElementById('wl-add-symbol').value.trim().toUpperCase();
+            if (!sym) return;
+            var high = document.getElementById('wl-add-high').value.trim();
+            var move = document.getElementById('wl-add-move').value.trim();
+            var body = new URLSearchParams();
+            body.set('symbol', sym);
+            if (high) body.set('highPct', high);
+            if (move) body.set('movePct', move);
+            wlSetStatus('Adding ' + sym + ' — fetching prices…');
+            fetch('/watchlist/add', { method: 'POST', body: body })
+                .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+                .then(function (view) {
+                    document.getElementById('wl-add-symbol').value = '';
+                    document.getElementById('wl-add-high').value = '';
+                    document.getElementById('wl-add-move').value = '';
+                    renderWatchlist(view.rows || []);
+                    wlSetStatus(sym + ' added — data fills in as the backfill completes.');
+                    // Poll a couple of times so a freshly-added row picks up its backfilled prices.
+                    setTimeout(loadWatchlist, 8000);
+                    setTimeout(loadWatchlist, 30000);
+                })
+                .catch(function () { wlSetStatus('Could not add ' + sym + '.'); });
+        }
+
+        function removeWatchlistSymbol(sym) {
+            var body = new URLSearchParams(); body.set('symbol', sym);
+            fetch('/watchlist/remove', { method: 'POST', body: body })
+                .then(function (r) { return r.json(); })
+                .then(function (view) { renderWatchlist(view.rows || []); });
+        }
+
+        function moveWatchlistSymbol(sym, dir) {
+            var body = new URLSearchParams(); body.set('symbol', sym); body.set('dir', dir);
+            fetch('/watchlist/move', { method: 'POST', body: body })
+                .then(function (r) { return r.json(); })
+                .then(function (view) { renderWatchlist(view.rows || []); });
+        }
+
+        function saveWatchlistThreshold(sym, highPct, movePct) {
+            var body = new URLSearchParams();
+            body.set('symbol', sym);
+            body.set('highPct', highPct);
+            body.set('movePct', movePct);
+            fetch('/watchlist/threshold', { method: 'POST', body: body })
+                .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+                .then(function (view) { renderWatchlist(view.rows || []); })
+                .catch(function () { wlSetStatus('Could not update thresholds for ' + sym + '.'); });
+        }
+
+        function wlPctCell(frac, colour) {
+            if (frac == null) return '<td class="na">—</td>';
+            var n = parseFloat(frac) * 100;
+            var cls = colour ? (n >= 0 ? ' class="wl-pos"' : ' class="wl-neg"') : '';
+            return '<td' + cls + '>' + (n >= 0 ? '+' : '') + n.toFixed(1) + '%</td>';
+        }
+
+        // Realized-vol cell — always positive, so no leading sign (matches the popup term structure).
+        function wlVolCell(frac) {
+            return frac == null ? '<td class="na">—</td>' : '<td>' + wlVolText(frac) + '</td>';
+        }
+
+        function wlGbpCell(v, colour) {
+            if (v == null) return '<td class="na">—</td>';
+            var n = parseFloat(v);
+            var cls = colour ? (n >= 0 ? ' class="wl-pos"' : ' class="wl-neg"') : '';
+            var s = (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+            return '<td' + cls + '>' + s + '</td>';
+        }
+
+        function renderWatchlistReturns(data) {
+            var panel = document.getElementById('wl-returns-panel');
+            if (!data || !data.dates || !data.dates.length) {
+                panel.innerHTML = '<p class="muted" style="padding:0.5rem">No price history yet — data will appear once the daily price fetch has run.</p>';
+                return;
+            }
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var html = '<label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer">' +
+                '<input type="checkbox" id="wl-cum-all"/> Show cumulative (Σ) for all rows</label>';
+            html += '<table><thead><tr>' +
+                '<th style="min-width:80px">Symbol</th>';
+            data.dates.forEach(function (d) {
+                // "6/6" (day/month) — parse as UTC to avoid timezone shifts
+                var parts = d.split('-');
+                var label = +parts[2] + '/' + +parts[1];
+                html += '<th style="min-width:46px">' + label + '</th>';
+            });
+            html += '</tr></thead><tbody>';
+
+            // Shade a single return cell. `pct` is a percentage (null → blank). Shared by the
+            // daily rows and the click-to-expand cumulative rows. `compact` drops the +/- sign
+            // and rounds to a whole percent so the larger compounded numbers still fit the cell
+            // — direction is already carried by the hue.
+            function returnCell(pct, compact) {
+                if (pct == null) return '<td style="color:#999">—</td>';
+                var absP = Math.abs(pct);
+                // Smooth, unbounded ramp: every return gets a distinct shade instead of
+                // saturating at a hard cap. 1-e^(-|%|/4) rises fast near 0 (small moves
+                // still visible) and keeps deepening for the big ±10-16% days.
+                var intensity = 1 - Math.exp(-absP / 4);
+                var bg, fg;
+                var hue = pct >= 0 ? 142 : 4;
+                if (isDark) {
+                    // Dark mode: lightness 16–52% so cells read on dark backgrounds
+                    var light = Math.round(16 + intensity * 36);
+                    var sat = Math.round(38 + intensity * 57);
+                    bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
+                    fg = intensity > 0.28 ? '#fff' : '#aaa';
+                } else {
+                    // Light mode: lightness 93–38% (near-white → deep)
+                    var light = Math.round(93 - intensity * 55);
+                    var sat = Math.round(28 + intensity * 67);
+                    bg = 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
+                    fg = intensity > 0.55 ? '#fff' : 'inherit';
+                }
+                var text = compact ? Math.round(pct).toString() : (pct >= 0 ? '+' : '') + pct.toFixed(1);
+                return '<td style="background:' + bg + ';color:' + fg + '">' + text + '</td>';
+            }
+
+            data.rows.forEach(function (row, i) {
+                html += '<tr class="wl-ret-row" data-idx="' + i + '" title="Click for cumulative returns"><td>' + row.symbol + '</td>';
+                row.returns.forEach(function (r) {
+                    html += returnCell(r == null ? null : parseFloat(r) * 100);
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            panel.innerHTML = html;
+
+            var tbody = panel.querySelector('tbody');
+
+            // The cumulative row already sitting above `tr`, or null.
+            function cumRowFor(tr) {
+                var prev = tr.previousElementSibling;
+                return (prev && prev.classList.contains('wl-cum-row') &&
+                    prev.getAttribute('data-for') === tr.getAttribute('data-idx')) ? prev : null;
+            }
+            function removeCumFor(tr) {
+                var existing = cumRowFor(tr);
+                if (existing) existing.remove();
+            }
+            function insertCumFor(tr) {
+                if (cumRowFor(tr)) return;
+                var row = data.rows[+tr.getAttribute('data-idx')];
+                // Cumulative return through each column: compound the daily returns
+                // (skipping missing days), so cell i = ∏(1+r_k) for k≤i, minus 1.
+                var cum = document.createElement('tr');
+                cum.className = 'wl-cum-row';
+                cum.setAttribute('data-for', tr.getAttribute('data-idx'));
+                var factor = 1, seen = false;
+                var cells = '<td style="font-style:italic" title="Cumulative return">' + row.symbol + ' Σ</td>';
+                row.returns.forEach(function (r) {
+                    if (r == null) {
+                        cells += returnCell(seen ? (factor - 1) * 100 : null, true);
+                    } else {
+                        factor *= 1 + parseFloat(r);
+                        seen = true;
+                        cells += returnCell((factor - 1) * 100, true);
+                    }
+                });
+                cum.innerHTML = cells;
+                tbody.insertBefore(cum, tr);
+            }
+
+            panel.querySelectorAll('.wl-ret-row').forEach(function (tr) {
+                tr.addEventListener('click', function () {
+                    // Toggle this row's cumulative line.
+                    if (cumRowFor(tr)) removeCumFor(tr); else insertCumFor(tr);
+                });
+            });
+
+            // Master switch: show/hide the Σ row for every ticker at once.
+            document.getElementById('wl-cum-all').addEventListener('change', function () {
+                var on = this.checked;
+                panel.querySelectorAll('.wl-ret-row').forEach(function (tr) {
+                    if (on) insertCumFor(tr); else removeCumFor(tr);
+                });
+            });
+        }
+
+        function renderWatchlist(rows) {
+            var table = document.getElementById('watchlist-table');
+            var empty = document.getElementById('wl-empty');
+            var toggle = document.getElementById('wl-view-toggle');
+            var tbody = table.querySelector('tbody');
+            tbody.innerHTML = '';
+            if (!rows.length) {
+                table.style.display = 'none';
+                empty.style.display = 'block';
+                toggle.style.display = 'none';
+                return;
+            }
+            empty.style.display = 'none';
+            toggle.style.display = '';
+            // Only show the stats table when in stats view.
+            if (wlCurrentView === 'stats') {
+                table.style.display = '';
+            }
+
+            rows.forEach(function (r) {
+                var tr = document.createElement('tr');
+                tr.className = rowAlertClass(r);
+                var price = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
+                var pe = r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1);
+                // Blank (empty input) means "no alert for this trigger" — a disabled threshold
+                // is stored as 0, shown as an empty cell.
+                var highV = (r.highThresholdPct == null || parseFloat(r.highThresholdPct) <= 0) ? '' : parseFloat(r.highThresholdPct);
+                var moveV = (r.moveThresholdPct == null || parseFloat(r.moveThresholdPct) <= 0) ? '' : parseFloat(r.moveThresholdPct);
+                var symCell = '<td><b>' + r.symbol + '</b>' +
+                    (r.missingData ? ' <span class="muted" style="font-size:0.75rem">(fetching…)</span>' : '') +
+                    (r.held ? ' <span class="muted" title="You hold this" style="font-size:0.75rem">●</span>' : '') + '</td>';
+                tr.innerHTML = symCell +
+                    '<td>' + price + '</td>' +
+                    wlPctCell(r.todayPct, true) +
+                    wlPctCell(r.pct5d, true) +
+                    wlPctCell(r.pct30d, true) +
+                    wlPctCell(r.pctFromHigh, false) +
+                    wlPctCell(r.pctFromLow, false) +
+                    wlVolCell(r.vol5d) +
+                    wlVolCell(r.vol10d) +
+                    wlVolCell(r.vol30d) +
+                    wlVolCell(r.vol1y) +
+                    '<td>' + pe + '</td>' +
+                    wlGbpCell(r.held ? r.positionValueGbp : null, false) +
+                    wlGbpCell(r.held ? r.gainGbp : null, true) +
+                    '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="high" type="text" value="' + highV + '"/></td>' +
+                    '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="move" type="text" value="' + moveV + '"/></td>' +
+                    '<td class="wl-actions">' +
+                        '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="up" title="Move up">↑</button>' +
+                        '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="down" title="Move down">↓</button>' +
+                        '<button class="wl-remove" data-sym="' + r.symbol + '" title="Remove">×</button>' +
+                    '</td>';
+
+                // Row click opens the popup, except when interacting with inputs/buttons.
+                tr.addEventListener('click', function (e) {
+                    if (e.target.closest('input, button')) return;
+                    openWlModal(r);
+                });
+                tbody.appendChild(tr);
+            });
+
+            tbody.querySelectorAll('.wl-remove').forEach(function (btn) {
+                btn.addEventListener('click', function () { removeWatchlistSymbol(this.dataset.sym); });
+            });
+            tbody.querySelectorAll('.wl-move').forEach(function (btn) {
+                btn.addEventListener('click', function () { moveWatchlistSymbol(this.dataset.sym, this.dataset.dir); });
+            });
+            tbody.querySelectorAll('.wl-thr-input').forEach(function (inp) {
+                inp.addEventListener('change', function () {
+                    var sym = this.dataset.sym;
+                    var row = this.closest('tr');
+                    var high = row.querySelector('.wl-thr-input[data-kind="high"]').value.trim();
+                    var move = row.querySelector('.wl-thr-input[data-kind="move"]').value.trim();
+                    saveWatchlistThreshold(sym, high, move);
+                });
+            });
+
+            if (!wlSortAttached) { wlSortAttached = true; attachSort(table); }
+        }
+
+        function rowAlertClass(r) {
+            var up = r.moveDirection >= 0;
+            if (r.nearHigh && r.bigMove) return up ? 'wl-both-up' : 'wl-both-down';
+            if (r.bigMove) return up ? 'wl-move-up' : 'wl-move-down';
+            if (r.nearHigh) return 'wl-near-high';
+            return '';
+        }
+
+        function openWlModal(r) {
+            wlCurrentSymbol = r.symbol;
+            document.getElementById('wl-modal-title').textContent = r.symbol +
+                (r.currency ? ' · ' + r.currency : '');
+            var today = r.todayPct == null ? '—' : (parseFloat(r.todayPct) * 100).toFixed(1) + '%';
+            document.getElementById('wl-modal-sub').textContent =
+                (r.currentPrice == null ? '' : fmtPrice(r.currentPrice, r.currency) + '  ·  today ' + today);
+
+            var stats = document.getElementById('wl-modal-stats');
+            stats.innerHTML = '';
+            stats.appendChild(wlStat('Today', wlPctText(r.todayPct)));
+            stats.appendChild(wlStat('3d', wlPctText(r.pct3d)));
+            stats.appendChild(wlStat('5d', wlPctText(r.pct5d)));
+            stats.appendChild(wlStat('10d', wlPctText(r.pct10d)));
+            stats.appendChild(wlStat('30d', wlPctText(r.pct30d)));
+            stats.appendChild(wlStat('52wk high', r.week52High == null ? '—' : fmtPrice(r.week52High, r.currency)));
+            stats.appendChild(wlStat('52wk low', r.week52Low == null ? '—' : fmtPrice(r.week52Low, r.currency)));
+            stats.appendChild(wlStat('% vs high', wlPctText(r.pctFromHigh)));
+            stats.appendChild(wlStat('P/E', r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1)));
+            stats.appendChild(wlStat('Beta', r.beta == null ? '—' : parseFloat(r.beta).toFixed(2)));
+            if (r.held) {
+                stats.appendChild(wlStat('Position', r.positionValueGbp == null ? '—' : fmtPrice(r.positionValueGbp, 'GBP')));
+                stats.appendChild(wlStat('Gain', r.gainGbp == null ? '—' : fmtPrice(r.gainGbp, 'GBP')));
+            }
+            loadWlVol(r.symbol, stats);
+
+            // Reset fundamentals section collapsed.
+            var fbody = document.getElementById('wl-fund-body');
+            fbody.style.display = 'none';
+            document.getElementById('wl-fund-toggle').classList.remove('open');
+            renderWlFundamentals(r.symbol);
+
+            // Default window 5D.
+            document.querySelectorAll('#wl-window-toggle button').forEach(function (b) {
+                b.classList.toggle('active', b.dataset.window === '5D');
+            });
+            document.getElementById('wl-modal').classList.add('open');
+            loadWlSeries(r.symbol, '5D');
+        }
+
+        // Realized-vol term structure (5D/10D intraday-derived, 30D/1Y daily). Appended
+        // asynchronously; guarded against a stale response landing after the user switched rows.
+        function loadWlVol(symbol, statsEl) {
+            fetch('/watchlist/vol?symbol=' + encodeURIComponent(symbol))
+                .then(function (r) { return r.json(); })
+                .then(function (v) {
+                    if (wlCurrentSymbol !== symbol) return;
+                    statsEl.appendChild(wlStat('Vol 5D', wlVolText(v.vol5d)));
+                    statsEl.appendChild(wlStat('Vol 10D', wlVolText(v.vol10d)));
+                    statsEl.appendChild(wlStat('Vol 30D', wlVolText(v.vol30d)));
+                    statsEl.appendChild(wlStat('Vol 1Y', wlVolText(v.vol1y)));
+                })
+                .catch(function () { /* leave stats without vol */ });
+        }
+
+        function wlStat(label, value) {
+            var d = document.createElement('div');
+            d.className = 'snap-kv';
+            d.innerHTML = '<span class="k">' + label + '</span><span class="v">' + value + '</span>';
+            return d;
+        }
+
+        function wlPctText(frac) {
+            if (frac == null) return '—';
+            var n = parseFloat(frac) * 100;
+            return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+        }
+
+        // Volatility is always positive — no leading sign.
+        function wlVolText(frac) {
+            return frac == null ? '—' : (parseFloat(frac) * 100).toFixed(1) + '%';
+        }
+
+        function closeWlModal() {
+            document.getElementById('wl-modal').classList.remove('open');
+            wlCurrentSymbol = null;
+            if (wlChart) { wlChart.destroy(); wlChart = null; }
+        }
+
+        function loadWlSeries(symbol, window) {
+            fetch('/watchlist/series?symbol=' + encodeURIComponent(symbol) + '&window=' + window)
+                .then(function (r) { return r.json(); })
+                .then(function (s) { renderWlChart(s); })
+                .catch(function () { /* leave prior chart */ });
+        }
+
+        function wlParseTs(ts) {
+            // Daily points are date-only ('YYYY-MM-DD'); anchor at local noon so the label
+            // doesn't slip a day across time zones. Intraday points are full ISO instants.
+            return /^\d{4}-\d{2}-\d{2}$/.test(ts) ? new Date(ts + 'T12:00:00') : new Date(ts);
+        }
+
+        function wlAxisLabel(ts, oneDay) {
+            var d = wlParseTs(ts);
+            return oneDay
+                ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        }
+
+        function renderWlChart(s) {
+            var ctx = document.getElementById('wl-chart').getContext('2d');
+            var pts = s.points || [];
+            var labels = pts.map(function (p) { return p.t; });
+            var data = pts.map(function (p) { return parseFloat(p.p); });
+            var isIntraday = s.granularity === 'intraday';
+            var oneDay = s.window === '1D';
+            if (wlChart) { wlChart.destroy(); }
+            // Category (evenly-spaced) axis rather than a time axis: this compresses out the
+            // overnight/weekend gaps so multi-day charts have no long diagonal lines between
+            // sessions — the standard finance-chart look.
+            wlChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: labels, datasets: [{
+                    data: data, borderColor: '#1f77b4', borderWidth: 1.2,
+                    pointRadius: 0, fill: false, tension: 0
+                }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: false,
+                    scales: {
+                        x: { type: 'category',
+                            ticks: { maxTicksLimit: 8, autoSkip: true, maxRotation: 0,
+                                callback: function (value, index) { return wlAxisLabel(labels[index], oneDay); } } },
+                        y: { ticks: { maxTicksLimit: 6 } }
+                    },
+                    plugins: { legend: { display: false },
+                        tooltip: { callbacks: { title: function (items) {
+                            var ts = labels[items[0].dataIndex];
+                            var d = wlParseTs(ts);
+                            return isIntraday
+                                ? d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                                : d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+                        } } } }
+                }
+            });
+        }
+
+        function renderWlFundamentals(symbol) {
+            var body = document.getElementById('wl-fund-body');
+            function render() {
+                var q = wlFundamentals ? wlFundamentals[symbol] : null;
+                if (!q || q.missing) {
+                    body.innerHTML = '<p class="muted">No fundamentals cached for ' + symbol +
+                        ' yet — the background refresh may still be running, or Yahoo has no data for this listing.</p>';
+                    return;
+                }
+                var sector = (q.labels && q.labels.sector) || '';
+                var isFinancial = /financial|insurance|bank/i.test(sector);
+                // Core valuation not already in the stats strip, then the shared grouped
+                // renderer (same one the Snapshot-diff modal uses), laid out in columns.
+                var core = '<div class="snap-group"><div class="snap-group-title">Key</div>' +
+                        wlKv('Forward P/E', fmtNumOrDash(q.forwardPe, 1)) +
+                        wlKv('PEG', fmtNumOrDash(q.pegRatio, 2)) +
+                        wlKv('Market cap', q.marketCap == null ? '—' : fmtMarketCap(q.marketCap, q.currency)) +
+                        wlKv('Target (mean)', q.targetMeanPrice == null ? '—' : fmtPrice(q.targetMeanPrice, q.currency)) +
+                        '</div>';
+                body.innerHTML = '<div class="wl-fund-cols">' + core + fundamentalsHtml(q, isFinancial) + '</div>';
+            }
+            if (wlFundamentals) { render(); return; }
+            body.innerHTML = '<p class="muted">Loading fundamentals…</p>';
+            fetch('/portfolio-fundamentals').then(function (r) { return r.json(); })
+                .then(function (snap) {
+                    wlFundamentals = {};
+                    (snap.rows || []).forEach(function (row) { wlFundamentals[row.symbol] = row; });
+                    render();
+                })
+                .catch(function () { body.innerHTML = '<p class="muted">Could not load fundamentals.</p>'; });
+        }
+
+        function wlKv(label, value) {
+            return '<div class="snap-kv"><span class="k">' + label + '</span><span class="v">' + value + '</span></div>';
+        }
+
+        function fmtNumOrDash(v, dp) {
+            return v == null ? '—' : parseFloat(v).toFixed(dp);
+        }
+
+        // ================= Swing stats tab =================
+        var swReport = null;
+        var swCorrChart = null;
+        var swCorrMode = '30';
+        var swInit = false;
+
+        function setupSwing() {
+            if (swInit) return;
+            swInit = true;
+            document.getElementById('sw-run').addEventListener('click', runSwing);
+            document.getElementById('sw-save').addEventListener('click', saveSwingList);
+            document.getElementById('sw-backfill').addEventListener('click', backfillSwing);
+            document.getElementById('sw-detail-symbol').addEventListener('change', renderSwingDetail);
+            document.querySelectorAll('#sw-corr-toggle button').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    swCorrMode = b.dataset.corr;
+                    document.querySelectorAll('#sw-corr-toggle button').forEach(function (x) {
+                        x.classList.toggle('active', x === b);
+                    });
+                    renderSwingCorr();
+                });
+            });
+        }
+
+        function swVal(id) { return (document.getElementById(id).value || '').trim(); }
+        function swSet(id, v) { document.getElementById(id).value = v; }
+        function swStatus(msg) { document.getElementById('sw-status').textContent = msg || ''; }
+
+        function buildSwingQuery() {
+            var map = {
+                symbols: swVal('sw-symbols'), cluster: swVal('sw-cluster'), years: swVal('sw-years'),
+                sigmas: swVal('sw-sigmas'), dropPcts: swVal('sw-drops'), flushPcts: swVal('sw-flushpct'),
+                flushDays: swVal('sw-flushdays'), horizons: swVal('sw-horizons'), tp: swVal('sw-tp'),
+                sl: swVal('sw-sl'), timeStops: swVal('sw-timestops'),
+                barrierDays: swVal('sw-barrierdays'), barrierPct: swVal('sw-barrierpct')
+            };
+            var parts = [];
+            Object.keys(map).forEach(function (k) {
+                if (map[k] !== '') parts.push(k + '=' + encodeURIComponent(map[k]));
+            });
+            return parts.join('&');
+        }
+
+        function runSwing() {
+            swStatus('Computing…');
+            fetch('/swing?' + buildSwingQuery())
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (rep) {
+                    swReport = rep;
+                    fillSwingInputs(rep.config);
+                    document.getElementById('sw-empty').style.display = 'none';
+                    renderSwingVol();
+                    populateSwingDetailSelect();
+                    renderSwingDetail();
+                    renderSwingCorr();
+                    document.getElementById('sw-vol-wrap').style.display = 'block';
+                    document.getElementById('sw-detail-wrap').style.display = 'block';
+                    document.getElementById('sw-corr-wrap').style.display = 'block';
+                    swStatus('Updated ' + new Date().toLocaleTimeString());
+                })
+                .catch(function (e) { swStatus('Error: ' + e.message); });
+        }
+
+        function saveSwingList() {
+            var body = 'symbols=' + encodeURIComponent(swVal('sw-symbols')) +
+                       '&cluster=' + encodeURIComponent(swVal('sw-cluster'));
+            swStatus('Saving…');
+            fetch('/swing/symbols', {
+                method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body
+            }).then(function (r) { return r.json(); })
+              .then(function (res) {
+                  swSet('sw-symbols', (res.symbols || []).join(','));
+                  swSet('sw-cluster', (res.cluster || []).join(','));
+                  swStatus('Saved. Backfilling new names in the background…');
+              }).catch(function (e) { swStatus('Save failed: ' + e.message); });
+        }
+
+        function backfillSwing() {
+            swStatus('Backfill started (this can take a minute per new name)…');
+            fetch('/swing/backfill', { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function () { swStatus('Backfill running. Re-run once prices land.'); })
+                .catch(function (e) { swStatus('Backfill failed: ' + e.message); });
+        }
+
+        function fillSwingInputs(cfg) {
+            var pctList = function (arr) { return arr.map(function (x) { return +(x * 100).toFixed(4); }).join(','); };
+            swSet('sw-symbols', cfg.symbols.join(','));
+            swSet('sw-cluster', cfg.cluster.join(','));
+            swSet('sw-years', cfg.years);
+            swSet('sw-sigmas', cfg.sigmaMultiples.join(','));
+            swSet('sw-drops', pctList(cfg.absDrops));
+            swSet('sw-flushpct', pctList(cfg.flushThresholds));
+            swSet('sw-flushdays', cfg.flushDays.join(','));
+            swSet('sw-horizons', cfg.horizons.join(','));
+            swSet('sw-tp', +(cfg.takeProfit * 100).toFixed(4));
+            swSet('sw-sl', +(cfg.stopLoss * 100).toFixed(4));
+            swSet('sw-timestops', cfg.timeStops.join(','));
+            swSet('sw-barrierdays', cfg.barrierFlushDays);
+            swSet('sw-barrierpct', +(cfg.barrierFlushDrop * 100).toFixed(4));
+        }
+
+        // ---- formatting helpers ----
+        function swPctCell(frac, dp) {
+            if (frac == null) return '—';
+            var v = parseFloat(frac) * 100;
+            var cls = v > 0 ? 'swing-pos' : (v < 0 ? 'swing-neg' : '');
+            return '<span class="' + cls + '">' + (v > 0 ? '+' : '') + v.toFixed(dp == null ? 2 : dp) + '%</span>';
+        }
+        function swPct(frac, dp) { return frac == null ? '—' : (parseFloat(frac) * 100).toFixed(dp == null ? 1 : dp) + '%'; }
+        function swNum(v, dp) { return v == null ? '—' : parseFloat(v).toFixed(dp == null ? 2 : dp); }
+
+        function renderSwingVol() {
+            var floor = swReport.config.smallNFloor;
+            var windows = (swReport.perSymbol.find(function (s) { return !s.missingData; }) || {}).realizedVol
+                || swReport.pooled.realizedVol || [];
+            var head = '<thead><tr><th data-sort="str">Symbol</th>';
+            windows.forEach(function (w) {
+                head += '<th data-sort="num">' + w.window + 'd daily</th><th data-sort="num">' + w.window + 'd ann</th>';
+            });
+            head += '</tr></thead>';
+            var body = '<tbody>';
+            var rows = swReport.perSymbol.concat([swReport.pooled]);
+            rows.forEach(function (s) {
+                body += '<tr><td class="lbl"><b>' + s.symbol + '</b></td>';
+                if (s.missingData) {
+                    body += '<td colspan="' + (windows.length * 2) + '" class="swing-smalln">no price history — Backfill</td></tr>';
+                    return;
+                }
+                s.realizedVol.forEach(function (v) {
+                    var flag = v.smallN ? ' swing-smalln-cell' : '';
+                    body += '<td class="' + flag.trim() + '">' + swPct(v.dailySigma, 2) + '</td>';
+                    body += '<td class="' + flag.trim() + '">' + swPct(v.annualSigma, 1) + '</td>';
+                });
+                body += '</tr>';
+            });
+            body += '</tbody>';
+            var table = document.getElementById('sw-vol-table');
+            table.innerHTML = head + body;
+            // innerHTML replaces the thead too, so the header cells (and their arrows)
+            // are fresh every render — re-attach the sort handler each time.
+            attachSort(table);
+        }
+
+        function populateSwingDetailSelect() {
+            var sel = document.getElementById('sw-detail-symbol');
+            var prev = sel.value;
+            var opts = '<option value="__POOL__">CLUSTER (pooled)</option>';
+            swReport.perSymbol.forEach(function (s) {
+                if (s.missingData) return;
+                opts += '<option value="' + s.symbol + '">' + s.symbol + '</option>';
+            });
+            sel.innerHTML = opts;
+            sel.value = prev && sel.querySelector('option[value="' + prev.replace(/"/g, '') + '"]') ? prev : '__POOL__';
+        }
+
+        function renderSwingDetail() {
+            if (!swReport) return;
+            var sel = document.getElementById('sw-detail-symbol').value;
+            var pooled = sel === '__POOL__';
+            var rep = pooled ? swReport.pooled
+                : swReport.perSymbol.find(function (s) { return s.symbol === sel; });
+            var host = document.getElementById('sw-detail');
+            if (!rep || rep.missingData) { host.innerHTML = '<p class="muted">No data.</p>'; return; }
+            host.innerHTML = swingSpanHeader(rep, pooled) +
+                '<div class="swing-regimes">' +
+                swingRegimeBlock('Full history', rep.full, pooled) +
+                swingRegimeBlock('Trailing 6 months', rep.trailing6m, pooled) +
+                '</div>';
+        }
+
+        // Per-symbol data-span line + a short-history warning (§9 transparency: what "full history" means).
+        function swingSpanHeader(rep, pooled) {
+            if (pooled) {
+                return '<div class="swing-span">Pooled <b>CLUSTER</b> — ' + rep.barCount +
+                    ' contributing member' + (rep.barCount === 1 ? '' : 's') +
+                    '. Pooled cells show <b>events / episodes</b> (distinct event dates); cells with ' +
+                    'fewer than ' + swReport.config.episodeFloor + ' episodes are ' +
+                    '<span class="swing-smalln">dimmed</span>.</div>';
+            }
+            var yrs = (rep.yearsAvailable || 0).toFixed(1);
+            var span = '<div class="swing-span">Data: <b>' + rep.symbol + '</b> ' + rep.from + ' → ' +
+                rep.to + ' (' + yrs + ' yrs, ' + rep.barCount + ' bars).';
+            if (rep.shortHistory) {
+                span += ' <span class="swing-warn">⚠ less than the requested ' + rep.requestedYears +
+                    'y — "full history" here is only ' + yrs + 'y (recent listing/spin-off).</span>';
+            }
+            return span + '</div>';
+        }
+
+        function swingRegimeBlock(label, regime, pooled) {
+            if (!regime) return '';
+            var floor = swReport.config.smallNFloor;
+            var head = '<div class="swing-regime-head">' + label +
+                '<span class="muted swing-sub"> · window from ' + (regime.cutoff || 'series start') + '</span></div>';
+            return '<div class="swing-block swing-regime-col">' + head +
+                   swingForwardTable(regime.forward, floor, pooled) +
+                   swingContinuationTable(regime.forward, floor, pooled) +
+                   swingFlushTable(regime.flushes, floor, pooled) +
+                   swingBarrierSection(regime.barriers, floor, pooled) + '</div>';
+        }
+
+        function smallNTag(n, floor) {
+            return n < floor ? '<span class="swing-smalln"> (n=' + n + ')</span>' : '';
+        }
+
+        // "events / episodes" for pooled cells; plain count otherwise. Dims when episodes < floor.
+        function epCell(count, episodes, thinEpisodes, pooled) {
+            if (!pooled) return '' + count;
+            var cls = thinEpisodes ? ' class="swing-smalln"' : '';
+            return count + '<span' + cls + '> / ' + episodes + ' ep</span>';
+        }
+
+        function swingForwardTable(fwd, floor, pooled) {
+            var hs = fwd.baseline.map(function (b) { return b.horizon; });
+            var html = '<div class="swing-sub">§2 baseline vs §3 down-day conditional — cell = mean fwd return, (％ positive); median on hover</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Trigger</th><th>' +
+                    (pooled ? 'n / ep' : 'n') + '</th>';
+            hs.forEach(function (h) { html += '<th>+' + h + 'd</th>'; });
+            html += '</tr></thead><tbody>';
+            // baseline row
+            html += '<tr class="swing-baseline"><td class="lbl">baseline (all days)</td><td>' + fwd.baselineDays + '</td>';
+            fwd.baseline.forEach(function (st) { html += forwardCell(st); });
+            html += '</tr>';
+            fwd.conditional.forEach(function (blk) {
+                var dim = blk.smallN ? ' class="swing-smalln-cell"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + blk.label + smallNTag(blk.triggerDays, floor) +
+                        '</td><td>' + epCell(blk.triggerDays, blk.episodes, blk.thinEpisodes, pooled) + '</td>';
+                blk.horizons.forEach(function (st) { html += forwardCell(st); });
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function forwardCell(st) {
+            if (!st || st.n === 0) return '<td>—</td>';
+            var title = 'median ' + swPct(st.median, 2) + ', %pos ' + swPct(st.pctPositive, 0) + ', n=' + st.n;
+            return '<td title="' + title + '">' + swPctCell(st.mean, 2) +
+                   ' <span class="muted">(' + swPct(st.pctPositive, 0) + ')</span></td>';
+        }
+
+        function swingContinuationTable(fwd, floor, pooled) {
+            var html = '<div class="swing-sub">§4 continuation — does the first red day keep falling?</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Trigger</th><th>' +
+                    (pooled ? 'n / ep' : 'n') + '</th>' +
+                    '<th>P(next ≤ 0)</th><th>P(next ≤ −3%)</th></tr></thead><tbody>';
+            html += '<tr class="swing-baseline"><td class="lbl">baseline (all days)</td><td>' + fwd.baselineDays +
+                    '</td><td>' + swPct(fwd.basePDown, 0) + '</td><td>' + swPct(fwd.basePBig, 0) + '</td></tr>';
+            fwd.continuation.forEach(function (c) {
+                var dim = c.smallN ? ' class="swing-smalln-cell"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + c.label + smallNTag(c.triggerDays, floor) + '</td><td>' +
+                        epCell(c.triggerDays, c.episodes, c.thinEpisodes, pooled) +
+                        '</td><td>' + swPct(c.pDown, 0) + '</td><td>' + swPct(c.pBig, 0) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function swingFlushTable(flushes, floor, pooled) {
+            var cooldown = swReport.config.flushCooldown;
+            var html = '<div class="swing-sub">§5 flush events — drawdown after the flush, time to +target, and which barrier hits first ' +
+                    'over the ' + swReport.config.followSessions + '-session follow window. ' +
+                    'Events deduped by a ' + cooldown + '-session cooldown; ' +
+                    '<b>events = TP + SL + neither + ambiguous + open</b>.</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">Flush</th><th>' +
+                    (pooled ? 'events / ep' : 'events') + '</th>' +
+                    '<th>further DD (med)</th><th>DD q1…q3</th><th>days→target (med)</th>' +
+                    '<th title="high traded ≥ +target first">TP</th>' +
+                    '<th title="low traded ≤ −stop first">SL</th>' +
+                    '<th title="full window, neither barrier touched">neither</th>' +
+                    '<th title="both barriers touched in the same session">ambig</th>' +
+                    '<th title="follow window runs past the last data date — open/censored">open</th></tr></thead><tbody>';
+            flushes.forEach(function (f) {
+                var dim = f.smallN ? ' class="swing-smalln-cell"' : '';
+                var reconciles = (f.tpFirst + f.slFirst + f.neither + f.ambiguous + f.open) === f.eventCount;
+                var evtCell = epCell(f.eventCount, f.episodes, f.thinEpisodes, pooled) +
+                    (reconciles ? '' : ' <span class="swing-warn">!</span>');
+                var daysTip = f.targetCensored > 0 ? ' title="' + f.targetCensored + ' full-window events never reached +target"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + f.label + smallNTag(f.eventCount, floor) + '</td><td>' + evtCell + '</td>' +
+                        '<td>' + swPct(distMed(f.furtherDrawdown), 1) + '</td>' +
+                        '<td>' + swPct(f.furtherDrawdown.q1, 1) + '…' + swPct(f.furtherDrawdown.q3, 1) + '</td>' +
+                        '<td' + daysTip + '>' + swNum(distMed(f.daysToTarget), 1) + '</td>' +
+                        '<td>' + f.tpFirst + '</td><td>' + f.slFirst + '</td><td>' + f.neither + '</td>' +
+                        '<td>' + f.ambiguous + '</td><td>' + f.open + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function distMed(d) { return d && d.n > 0 ? d.median : null; }
+
+        // §6 — barrier accounting (flush vs all-days placebo) + matched-random bootstrap, plus the
+        // conventions the numbers depend on. `comparisons` is a list of {timeStop, flush, placebo, bootstrap}.
+        function swingBarrierSection(comparisons, floor, pooled) {
+            if (!comparisons || !comparisons.length) return '';
+            var cfg = swReport.config;
+            var tp = (cfg.takeProfit * 100).toFixed(0);
+            var sl = (cfg.stopLoss * 100).toFixed(0);
+            var note = '<div class="swing-sub">§6 barrier / time-stop simulation — entry at each ' +
+                cfg.barrierFlushDays + 'd ≤ −' + (cfg.barrierFlushDrop * 100).toFixed(0) + '% flush close.' +
+                ' <b>Touch convention</b>: intraday OHLC — TP if session high ≥ +' + tp + '%, SL if low ≤ −' + sl +
+                '%; fills at the barrier, time-stop exits at the close. <b>Ambiguous</b> = both barriers touched ' +
+                'in one session (excluded from mean ret; the <i>cons ret</i> column books each as a stop = a ' +
+                'pessimistic bound). <b>Open</b> = the time-stop window runs past the last data date (censored, ' +
+                'never counted as an outcome). <b>Overlap</b>: non-overlapping — the next entry waits until the ' +
+                'prior trade resolves. <b>events = TP + SL + Time + Ambiguous + Open</b>.</div>';
+
+            // Accounting table: flush row-group then placebo row-group.
+            var head = '<table class="swing-tbl"><thead><tr><th class="lbl">Source · N-stop</th><th>' +
+                (pooled ? 'events / ep' : 'events') + '</th>' +
+                '<th>TP</th><th>SL</th><th>Time</th><th>Amb</th><th>Open</th>' +
+                '<th title="TP ÷ closed">%TP</th><th>mean ret</th>' +
+                '<th title="ambiguous booked as SL">cons ret</th><th>mean days</th><th>ret q1…q3</th></tr></thead><tbody>';
+            var body = '';
+            comparisons.forEach(function (c) {
+                body += barrierAccountingRow('flush ' + c.timeStop + 'd', c.flush, floor, pooled, false);
+            });
+            comparisons.forEach(function (c) {
+                body += barrierAccountingRow('placebo ' + c.timeStop + 'd (all days)', c.placebo, floor, pooled, true);
+            });
+            var acct = head + body + '</tbody></table>';
+
+            return note + acct + swingBootstrapTable(comparisons, cfg);
+        }
+
+        // %TP is over the CLOSED set (events minus open); computed here since it isn't a serialized field.
+        function barPctTp(b) {
+            var closed = b.tpFirst + b.slFirst + b.timeCount + b.ambiguous;
+            return closed === 0 ? null : b.tpFirst / closed;
+        }
+
+        function barrierAccountingRow(label, b, floor, pooled, isPlacebo) {
+            var reconciles = (b.tpFirst + b.slFirst + b.timeCount + b.ambiguous + b.open) === b.events;
+            var cls = isPlacebo ? ' class="swing-placebo-row"' : (b.smallN ? ' class="swing-smalln-cell"' : '');
+            var evt = (isPlacebo ? '' + b.events : epCell(b.events, b.episodes, b.thinEpisodes, pooled)) +
+                (reconciles ? '' : ' <span class="swing-warn">!</span>');
+            return '<tr' + cls + '><td class="lbl">' + label + (isPlacebo ? '' : smallNTag(b.events, floor)) + '</td>' +
+                '<td>' + evt + '</td>' +
+                '<td>' + b.tpFirst + '</td><td>' + b.slFirst + '</td><td>' + b.timeCount + '</td>' +
+                '<td>' + b.ambiguous + '</td><td>' + b.open + '</td>' +
+                '<td>' + swPct(barPctTp(b), 0) + '</td>' +
+                '<td>' + swPctCell(b.meanReturn, 2) + '</td>' +
+                '<td>' + swPctCell(b.meanReturnConservative, 2) + '</td>' +
+                '<td>' + swNum(b.meanHoldingDays, 1) + '</td>' +
+                '<td>' + swPct(b.returnDist.q1, 1) + '…' + swPct(b.returnDist.q3, 1) + '</td></tr>';
+        }
+
+        // Bootstrap: is the flush result distinguishable from random timing of the same count?
+        function swingBootstrapTable(comparisons, cfg) {
+            var iters = cfg.bootstrapIterations;
+            var html = '<div class="swing-sub" style="margin-top:0.5rem;">§6 control — matched random bootstrap (' +
+                iters + '× per stop): draw the same number of entries at random dates, run the identical sim. ' +
+                'A flush figure inside the bootstrap IQR (percentile 25–75, <span class="swing-smalln">dimmed</span>) ' +
+                'is <b>indistinguishable from regime drift</b>; outside it (highlighted) the trigger adds signal.</div>';
+            html += '<table class="swing-tbl"><thead><tr><th class="lbl">N-stop</th><th>pool</th><th>draws</th>' +
+                '<th>%TP median</th><th>%TP 5–95</th><th>flush %TP (pctile)</th>' +
+                '<th>ret median</th><th>ret 5–95</th><th>flush ret (pctile)</th></tr></thead><tbody>';
+            comparisons.forEach(function (c) {
+                var bs = c.bootstrap;
+                var dim = bs.smallN ? ' class="swing-smalln-cell"' : '';
+                html += '<tr' + dim + '><td class="lbl">' + bs.timeStop + 'd</td>' +
+                    '<td>' + bs.poolSize + '</td><td>' + bs.drawN + '</td>' +
+                    '<td>' + swPct(bs.tpMedian, 0) + '</td>' +
+                    '<td>' + swPct(bs.tpP05, 0) + '…' + swPct(bs.tpP95, 0) + '</td>' +
+                    '<td>' + rankBadge(swPct(bs.actualTpPct, 0), bs.tpPercentileRank) + '</td>' +
+                    '<td>' + swPctCell(bs.retMedian, 2) + '</td>' +
+                    '<td>' + swPct(bs.retP05, 1) + '…' + swPct(bs.retP95, 1) + '</td>' +
+                    '<td>' + rankBadge(swPctCellStr(bs.actualMeanReturn), bs.retPercentileRank) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function swPctCellStr(frac) { return frac == null ? '—' : swPctCell(frac, 2); }
+
+        // Value + its bootstrap percentile rank; dim when inside the IQR (adds nothing), highlight outside.
+        function rankBadge(valueHtml, rank) {
+            if (rank == null) return valueHtml;
+            var pctile = Math.round(rank * 100);
+            var inside = rank >= 0.25 && rank <= 0.75;
+            var cls = inside ? 'swing-smalln' : 'swing-rank-hit';
+            return valueHtml + ' <span class="' + cls + '" title="percentile rank within the bootstrap">(p' + pctile + ')</span>';
+        }
+
+        // ---- §7 correlation ----
+        function renderSwingCorr() {
+            if (!swReport) return;
+            var c = swReport.correlation;
+            var syms = c.symbols || [];
+            var matrix = swCorrMode === '60' ? c.matrix60 : (swCorrMode === 'down' ? c.downDayMatrix : c.matrix30);
+            var caption = swCorrMode === 'down'
+                ? 'Tail correlation: ' + c.downDayCount + ' days where the cluster mean return ≤ −' + (c.downDayThreshold * 100).toFixed(0) + '%'
+                : 'Latest rolling ' + (swCorrMode === '60' ? c.window60 : c.window30) + '-day pairwise correlation';
+            document.getElementById('sw-corr-caption').textContent = caption;
+
+            var table = document.getElementById('sw-corr-heatmap');
+            table.innerHTML = '';
+            if (!syms.length || !matrix) { table.innerHTML = '<tbody><tr><td class="muted">No cluster data.</td></tr></tbody>'; }
+            else {
+                var thead = '<thead><tr><th class="corr-axis"></th>';
+                syms.forEach(function (s) { thead += '<th class="corr-axis">' + s + '</th>'; });
+                thead += '</tr></thead>';
+                var tbody = '<tbody>';
+                matrix.forEach(function (row, i) {
+                    tbody += '<tr><th class="corr-axis">' + syms[i] + '</th>';
+                    row.forEach(function (cell) {
+                        if (cell == null) { tbody += '<td class="muted">—</td>'; return; }
+                        var v = parseFloat(cell);
+                        var col = corrColour(v);
+                        tbody += '<td style="background:' + col.bg + ';color:' + col.fg + '">' + v.toFixed(2) + '</td>';
+                    });
+                    tbody += '</tr>';
+                });
+                tbody += '</tbody>';
+                table.innerHTML = thead + tbody;
+            }
+            renderSwingCorrChart(c);
+        }
+
+        function renderSwingCorrChart(c) {
+            if (swCorrChart) swCorrChart.destroy();
+            var pts = c.avgPairwise || [];
+            if (!pts.length) return;
+            var ds = function (key, colour) {
+                return {
+                    label: key === 'avg30' ? c.window30 + 'd' : c.window60 + 'd',
+                    data: pts.filter(function (p) { return p[key] != null; })
+                             .map(function (p) { return { x: p.date, y: parseFloat(p[key]) }; }),
+                    borderColor: colour, backgroundColor: 'transparent',
+                    borderWidth: 1.4, pointRadius: 0, tension: 0.1
+                };
+            };
+            swCorrChart = new Chart(document.getElementById('sw-corr-chart').getContext('2d'), {
+                type: 'line',
+                data: { datasets: [ds('avg30', '#1f77b4'), ds('avg60', '#ff7f0e')] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                    scales: {
+                        x: { type: 'time', time: { unit: 'month' } },
+                        y: { suggestedMin: 0, suggestedMax: 1, title: { display: true, text: 'avg pairwise ρ' } }
+                    },
+                    plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } }
+                }
+            });
         }
 
     }());

@@ -135,6 +135,26 @@ public class AnalysisController {
     }
 
     /**
+     * Add a not-held ticker to the fundamentals snapshot so its Yahoo fundamentals show up
+     * alongside held names. Fetches synchronously (one quoteSummary call), then returns the
+     * refreshed snapshot so the UI can render the new row immediately. Blank or bond/CASH
+     * symbols are rejected via {@link GlobalExceptionAdvice}.
+     */
+    @PostMapping("/portfolio-fundamentals/add")
+    @ResponseBody
+    public Snapshot addFundamentalsSymbol(@RequestParam("symbol") String symbol) {
+        portfolioFundamentalsService.addExtra(symbol);
+        return portfolioFundamentalsService.snapshot();
+    }
+
+    @PostMapping("/portfolio-fundamentals/remove")
+    @ResponseBody
+    public Snapshot removeFundamentalsSymbol(@RequestParam("symbol") String symbol) {
+        portfolioFundamentalsService.removeExtra(symbol);
+        return portfolioFundamentalsService.snapshot();
+    }
+
+    /**
      * Backtest a fixed basket against the actual contribution history. Symbols and weights
      * arrive as two parallel lists from the form (e.g. {@code symbols=GOOG&symbols=EQQQ}).
      * Weights are percentages — converted to fractions here so the service can stay in

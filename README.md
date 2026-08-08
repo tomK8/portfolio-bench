@@ -14,7 +14,7 @@ through a server-side Thymeleaf + htmx + Chart.js UI.
 
 ## TL;DR
 
-Java 25 / Spring Boot 3 web app. ~18.5 kLOC, **250+ unit tests**, clean
+Java 25 / Spring Boot 3 web app. ~18.5 kLOC, **330+ unit tests**, clean
 ports-and-adapters layering with Spring confined to `web` + `config`. SQLite via JDBC
 (no ORM), Apache POI for Excel I/O, server-rendered UI with no frontend build
 pipeline. Single Maven module. Built solo with Claude as an AI pair programmer.
@@ -77,8 +77,8 @@ architecture document.
 
 ## Quality signals
 
-- **250+ unit tests** covering parsers, dedup, FIFO, dividend attribution, FX, returns,
-  correlations, concentration. The single live-API test is tagged `@Tag("integration")`
+- **330+ unit tests** covering parsers, dedup, FIFO, dividend attribution, FX, returns,
+  correlations, concentration, service-layer valuation, and repository read queries. The single live-API test is tagged `@Tag("integration")`
   and excluded from default runs; Yahoo parsing is covered by a captured JSON fixture.
 - All fixtures under `src/test/resources/` are **synthetic** — no real brokerage
   exports have ever been committed.

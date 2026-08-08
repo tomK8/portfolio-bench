@@ -55,7 +55,7 @@ class HistoricalScenarioServiceTest {
         IntradayPriceRepository intraday = new IntradayPriceRepository(cf);
         PriceHistoryRepository prices = new PriceHistoryRepository(cf);
         YahooTickerMap tickerMap = new YahooTickerMap();
-        SyncFromCashService sync = new SyncFromCashService(cash, intraday, FLAT_USD_LIVE, tickerMap);
+        SyncFromCashService sync = new SyncFromCashService(cash, intraday, FLAT_USD_LIVE, tickerMap, prices);
         return new HistoricalScenarioService(sync, prices, FLAT_USD_HIST, tickerMap, kv);
     }
 

@@ -127,7 +127,7 @@ class PortfolioRiskServiceTest {
             else v = new BigDecimal("-0.10");
             dd.add(new DrawdownPoint(base.plusDays(i).toString(), v));
         }
-        Summary summary = new Summary(null, null, null, null,
+        Summary summary = new Summary(null, null, null, null, null, null, null, null,
                 new BigDecimal("-0.30"), base.plusDays(10).toString());
         List<ReturnPoint> growth = flatGrowth(base, 50, "1.0");
         ReturnTimeline rt = new ReturnTimeline(growth, List.of(), dd, List.of(), summary);
@@ -145,7 +145,7 @@ class PortfolioRiskServiceTest {
         for (int i = 1; i <= 20; i++) {
             dd.add(new DrawdownPoint(base.plusDays(i).toString(), new BigDecimal("-0.20")));
         }
-        Summary summary = new Summary(null, null, null, null,
+        Summary summary = new Summary(null, null, null, null, null, null, null, null,
                 new BigDecimal("-0.20"), base.plusDays(10).toString());
         List<ReturnPoint> growth = flatGrowth(base, 30, "1.0");
         ReturnTimeline rt = new ReturnTimeline(growth, List.of(), dd, List.of(), summary);

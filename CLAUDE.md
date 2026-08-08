@@ -87,6 +87,28 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   when `to == today`, daily close + historical FX otherwise — so totals reconcile with
   the cash-ledger view.
 
+- **Watchlist** — `GET /watchlist` → JSON, rendered as a table under the Tools group. A
+  user-maintained set of symbols (owned or not — *not* unioned with holdings, kept lean by
+  design) for volatility trading. Each row joins live price + today's move + trailing
+  momentum (5d/30d) + a realized-vol term structure (5D/10D/30D/1Y annualised) + 52-wk
+  high/low distances + P/E/beta
+  + position/gain (blank when not held). Two per-symbol alert triggers with editable
+  thresholds: proximity to the 52-week high, and |today's move|. Row colour = alert state
+  (green/red today-move by direction, blue near-high, pulsing when both). Click a row for a
+  popup: same fields + a price chart with a 1D/3D/5D/10D/15D (intraday) + 30D (daily) window
+  toggle + a collapsible Fundamentals section. See the Watchlist section below.
+
+- **Swing stats** — `GET /swing` → JSON, rendered as tables + a correlation heatmap under the
+  Tools group. Validation statistics for a short-term mean-reversion (dip-buy) strategy on a
+  configurable high-vol semi/AI watchlist: realized-vol term structure; forward returns after
+  down-day / flush triggers, always shown next to their unconditional baseline; an OHLC-touch
+  barrier / time-stop trade simulation with full TP/SL/Time/Ambiguous/Open accounting, an all-days
+  placebo and a matched-random bootstrap (does the flush trigger beat drift?); and cluster
+  correlation (incl. tail correlation on down days). Everything is configurable and pooled across a
+  "semi cluster" subset (pooled cells report distinct-date *episodes* alongside raw event counts);
+  §9 regime split (full vs trailing 6 months) is shown side by side with each name's actual data
+  span. §8 earnings hygiene is deferred. See the Swing section below.
+
 Charts load lazily on first tab click. Logging is SLF4J + Logback (`logback-spring.xml`);
 no `System.out` in production code.
 
@@ -101,6 +123,13 @@ no `System.out` in production code.
 | Value-over-time chart | `GET /portfolio-value`     | `PortfolioValueService`   |
 | Allocation            | `GET /allocation`          | `AllocationService`       |
 | Attribution           | `GET /attribution`         | `AttributionService`      |
+| Watchlist             | `GET /watchlist`           | `WatchlistService`        |
+| Watchlist mutate      | `POST /watchlist/{add,remove,threshold,move}` | `WatchlistRepository` |
+| Watchlist popup chart | `GET /watchlist/series`    | `WatchlistService`        |
+| Watchlist vol horizons| `GET /watchlist/vol`       | `WatchlistService`        |
+| Fundamentals snapshot | `GET /portfolio-fundamentals` (+ `/add`, `/remove`, `/refresh`) | `PortfolioFundamentalsService` |
+| Swing stats           | `GET /swing`               | `SwingAnalysisService`    |
+| Swing mutate/backfill | `POST /swing/{symbols,backfill}` | `SwingAnalysisService` |
 
 ## Holding fields
 
@@ -217,8 +246,11 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
 
 - `PriceFetchJob` → `price_history` (daily). First run backfills ~10 years per ticker; later runs
   fetch the gap to today. Cron 22:00 Europe/London + startup.
-- `IntradayPriceFetchJob` → `price_intraday` (1-minute closes). 7-day retention; pruned after each
-  fetch tick. Every 5 minutes + startup.
+- `IntradayPriceFetchJob` → `price_intraday` (1-minute closes). **15-day** retention
+  (`RETENTION_DAYS`), but the per-tick fetch lookback is capped at `FETCH_LOOKBACK_DAYS` = 7 —
+  Yahoo only serves ~7 days of 1-minute history per request, so the 15-day window *accumulates*
+  as ticks append rather than backfilling in one shot. Feeds the watchlist popup's 1D–15D
+  intraday charts. Pruned after each fetch tick. Every minute + startup.
 - `GiltPriceFetchJob` → also `price_intraday`, one HTTP GET to `dividenddata.co.uk/uk-gilts-prices-yields.py`.
   Hourly + startup. Symbols are `"GILT {coupon}% {year}"` (no Yahoo ticker map). Currency `"GBP"`.
   Rides the intraday job's prune for retention. Dividenddata returns 403 to the default Java
@@ -301,3 +333,111 @@ the warning and fills in the dip.
 **Yahoo testing:** JSON parsing is unit-tested against `yahoo-nvda-sample.json`; a live-API test
 (`YahooPriceFetcherIntegrationTest`) is `@Tag("integration")` and excluded by the surefire
 `excludedGroups` property. Run with `mvn test -Dgroups=integration -DexcludedGroups=`.
+
+## Watchlist & alerts (volatility trading)
+
+Monitor-and-nudge tool for opportunistic trimming/rebuying — it emails alerts and never
+touches an order.
+
+- `WatchlistRepository` — `watchlist` table (symbol PK + two thresholds + added_at). The
+  symbol set is **mirrored** to `KeyValueStore` under `watchlist_symbols` on every mutation,
+  so `PriceFetchSupport.tickersToFetch` and `PortfolioFundamentalsService` union watchlist
+  names into their fetch universes with no constructor churn — a freshly added symbol gets
+  daily + intraday prices and a fundamentals row on the next tick. `WatchlistController.add`
+  also kicks an immediate `PriceFetchJob.fetchSingle` + fundamentals refresh in the background.
+- `WatchlistService` — assembles each row from one snapshot (single FX fetch, one bulk
+  latest-intraday lookup, one ledger read). Position/gain reuse `PositionDetailService`'s FIFO
+  engine (same package) rather than re-implementing it. Momentum is calendar-anchored via
+  `PriceStats.closeOnOrBefore`; realized vol is `PriceStats.annualizedVol` (30-session sample
+  stdev × √252, on split-adjusted `close`, same convention as the Risk tab). 52-wk high/low,
+  P/E and beta come from the fundamentals cache. `series()` serves the popup chart: intraday
+  for 1D–15D (downsampled to ~5-min beyond 5 days), daily `close×splitFactor` for 30D.
+- **Triggers** are pure domain logic (`WatchlistAlerts.evaluate` → `Flags`): (a) within
+  `highThresholdPct`% of the 52-week high (a fresh high always fires); (b) `|today's move|` ≥
+  `moveThresholdPct`%, either direction. Screen and alert job evaluate identical `Row`s so they
+  never disagree. **No 52-wk-low trigger** — the low is displayed but never alerts (watched
+  names have run up too far for it to matter). A **blank/0 threshold disables that trigger**
+  (`WatchlistRepository` stores 0), so a symbol can be watched with no alerts at all.
+- **Popup extras:** `GET /watchlist/vol` returns a realized-vol **term structure** (5D/10D from
+  intraday 1-min returns via `PriceStats.annualizedVolIntraday`, 30D/1Y from daily closes) shown
+  in the popup stats. `GET /watchlist/series` for `1D` returns only the latest session's bars
+  (convention: today only); the popup chart uses a **category x-axis** (evenly-spaced) so
+  overnight/weekend gaps don't draw diagonal lines — 1D labels are times, multi-day/30D labels
+  are dates. Popup fundamentals reuse the Snapshot-diff renderer (`fundamentalsHtml` /
+  `fundamentalsFieldGroups` in `dashboard.js`) laid out in columns.
+- **Manual order:** `watchlist.display_order` + `POST /watchlist/move?dir=up|down` swap
+  neighbours; rows render in that order (↑/↓ buttons per row). Add-backfills run on a
+  single-thread executor in `WatchlistController` so two quick adds queue rather than racing
+  SQLite writes.
+- `WatchlistAlertJob` — runs every 5 min (`PriceFetchScheduler`). Dedups **once per day per
+  symbol per trigger** via a KV set (`watchlist_alerts_fired`, keys `SYMBOL|TRIGGER|date`),
+  batches a tick's new firings into one email, and only persists the fired-set after a
+  successful send (so a mail failure retries). No-op unless SMTP is configured.
+- **Email:** `AlertNotifier` port + `SmtpAlertNotifier` adapter (Jakarta Mail directly, kept
+  Spring-free like the other adapters; `spring-boot-starter-mail` supplies the library).
+  Disabled by default. **Put the Gmail app password in `~/.portfolio-bench.properties`** (home
+  dir, outside the repo — `application.properties` loads it via
+  `spring.config.import=optional:file:${user.home}/.portfolio-bench.properties`, so it can never
+  be committed). Set `portfolio.alert.mail.{enabled=true,username,password,from,to}` there
+  (Gmail: `smtp.gmail.com:587`, STARTTLS). The app must be running during market hours for
+  alerts to fire — keep the lid open + `caffeinate` (closing the lid sleeps the JVM even under
+  caffeinate).
+
+## Swing-strategy validation statistics
+
+Backtesting/statistics tool (Swing stats tab) for validating a short-term mean-reversion
+strategy — dip-buy after 1–2 day flushes, exit at a fixed take-profit / wide stop / time stop —
+*before* trading it. Read-only: it never touches the ledger or places an order.
+
+- **Pure engine** lives in `com.portfolio.domain.swing` (framework-free, unit-tested like
+  `PriceStats`). `SwingConfig` holds every knob (spec defaults); `SwingSeries` pre-computes the
+  aligned `close/high/low/logRet/simpleRet` arrays plus a **look-ahead-free trailing-30d daily σ**
+  (σ over returns strictly *before* each bar, so a σ-trigger judges a day against vol known going
+  in). Engines: `RealizedVol` (§1), `ForwardReturns` (§2 baseline / §3 conditional / §4
+  continuation), `Flushes` (§5 flush profile + §6 barrier/time-stop sim), `Placebo` (§6 controls:
+  all-days placebo + matched-random bootstrap), `ReturnCorrelation` (§7). `Stats` provides
+  mean/median/quartiles/%pos + a public `quantile`. All engines take a `List<SwingSeries>` so the
+  same code serves per-symbol (one) and pooled-cluster (concatenate observations across the cluster,
+  equal-weight by observation).
+- **Conventions:** returns off `close` (split-adjusted), log for vol, simple for anything P&L-like.
+  σ-triggers compare the day's simple return to −k×(trailing daily σ); absolute triggers to −p%.
+  A 1e-9 epsilon makes round thresholds (a "−10%" day stored as −0.0999999998) register. Small-N
+  cells are flagged, never silently averaged (`smallNFloor`); **pooled** cells also report distinct
+  event *dates* (episodes) beside the raw event count and flag `episodes < episodeFloor` (cluster
+  names flush on shared dates, so 10 symbols × one crash ≈ 1 episode, not 10).
+- **§6 event accounting** (the calibration core). Barrier touches are read from **intraday OHLC**
+  (TP if session `high ≥ entry×(1+tp)`, SL if `low ≤ entry×(1−sl)`; fills at the barrier, time-stop
+  exits at the close). `Flushes.simulateTrade`/`aggregate` are the shared single-trade engine (reused
+  by the placebo). Five-way reconciliation holds in every table: **events = TP + SL + Time +
+  Ambiguous + Open**. *Ambiguous* = both barriers touched in one session (excluded from the standard
+  mean return; a `meanReturnConservative` books each as a stop for a pessimistic bound). *Open* = the
+  outcome window runs past the last data date (censored — never dropped, never counted as an
+  outcome). §6 events are **non-overlapping until the prior simulated trade resolves** (so the count
+  legitimately shrinks as the time stop lengthens); §5 keeps its `flushCooldown` dedup for its
+  descriptive profile. `Stats.Dist` and any nullable figure never emit a bare `NaN` — `config/JacksonConfig`
+  serializes non-finite doubles as JSON `null` app-wide (empty distributions would otherwise corrupt
+  the payload).
+- **§6 controls (`Placebo`)** answer "does the flush trigger beat drift?": an **all-days placebo**
+  (entry at every fully-evaluable close, overlaps allowed, `open == 0` by construction) and a
+  **matched random bootstrap** (draw N = flush-event count random entry dates from that pool,
+  `bootstrapIterations` times, seeded by `randomSeed`; reports the %TP / mean-return distribution and
+  the percentile rank of the actual flush result — a rank inside the IQR means the trigger adds
+  nothing). The bootstrap samples the precomputed placebo pool, so 1,000 iterations are cheap.
+- **`SwingAnalysisService`** loads bars, runs every symbol + the pooled cluster over both §9
+  regimes (full history + trailing 6 months, rendered **side by side**), and adds §7 correlation.
+  Each `SymbolReport` reports its actual data span (`from`/`to`/`yearsAvailable`) and a `shortHistory`
+  flag when the first bar post-dates the full-history cutoff (recent listing → "full history" is
+  really shorter than `years`). Each `Regime` pairs the §6 flush sim with its placebo + bootstrap
+  (`BarrierComparison`). No FX — statistics are unit-less return ratios, so `.L` pence listings need
+  no conversion. `SwingReport` (in `application`) is the JSON DTO; `earningsHygiene` is a reserved
+  `null` slot for the deferred §8.
+- **Config persistence:** the symbol universe + cluster live in `KeyValueStore` (`swing_symbols` /
+  `swing_cluster`, seeded from spec defaults on first read). `swing_symbols` is unioned into
+  `PriceFetchSupport.tickersToFetch`, so the nightly 30-year daily job keeps the swing universe
+  backfilled automatically; `POST /swing/backfill` (and `POST /swing/symbols` after an edit) covers
+  the first-run gap via `PriceFetchJob.fetchSingle` on a background executor. `GET /swing` echoes
+  the effective `SwingConfig`; every knob is also an optional query param (percents in, e.g.
+  `dropPcts=5,8,10`) so parameters can be swept without changing stored config.
+- **§8 earnings hygiene is deferred** — the app has no multi-year earnings-date source (Yahoo
+  serves only ~4–8 recent quarters). The DTO/config slot is reserved so it can land without a
+  reshape.

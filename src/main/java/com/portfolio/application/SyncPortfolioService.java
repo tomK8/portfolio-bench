@@ -14,12 +14,14 @@ import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.CashTransactionRepository.CashBalance;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.KeyValueStore;
+import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.persistence.SnapshotRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Currency;
@@ -46,6 +48,7 @@ public class SyncPortfolioService {
     private final DividendService dividendService;
     private final YahooTickerMap tickerMap;
     private final CashTransactionRepository cashRepo;
+    private final PriceHistoryRepository priceHistory;
     private final KeyValueStore kv;
 
     public SyncPortfolioService(PortfolioGatherer gatherer,
@@ -54,6 +57,7 @@ public class SyncPortfolioService {
                                 DividendService dividendService,
                                 YahooTickerMap tickerMap,
                                 CashTransactionRepository cashRepo,
+                                PriceHistoryRepository priceHistory,
                                 KeyValueStore kv) {
         this.gatherer = gatherer;
         this.snapshots = snapshots;
@@ -61,6 +65,7 @@ public class SyncPortfolioService {
         this.dividendService = dividendService;
         this.tickerMap = tickerMap;
         this.cashRepo = cashRepo;
+        this.priceHistory = priceHistory;
         this.kv = kv;
     }
 
@@ -73,11 +78,13 @@ public class SyncPortfolioService {
 
         BigDecimal iiSippCash = combineIiCashAsGbp(iiSippCashGbp, iiSippCashUsd, gathered.rates());
 
-        Map<String, IntradayPrice> latestBySymbol = latestPricesBySymbol(gathered.holdings());
+        Map<String, String> tickerBySymbol = tickerBySymbol(gathered.holdings());
+        Map<String, IntradayPrice> latestBySymbol = latestPricesBySymbol(tickerBySymbol);
+        Map<String, BigDecimal> monthChangeBySymbol = monthChangeBySymbol(tickerBySymbol);
         List<AggHolding> aggregated = new PortfolioAggregator().aggregate(
                 gathered.holdings(), gathered.rates(),
                 dividendService.dividendsBySymbol(gathered.holdings()),
-                latestBySymbol);
+                latestBySymbol, monthChangeBySymbol);
         PortfolioMetrics.Totals totals = new PortfolioMetrics().compute(aggregated, iiSippCash);
 
         snapshots.saveSnapshot(totals.totalGbp(), totals.totalGainGbp(), totals.totalCashGbp(),
@@ -294,7 +301,8 @@ public class SyncPortfolioService {
      * key equals the symbol itself. A holding whose symbol has no cached bar simply won't appear
      * in the result and the RT columns render as "—".
      */
-    private Map<String, IntradayPrice> latestPricesBySymbol(List<Holding> holdings) {
+    /** Broker symbol (uppercase) → Yahoo ticker, for the intraday-price and month-change joins. */
+    private Map<String, String> tickerBySymbol(List<Holding> holdings) {
         Map<String, String> tickerBySymbol = new LinkedHashMap<>();   // preserves first-seen order
         for (Holding h : holdings) {
             String sym = h.getSecurityId();
@@ -303,13 +311,28 @@ public class SyncPortfolioService {
             String ticker = Instruments.isBond(sym) ? upper : tickerMap.tickerFor(sym);
             tickerBySymbol.putIfAbsent(upper, ticker);
         }
-        if (tickerBySymbol.isEmpty()) return Map.of();
+        return tickerBySymbol;
+    }
 
+    private Map<String, IntradayPrice> latestPricesBySymbol(Map<String, String> tickerBySymbol) {
+        if (tickerBySymbol.isEmpty()) return Map.of();
         Map<String, IntradayPrice> byTicker = intraday.loadLatestIntradayPrices(tickerBySymbol.values());
         Map<String, IntradayPrice> bySymbol = new HashMap<>();
         for (Map.Entry<String, String> e : tickerBySymbol.entrySet()) {
             IntradayPrice p = byTicker.get(e.getValue());
             if (p != null) bySymbol.put(e.getKey(), p);
+        }
+        return bySymbol;
+    }
+
+    /** Trailing ~1-month price change (fraction) per symbol, for the Price-column tint. */
+    private Map<String, BigDecimal> monthChangeBySymbol(Map<String, String> tickerBySymbol) {
+        if (tickerBySymbol.isEmpty()) return Map.of();
+        LocalDate today = LocalDate.now();
+        Map<String, BigDecimal> bySymbol = new HashMap<>();
+        for (Map.Entry<String, String> e : tickerBySymbol.entrySet()) {
+            BigDecimal chg = PriceMomentum.monthChange(priceHistory, e.getValue(), today);
+            if (chg != null) bySymbol.put(e.getKey(), chg);
         }
         return bySymbol;
     }

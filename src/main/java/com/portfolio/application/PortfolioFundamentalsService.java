@@ -41,6 +41,14 @@ public class PortfolioFundamentalsService {
 
     private static final long THROTTLE_MS = 500;
 
+    /**
+     * User-added symbols to show fundamentals for even though they aren't held (or watched) —
+     * a plain newline set in the KV store, managed from the snapshot tab. Independent of the
+     * volatility watchlist so you can inspect a name's fundamentals without committing it to
+     * alerting.
+     */
+    public static final String EXTRA_SYMBOLS_KEY = "fundamentals_extra_symbols";
+
     private final YahooQuoteSummaryFetcher fetcher;
     private final YahooTickerMap tickerMap;
     private final KeyValueStore keyValueStore;
@@ -76,7 +84,46 @@ public class PortfolioFundamentalsService {
                 if (latest == null || c.fetchedAt().isAfter(latest)) latest = c.fetchedAt();
             }
         }
-        return new Snapshot(rows, latest);
+        return new Snapshot(rows, latest, filteredExtraSymbols());
+    }
+
+    /**
+     * Add a symbol to show fundamentals for even if not held. Fetches its quoteSummary
+     * synchronously so the row is populated on the next {@link #snapshot()} read; throws on a
+     * blank or bond/CASH symbol. Idempotent — re-adding just refreshes the cached row.
+     */
+    public void addExtra(String symbolRaw) {
+        String sym = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase();
+        if (sym.isEmpty()) throw new IllegalArgumentException("Symbol is required.");
+        if (Instruments.isBond(sym) || "CASH".equals(sym)) {
+            throw new IllegalArgumentException(sym + " has no Yahoo fundamentals coverage.");
+        }
+        Set<String> extra = new java.util.LinkedHashSet<>(keyValueStore.getStringSet(EXTRA_SYMBOLS_KEY));
+        extra.add(sym);
+        keyValueStore.putStringSet(EXTRA_SYMBOLS_KEY, extra);
+        refreshSymbol(sym);
+    }
+
+    public void removeExtra(String symbolRaw) {
+        String sym = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase();
+        Set<String> extra = new java.util.LinkedHashSet<>(keyValueStore.getStringSet(EXTRA_SYMBOLS_KEY));
+        if (extra.remove(sym)) keyValueStore.putStringSet(EXTRA_SYMBOLS_KEY, extra);
+    }
+
+    /** Fetch and cache one symbol's fundamentals now (resolving to its Yahoo ticker). */
+    public void refreshSymbol(String internal) {
+        String yahooTicker = tickerMap.tickerFor(internal);
+        QuoteSummary q = fetcher.fetch(yahooTicker);
+        repo.save(internal, q, Instant.now());
+    }
+
+    /** The extra set minus anything that's also held — i.e. the rows the UI may offer to remove. */
+    private List<String> filteredExtraSymbols() {
+        List<String> out = new ArrayList<>();
+        for (String s : keyValueStore.getStringSet(EXTRA_SYMBOLS_KEY)) {
+            if (!Instruments.isBond(s) && !"CASH".equals(s)) out.add(s);
+        }
+        return out;
     }
 
     /**
@@ -102,9 +149,16 @@ public class PortfolioFundamentalsService {
     }
 
     private List<String> heldInternalSymbols() {
-        Set<String> held = keyValueStore.getStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY);
+        Set<String> universe = new TreeSet<>(Comparator.naturalOrder());
+        universe.addAll(keyValueStore.getStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY));
+        // Watchlist names too, so their P/E, beta and 52-week high/low populate the fundamentals
+        // cache the watchlist screen reads from.
+        universe.addAll(keyValueStore.getStringSet(
+                com.portfolio.persistence.WatchlistRepository.WATCHLIST_SYMBOLS_KEY));
+        // Symbols the user added purely to inspect fundamentals (not held, not watched).
+        universe.addAll(keyValueStore.getStringSet(EXTRA_SYMBOLS_KEY));
         Set<String> filtered = new TreeSet<>(Comparator.naturalOrder());
-        for (String s : held) {
+        for (String s : universe) {
             if (!Instruments.isBond(s) && !"CASH".equals(s)) filtered.add(s);
         }
         return new ArrayList<>(filtered);
@@ -117,7 +171,8 @@ public class PortfolioFundamentalsService {
                 q.extra(), q.labels(), q.missing());
     }
 
-    public record Snapshot(List<QuoteSummary> rows, Instant lastUpdatedAt) {}
+    /** {@code extraSymbols} are the user-added (non-held) rows the UI can offer a remove control for. */
+    public record Snapshot(List<QuoteSummary> rows, Instant lastUpdatedAt, List<String> extraSymbols) {}
 
     public record RefreshResult(int fetched, long elapsedMs) {}
 }

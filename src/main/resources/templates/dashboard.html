@@ -102,6 +102,43 @@
             border-bottom: 2px solid #ccc;
         }
 
+        /* The long holdings tables (per-holding snapshot, Live, files-sync, cash-ledger) pin
+           their header to the viewport top so the column labels stay visible while scrolling.
+           These scroll at page level, so top:0 sticks to the browser top. A sticky cell's own
+           border-bottom scrolls away in some engines, so the 2px rule is redrawn with an inset
+           box-shadow, and the th needs an opaque background or body rows show through. */
+        .sticky-head thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #fff;
+            box-shadow: inset 0 -2px 0 #ccc;
+        }
+        html[data-theme="dark"] .sticky-head thead th {
+            background: #1c1f24;
+            box-shadow: inset 0 -2px 0 #2e3137;
+        }
+
+        /* Match the compact watchlist (annual-table) typography on the long holdings lists
+           (files, cash ledger, Live, fundamentals snapshot). The watchlist already carries
+           annual-table so these values are a no-op there. */
+        .sticky-head { font-size: 0.85rem; }
+        .sticky-head th, .sticky-head td { padding: 0.25rem 0.5rem; }
+
+        /* Gain / total-gain cells: green/red TEXT by sign. */
+        td.val-pos { color: #2ca02c; }
+        td.val-neg { color: #c0392b; }
+        html[data-theme="dark"] td.val-pos { color: #4ade80; }
+        html[data-theme="dark"] td.val-neg { color: #f87171; }
+
+        /* Price cell: green/red BACKGROUND tint by trailing ~1-month price change — a separate
+           signal from gain/loss (a name can be up over the month yet below cost, or vice versa).
+           Same tints as the watchlist rows, and like there they hold in both light and dark. */
+        td.mom-pos { background: rgba(44, 160, 44, 0.14); }
+        td.mom-neg { background: rgba(192, 57, 43, 0.14); }
+        html[data-theme="dark"] td.mom-pos { background: rgba(74, 222, 128, 0.22); }
+        html[data-theme="dark"] td.mom-neg { background: rgba(248, 113, 113, 0.22); }
+
         .totals {
             margin-bottom: 1.5rem;
         }
@@ -441,6 +478,118 @@
         html[data-theme="dark"] .snap-group-title { color: #999; border-bottom-color: #2e3137; }
         html[data-theme="dark"] .snap-kv .k { color: #b4b4b4; }
 
+        /* Watchlist: alert row colours. Today-move fires green (up) / red (down) by direction;
+           near-52-week-high fires blue; when both fire the row pulses between blue and the
+           move's direction colour. Colours are applied as a left border + tinted background so
+           the number columns stay legible. */
+        /* Compact row density for the stats table specifically */
+        #watchlist-table { font-size: 0.78rem; }
+        #watchlist-table th, #watchlist-table td { padding: 0.1rem 0.35rem; }
+        #watchlist-table tbody tr { cursor: pointer; }
+        #watchlist-table tbody tr.wl-move-up   { background: rgba(44, 160, 44, 0.14);  box-shadow: inset 3px 0 0 #2ca02c; }
+        #watchlist-table tbody tr.wl-move-down { background: rgba(192, 57, 43, 0.14);  box-shadow: inset 3px 0 0 #c0392b; }
+        #watchlist-table tbody tr.wl-near-high { background: rgba(31, 119, 180, 0.14); box-shadow: inset 3px 0 0 #1f77b4; }
+        #watchlist-table tbody tr.wl-both-up   { animation: wl-pulse-up 1.6s ease-in-out infinite; }
+        #watchlist-table tbody tr.wl-both-down { animation: wl-pulse-down 1.6s ease-in-out infinite; }
+        @keyframes wl-pulse-up {
+            0%, 100% { background: rgba(31, 119, 180, 0.16); box-shadow: inset 3px 0 0 #1f77b4; }
+            50%      { background: rgba(44, 160, 44, 0.16);  box-shadow: inset 3px 0 0 #2ca02c; }
+        }
+        @keyframes wl-pulse-down {
+            0%, 100% { background: rgba(31, 119, 180, 0.16); box-shadow: inset 3px 0 0 #1f77b4; }
+            50%      { background: rgba(192, 57, 43, 0.16);  box-shadow: inset 3px 0 0 #c0392b; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #watchlist-table tbody tr.wl-both-up,
+            #watchlist-table tbody tr.wl-both-down { animation: none; background: rgba(31, 119, 180, 0.16); box-shadow: inset 3px 0 0 #1f77b4; }
+        }
+        .wl-pos { color: #2ca02c; } .wl-neg { color: #c0392b; }
+        html[data-theme="dark"] .wl-pos { color: #4ade80; }
+        html[data-theme="dark"] .wl-neg { color: #f87171; }
+        .wl-thr-input { width: 3.2rem; font-size: 0.8rem; padding: 1px 3px; }
+        .wl-remove { color: #c0392b; cursor: pointer; border: 0; background: none; font-size: 1rem; line-height: 1; }
+        .wl-actions { white-space: nowrap; }
+        .wl-move { border: 0; background: none; cursor: pointer; font-size: 0.95rem; line-height: 1; color: #999; padding: 0 2px; }
+        .wl-move:hover { color: #1f77b4; }
+        #wl-modal .modal-box { max-width: 1180px; width: 96vw; max-height: 92vh; overflow-y: auto; }
+        /* Fundamentals laid out in balanced columns; groups never split across a column break. */
+        .wl-fund-cols { column-width: 250px; column-gap: 2rem; }
+        .wl-fund-cols .snap-group { break-inside: avoid; -webkit-column-break-inside: avoid; margin-top: 0; margin-bottom: 0.75rem; }
+        /* Subtle Google-style stat grid inside the popup: light label left, value right,
+           thin row rules, flowing into columns. Deliberately quiet — no boxes. */
+        .wl-stats { column-width: 185px; column-gap: 2.2rem; margin: 0.5rem 0 0.25rem; }
+        .wl-stats .snap-kv { break-inside: avoid; border-bottom: 1px solid #f0f0f0; padding: 0.24rem 0; font-size: 0.8rem; }
+        .wl-stats .snap-kv .k { color: #8a8f96; font-weight: 400; }
+        .wl-stats .snap-kv .v { font-weight: 500; font-variant-numeric: tabular-nums; }
+
+        /* ---- Swing stats tab ---- */
+        .swing-controls { flex-wrap: wrap; row-gap: 0.35rem; }
+        .swing-h { margin: 0.4rem 0 0.3rem; font-size: 0.98rem; }
+        .swing-sub { font-weight: 400; font-size: 0.8rem; }
+        #panel-swing table.annual-table { font-size: 0.78rem; }
+        #panel-swing table.annual-table th, #panel-swing table.annual-table td { padding: 0.12rem 0.4rem; }
+        .swing-block { margin: 0.6rem 0 1rem; }
+        .swing-regimes { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; overflow-x: auto; }
+        .swing-regime-col { flex: 1 1 620px; min-width: 560px; }
+        .swing-span { font-size: 0.82rem; margin: 0.5rem 0; padding: 0.3rem 0.5rem; background: #f6f7f9; border-radius: 4px; }
+        .swing-warn { color: #c0392b; font-weight: 600; }
+        .swing-regime-head { font-weight: 600; font-size: 0.85rem; margin: 0.6rem 0 0.2rem; color: #1f77b4; }
+        .swing-tbl { border-collapse: collapse; font-size: 0.78rem; font-variant-numeric: tabular-nums; margin-bottom: 0.5rem; }
+        .swing-tbl th, .swing-tbl td { border: 1px solid #e3e3e3; padding: 0.12rem 0.45rem; text-align: right; white-space: nowrap; }
+        .swing-tbl th { background: #f6f7f9; font-weight: 600; }
+        .swing-tbl td.lbl, .swing-tbl th.lbl { text-align: left; }
+        .swing-tbl tr.swing-baseline td { background: #eef4fb; font-style: italic; }
+        .swing-pos { color: #2ca02c; } .swing-neg { color: #c0392b; }
+        .swing-smalln { color: #b0b3b8; }
+        .swing-smalln-cell { color: #b0b3b8; }
+        .swing-tbl tr.swing-placebo-row td { background: #fafbfc; color: #667; }
+        .swing-rank-hit { color: #1f77b4; font-weight: 600; }
+        .swing-corr-toggle button, .swing-corr-toggle > button { font-size: 0.8rem; padding: 2px 8px; margin-right: 4px; }
+        .swing-corr-toggle button.active { background: #1f77b4; color: #fff; }
+        table.corr-matrix { border-collapse: collapse; font-size: 0.72rem; }
+        table.corr-matrix th, table.corr-matrix td { padding: 0.15rem 0.4rem; text-align: center; border: 1px solid #eee; }
+        table.corr-matrix th.corr-axis { background: #f6f7f9; font-weight: 600; position: sticky; }
+        html[data-theme="dark"] .swing-tbl th { background: #23262b; }
+        html[data-theme="dark"] .swing-tbl th, html[data-theme="dark"] .swing-tbl td { border-color: #333; }
+        html[data-theme="dark"] .swing-tbl tr.swing-baseline td { background: #1c2836; }
+        html[data-theme="dark"] .swing-span { background: #23262b; }
+        html[data-theme="dark"] .swing-tbl tr.swing-placebo-row td { background: #202328; color: #99a; }
+        html[data-theme="dark"] .swing-rank-hit { color: #6ab0f3; }
+        html[data-theme="dark"] .swing-pos { color: #4ade80; } html[data-theme="dark"] .swing-neg { color: #f87171; }
+        html[data-theme="dark"] table.corr-matrix th.corr-axis { background: #23262b; }
+        html[data-theme="dark"] .wl-stats .snap-kv { border-bottom-color: #23262b; }
+        .wl-window-toggle { display: inline-flex; gap: 0; margin: 0.5rem 0; }
+        .wl-view-toggle { display: inline-flex; gap: 0; margin-left: 0.5rem; }
+        .wl-view-toggle button { padding: 2px 10px; font-size: 0.82rem; border: 1px solid #ccc; background: none; cursor: pointer; }
+        .wl-view-toggle button:first-child { border-radius: 4px 0 0 4px; }
+        .wl-view-toggle button:last-child  { border-radius: 0 4px 4px 0; border-left: 0; }
+        .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
+        html[data-theme="dark"] .wl-view-toggle button { border-color: #444; color: #ccc; }
+        html[data-theme="dark"] .wl-view-toggle button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
+        /* Break out of the 960px body cap so the heatmap can use the whole viewport. */
+        #wl-returns-panel {
+            overflow-x: auto;
+            margin: 1rem calc(50% - 50vw) 0;
+            padding: 0 1.5rem;
+            box-sizing: border-box;
+        }
+        #wl-returns-panel table { border-collapse: collapse; white-space: nowrap; font-size: 0.75rem; width: 100%; table-layout: fixed; }
+        #wl-returns-panel th, #wl-returns-panel td { padding: 2px 3px; }
+        #wl-returns-panel thead th { font-weight: 400; font-size: 0.66rem; text-align: right; border-bottom: 1px solid #ddd; }
+        #wl-returns-panel thead th:first-child { text-align: left; width: 56px; }
+        #wl-returns-panel tbody td { text-align: right; font-variant-numeric: tabular-nums; }
+        #wl-returns-panel tbody td:first-child { text-align: left; font-weight: 600; position: sticky; left: 0; background: inherit; z-index: 1; }
+        #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: var(--row-alt, #f8f8f8); }
+        html[data-theme="dark"] #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: #1e2026; }
+        html[data-theme="dark"] #wl-returns-panel thead th { border-bottom-color: #333; }
+        .wl-window-toggle button { padding: 0.25rem 0.7rem; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
+        .wl-window-toggle button.active { background: #1f77b4; color: #fff; border-color: #1d6ba2; }
+        html[data-theme="dark"] .wl-window-toggle button { background: #23262b; color: #c4c7cb; border-color: #3a3d44; }
+        html[data-theme="dark"] .wl-window-toggle button.active { background: #1d6ba2; color: #fff; }
+        .wl-fund-toggle { cursor: pointer; user-select: none; font-weight: 600; margin-top: 1rem; }
+        .wl-fund-toggle::before { content: '▸ '; }
+        .wl-fund-toggle.open::before { content: '▾ '; }
+
         .snap-tip {
             display: inline-block;
             font-family: Georgia, Cambria, serif;
@@ -639,6 +788,7 @@
             font-weight: 600;
             color: #555;
         }
+        html[data-theme="dark"] .annual-table thead th { color: #bbb; border-bottom-color: #444; }
 
         .annual-table tr.partial { font-style: italic; color: #888; }
         .annual-table td.pos { color: #2ca02c; }
@@ -731,7 +881,7 @@
         html[data-theme="dark"] button:hover { background: #353841; }
         html[data-theme="dark"] .tabs { border-bottom-color: #2e3137; }
         html[data-theme="dark"] .tab { color: #9aa0a6; }
-        html[data-theme="dark"] .tab.active { color: #f4f4f6; border-bottom-color: #4a9eff; }
+        html[data-theme="dark"] .tab.active { color: #f4f4f6; background: #15171a; border-color: #3a3d44; border-bottom-color: #4a9eff; }
         html[data-theme="dark"] .returns-stat { background: #1c1f24; border-color: #2e3137; }
         html[data-theme="dark"] .returns-stat .label { color: #9aa0a6; }
         html[data-theme="dark"] .returns-stat .value { color: #f4f4f6; }
@@ -742,6 +892,11 @@
         html[data-theme="dark"] .annual-table td.neg { color: #f87171; }
         html[data-theme="dark"] .value-warnings,
         html[data-theme="dark"] .whatif-error { background: #3a2f15; color: #ffeab0; border-color: #5c4720; }
+        html[data-theme="dark"] .cash-recon { background: #1c1f24; border-color: #2e3137; }
+        html[data-theme="dark"] .cash-recon h3 { color: #9aa0a6; }
+        html[data-theme="dark"] .recon-subhead { color: #8a8e94; }
+        html[data-theme="dark"] .recon-table th, html[data-theme="dark"] .recon-table td { border-bottom-color: #2e3137; }
+        html[data-theme="dark"] .recon-warn td { color: #f87171; }
         html[data-theme="dark"] .modal-backdrop { background: rgba(0, 0, 0, 0.6); }
         html[data-theme="dark"] .modal-box { background: #1c1f24; color: #e8e8ea; border: 1px solid #2e3137; }
         html[data-theme="dark"] .link-btn { color: #4a9eff; }
@@ -925,6 +1080,8 @@
 <div class="tabs tabs-secondary" data-group="group-tools">
     <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-trades" type="button">Journal</button>
+    <button class="tab" data-panel="panel-watchlist" type="button">Watchlist</button>
+    <button class="tab" data-panel="panel-swing" type="button">Swing stats</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -1173,7 +1330,7 @@
     <p class="muted" style="margin-top: 0">
         Time-weighted return (TWR) — the daily price-only return of the asset mix,
         chain-linked, with external contributions stripped out. Comparable to a fund
-        factsheet number. Trailing 1y is the simple period return; 3y / 5y / since
+        factsheet number. Trailing 1w–1y are simple period returns; 3y / 5y / since
         inception are annualised. Top chart: growth of £1 invested at portfolio inception.
         Middle chart: cumulative external contributions on the same time axis, for context.
         Bottom chart: underwater curve (drawdown from the running TWR peak) — flat at 0%
@@ -1214,6 +1371,10 @@
         <span class="muted" style="font-size: 0.8rem;">TWR strips out contribution timing; MWR is your actual personal IRR.</span>
     </div>
     <div class="returns-stats" id="returns-stats">
+        <div class="returns-stat"><span class="label">Portfolio · 1w</span><span class="value na" id="returns-1w">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio · 1m</span><span class="value na" id="returns-1m">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio · 3m</span><span class="value na" id="returns-3m">—</span></div>
+        <div class="returns-stat"><span class="label">Portfolio · 6m</span><span class="value na" id="returns-6m">—</span></div>
         <div class="returns-stat"><span class="label">Portfolio · 1y</span><span class="value na" id="returns-1y">—</span></div>
         <div class="returns-stat"><span class="label">Portfolio · 3y (ann.)</span><span class="value na" id="returns-3y">—</span></div>
         <div class="returns-stat"><span class="label">Portfolio · 5y (ann.)</span><span class="value na" id="returns-5y">—</span></div>
@@ -1225,6 +1386,10 @@
         </div>
     </div>
     <div class="returns-stats" id="benchmark-stats" style="display:none;">
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-1w">Benchmark</span> · 1w</span><span class="value na" id="bench-1w">—</span></div>
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-1m">Benchmark</span> · 1m</span><span class="value na" id="bench-1m">—</span></div>
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-3m">Benchmark</span> · 3m</span><span class="value na" id="bench-3m">—</span></div>
+        <div class="returns-stat"><span class="label"><span id="benchmark-label-6m">Benchmark</span> · 6m</span><span class="value na" id="bench-6m">—</span></div>
         <div class="returns-stat"><span class="label"><span id="benchmark-label-1y">Benchmark</span> · 1y</span><span class="value na" id="bench-1y">—</span></div>
         <div class="returns-stat"><span class="label"><span id="benchmark-label-3y">Benchmark</span> · 3y (ann.)</span><span class="value na" id="bench-3y">—</span></div>
         <div class="returns-stat"><span class="label"><span id="benchmark-label-5y">Benchmark</span> · 5y (ann.)</span><span class="value na" id="bench-5y">—</span></div>
@@ -1577,6 +1742,161 @@
     </div>
 </section>
 
+<section class="tab-panel" id="panel-watchlist">
+    <p class="muted" style="margin-top: 0">
+        Volatility-trading watchlist. Enter any symbol — owned or not. Rows colour when an alert
+        fires: <b class="wl-pos">green</b>/<b class="wl-neg">red</b> = a big move today (up/down),
+        <b style="color:#1f77b4">blue</b> = near the 52-week high, pulsing = both. Set each
+        symbol's two thresholds inline (% from 52-wk high, |today's move|); leave a threshold
+        blank to watch a symbol without any alert. Email alerts fire once per day per signal
+        when SMTP is configured. Click a row for the price chart and fundamentals.
+    </p>
+    <div class="benchmark-controls">
+        <label>Symbol: <input id="wl-add-symbol" type="text" size="8" placeholder="e.g. NVDA"/></label>
+        <label>Near-high %: <input id="wl-add-high" type="text" size="4" placeholder="3"/></label>
+        <label>Move %: <input id="wl-add-move" type="text" size="4" placeholder="10"/></label>
+        <button id="wl-add-btn" type="button">Add</button>
+        <button id="wl-refresh-btn" type="button">Refresh</button>
+        <span id="wl-view-toggle" class="wl-view-toggle" style="display:none;">
+            <button type="button" id="wl-view-stats" class="active">Stats</button>
+            <button type="button" id="wl-view-returns">Returns</button>
+        </span>
+        <span id="wl-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="wl-empty" class="muted" style="margin-top: 1rem;">
+        No symbols yet. Add one above to start watching.
+    </div>
+
+    <div id="wl-returns-panel" style="display:none;"></div>
+
+    <table id="watchlist-table" class="annual-table sticky-head" style="margin-top: 0.4rem; display: none;">
+        <thead><tr>
+            <th data-sort="str">Symbol</th>
+            <th data-sort="num">Price</th>
+            <th data-sort="num" title="Live move since prior close">Today %</th>
+            <th data-sort="num">5d %</th>
+            <th data-sort="num">30d %</th>
+            <th data-sort="num" title="Distance from 52-week high (negative = below)">% vs High</th>
+            <th data-sort="num" title="Distance above 52-week low">% vs Low</th>
+            <th data-sort="num" title="Annualised realized volatility, 5-day (from 1-minute intraday returns)">Vol 5D</th>
+            <th data-sort="num" title="Annualised realized volatility, 10-day (from 1-minute intraday returns)">Vol 10D</th>
+            <th data-sort="num" title="Annualised realized volatility, 30-day (from daily closes)">Vol 30D</th>
+            <th data-sort="num" title="Annualised realized volatility, 1-year (from daily closes)">Vol 1Y</th>
+            <th data-sort="num">P/E</th>
+            <th data-sort="num" title="Market value of your holding, GBP (blank if not held)">Pos £</th>
+            <th data-sort="num" title="Unrealized gain on the holding, GBP">Gain</th>
+            <th title="Alert when within this % of the 52-week high">Near-hi %</th>
+            <th title="Alert when |today's move| exceeds this %">Move %</th>
+            <th></th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+
+    <div id="wl-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div class="modal-box">
+            <h3 id="wl-modal-title" style="margin-bottom: 0.15rem;">—</h3>
+            <div id="wl-modal-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.5rem;"></div>
+            <div style="height: 360px;">
+                <canvas id="wl-chart"></canvas>
+            </div>
+            <div class="wl-window-toggle" id="wl-window-toggle">
+                <button type="button" data-window="1D">1D</button>
+                <button type="button" data-window="3D">3D</button>
+                <button type="button" data-window="5D" class="active">5D</button>
+                <button type="button" data-window="10D">10D</button>
+                <button type="button" data-window="15D">15D</button>
+                <button type="button" data-window="30D">30D</button>
+            </div>
+            <div class="wl-stats" id="wl-modal-stats"></div>
+            <div class="wl-fund-toggle" id="wl-fund-toggle">Fundamentals</div>
+            <div id="wl-fund-body" style="display: none; margin-top: 0.5rem;"></div>
+            <div class="modal-actions">
+                <button id="wl-modal-close" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="tab-panel" id="panel-swing">
+    <p class="muted" style="margin-top: 0">
+        Validation statistics for a short-term mean-reversion (dip-buy) strategy on high-vol
+        semi/AI names. Every conditional number is shown next to its unconditional
+        <b>baseline</b> — a bounce stat only matters if it beats the drift, and next to
+        <b>placebo</b>/<b>bootstrap</b> controls (§6) that test whether the flush trigger adds
+        anything over random entry timing. Thin cells
+        (<span class="swing-smalln">dimmed, with n</span>) are flagged, never silently averaged;
+        pooled cells report <b>events / episodes</b> (distinct event dates, since cluster names flush
+        together). §6 accounting reconciles exactly: <b>events = TP + SL + Time + Ambiguous + Open</b>,
+        with barrier touches read from intraday OHLC and open/censored trades shown, never dropped.
+        Returns use each symbol's own split-adjusted close (log for vol, simple for P&amp;L).
+        Full history vs trailing 6 months (§9) sit side by side, with each name's actual data span.
+        §8 earnings hygiene is deferred. Every field below is configurable.
+    </p>
+
+    <div class="benchmark-controls swing-controls">
+        <label>Symbols: <input id="sw-symbols" type="text" size="42"
+                                placeholder="MU,AMAT,KLAC,…"/></label>
+        <label>Cluster: <input id="sw-cluster" type="text" size="34"
+                                placeholder="MU,AMAT,… (pooled + correlation)"/></label>
+        <button id="sw-save" type="button" title="Persist symbols/cluster and backfill new names">Save&nbsp;list</button>
+        <button id="sw-backfill" type="button" title="Fetch daily history for symbols not in the DB yet">Backfill</button>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label>Years: <input id="sw-years" type="text" size="3" value="3"/></label>
+        <label>σ triggers: <input id="sw-sigmas" type="text" size="6" value="1,2,3"/></label>
+        <label>Abs drop %: <input id="sw-drops" type="text" size="8" value="5,8,10"/></label>
+        <label>Horizons: <input id="sw-horizons" type="text" size="8" value="1,3,5,10"/></label>
+        <label>Flush %: <input id="sw-flushpct" type="text" size="8" value="10,15,20"/></label>
+        <label>Flush days: <input id="sw-flushdays" type="text" size="5" value="2,3"/></label>
+    </div>
+    <div class="benchmark-controls swing-controls">
+        <label>TP %: <input id="sw-tp" type="text" size="4" value="10"/></label>
+        <label>SL %: <input id="sw-sl" type="text" size="4" value="15"/></label>
+        <label>Time stops: <input id="sw-timestops" type="text" size="10" value="5,10,15,20"/></label>
+        <label>Barrier entry: <input id="sw-barrierdays" type="text" size="3" value="2"/>d ≤ −<input id="sw-barrierpct" type="text" size="3" value="10"/>%</label>
+        <button id="sw-run" type="button">Run</button>
+        <span id="sw-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <div id="sw-empty" class="muted" style="margin-top: 1rem;">
+        Click <b>Run</b> to compute the report. First run of a fresh name needs a
+        <b>Backfill</b> (or wait for the nightly price job).
+    </div>
+
+    <div id="sw-vol-wrap" style="display:none; margin-top: 0.8rem;">
+        <h3 class="swing-h">§1 Realized volatility from daily log returns <span class="muted swing-sub">daily and annualized</span></h3>
+        <table id="sw-vol-table" class="annual-table sticky-head"></table>
+    </div>
+
+    <div id="sw-detail-wrap" style="display:none; margin-top: 1rem;">
+        <div class="benchmark-controls">
+            <label>Detail for:
+                <select id="sw-detail-symbol"></select>
+            </label>
+            <span class="muted swing-sub">§2–§6 · full history vs trailing 6 months (§9)</span>
+        </div>
+        <div id="sw-detail"></div>
+    </div>
+
+    <div id="sw-corr-wrap" style="display:none; margin-top: 1.2rem;">
+        <h3 class="swing-h">§7 Return correlation <span class="muted swing-sub">semi cluster, daily simple returns</span></h3>
+        <div class="swing-corr-toggle" id="sw-corr-toggle">
+            <button type="button" data-corr="30" class="active">Rolling 30d</button>
+            <button type="button" data-corr="60">Rolling 60d</button>
+            <button type="button" data-corr="down">Down days only</button>
+        </div>
+        <div id="sw-corr-caption" class="muted swing-sub" style="margin: 0.3rem 0;"></div>
+        <div style="overflow-x:auto;">
+            <table id="sw-corr-heatmap" class="corr-matrix"></table>
+        </div>
+        <h4 class="swing-h" style="margin-top: 0.9rem;">Average pairwise correlation over time</h4>
+        <div style="height: 260px;">
+            <canvas id="sw-corr-chart"></canvas>
+        </div>
+    </div>
+</section>
+
 <section class="tab-panel" id="panel-snapshots">
     <p class="muted" style="margin-top: 0">
         Diff any two saved snapshots from <code>portfolio_snapshots</code>. Snapshots are
@@ -1782,21 +2102,24 @@
 
     <div class="subview" id="fund-view-holdings">
         <p class="muted" style="margin-top: 0">
-            Current-state fundamentals for every currently-held symbol — P/E, forward P/E,
+            Current-state fundamentals for every currently-held symbol (plus any watchlist names
+            and any ticker you add below, owned or not) — P/E, forward P/E,
             EV/EBITDA, PEG, market cap, 52-week range, beta and analyst target, all from Yahoo's
             <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Data is
-            cached in SQLite and refreshed by a background job on startup and every 6 hours, so
+            cached in SQLite and refreshed by a background job on startup and every 4 hours, so
             the table renders instantly. Click <b>Refresh</b> to force an immediate
             background re-fetch (the table updates as rows come in, ~30s for a full portfolio).
             Click any row to see cash flow (TTM OCF, Capex, FCF, FCF margin, FCF growth YoY),
             ROIC, Net Debt/EBITDA, margins, balance-sheet ratios, dividends, sector and more.
         </p>
         <div class="actions">
+            <label>Add ticker: <input id="snapshot-add-symbol" type="text" size="8" placeholder="e.g. TSLA"/></label>
+            <button id="snapshot-add-btn" type="button">Add</button>
             <button id="snapshot-reload" type="button">Refresh</button>
             <span id="snapshot-status" class="muted" style="font-size: 0.85rem;"></span>
         </div>
 
-        <table id="snapshot-table" style="margin-top: 0.75rem;">
+        <table id="snapshot-table" class="sticky-head" style="margin-top: 0.75rem;">
             <thead><tr>
                 <th class="txt" data-sort="str">Symbol</th>
                 <th data-sort="num">Price</th>
@@ -2039,7 +2362,7 @@
         </div>
     </div>
 
-    <table id="live-table" style="margin-top: 0.5rem;">
+    <table id="live-table" class="sticky-head" style="margin-top: 0.5rem;">
         <thead>
         <tr>
             <th class="txt" data-sort="text">Symbol</th>
@@ -2048,6 +2371,9 @@
             <th data-sort="num">Last</th>
             <th data-sort="num">Day Δ %</th>
             <th data-sort="num">Day Δ £</th>
+            <th data-sort="num" title="Trailing 5-calendar-day price change">5d %</th>
+            <th data-sort="num" title="Trailing 10-calendar-day price change">10d %</th>
+            <th data-sort="num" title="Trailing ~30-calendar-day price change">30d %</th>
             <th data-sort="num">Position £</th>
             <th class="txt" data-sort="text">Accounts</th>
             <th class="txt">Quote ts</th>

@@ -4,3 +4,7 @@
 target/
 portfolio-bench.pid
 node_modules/
+# Local secrets / overrides — never commit (Gmail app password lives in ~/.portfolio-bench.properties)
+application-local.properties
+*.local.properties
+/config/

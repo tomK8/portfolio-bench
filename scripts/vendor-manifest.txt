@@ -1,0 +1,18 @@
+# Vendored front-end libraries for the dashboard.
+#
+# One line per file:  <target-filename>  <upstream-url>
+#
+# The URL *is* the version pin — there is no separate version column to drift out
+# of sync with it. To upgrade a library, change the version in its URL below and
+# run scripts/update-vendor.sh. Keep every URL pinned to an exact version: an
+# unpinned jsdelivr/unpkg path silently serves whatever is latest, which is how
+# the date-fns adapter used to float.
+#
+# Load order is fixed in dashboard.html, not here: chart.umd.js must precede the
+# adapter and the zoom plugin, and hammer.min.js must precede the zoom plugin.
+
+htmx.min.js                             https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js
+chart.umd.js                            https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js
+chartjs-adapter-date-fns.bundle.min.js  https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js
+hammer.min.js                           https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js
+chartjs-plugin-zoom.min.js              https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js

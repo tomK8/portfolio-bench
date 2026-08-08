@@ -61,12 +61,14 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 - Root — `ExcelReportWriter`, `PortfolioBenchApplication`.
 
 UI: server-rendered Thymeleaf + htmx + Chart.js 4 + `chartjs-adapter-date-fns` + hammer.js +
-`chartjs-plugin-zoom`, all **vendored** under `static/js/vendor/` (versions + exact upstream
-URLs in that dir's `README.md`). They were CDN-loaded until 2026-08-08, when a jsdelivr/unpkg
-blip left `Chart` undefined and every chart panel rendered silently blank; a loopback-only tool
-gets no cache-sharing benefit from a CDN, so there was nothing to weigh against that. Load order
-matters — `chart.umd.js` before the adapter and the zoom plugin, `hammer.min.js` before the zoom
-plugin. Dashboard tabs:
+`chartjs-plugin-zoom`, all **vendored** under `static/js/vendor/`. They were CDN-loaded until
+2026-08-08, when a jsdelivr/unpkg blip left `Chart` undefined and every chart panel rendered
+silently blank; a loopback-only tool gets no cache-sharing benefit from a CDN, so there was
+nothing to weigh against that. They never auto-update: `scripts/vendor-manifest.txt` pins each
+by exact URL (the URL *is* the version — no second list to drift) and `scripts/update-vendor.sh`
+re-downloads them (`--check` for a dry run), staging and installing all-or-nothing so a
+half-updated dir can't mix incompatible versions. Load order matters — `chart.umd.js` before the
+adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard tabs:
 - **From holdings files** — `POST /sync` → `fragments/portfolio`. Includes a cash
   reconciliation panel comparing the holdings-side cash (parsed CASH rows + form-supplied
   II SIPP £/$) against the ledger-side latest stored cash balance, with red rows for

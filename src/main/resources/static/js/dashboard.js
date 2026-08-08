@@ -224,6 +224,72 @@
             }
         } catch (e) {}
 
+        // Shared failure path for the load-once panels.
+        //
+        // Every load*/setup* below latches `xLoaded = true` *before* awaiting, so the fetch
+        // runs once per page. Without a catch that latch also survived failure: one transient
+        // error (a dead fetch, or Chart undefined when the charting library failed to load)
+        // left the panel blank with no message, and re-clicking the tab was a silent no-op
+        // until a full reload. Each caller now releases its own latch here and reports why.
+        //
+        // Half-built panels are torn down before the retry: Chart.js refuses to bind a canvas
+        // that still has a live chart on it, so a loader that failed part-way through would
+        // otherwise throw "Canvas is already in use" on every subsequent attempt.
+        function panelLoadFailed(panelId, err, retry) {
+            var panel = document.getElementById(panelId);
+            if (!panel) return;
+
+            if (typeof Chart !== 'undefined' && Chart.getChart) {
+                panel.querySelectorAll('canvas').forEach(function (c) {
+                    var existing = Chart.getChart(c);
+                    if (existing) existing.destroy();
+                });
+            }
+
+            var box = panel.querySelector('.panel-load-error');
+            if (!box) {
+                box = document.createElement('div');
+                box.className = 'panel-load-error';
+                panel.insertBefore(box, panel.firstChild);
+            }
+            // A missing Chart means the vendored libraries didn't load — a different problem
+            // from a failed endpoint, and one the raw exception text describes badly.
+            var detail = (typeof Chart === 'undefined')
+                    ? 'The charting library did not load — check that <code>/js/vendor/chart.umd.js</code> is being served.'
+                    : 'Error: <code>' + String((err && err.message) || err) + '</code>';
+            box.innerHTML = '<strong>Could not load this panel.</strong> ' + detail;
+
+            if (typeof retry === 'function') {
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.textContent = 'Retry';
+                btn.addEventListener('click', function () {
+                    box.remove();
+                    retry();
+                });
+                box.appendChild(btn);
+            }
+            if (window.console && console.error) console.error('panel ' + panelId + ' failed to load', err);
+        }
+
+        // Idempotent listener bind. The load-once panels can now re-run after a failed
+        // attempt (see panelLoadFailed), so a bare addEventListener inside one would stack a
+        // duplicate handler on every retry — e.g. a doubled POST on the next Save click.
+        // Same dataset guard bindSubviewToggle/bindReturnsModeToggle already use.
+        function bindOnce(el, event, handler) {
+            if (!el || el.dataset['bound' + event]) return;
+            el.dataset['bound' + event] = '1';
+            el.addEventListener(event, handler);
+        }
+
+        // Drops a previous failure box so a successful retry doesn't leave a stale error
+        // sitting above freshly rendered content.
+        function clearPanelError(panelId) {
+            var panel = document.getElementById(panelId);
+            var box = panel && panel.querySelector('.panel-load-error');
+            if (box) box.remove();
+        }
+
         // Generic intra-panel subview toggle. Each .subview-toggle button carries a
         // data-subview attribute pointing to the .subview div to show. The loader callback
         // is invoked when its subview first becomes visible — the called function is
@@ -570,6 +636,7 @@
         function loadValueChart() {
             if (valueLoaded) return;
             valueLoaded = true;
+            clearPanelError('panel-value');
             Promise.all([
                 fetch('/portfolio-value').then(function (r) { return r.json(); }),
                 fetch('/contributions').then(function (r) { return r.json(); })
@@ -678,6 +745,9 @@
                 document.getElementById('value-zoom-reset').onclick = function () {
                     if (valueChart) valueChart.resetZoom();
                 };
+            }).catch(function (e) {
+                valueLoaded = false;
+                panelLoadFailed('panel-value', e, loadValueChart);
             });
         }
 
@@ -691,6 +761,7 @@
         function loadReturnsChart() {
             if (returnsLoaded) return;
             returnsLoaded = true;
+            clearPanelError('panel-returns');
             bindReturnsModeToggle();
             fetch('/returns').then(function (r) { return r.json(); }).then(function (data) {
                 renderReturnsStats(data.summary);
@@ -844,6 +915,9 @@
                         }
                     }
                 });
+            }).catch(function (e) {
+                returnsLoaded = false;
+                panelLoadFailed('panel-returns', e, loadReturnsChart);
             });
         }
 
@@ -1148,6 +1222,7 @@
         function loadContributionsChart() {
             if (contributionsLoaded) return;
             contributionsLoaded = true;
+            clearPanelError('panel-contributions');
             fetch('/contributions').then(function (r) { return r.json(); }).then(function (timeline) {
                 var palette = ['#1f77b4', '#2ca02c', '#ff7f0e', '#d62728'];
                 var datasets = timeline.lines.map(function (line, i) {
@@ -1196,6 +1271,9 @@
                         }
                     }
                 });
+            }).catch(function (e) {
+                contributionsLoaded = false;
+                panelLoadFailed('panel-contributions', e, loadContributionsChart);
             });
         }
 
@@ -1398,20 +1476,24 @@
         function loadAllocation() {
             if (allocLoaded) return;
             allocLoaded = true;
+            clearPanelError('alloc-view-breakdown');
             loadTargetAllocation();
-            document.getElementById('target-save').addEventListener('click', saveTargetAllocation);
+            bindOnce(document.getElementById('target-save'), 'click', saveTargetAllocation);
             fetch('/allocation').then(function (r) { return r.json(); }).then(function (data) {
                 allocData = data;
                 if (!data.points || !data.points.length) return;
                 renderAllocCashChart(data.points);
                 renderAllocSymbolsChart(data.points);
                 initAllocSnapshot(data.points);
-                document.getElementById('alloc-cash-zoom-reset').addEventListener('click', function () {
+                bindOnce(document.getElementById('alloc-cash-zoom-reset'), 'click', function () {
                     if (allocCashChart) allocCashChart.resetZoom();
                 });
-                document.getElementById('alloc-symbols-zoom-reset').addEventListener('click', function () {
+                bindOnce(document.getElementById('alloc-symbols-zoom-reset'), 'click', function () {
                     if (allocSymbolsChart) allocSymbolsChart.resetZoom();
                 });
+            }).catch(function (e) {
+                allocLoaded = false;
+                panelLoadFailed('alloc-view-breakdown', e, loadAllocation);
             });
         }
 
@@ -2494,13 +2576,17 @@
         function loadRisk() {
             if (riskLoaded) return;
             riskLoaded = true;
-            document.getElementById('risk-rf-apply')
-                    .addEventListener('click', applyRiskFreeRate);
+            bindOnce(document.getElementById('risk-rf-apply'), 'click', applyRiskFreeRate);
             fetchAndRenderRisk();
         }
 
         function fetchAndRenderRisk() {
-            fetch('/risk').then(function (r) { return r.json(); }).then(renderRisk);
+            clearPanelError('panel-risk');
+            return fetch('/risk').then(function (r) { return r.json(); }).then(renderRisk)
+                    .catch(function (e) {
+                        riskLoaded = false;
+                        panelLoadFailed('panel-risk', e, fetchAndRenderRisk);
+                    });
         }
 
         function applyRiskFreeRate() {
@@ -2681,8 +2767,17 @@
         function loadDividends() {
             if (dividendsLoaded) return;
             dividendsLoaded = true;
-            fetch('/dividends').then(function (r) { return r.json(); }).then(renderDividends);
-            fetch('/dividends/audit').then(function (r) { return r.json(); }).then(renderDividendAudit);
+            clearPanelError('panel-dividends');
+            fetch('/dividends').then(function (r) { return r.json(); }).then(renderDividends)
+                    .catch(function (e) {
+                        dividendsLoaded = false;
+                        panelLoadFailed('panel-dividends', e, loadDividends);
+                    });
+            fetch('/dividends/audit').then(function (r) { return r.json(); }).then(renderDividendAudit)
+                    .catch(function (e) {
+                        dividendsLoaded = false;
+                        panelLoadFailed('panel-dividends', e, loadDividends);
+                    });
         }
 
         function renderDividendAudit(report) {
@@ -3116,8 +3211,13 @@
         function loadConcentration() {
             if (concentrationLoaded) return;
             concentrationLoaded = true;
+            clearPanelError('alloc-view-concentration');
             fetch('/concentration').then(function (r) { return r.json(); })
-                    .then(renderConcentration);
+                    .then(renderConcentration)
+                    .catch(function (e) {
+                        concentrationLoaded = false;
+                        panelLoadFailed('alloc-view-concentration', e, loadConcentration);
+                    });
         }
 
         function renderConcentration(d) {
@@ -3585,8 +3685,13 @@
         function loadCurrency() {
             if (currencyLoaded) return;
             currencyLoaded = true;
+            clearPanelError('alloc-view-currency');
             fetch('/currency').then(function (r) { return r.json(); })
-                    .then(renderCurrency);
+                    .then(renderCurrency)
+                    .catch(function (e) {
+                        currencyLoaded = false;
+                        panelLoadFailed('alloc-view-currency', e, loadCurrency);
+                    });
         }
 
         function renderCurrency(d) {
@@ -3827,8 +3932,13 @@
         function loadReconciliation() {
             if (reconLoaded) return;
             reconLoaded = true;
-            document.getElementById('price-save').addEventListener('click', saveManualPrice);
-            fetch('/reconciliation').then(function (r) { return r.json(); }).then(renderRecon);
+            bindOnce(document.getElementById('price-save'), 'click', saveManualPrice);
+            clearPanelError('panel-recon');
+            fetch('/reconciliation').then(function (r) { return r.json(); }).then(renderRecon)
+                    .catch(function (e) {
+                        reconLoaded = false;
+                        panelLoadFailed('panel-recon', e, loadReconciliation);
+                    });
         }
 
         function saveManualPrice() {

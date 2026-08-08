@@ -60,8 +60,13 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 - `config` — `BeanConfiguration`.
 - Root — `ExcelReportWriter`, `PortfolioBenchApplication`.
 
-UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-fns` +
-`chartjs-plugin-zoom` (CDN). Dashboard tabs:
+UI: server-rendered Thymeleaf + htmx + Chart.js 4 + `chartjs-adapter-date-fns` + hammer.js +
+`chartjs-plugin-zoom`, all **vendored** under `static/js/vendor/` (versions + exact upstream
+URLs in that dir's `README.md`). They were CDN-loaded until 2026-08-08, when a jsdelivr/unpkg
+blip left `Chart` undefined and every chart panel rendered silently blank; a loopback-only tool
+gets no cache-sharing benefit from a CDN, so there was nothing to weigh against that. Load order
+matters — `chart.umd.js` before the adapter and the zoom plugin, `hammer.min.js` before the zoom
+plugin. Dashboard tabs:
 - **From holdings files** — `POST /sync` → `fragments/portfolio`. Includes a cash
   reconciliation panel comparing the holdings-side cash (parsed CASH rows + form-supplied
   II SIPP £/$) against the ledger-side latest stored cash balance, with red rows for
@@ -193,7 +198,20 @@ UI: server-rendered Thymeleaf + htmx (CDN) + Chart.js 4 + `chartjs-adapter-date-
   the half the EDGAR filing-date proxy (Swing §D) can't serve. Rosters are cached and degrade to
   last-known on a feed outage. See the Earnings section below.
 
-Charts load lazily on first tab click. Logging is SLF4J + Logback (`logback-spring.xml`);
+Charts load lazily on first tab click, each behind a `xLoaded` latch set *before* the fetch so
+it runs once per page. **Every such loader must end in a `.catch`** that releases its own latch
+and calls `panelLoadFailed(panelId, err, retryFn)` (`dashboard.js`) — without one, a single
+transient failure left the latch set, so the tab stayed blank with no message and re-clicking it
+was a silent no-op until a full reload. `panelLoadFailed` destroys any half-built charts on the
+panel first (Chart.js refuses to re-bind a live canvas, so a partly-failed loader would otherwise
+throw "Canvas is already in use" on every retry), then renders a `.panel-load-error` box with a
+Retry button; the paired `clearPanelError(panelId)` goes right after the latch. Because loaders
+can now re-run, any `addEventListener` inside one must go through `bindOnce` or it stacks a
+duplicate handler per retry. Loaders that own a sub-view (allocation's concentration/currency)
+pass the **sub-view** id, not the panel id — `panelLoadFailed` queries descendants, so a
+panel-scoped call would clear a sibling sub-view's box.
+
+Logging is SLF4J + Logback (`logback-spring.xml`);
 no `System.out` in production code.
 
 | Action                | Endpoint                   | Service                   |

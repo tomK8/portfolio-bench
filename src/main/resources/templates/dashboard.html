@@ -10,11 +10,15 @@
             if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
         } catch (e) {}
     </script>
-    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
+    <!-- Vendored locally (static/js/vendor) rather than CDN-loaded: a jsdelivr/unpkg blip
+         left Chart undefined and every chart panel silently blank. Loopback-only tool, so
+         there is no cache-sharing benefit to pay for that. Versions are pinned in the
+         filenames' upstream sources; re-download from the same URLs to upgrade. -->
+    <script src="/js/vendor/htmx.min.js"></script>
+    <script src="/js/vendor/chart.umd.js"></script>
+    <script src="/js/vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="/js/vendor/hammer.min.js"></script>
+    <script src="/js/vendor/chartjs-plugin-zoom.min.js"></script>
     <style>
         body {
             font-family: system-ui, sans-serif;
@@ -396,6 +400,31 @@
             border-radius: 6px;
             font-size: 0.9rem;
             display: none;
+        }
+
+        /* Shown in place of a panel's content when its data/chart load failed. Unlike
+           .whatif-error this is injected on demand, so it is visible by default. */
+        .panel-load-error {
+            margin: 0.5rem 0 1rem 0;
+            padding: 0.6rem 0.9rem;
+            border: 1px solid #c0392b;
+            background: #fdecea;
+            color: #7a1d12;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        .panel-load-error code {
+            background: rgba(0, 0, 0, 0.06);
+            padding: 0 3px;
+            border-radius: 3px;
+        }
+
+        .panel-load-error button {
+            margin-left: 0.5rem;
+            font: inherit;
+            padding: 0.1rem 0.6rem;
+            cursor: pointer;
         }
 
         .modal-backdrop {
@@ -967,6 +996,8 @@
         html[data-theme="dark"] .annual-table td.neg { color: #f87171; }
         html[data-theme="dark"] .value-warnings,
         html[data-theme="dark"] .whatif-error { background: #3a2f15; color: #ffeab0; border-color: #5c4720; }
+        html[data-theme="dark"] .panel-load-error { background: #3a1c18; color: #ffc9c0; border-color: #6b2b22; }
+        html[data-theme="dark"] .panel-load-error button { background: #2a2d33; color: #e8e8ea; border: 1px solid #4a4e56; }
         html[data-theme="dark"] .cash-recon { background: #1c1f24; border-color: #2e3137; }
         html[data-theme="dark"] .cash-recon h3 { color: #9aa0a6; }
         html[data-theme="dark"] .recon-subhead { color: #8a8e94; }

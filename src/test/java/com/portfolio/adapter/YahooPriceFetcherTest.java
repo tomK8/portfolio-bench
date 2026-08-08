@@ -121,4 +121,15 @@ class YahooPriceFetcherTest {
                 .parseIntraday("BAD", "{\"chart\":{\"result\":null,\"error\":{\"code\":\"Not Found\"}}}");
         assertTrue(bars.isEmpty());
     }
+
+    @Test
+    void urlTickerEncodesIndexCaretForUriSafety() {
+        // URI.create rejects a raw '^', so index tickers must be percent-encoded in the URL
+        // while keeping '^NDX' as the stored symbol.
+        assertEquals("%5ENDX", YahooPriceFetcher.urlTicker("^NDX"));
+        assertEquals("%5EIRX", YahooPriceFetcher.urlTicker("^IRX"));
+        assertEquals("EQQQ.L", YahooPriceFetcher.urlTicker("EQQQ.L"));
+        assertDoesNotThrow(() -> java.net.URI.create(
+                "https://query1.finance.yahoo.com/v8/finance/chart/" + YahooPriceFetcher.urlTicker("^NDX")));
+    }
 }

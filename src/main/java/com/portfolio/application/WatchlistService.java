@@ -101,24 +101,97 @@ public class WatchlistService {
         Map<String, IntradayPrice> latest = intradayRepo.loadLatestIntradayPrices(tickers);
 
         LocalDate today = LocalDate.now();
+        Instant now = Instant.now();
         List<Row> rows = new ArrayList<>(entries.size());
         for (Entry e : entries) {
-            rows.add(buildRow(e, today, fundamentals, ledgerBySymbol, rates, latest));
+            rows.add(buildRow(e, today, now, fundamentals, ledgerBySymbol, rates, latest));
         }
         return new WatchlistView(rows);
     }
 
-    private Row buildRow(Entry e, LocalDate today,
+    /**
+     * Near-real-time poll payload: only the intraday-varying fields (live price, momentum,
+     * short-horizon vol, alert flags), computed <em>without</em> the FX fetch or ledger read the
+     * full {@link #view()} does. The dashboard polls this every ~30s and patches the matching cells
+     * in place, so the slower position/fundamentals columns keep their last full-load values and no
+     * external FX call is made on the polling cadence.
+     */
+    public QuoteView quotes() {
+        List<Entry> entries = watchlistRepo.loadAll();
+        if (entries.isEmpty()) return new QuoteView(List.of());
+
+        Map<String, Cached> fundamentals = fundamentalsRepo.loadAll();
+        List<String> tickers = new ArrayList<>();
+        for (Entry e : entries) tickers.add(tickerFor(e.symbol()));
+        Map<String, IntradayPrice> latest = intradayRepo.loadLatestIntradayPrices(tickers);
+
+        LocalDate today = LocalDate.now();
+        Instant now = Instant.now();
+        List<QuoteRow> rows = new ArrayList<>(entries.size());
+        for (Entry e : entries) rows.add(buildQuote(e, today, now, fundamentals, latest));
+        return new QuoteView(rows);
+    }
+
+    private Row buildRow(Entry e, LocalDate today, Instant now,
                          Map<String, Cached> fundamentals,
                          Map<String, List<CashTransaction>> ledgerBySymbol,
                          Map<String, BigDecimal> rates,
                          Map<String, IntradayPrice> latest) {
         String symbol = e.symbol();
         String ticker = tickerFor(symbol);
-
-        List<PriceBar> bars = priceRepo.getPriceHistory(ticker, today.minusDays(400), today);
         IntradayPrice ip = latest.get(ticker);
+        Snapshot s = snapshot(e, ip, today, fundamentals);
+        if (s == null) return Row.missing(symbol, e.highThresholdPct(), e.moveThresholdPct(),
+                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()));
 
+        Live live = computeLive(s, e, today, now);
+
+        // 30D/1Y vol from daily closes, P/E + beta from fundamentals — all slow-moving, so the
+        // poll skips them (see quotes()); only the full view assembles them.
+        BigDecimal vol30 = PriceStats.annualizedVol(s.bars(), VOL_WINDOW);
+        BigDecimal vol1y = PriceStats.annualizedVol(s.bars(), VOL_1Y_WINDOW);
+        BigDecimal trailingPe = s.q() == null ? null : s.q().trailingPe();
+        BigDecimal beta = s.q() == null ? null : s.q().beta();
+        Position pos = position(symbol, ticker, ledgerBySymbol.get(symbol), ip, rates);
+
+        return new Row(symbol, s.currency(), s.currentPrice(),
+                live.todayPct(), live.pct2d(), live.pct3d(), live.pct5d(), live.pct10d(), live.pct30d(),
+                s.week52High(), s.week52Low(), live.pctFromHigh(), live.pctFromLow(),
+                live.vol5d(), live.vol10d(), scalePct(vol30), scalePct(vol1y), trailingPe, beta,
+                pos.held(), pos.valueGbp(), pos.gainGbp(), scalePct(pos.gainPct()),
+                e.highThresholdPct(), e.moveThresholdPct(),
+                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()),
+                live.nearHigh(), live.bigMove(), live.moveDirection(),
+                live.aboveLevel(), live.belowLevel(),
+                false);
+    }
+
+    private QuoteRow buildQuote(Entry e, LocalDate today, Instant now,
+                                Map<String, Cached> fundamentals,
+                                Map<String, IntradayPrice> latest) {
+        String symbol = e.symbol();
+        IntradayPrice ip = latest.get(tickerFor(symbol));
+        Snapshot s = snapshot(e, ip, today, fundamentals);
+        if (s == null) return QuoteRow.missing(symbol);
+
+        Live live = computeLive(s, e, today, now);
+        return new QuoteRow(symbol, s.currency(), s.currentPrice(),
+                live.todayPct(), live.pct2d(), live.pct3d(), live.pct5d(), live.pct10d(), live.pct30d(),
+                live.pctFromHigh(), live.pctFromLow(), live.vol5d(), live.vol10d(),
+                live.nearHigh(), live.bigMove(), live.moveDirection(),
+                live.aboveLevel(), live.belowLevel());
+    }
+
+    /**
+     * Load the per-symbol inputs the full row and the quote poll share (daily bars, the latest
+     * intraday quote, the fundamentals snapshot) and derive the live price + 52-week levels.
+     * Returns {@code null} when the symbol has neither bars nor a quote yet (freshly added, still
+     * backfilling) — the caller renders that as a "missing" placeholder.
+     */
+    private Snapshot snapshot(Entry e, IntradayPrice ip, LocalDate today, Map<String, Cached> fundamentals) {
+        String symbol = e.symbol();
+        String ticker = tickerFor(symbol);
+        List<PriceBar> bars = priceRepo.getPriceHistory(ticker, today.minusDays(400), today);
         QuoteSummary q = fundamentals.containsKey(symbol) ? fundamentals.get(symbol).quote() : null;
         String currency = ip != null ? ip.currency() : (q != null ? q.currency() : null);
 
@@ -128,51 +201,53 @@ public class WatchlistService {
         Double lastClose = bars.isEmpty() ? null : bars.get(bars.size() - 1).close();
         Double current = lastClose;
         if (ip != null) current = ip.close();
-
-        if (bars.isEmpty() && current == null) {
-            return Row.missing(symbol, e.highThresholdPct(), e.moveThresholdPct());
-        }
-
-        // Trailing-window momentum, calendar-anchored. "Today" = live vs the last close before today.
-        BigDecimal todayPct = PriceStats.pctChange(current, PriceStats.closeOnOrBefore(bars, today.minusDays(1)));
-        BigDecimal pct3d  = PriceStats.pctChange(current, PriceStats.closeOnOrBefore(bars, today.minusDays(3)));
-        BigDecimal pct5d  = PriceStats.pctChange(current, PriceStats.closeOnOrBefore(bars, today.minusDays(5)));
-        BigDecimal pct10d = PriceStats.pctChange(current, PriceStats.closeOnOrBefore(bars, today.minusDays(10)));
-        BigDecimal pct30d = PriceStats.pctChange(current, PriceStats.closeOnOrBefore(bars, today.minusDays(30)));
-
-        // Realized-vol term structure, same estimators the popup uses: 5D/10D from intraday
-        // 1-minute returns (less noisy over a few days than a handful of daily returns), 30D/1Y
-        // from the daily closes already loaded above.
-        BigDecimal vol30 = PriceStats.annualizedVol(bars, VOL_WINDOW);
-        BigDecimal vol1y = PriceStats.annualizedVol(bars, VOL_1Y_WINDOW);
-        BigDecimal[] intra = intradayVols(ticker, Instant.now());
-        BigDecimal vol5 = intra[0], vol10 = intra[1];
+        if (bars.isEmpty() && current == null) return null;
 
         BigDecimal currentPrice = current == null ? null
                 : BigDecimal.valueOf(current).setScale(PRICE_SCALE, RoundingMode.HALF_UP);
         BigDecimal week52High = q == null ? null : q.week52High();
         BigDecimal week52Low = q == null ? null : q.week52Low();
-        BigDecimal pctFromHigh = (currentPrice != null && week52High != null && week52High.signum() > 0)
-                ? currentPrice.subtract(week52High).divide(week52High, PCT_SCALE, RoundingMode.HALF_UP) : null;
-        BigDecimal pctFromLow = (currentPrice != null && week52Low != null && week52Low.signum() > 0)
-                ? currentPrice.subtract(week52Low).divide(week52Low, PCT_SCALE, RoundingMode.HALF_UP) : null;
+        return new Snapshot(ticker, bars, ip, q, currency, current, currentPrice, week52High, week52Low);
+    }
 
-        BigDecimal trailingPe = q == null ? null : q.trailingPe();
-        BigDecimal beta = q == null ? null : q.beta();
+    /**
+     * The intraday-varying fields common to the full row and the quote poll: calendar-anchored
+     * trailing momentum, the 5D/10D intraday-derived realized vol, distance from the 52-week
+     * high/low, and the alert flags. Percentages come back already scaled. Kept as one method so
+     * the screen and the poll can never compute these differently.
+     */
+    private Live computeLive(Snapshot s, Entry e, LocalDate today, Instant now) {
+        List<PriceBar> bars = s.bars();
+        Double current = s.current();
+        // Session-anchored, not calendar-anchored: "today" = live vs the previous session's close,
+        // "2d" = live vs two sessions ago (today + the prior session), etc. Counting sessions keeps
+        // the short windows distinct over weekends/holidays (a calendar anchor makes Today/2d/3d
+        // identical on Mondays). k "days" here means k trading sessions.
+        BigDecimal todayPct = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 1));
+        BigDecimal pct2d  = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 2));
+        BigDecimal pct3d  = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 3));
+        BigDecimal pct5d  = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 5));
+        BigDecimal pct10d = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 10));
+        BigDecimal pct30d = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 30));
 
-        Position pos = position(symbol, ticker, ledgerBySymbol.get(symbol), ip, rates);
+        // 5D/10D vol from intraday 1-minute returns (less noisy over a few days than a handful of
+        // daily returns). Same estimator the popup term structure uses.
+        BigDecimal[] intra = intradayVols(s.ticker(), now);
 
-        Flags flags = WatchlistAlerts.evaluate(currentPrice, week52High, todayPct,
-                e.highThresholdPct(), e.moveThresholdPct());
+        BigDecimal cp = s.currentPrice(), wh = s.week52High(), wl = s.week52Low();
+        BigDecimal pctFromHigh = (cp != null && wh != null && wh.signum() > 0)
+                ? cp.subtract(wh).divide(wh, PCT_SCALE, RoundingMode.HALF_UP) : null;
+        BigDecimal pctFromLow = (cp != null && wl != null && wl.signum() > 0)
+                ? cp.subtract(wl).divide(wl, PCT_SCALE, RoundingMode.HALF_UP) : null;
 
-        return new Row(symbol, currency, currentPrice,
-                scalePct(todayPct), scalePct(pct3d), scalePct(pct5d), scalePct(pct10d), scalePct(pct30d),
-                week52High, week52Low, scalePct(pctFromHigh), scalePct(pctFromLow),
-                scalePct(vol5), scalePct(vol10), scalePct(vol30), scalePct(vol1y), trailingPe, beta,
-                pos.held(), pos.valueGbp(), pos.gainGbp(), scalePct(pos.gainPct()),
-                e.highThresholdPct(), e.moveThresholdPct(),
+        Flags flags = WatchlistAlerts.evaluate(cp, wh, todayPct, e.highThresholdPct(), e.moveThresholdPct(),
+                e.priceAbove(), e.priceBelow());
+
+        return new Live(scalePct(todayPct), scalePct(pct2d), scalePct(pct3d), scalePct(pct5d),
+                scalePct(pct10d), scalePct(pct30d), scalePct(pctFromHigh), scalePct(pctFromLow),
+                scalePct(intra[0]), scalePct(intra[1]),
                 flags.nearHigh(), flags.bigMove(), flags.moveDirection(),
-                false);
+                flags.aboveLevel(), flags.belowLevel());
     }
 
     // ---- Position / gain (reuses PositionDetailService's FIFO engine) -------
@@ -215,14 +290,26 @@ public class WatchlistService {
         return nativeVal.divide(rate, 10, RoundingMode.HALF_UP);
     }
 
+    /**
+     * The gilt names currently priced (conventional gilts scraped hourly by
+     * {@link GiltPriceFetchJob}, keyed {@code "GILT {coupon}% {year}"}). Feeds the Watchlist
+     * add-box autocomplete so a gilt buy-limit alert is entered by picking a valid, priced name
+     * rather than typing one — a mistyped symbol joins no price and would silently never fire.
+     */
+    public List<String> giltSymbols() {
+        return intradayRepo.distinctGiltSymbols();
+    }
+
     // ---- Popup price series -------------------------------------------------
 
     /**
      * Price series for the popup chart. Windows {@code 1D}/{@code 3D}/{@code 5D}/{@code 10D}/
      * {@code 15D} come from 1-minute intraday bars (downsampled to ~5-minute buckets beyond
-     * 5 days to stay light); {@code 30D} falls back to daily closes, since intraday retention
-     * only reaches 15 days. Daily points use the raw close the user saw that day
-     * ({@code close × splitFactor}).
+     * 5 days to stay light); everything longer ({@code 30D}, {@code 2M}/{@code 3M}/{@code 6M},
+     * {@code 1Y}…{@code 10Y}, {@code MAX}) falls back to daily closes, since intraday retention
+     * only reaches 15 days. {@code 30D} uses the raw close the user saw that day
+     * ({@code close × splitFactor}); longer daily windows use split-adjusted close so splits
+     * don't draw a cliff. See {@link #dailyWindowStart}.
      */
     public Series series(String symbolRaw, String windowRaw) {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase();
@@ -230,13 +317,19 @@ public class WatchlistService {
         if (symbol.isEmpty()) return new Series(symbol, window, "daily", List.of());
         String ticker = tickerFor(symbol);
 
-        if ("30D".equals(window)) {
-            List<PriceBar> bars = priceRepo.getPriceHistory(ticker,
-                    LocalDate.now().minusDays(31), LocalDate.now());
+        LocalDate dailyFrom = dailyWindowStart(window);
+        if (dailyFrom != null) {
+            // 30D keeps the raw close the user saw that day (close × splitFactor); the
+            // longer windows use split-adjusted close so a stock split doesn't draw an
+            // artificial cliff — the latest bar's splitFactor is 1, so both conventions
+            // agree at the right edge (today's price still matches the row).
+            boolean raw = "30D".equals(window);
+            List<PriceBar> bars = priceRepo.getPriceHistory(ticker, dailyFrom, LocalDate.now());
             List<Point> pts = new ArrayList<>(bars.size());
             for (PriceBar b : bars) {
+                double price = raw ? b.close() * b.splitFactor() : b.close();
                 pts.add(new Point(b.date().toString(),
-                        BigDecimal.valueOf(b.close() * b.splitFactor()).setScale(PRICE_SCALE, RoundingMode.HALF_UP)));
+                        BigDecimal.valueOf(price).setScale(PRICE_SCALE, RoundingMode.HALF_UP)));
             }
             return new Series(symbol, window, "daily", pts);
         }
@@ -260,6 +353,28 @@ public class WatchlistService {
                     BigDecimal.valueOf(b.close()).setScale(PRICE_SCALE, RoundingMode.HALF_UP)));
         }
         return new Series(symbol, window, "intraday", pts);
+    }
+
+    /**
+     * Start date for a daily-close window, or {@code null} for the intraday windows
+     * (1D–15D). {@code MAX} reaches back further than any stored history, so it just
+     * returns everything on file.
+     */
+    private static LocalDate dailyWindowStart(String window) {
+        LocalDate today = LocalDate.now();
+        return switch (window) {
+            case "30D" -> today.minusDays(31);
+            case "2M"  -> today.minusMonths(2);
+            case "3M"  -> today.minusMonths(3);
+            case "6M"  -> today.minusMonths(6);
+            case "1Y"  -> today.minusYears(1);
+            case "2Y"  -> today.minusYears(2);
+            case "3Y"  -> today.minusYears(3);
+            case "5Y"  -> today.minusYears(5);
+            case "10Y" -> today.minusYears(10);
+            case "MAX" -> today.minusYears(50);
+            default    -> null;
+        };
     }
 
     /**
@@ -341,10 +456,30 @@ public class WatchlistService {
         return v == null ? null : v.setScale(PCT_SCALE, RoundingMode.HALF_UP);
     }
 
+    /** A stored price level of 0 (or null) means "disabled" — surface it as null so the UI cell blanks. */
+    private static BigDecimal levelOrNull(BigDecimal v) {
+        return (v == null || v.signum() <= 0) ? null : v;
+    }
+
     private record Position(boolean held, BigDecimal valueGbp, BigDecimal gainGbp, BigDecimal gainPct) {
         static Position none() {
             return new Position(false, null, null, null);
         }
+    }
+
+    /** Per-symbol inputs loaded once and shared by the full {@link Row} and the {@link QuoteRow} poll. */
+    private record Snapshot(String ticker, List<PriceBar> bars, IntradayPrice ip, QuoteSummary q,
+                            String currency, Double current, BigDecimal currentPrice,
+                            BigDecimal week52High, BigDecimal week52Low) {
+    }
+
+    /** The intraday-varying, already-scaled fields shared by {@link Row} and {@link QuoteRow}. */
+    private record Live(BigDecimal todayPct, BigDecimal pct2d, BigDecimal pct3d, BigDecimal pct5d,
+                        BigDecimal pct10d, BigDecimal pct30d,
+                        BigDecimal pctFromHigh, BigDecimal pctFromLow,
+                        BigDecimal vol5d, BigDecimal vol10d,
+                        boolean nearHigh, boolean bigMove, int moveDirection,
+                        boolean aboveLevel, boolean belowLevel) {
     }
 
     // ---- DTOs ---------------------------------------------------------------
@@ -357,7 +492,7 @@ public class WatchlistService {
      * freshly-added symbol still backfilling.
      */
     public record Row(String symbol, String currency, BigDecimal currentPrice,
-                      BigDecimal todayPct, BigDecimal pct3d, BigDecimal pct5d,
+                      BigDecimal todayPct, BigDecimal pct2d, BigDecimal pct3d, BigDecimal pct5d,
                       BigDecimal pct10d, BigDecimal pct30d,
                       BigDecimal week52High, BigDecimal week52Low,
                       BigDecimal pctFromHigh, BigDecimal pctFromLow,
@@ -365,18 +500,44 @@ public class WatchlistService {
                       BigDecimal trailingPe, BigDecimal beta,
                       boolean held, BigDecimal positionValueGbp, BigDecimal gainGbp, BigDecimal gainPct,
                       BigDecimal highThresholdPct, BigDecimal moveThresholdPct,
+                      BigDecimal priceAbove, BigDecimal priceBelow,
                       boolean nearHigh, boolean bigMove, int moveDirection,
+                      boolean aboveLevel, boolean belowLevel,
                       boolean missingData) {
 
-        static Row missing(String symbol, BigDecimal highPct, BigDecimal movePct) {
-            return new Row(symbol, null, null, null, null, null, null, null,
+        static Row missing(String symbol, BigDecimal highPct, BigDecimal movePct,
+                           BigDecimal priceAbove, BigDecimal priceBelow) {
+            return new Row(symbol, null, null, null, null, null, null, null, null,
                     null, null, null, null, null, null, null, null, null, null,
-                    false, null, null, null, highPct, movePct,
-                    false, false, 0, true);
+                    false, null, null, null, highPct, movePct, priceAbove, priceBelow,
+                    false, false, 0, false, false, true);
         }
     }
 
     public record WatchlistView(List<Row> rows) {
+    }
+
+    /**
+     * Fast-moving subset of {@link Row} served by the near-real-time poll ({@code /watchlist/quotes}).
+     * Carries only the fields that change intraday — live price, momentum, 5D/10D vol, distance from
+     * the 52-week high/low, and the alert-flag triple that drives the row colour. The dashboard patches
+     * the matching cells in place, leaving the position/fundamentals columns from the last full load.
+     */
+    public record QuoteRow(String symbol, String currency, BigDecimal currentPrice,
+                           BigDecimal todayPct, BigDecimal pct2d, BigDecimal pct3d, BigDecimal pct5d,
+                           BigDecimal pct10d, BigDecimal pct30d,
+                           BigDecimal pctFromHigh, BigDecimal pctFromLow,
+                           BigDecimal vol5d, BigDecimal vol10d,
+                           boolean nearHigh, boolean bigMove, int moveDirection,
+                           boolean aboveLevel, boolean belowLevel) {
+
+        static QuoteRow missing(String symbol) {
+            return new QuoteRow(symbol, null, null, null, null, null, null, null, null,
+                    null, null, null, null, false, false, 0, false, false);
+        }
+    }
+
+    public record QuoteView(List<QuoteRow> rows) {
     }
 
     public record Point(String t, BigDecimal p) {

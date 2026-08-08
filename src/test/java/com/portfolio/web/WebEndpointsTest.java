@@ -61,6 +61,27 @@ class WebEndpointsTest {
                 .andExpect(content().string(containsString("Total Gain %")));
     }
 
+    @Test
+    void dashboardShowsMomentumTab() throws Exception {
+        mvc.perform(get("/"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("panel-momentum")));
+    }
+
+    @Test
+    void momentumEndpointServializesEvenWithNoPriceData() throws Exception {
+        // Essentially no price history is loaded in this fixture, so the report degrades to a
+        // warning — but the bean must wire, the config echo + survivorship caveat must render, and
+        // JSON must serialize. Which of the two "not enough data" warnings fires depends on how far
+        // the context's startup price jobs got in the background, so assert only the shared
+        // "Backfill" nudge.
+        mvc.perform(get("/momentum").param("bootstrap", "10"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("application/json"))
+                .andExpect(content().string(containsString("survivorshipCaveat")))
+                .andExpect(content().string(containsString("Backfill")));
+    }
+
     /**
      * Override the live FX adapter so the test never hits the network.
      */

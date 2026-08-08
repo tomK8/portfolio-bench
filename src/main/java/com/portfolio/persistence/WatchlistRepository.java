@@ -47,7 +47,9 @@ public class WatchlistRepository {
                 high_threshold_pct REAL    NOT NULL,
                 move_threshold_pct REAL    NOT NULL,
                 added_at           TEXT    NOT NULL,
-                display_order      INTEGER
+                display_order      INTEGER,
+                price_above        REAL,
+                price_below        REAL
             )""";
 
     private final JdbcConnectionFactory connections;
@@ -58,11 +60,9 @@ public class WatchlistRepository {
         this.keyValueStore = keyValueStore;
         try (Connection conn = connections.open(); Statement ddl = conn.createStatement()) {
             ddl.execute(CREATE_TABLE);
-            try {
-                ddl.execute("ALTER TABLE watchlist ADD COLUMN display_order INTEGER");
-            } catch (java.sql.SQLException alreadyMigrated) {
-                // display_order column already present — fine
-            }
+            addColumnIfMissing(ddl, "display_order INTEGER");
+            addColumnIfMissing(ddl, "price_above REAL");
+            addColumnIfMissing(ddl, "price_below REAL");
             // Backfill any rows that predate the column so ordering is stable and non-null.
             ddl.execute("UPDATE watchlist SET display_order = rowid WHERE display_order IS NULL");
         } catch (Exception e) {
@@ -70,21 +70,40 @@ public class WatchlistRepository {
         }
     }
 
-    /** Insert a new symbol or update its thresholds if already present. Re-mirrors the KV set. */
+    /** Idempotent ADD COLUMN — swallows the "duplicate column" error on re-run. */
+    private static void addColumnIfMissing(Statement ddl, String columnDef) {
+        try {
+            ddl.execute("ALTER TABLE watchlist ADD COLUMN " + columnDef);
+        } catch (java.sql.SQLException alreadyMigrated) {
+            // column already present — fine
+        }
+    }
+
+    /** Convenience overload for callers that set only the percent thresholds (no price levels). */
     public void add(String symbol, BigDecimal highPct, BigDecimal movePct) {
+        add(symbol, highPct, movePct, null, null);
+    }
+
+    /** Insert a new symbol or update its thresholds/levels if already present. Re-mirrors the KV set. */
+    public void add(String symbol, BigDecimal highPct, BigDecimal movePct,
+                    BigDecimal priceAbove, BigDecimal priceBelow) {
         String sym = normalise(symbol);
         if (sym.isEmpty()) throw new IllegalStateException("Watchlist symbol must not be blank.");
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
-                     "INSERT INTO watchlist (symbol, high_threshold_pct, move_threshold_pct, added_at, display_order) " +
-                             "VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(display_order), 0) + 1 FROM watchlist)) " +
+                     "INSERT INTO watchlist (symbol, high_threshold_pct, move_threshold_pct, added_at, display_order, price_above, price_below) " +
+                             "VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(display_order), 0) + 1 FROM watchlist), ?, ?) " +
                              "ON CONFLICT(symbol) DO UPDATE SET " +
                              "high_threshold_pct = excluded.high_threshold_pct, " +
-                             "move_threshold_pct = excluded.move_threshold_pct")) {
+                             "move_threshold_pct = excluded.move_threshold_pct, " +
+                             "price_above = excluded.price_above, " +
+                             "price_below = excluded.price_below")) {
             ps.setString(1, sym);
             ps.setDouble(2, orDisabled(highPct).doubleValue());
             ps.setDouble(3, orDisabled(movePct).doubleValue());
             ps.setString(4, Instant.now().toString());
+            ps.setDouble(5, orDisabled(priceAbove).doubleValue());
+            ps.setDouble(6, orDisabled(priceBelow).doubleValue());
             ps.executeUpdate();
         } catch (Exception e) {
             throw new IllegalStateException("Could not add " + sym + " to the watchlist.", e);
@@ -92,19 +111,25 @@ public class WatchlistRepository {
         mirrorKv();
     }
 
-    public void updateThresholds(String symbol, BigDecimal highPct, BigDecimal movePct) {
+    public void updateThresholds(String symbol, BigDecimal highPct, BigDecimal movePct,
+                                 BigDecimal priceAbove, BigDecimal priceBelow) {
         String sym = normalise(symbol);
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
-                     "UPDATE watchlist SET high_threshold_pct = ?, move_threshold_pct = ? WHERE symbol = ?")) {
+                     "UPDATE watchlist SET high_threshold_pct = ?, move_threshold_pct = ?, " +
+                             "price_above = ?, price_below = ? WHERE symbol = ?")) {
             ps.setDouble(1, orDisabled(highPct).doubleValue());
             ps.setDouble(2, orDisabled(movePct).doubleValue());
-            ps.setString(3, sym);
+            ps.setDouble(3, orDisabled(priceAbove).doubleValue());
+            ps.setDouble(4, orDisabled(priceBelow).doubleValue());
+            ps.setString(5, sym);
             if (ps.executeUpdate() == 0) {
-                throw new IllegalStateException(sym + " is not on the watchlist.");
+                // The symbol was removed between the edit and this save landing — e.g. the user hit ×
+                // while an inline edit's blur-triggered save was still in flight. A threshold update
+                // for a row that no longer exists is a genuine no-op, not an error: throwing here would
+                // send the client down its error path and flap the just-deleted row back on screen.
+                log.debug("Threshold update for {} affected no rows (not on the watchlist) — ignored.", sym);
             }
-        } catch (IllegalStateException e) {
-            throw e;
         } catch (Exception e) {
             throw new IllegalStateException("Could not update thresholds for " + sym + ".", e);
         }
@@ -129,13 +154,17 @@ public class WatchlistRepository {
         try (Connection conn = connections.open();
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
-                     "SELECT symbol, high_threshold_pct, move_threshold_pct, added_at " +
+                     "SELECT symbol, high_threshold_pct, move_threshold_pct, added_at, price_above, price_below " +
                              "FROM watchlist ORDER BY display_order, symbol")) {
             while (rs.next()) {
+                // price_above/below are NULL on rows predating the columns → getDouble yields 0.0
+                // (disabled), which is exactly the intended "no level" behaviour.
                 out.add(new Entry(rs.getString(1),
                         BigDecimal.valueOf(rs.getDouble(2)),
                         BigDecimal.valueOf(rs.getDouble(3)),
-                        Instant.parse(rs.getString(4))));
+                        Instant.parse(rs.getString(4)),
+                        BigDecimal.valueOf(rs.getDouble(5)),
+                        BigDecimal.valueOf(rs.getDouble(6))));
             }
         } catch (Exception e) {
             log.warn("Could not load watchlist", e);
@@ -197,6 +226,6 @@ public class WatchlistRepository {
     }
 
     public record Entry(String symbol, BigDecimal highThresholdPct, BigDecimal moveThresholdPct,
-                        Instant addedAt) {
+                        Instant addedAt, BigDecimal priceAbove, BigDecimal priceBelow) {
     }
 }

@@ -38,6 +38,21 @@ class IntradayPriceRepositoryTest {
     }
 
     @Test
+    void saveIntradayBarsCountsOnlyNewRowsInMixedBatch() {
+        IntradayPriceRepository repo = newRepo();
+        Instant t0 = Instant.parse("2025-01-02T14:30:00Z");
+        repo.saveIntradayBars(List.of(bar("AAPL", t0, 190.10, "USD")));
+
+        int saved = repo.saveIntradayBars(List.of(
+                bar("AAPL", t0, 190.10, "USD"),               // duplicate — ignored
+                bar("AAPL", t0.plusSeconds(60), 190.25, "USD"),
+                bar("AAPL", t0.plusSeconds(120), 190.40, "USD")));
+
+        assertEquals(2, saved, "batched insert reports only the genuinely new rows");
+        assertEquals(t0.plusSeconds(120), repo.getLatestIntradayTs("AAPL"));
+    }
+
+    @Test
     void getLatestIntradayTsNullThenReturnsMax() {
         IntradayPriceRepository repo = newRepo();
         assertNull(repo.getLatestIntradayTs("AAPL"));

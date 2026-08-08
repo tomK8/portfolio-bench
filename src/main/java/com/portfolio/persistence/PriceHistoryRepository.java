@@ -61,34 +61,44 @@ public class PriceHistoryRepository {
         }
     }
 
+    /**
+     * Commit bulk writes in chunks of this many rows rather than one transaction for the whole
+     * batch. SQLite has a single writer for the entire database file, so a multi-thousand-row
+     * backfill committed atomically holds that lock for seconds and starves interactive writes
+     * (a watchlist add/remove) until it finishes. Committing every chunk releases the lock
+     * frequently so those small writes interleave. Price backfills are idempotent/incremental,
+     * so a failure that leaves earlier chunks committed self-heals on the next fetch.
+     */
+    private static final int WRITE_CHUNK_ROWS = 500;
+
     public int savePriceBars(List<PriceBar> bars) {
         if (bars.isEmpty()) return 0;
         String fetchedAt = Instant.now().toString();
+        int inserted = 0;
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT OR IGNORE INTO price_history " +
                              "(symbol, date, open, high, low, close, adj_close, split_factor, volume, currency, fetched_at) " +
                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
-            int inserted = 0;
+            conn.setAutoCommit(false);
+            int inBatch = 0;
             for (PriceBar b : bars) {
-                ps.setString(1, b.symbol());
-                ps.setString(2, b.date().toString());
-                setNullableDouble(ps, 3, b.open());
-                setNullableDouble(ps, 4, b.high());
-                setNullableDouble(ps, 5, b.low());
-                ps.setDouble(6, b.close());
-                ps.setDouble(7, b.adjClose());
-                ps.setDouble(8, b.splitFactor());
-                if (b.volume() != null) ps.setLong(9, b.volume());
-                else ps.setNull(9, Types.INTEGER);
-                ps.setString(10, b.currency());
-                ps.setString(11, fetchedAt);
-                inserted += ps.executeUpdate();
+                bindBar(ps, b, fetchedAt);
+                ps.addBatch();
+                if (++inBatch >= WRITE_CHUNK_ROWS) {
+                    for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+                    conn.commit();
+                    inBatch = 0;
+                }
+            }
+            if (inBatch > 0) {
+                for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+                conn.commit();
             }
             return inserted;
         } catch (Exception e) {
             log.warn("Could not save price bars", e);
-            return 0;
+            return inserted;
         }
     }
 
@@ -114,27 +124,42 @@ public class PriceHistoryRepository {
                              "split_factor = excluded.split_factor, " +
                              "volume = excluded.volume, currency = excluded.currency, " +
                              "fetched_at = excluded.fetched_at")) {
-            int touched = 0;
+            conn.setAutoCommit(false);
+            int touched = 0, inBatch = 0;
             for (PriceBar b : bars) {
-                ps.setString(1, b.symbol());
-                ps.setString(2, b.date().toString());
-                setNullableDouble(ps, 3, b.open());
-                setNullableDouble(ps, 4, b.high());
-                setNullableDouble(ps, 5, b.low());
-                ps.setDouble(6, b.close());
-                ps.setDouble(7, b.adjClose());
-                ps.setDouble(8, b.splitFactor());
-                if (b.volume() != null) ps.setLong(9, b.volume());
-                else ps.setNull(9, Types.INTEGER);
-                ps.setString(10, b.currency());
-                ps.setString(11, fetchedAt);
-                touched += ps.executeUpdate();
+                bindBar(ps, b, fetchedAt);
+                ps.addBatch();
+                if (++inBatch >= WRITE_CHUNK_ROWS) {   // release the DB-wide writer lock between chunks
+                    for (int n : ps.executeBatch()) if (n > 0) touched += n;
+                    conn.commit();
+                    inBatch = 0;
+                }
+            }
+            if (inBatch > 0) {
+                for (int n : ps.executeBatch()) if (n > 0) touched += n;
+                conn.commit();
             }
             return touched;
         } catch (Exception e) {
             log.warn("Could not upsert price bars", e);
             return 0;
         }
+    }
+
+    /** Shared column binding for the two bulk write paths (identical column lists). */
+    private static void bindBar(PreparedStatement ps, PriceBar b, String fetchedAt) throws SQLException {
+        ps.setString(1, b.symbol());
+        ps.setString(2, b.date().toString());
+        setNullableDouble(ps, 3, b.open());
+        setNullableDouble(ps, 4, b.high());
+        setNullableDouble(ps, 5, b.low());
+        ps.setDouble(6, b.close());
+        ps.setDouble(7, b.adjClose());
+        ps.setDouble(8, b.splitFactor());
+        if (b.volume() != null) ps.setLong(9, b.volume());
+        else ps.setNull(9, Types.INTEGER);
+        ps.setString(10, b.currency());
+        ps.setString(11, fetchedAt);
     }
 
     public LocalDate getLatestPriceDate(String symbol) {

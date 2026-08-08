@@ -3,7 +3,7 @@
 A local-first portfolio aggregator and analytics dashboard for a multi-broker retirement
 portfolio (AJ Bell SIPP, City Roth IRA, Interactive Investor SIPP). Parses
 the broker exports, reconciles them against intraday Yahoo Finance prices and
-Frankfurter FX rates, persists everything to SQLite, and renders ~18 analytics tabs
+Frankfurter FX rates, persists everything to SQLite, and renders ~19 analytics tabs
 through a server-side Thymeleaf + htmx + Chart.js UI.
 
 
@@ -14,7 +14,7 @@ through a server-side Thymeleaf + htmx + Chart.js UI.
 
 ## TL;DR
 
-Java 25 / Spring Boot 3 web app. ~18.5 kLOC, **330+ unit tests**, clean
+Java 25 / Spring Boot 3 web app. ~20 kLOC, **390+ unit tests**, clean
 ports-and-adapters layering with Spring confined to `web` + `config`. SQLite via JDBC
 (no ORM), Apache POI for Excel I/O, server-rendered UI with no frontend build
 pipeline. Single Maven module. Built solo with Claude as an AI pair programmer.
@@ -40,14 +40,23 @@ pipeline. Single Maven module. Built solo with Claude as an AI pair programmer.
   visibly freeze post-close.
 - **Trade journal** keyed by SQLite `rowid` — annotations (FOMO / fear / conviction /
   rebalance / …) survive re-imports because each broker's dedup path preserves rowids.
+- **Volatility-trading toolkit.** A watchlist that joins live price + momentum + a
+  realized-vol term structure + 52-week distances, with per-symbol alert triggers that
+  email (never trade). Plus a **swing-strategy validation lab** — a read-only backtest of a
+  short-term mean-reversion (dip-buy) strategy: forward-return conditionals vs baseline, an
+  OHLC triple-barrier / time-stop simulation with full TP/SL/Time/Ambiguous/Open reconciliation,
+  all-days placebo + matched-random bootstrap controls, absolute and σ-scaled trigger families,
+  a per-event log, per-year and 200d-MA regime splits, and earnings-window hygiene proxied from
+  SEC EDGAR filing dates.
 - **Snapshot diffing, what-if planner, target-allocation drift, currency exposure,
-  attribution windows, Excel export.** ~18 tabs in total.
+  attribution windows, Excel export.** ~19 tabs in total.
 
 ## Architecture
 
 Ports and adapters. `domain` is pure Java. `port` defines small SPIs
-(`FxRateProvider`, `HistoricalFxRateProvider`). `adapter` implements them against
-Frankfurter, Yahoo, dividenddata.co.uk. `application` orchestrates use cases.
+(`FxRateProvider`, `HistoricalFxRateProvider`, `EarningsCalendarProvider`, `AlertNotifier`).
+`adapter` implements them against Frankfurter, Yahoo, dividenddata.co.uk, and SEC EDGAR.
+`application` orchestrates use cases.
 `persistence` owns all JDBC. `web` and `config` are the only Spring-aware layers.
 
 ```
@@ -73,13 +82,15 @@ architecture document.
 | Templating   | Thymeleaf                                       |
 | Frontend     | htmx + Chart.js 4 (CDN, no build chain)         |
 | Build        | Maven                                           |
-| External APIs| Yahoo Finance, Frankfurter (FX), dividenddata   |
+| External APIs| Yahoo Finance, Frankfurter (FX), dividenddata, SEC EDGAR |
 
 ## Quality signals
 
-- **330+ unit tests** covering parsers, dedup, FIFO, dividend attribution, FX, returns,
-  correlations, concentration, service-layer valuation, and repository read queries. The single live-API test is tagged `@Tag("integration")`
-  and excluded from default runs; Yahoo parsing is covered by a captured JSON fixture.
+- **390+ unit tests** covering parsers, dedup, FIFO, dividend attribution, FX, returns,
+  correlations, concentration, the swing-strategy engines (flush triggers, barrier sim,
+  placebo/bootstrap, event log, MA split), service-layer valuation, and repository read queries.
+  Live-API tests are tagged `@Tag("integration")` and excluded from default runs; Yahoo and EDGAR
+  parsing are covered by captured JSON fixtures.
 - All fixtures under `src/test/resources/` are **synthetic** — no real brokerage
   exports have ever been committed.
 - Write paths throw `IllegalStateException` on failure and surface as a friendly

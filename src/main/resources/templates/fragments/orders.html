@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<div th:fragment="result">
+
+    <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>
+
+    <div class="note" th:if="${orders.empty}">
+        No order files found in <code>~/Downloads</code>. Export your resting orders — AJ Bell
+        <code>activeorders*.csv</code>, II order history (UUID <code>.csv</code>), Citi Roth
+        <code>Order+Status*.xlsx</code> — and reload this tab.
+    </div>
+
+    <div th:unless="${orders.empty}">
+
+        <p class="muted" th:if="${!orders.sources.isEmpty()}"
+           th:text="'Sources: ' + ${#strings.listJoin(orders.sources, ', ')}">Sources</p>
+
+        <div th:if="${!orders.warnings.isEmpty()}" class="value-warnings">
+            <h4>Could not read some order files</h4>
+            <ul>
+                <li th:each="w : ${orders.warnings}" th:text="${w}">warning</li>
+            </ul>
+        </div>
+
+        <div class="note" th:if="${orders.orders.isEmpty()}">
+            No open orders — every order in the exported files has been filled, cancelled or expired.
+        </div>
+
+        <table id="orders-table" class="sticky-head" th:unless="${orders.orders.isEmpty()}">
+            <thead>
+            <tr>
+                <th class="txt" data-sort="text">Broker</th>
+                <th class="txt" data-sort="text">Symbol</th>
+                <th class="txt" data-sort="text">Side</th>
+                <th class="txt" data-sort="text">Type</th>
+                <th data-sort="num">Qty</th>
+                <th data-sort="num">Price</th>
+                <th data-sort="num" title="Latest live price, in the order's currency">Current</th>
+                <th data-sort="num" title="(current − limit) ÷ limit — how far the market sits from your limit price">vs limit</th>
+                <th data-sort="num" title="Realized daily volatility over the last 10 sessions (sample stdev of daily log returns, not annualised)">RV10</th>
+                <th data-sort="num" title="Realized daily volatility over the last 30 sessions (not annualised)">RV30</th>
+                <th data-sort="num" title="Signed distance from the current price to your limit, in 5-session σ units: ln(limit ÷ current) ÷ (RV10 × √5). + = limit above the market">σ→lim</th>
+                <th data-sort="num" title="Probability the market touches your limit within 5 sessions — driftless first-passage 2·Φ(−|σ→lim|)">P(5d)</th>
+                <th data-sort="num" title="Probability the market touches your limit within 20 sessions — same first-passage estimate, σ scaled to a 20-session horizon">P(20d)</th>
+                <th data-sort="num">Amount</th>
+                <th data-sort="num">Amount £</th>
+                <th class="txt" data-sort="text">Date entered</th>
+                <th class="txt" data-sort="text">Expiry</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="o : ${orders.orders}">
+                <td class="txt" th:text="${o.broker}">Broker</td>
+                <td class="txt" th:text="${o.symbol != null ? o.symbol : '—'}">SYM</td>
+                <td class="txt"
+                    th:classappend="${o.side != null ? (#strings.equalsIgnoreCase(o.side, 'Buy') ? 'val-pos' : (#strings.equalsIgnoreCase(o.side, 'Sell') ? 'val-neg' : '')) : ''}"
+                    th:text="${o.side != null ? o.side : '—'}">Side</td>
+                <td class="txt" th:text="${o.orderType != null ? o.orderType : '—'}">Type</td>
+                <td th:text="${#numbers.formatDecimal(o.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>
+                <td th:text="${o.price != null ? (o.priceEstimated ? '~' : '') + o.currencySymbol + #numbers.formatDecimal(o.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:text="${o.currentPrice != null ? o.currencySymbol + #numbers.formatDecimal(o.currentPrice, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:classappend="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? 'val-pos' : (o.distancePct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                    th:text="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>
+                <td th:text="${o.dailyVol10 != null ? #numbers.formatDecimal(o.dailyVol10.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>
+                <td th:text="${o.dailyVol30 != null ? #numbers.formatDecimal(o.dailyVol30.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>
+                <td th:text="${o.sigmaToLimit != null ? (o.sigmaToLimit.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.sigmaToLimit, 1, 'COMMA', 2, 'POINT') + 'σ' : '—'}">—</td>
+                <td th:text="${o.touchProb5d != null ? #numbers.formatDecimal(o.touchProb5d.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '—'}">—</td>
+                <td th:text="${o.touchProb20d != null ? #numbers.formatDecimal(o.touchProb20d.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '—'}">—</td>
+                <td th:text="${o.amount != null ? o.currencySymbol + #numbers.formatDecimal(o.amount, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:text="${o.amountGbp != null ? '£' + #numbers.formatDecimal(o.amountGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td class="txt" th:text="${o.dateEntered != null ? o.dateEntered.toString() : '—'}">—</td>
+                <td class="txt"
+                    th:text="${o.expiry != null ? o.expiry.toString() : (o.duration != null ? o.duration : '—')}">—</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <p class="muted" th:if="${!#lists.isEmpty(orders.orders.?[priceEstimated])}"
+           style="margin-top: 0.6rem; font-size: 0.85rem">
+            ~ II doesn't export the resting limit price, so it's estimated as order value ÷ quantity.
+            It's slightly off — the ~£2.99 dealing fee (and, on USD orders, an FX charge levied in
+            GBP) is folded into the order value.
+        </p>
+    </div>
+
+</div>
+
+</body>
+</html>

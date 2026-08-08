@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
  * Thin Spring trigger for the framework-free price jobs. All three fire on startup (off the main
  * thread, so a first-run backfill doesn't delay the web UI). The daily Yahoo job runs each
  * evening after the US market close; the intraday Yahoo job runs every minute thereafter so
- * the Live tab feels live; the gilt scrape runs hourly because dividenddata itself doesn't
+ * the Live tab feels live; the gilt scrape runs hourly because the HL gilt page itself doesn't
  * update faster.
  */
 @Component

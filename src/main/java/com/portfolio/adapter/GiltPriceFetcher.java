@@ -16,23 +16,27 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Single-shot scraper for UK gilt prices from dividenddata.co.uk. Yahoo doesn't quote gilts,
- * so this fills the same role {@link YahooPriceFetcher} fills for stocks. The all-gilts table
- * is rendered server-side, so one HTTP GET returns every TG and TR row in one go — there is
- * no per-ticker iteration here.
+ * Single-shot scraper for UK gilt prices from Hargreaves Lansdown's public gilt-prices page.
+ * Yahoo doesn't quote gilts, so this fills the same role {@link YahooPriceFetcher} fills for
+ * stocks. The all-gilts table is rendered server-side, so one HTTP GET returns every
+ * conventional gilt in one go — there is no per-ticker iteration here.
  *
- * <p>The page identifies gilts by TIDM (e.g. {@code TG44}), but our internal {@code securityId}
- * uses the human-readable {@code "GILT {coupon}% {year}"} form produced by
- * {@code AJBellSippParser.extractBondId}. We key on {@code (coupon, year)} from the dividenddata
- * row's decimal-coupon and maturity-date columns so the resulting symbols join cleanly to
- * {@code Holding.securityId}. {@code (coupon, year)} is unique across all gilts on the page.
+ * <p>(Previously scraped dividenddata.co.uk, which went behind a Cloudflare JS challenge in
+ * July 2026 — no header combination gets past a managed challenge, so the source had to move.)
+ *
+ * <p>The page identifies gilts by name/ISIN/SEDOL, but our internal {@code securityId} uses the
+ * human-readable {@code "GILT {coupon}% {year}"} form produced by
+ * {@code AJBellSippParser.extractBondId}. We key on {@code (coupon, year)} from the row's
+ * decimal-coupon and maturity-date columns so the resulting symbols join cleanly to
+ * {@code Holding.securityId}. {@code (coupon, year)} is unique across all conventional gilts
+ * on the page (index-linked gilts live on a separate page and are not fetched).
  */
 public class GiltPriceFetcher {
 
     private static final Logger log = LoggerFactory.getLogger(GiltPriceFetcher.class);
 
-    static final String URL = "https://www.dividenddata.co.uk/uk-gilts-prices-yields.py";
-    // Default client (no User-Agent) gets 403; this matches what YahooPriceFetcher sends.
+    static final String URL = "https://www.hl.co.uk/shares/corporate-bonds-gilts/bond-prices/uk-gilts";
+    // Default client (no User-Agent) risks a 403; this matches what YahooPriceFetcher sends.
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
 
@@ -40,8 +44,10 @@ public class GiltPriceFetcher {
     private static final Pattern ROW = Pattern.compile("<tr[^>]*>(.*?)</tr>", Pattern.DOTALL);
     private static final Pattern CELL = Pattern.compile("<t[hd][^>]*>(.*?)</t[hd]>", Pattern.DOTALL);
     private static final Pattern TAG = Pattern.compile("<[^>]+>");
-    private static final Pattern POUND = Pattern.compile("(?:&pound;|£)\\s*([0-9]+(?:\\.[0-9]+)?)");
-    private static final Pattern COUPON_PCT = Pattern.compile("^([0-9]+(?:\\.[0-9]+)?)%$");
+    // HL renders the coupon as a plain decimal with trailing zeros ("4.750") and the price as
+    // a plain decimal in pounds per £100 nominal ("95.190") — no currency symbol.
+    private static final Pattern COUPON_DECIMAL = Pattern.compile("^([0-9]+(?:\\.[0-9]+)?)$");
+    private static final Pattern PRICE = Pattern.compile("^([0-9]+(?:\\.[0-9]+)?)$");
     private static final Pattern MATURITY_YEAR = Pattern.compile("(\\d{4})\\s*$");
 
     private final HttpClient client =
@@ -55,7 +61,9 @@ public class GiltPriceFetcher {
             return List.of();
         }
         try {
-            return parse(body, Instant.now());
+            List<IntradayBar> bars = parse(body, Instant.now());
+            if (bars.isEmpty()) log.warn("Gilt fetch returned 200 but no rows parsed — page layout changed?");
+            return bars;
         } catch (Exception e) {
             log.warn("Gilt parse failed", e);
             return List.of();
@@ -79,9 +87,10 @@ public class GiltPriceFetcher {
     }
 
     /**
-     * Parses every row whose first cell starts with a gilt TIDM (TG/TR + digits). Rows that
-     * don't carry both a decimal coupon and a maturity year are skipped silently — the page
-     * also has a navigation row, summary rows etc. that legitimately don't match.
+     * Parses every row shaped {@code name | coupon | maturity | price [| actions]} whose name
+     * cell mentions "Treasury" (all conventional gilts are "Treasury {coupon}% {date}"). Rows
+     * that don't carry a decimal coupon, a maturity year and a plain-decimal price are skipped
+     * silently — the page also has a header row, navigation etc. that legitimately don't match.
      */
     List<IntradayBar> parse(String html, Instant ts) {
         List<IntradayBar> bars = new ArrayList<>();
@@ -89,12 +98,12 @@ public class GiltPriceFetcher {
         while (rows.find()) {
             String row = rows.group(1);
             List<String> cells = cells(row);
-            if (cells.size() < 6) continue;
-            if (!isGiltTidm(cells.get(0))) continue;
+            if (cells.size() < 4) continue;
+            if (!cells.get(0).contains("Treasury")) continue;
 
-            String coupon = couponDecimal(cells.get(2));
-            String year = maturityYear(cells.get(3));
-            Double price = poundsValue(cells.get(5));
+            String coupon = couponDecimal(cells.get(1));
+            String year = maturityYear(cells.get(2));
+            Double price = priceValue(cells.get(3));
             if (coupon == null || year == null || price == null) continue;
 
             String symbol = "GILT " + coupon + "% " + year;
@@ -106,20 +115,20 @@ public class GiltPriceFetcher {
     private static List<String> cells(String row) {
         List<String> out = new ArrayList<>();
         Matcher m = CELL.matcher(row);
-        while (m.find()) out.add(TAG.matcher(m.group(1)).replaceAll("").trim());
+        while (m.find()) out.add(TAG.matcher(m.group(1)).replaceAll(" ").replaceAll("\\s+", " ").trim());
         return out;
     }
 
-    private static boolean isGiltTidm(String cell) {
-        return cell.length() >= 3
-                && (cell.charAt(0) == 'T')
-                && (cell.charAt(1) == 'G' || cell.charAt(1) == 'R')
-                && Character.isLetterOrDigit(cell.charAt(2));
-    }
-
+    /**
+     * HL pads coupons with trailing zeros ("4.750", "1.000") while {@code extractBondId}'s
+     * symbols carry the coupon as brokers write it ("4.75", "1") — trim so the join holds.
+     */
     private static String couponDecimal(String cell) {
-        Matcher m = COUPON_PCT.matcher(cell);
-        return m.matches() ? m.group(1) : null;
+        Matcher m = COUPON_DECIMAL.matcher(cell);
+        if (!m.matches()) return null;
+        String c = m.group(1);
+        if (c.contains(".")) c = c.replaceAll("0+$", "").replaceAll("\\.$", "");
+        return c.isEmpty() ? null : c;
     }
 
     private static String maturityYear(String cell) {
@@ -127,8 +136,8 @@ public class GiltPriceFetcher {
         return m.find() ? m.group(1) : null;
     }
 
-    private static Double poundsValue(String cell) {
-        Matcher m = POUND.matcher(cell);
-        return m.find() ? Double.valueOf(m.group(1)) : null;
+    private static Double priceValue(String cell) {
+        Matcher m = PRICE.matcher(cell);
+        return m.matches() ? Double.valueOf(m.group(1)) : null;
     }
 }

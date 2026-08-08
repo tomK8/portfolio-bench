@@ -44,7 +44,7 @@ public class YahooPriceFetcher {
     public List<PriceBar> fetch(String yahooTicker, LocalDate start, LocalDate end) {
         long p1 = start.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         long p2 = end.plusDays(1).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
-        String url = String.format(CHART_URL, yahooTicker, p1, p2);
+        String url = String.format(CHART_URL, urlTicker(yahooTicker), p1, p2);
 
         String body = get(url);
         if (body == null) {
@@ -57,6 +57,15 @@ public class YahooPriceFetcher {
             log.warn("Yahoo parse failed for {}", yahooTicker, e);
             return List.of();
         }
+    }
+
+    /**
+     * Percent-encodes the characters Yahoo tickers can contain that are illegal in a URI path.
+     * Index tickers start with {@code ^} (e.g. {@code ^NDX}, {@code ^IRX}), which
+     * {@link URI#create} rejects outright; everything else we fetch is URI-safe as-is.
+     */
+    static String urlTicker(String yahooTicker) {   // package-private for tests
+        return yahooTicker.replace("^", "%5E");
     }
 
     private String get(String url) {   // retry once, then give up
@@ -236,7 +245,8 @@ public class YahooPriceFetcher {
      * failure (logged).
      */
     public List<IntradayBar> fetchIntraday(String yahooTicker, Instant from, Instant to) {
-        String url = String.format(INTRADAY_URL, yahooTicker, from.getEpochSecond(), to.getEpochSecond());
+        String url = String.format(INTRADAY_URL, urlTicker(yahooTicker),
+                from.getEpochSecond(), to.getEpochSecond());
         String body = get(url);
         if (body == null) {
             log.warn("Yahoo intraday fetch failed for {}", yahooTicker);

@@ -52,15 +52,26 @@ public class IntradayPriceRepository {
         }
     }
 
+    /**
+     * Commit bulk writes in chunks rather than one transaction for the whole batch: SQLite's
+     * single database-wide writer lock, held across a multi-thousand-row batch, starves
+     * interactive writes (a watchlist add/remove) until the batch finishes. Chunked commits
+     * release it frequently so those small writes interleave. INSERT-OR-IGNORE is idempotent,
+     * so earlier chunks surviving a mid-batch failure is harmless.
+     */
+    private static final int WRITE_CHUNK_ROWS = 500;
+
     public int saveIntradayBars(List<IntradayBar> bars) {
         if (bars.isEmpty()) return 0;
         String fetchedAt = Instant.now().toString();
+        int inserted = 0;
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT OR IGNORE INTO price_intraday " +
                              "(symbol, ts, close, volume, currency, fetched_at) " +
                              "VALUES (?, ?, ?, ?, ?, ?)")) {
-            int inserted = 0;
+            conn.setAutoCommit(false);
+            int inBatch = 0;
             for (IntradayBar b : bars) {
                 ps.setString(1, b.symbol());
                 ps.setString(2, b.ts().toString());
@@ -69,12 +80,21 @@ public class IntradayPriceRepository {
                 else ps.setNull(4, Types.INTEGER);
                 ps.setString(5, b.currency());
                 ps.setString(6, fetchedAt);
-                inserted += ps.executeUpdate();
+                ps.addBatch();
+                if (++inBatch >= WRITE_CHUNK_ROWS) {
+                    for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+                    conn.commit();
+                    inBatch = 0;
+                }
+            }
+            if (inBatch > 0) {
+                for (int n : ps.executeBatch()) if (n > 0) inserted += n;
+                conn.commit();
             }
             return inserted;
         } catch (Exception e) {
             log.warn("Could not save intraday bars", e);
-            return 0;
+            return inserted;
         }
     }
 
@@ -115,6 +135,27 @@ public class IntradayPriceRepository {
             }
         } catch (Exception e) {
             log.warn("Could not load latest intraday prices", e);
+        }
+        return out;
+    }
+
+    /**
+     * The distinct gilt symbols currently priced in {@code price_intraday} — i.e. the conventional
+     * gilts {@link com.portfolio.application.GiltPriceFetchJob} scrapes hourly from HL, stored as
+     * {@code "GILT {coupon}% {year}"}. Feeds the Watchlist add-box autocomplete so a gilt buy-limit
+     * alert can be entered by picking a valid name rather than typing one (a mistyped coupon/year
+     * would silently never join a price and never fire). Read path — degrades to empty on failure.
+     */
+    public List<String> distinctGiltSymbols() {
+        List<String> out = new java.util.ArrayList<>();
+        if (!connections.dbExists()) return out;
+        try (Connection conn = connections.open();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT DISTINCT symbol FROM price_intraday WHERE symbol LIKE 'GILT %' ORDER BY symbol")) {
+            while (rs.next()) out.add(rs.getString(1));
+        } catch (Exception e) {
+            log.warn("Could not load distinct gilt symbols", e);
         }
         return out;
     }

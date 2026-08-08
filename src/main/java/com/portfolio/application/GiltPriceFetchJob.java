@@ -15,8 +15,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Hourly gilt-price refresh. One HTTP request returns every TG and TR row on dividenddata, which
- * we store in {@code price_intraday} alongside Yahoo intraday closes. Symbols match the
+ * Hourly gilt-price refresh. One HTTP request returns every conventional gilt on HL's public
+ * gilt-prices page, which we store in {@code price_intraday} alongside Yahoo intraday closes. Symbols match the
  * {@code "GILT {coupon}% {year}"} form produced by {@code AJBellSippParser.extractBondId}, so
  * the dashboard's RT-value lookup joins without any ticker translation.
  *
@@ -58,7 +58,7 @@ public class GiltPriceFetchJob {
     }
 
     /**
-     * Dividenddata refreshes infrequently — most hourly ticks return prices identical to what's
+     * The source page refreshes infrequently — most hourly ticks return prices identical to what's
      * already stored. Keep one row per (symbol, London date) when the price hasn't moved, and
      * only add another for the same day if the close has actually changed.
      */

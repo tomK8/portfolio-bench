@@ -1,16 +1,26 @@
 package com.portfolio.config;
 
 import com.portfolio.ExcelReportWriter;
+import com.portfolio.adapter.CachingFxRateProvider;
+import com.portfolio.adapter.CikRegistry;
+import com.portfolio.adapter.EdgarEarningsFetcher;
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
 import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.GiltPriceFetcher;
 import com.portfolio.adapter.HoldingFileLocator;
+import com.portfolio.adapter.NasdaqEarningsFetcher;
 import com.portfolio.adapter.SmtpAlertNotifier;
 import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooQuoteSummaryFetcher;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.*;
 import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.application.EarningsService;
+import com.portfolio.parser.AJBellOrdersParser;
+import com.portfolio.parser.IIOrdersParser;
+import com.portfolio.parser.RothOrdersParser;
+import com.portfolio.persistence.EarningsCalendarRepository;
+import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
@@ -20,6 +30,8 @@ import com.portfolio.persistence.SnapshotRepository;
 import com.portfolio.persistence.TradeNotesRepository;
 import com.portfolio.persistence.WatchlistRepository;
 import com.portfolio.port.AlertNotifier;
+import com.portfolio.port.EarningsCalendarFeed;
+import com.portfolio.port.EarningsCalendarProvider;
 import com.portfolio.port.FxRateProvider;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,6 +39,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
 
 /**
  * The only place outside the web layer that knows about Spring. Wires the
@@ -53,9 +67,10 @@ public class BeanConfiguration {
         return configured.isBlank() ? DEFAULT_DB_DIR : Path.of(configured);
     }
 
+    /** Live GBP FX rates, TTL-cached with stale-on-failure fallback (see the decorator). */
     @Bean
     public FxRateProvider fxRateProvider() {
-        return new FrankfurterFxClient();
+        return new CachingFxRateProvider(new FrankfurterFxClient(), Duration.ofMinutes(15));
     }
 
     @Bean
@@ -113,6 +128,24 @@ public class BeanConfiguration {
     public PortfolioGatherer portfolioGatherer(FxRateProvider fxRateProvider,
                                                HoldingFileLocator holdingFileLocator) {
         return new PortfolioGatherer(fxRateProvider, holdingFileLocator);
+    }
+
+    @Bean
+    public OpenOrdersService openOrdersService(HoldingFileLocator holdingFileLocator,
+                                               FxRateProvider fxRateProvider,
+                                               ExcelReportWriter excelReportWriter,
+                                               IntradayPriceRepository intradayPriceRepository,
+                                               PriceHistoryRepository priceHistoryRepository,
+                                               YahooTickerMap yahooTickerMap,
+                                               @Value("${portfolio.output-dir:}") String outputDir) {
+        Path dir = outputDir.isBlank()
+                ? Path.of(System.getProperty("user.home"), "Documents")
+                : Path.of(outputDir);
+        return new OpenOrdersService(holdingFileLocator, List.of(
+                new AJBellOrdersParser(),
+                new IIOrdersParser(),
+                new RothOrdersParser()), fxRateProvider, excelReportWriter, dir,
+                intradayPriceRepository, priceHistoryRepository, yahooTickerMap);
     }
 
     @Bean
@@ -490,11 +523,89 @@ public class BeanConfiguration {
     // ---- Swing-strategy validation statistics -------------------------------
 
     @Bean
+    public EarningsDateRepository earningsDateRepository(JdbcConnectionFactory connections) {
+        return new EarningsDateRepository(connections);
+    }
+
+    @Bean
+    public EarningsCalendarProvider earningsCalendarProvider(JdbcConnectionFactory jdbcConnectionFactory) {
+        return new EdgarEarningsFetcher(new CikRegistry(jdbcConnectionFactory.dbDir()));
+    }
+
+    @Bean
+    public EarningsService earningsService(EarningsCalendarProvider earningsCalendarProvider,
+                                           EarningsDateRepository earningsDateRepository,
+                                           KeyValueStore keyValueStore) {
+        return new EarningsService(earningsCalendarProvider, earningsDateRepository, keyValueStore);
+    }
+
+    // ---- Earnings calendar (Nasdaq feed) ------------------------------------
+
+    @Bean
+    public EarningsCalendarFeed earningsCalendarFeed() {
+        return new NasdaqEarningsFetcher();
+    }
+
+    @Bean
+    public EarningsCalendarRepository earningsCalendarRepository(JdbcConnectionFactory connections) {
+        return new EarningsCalendarRepository(connections);
+    }
+
+    @Bean
+    public EarningsCalendarService earningsCalendarService(EarningsCalendarFeed earningsCalendarFeed,
+                                                           EarningsCalendarRepository earningsCalendarRepository,
+                                                           KeyValueStore keyValueStore) {
+        return new EarningsCalendarService(earningsCalendarFeed, earningsCalendarRepository, keyValueStore);
+    }
+
+    @Bean
     public SwingAnalysisService swingAnalysisService(PriceHistoryRepository priceHistoryRepository,
                                                      YahooTickerMap yahooTickerMap,
                                                      KeyValueStore keyValueStore,
-                                                     PriceFetchJob priceFetchJob) {
+                                                     PriceFetchJob priceFetchJob,
+                                                     EarningsService earningsService) {
         return new SwingAnalysisService(priceHistoryRepository, yahooTickerMap,
+                keyValueStore, priceFetchJob, earningsService);
+    }
+
+    // ---- Trend-filter backtest ----------------------------------------------
+
+    @Bean
+    public TrendAnalysisService trendAnalysisService(PriceHistoryRepository priceHistoryRepository,
+                                                     YahooTickerMap yahooTickerMap,
+                                                     KeyValueStore keyValueStore,
+                                                     PriceFetchJob priceFetchJob) {
+        return new TrendAnalysisService(priceHistoryRepository, yahooTickerMap,
                 keyValueStore, priceFetchJob);
+    }
+
+    // ---- Momentum rotation backtest -----------------------------------------
+
+    @Bean
+    public MomentumAnalysisService momentumAnalysisService(PriceHistoryRepository priceHistoryRepository,
+                                                           YahooTickerMap yahooTickerMap,
+                                                           KeyValueStore keyValueStore,
+                                                           PriceFetchJob priceFetchJob) {
+        return new MomentumAnalysisService(priceHistoryRepository, yahooTickerMap,
+                keyValueStore, priceFetchJob);
+    }
+
+    @Bean
+    public MomentumSignalsService momentumSignalsService(PriceHistoryRepository priceHistoryRepository,
+                                                         YahooTickerMap yahooTickerMap,
+                                                         KeyValueStore keyValueStore,
+                                                         PriceFetchJob priceFetchJob) {
+        return new MomentumSignalsService(priceHistoryRepository, yahooTickerMap,
+                keyValueStore, priceFetchJob);
+    }
+
+    @Bean
+    public RangeAnalysisService rangeAnalysisService(PriceHistoryRepository priceHistoryRepository,
+                                                     YahooTickerMap yahooTickerMap,
+                                                     HistoricalFxRateProvider historicalFxRateProvider,
+                                                     KeyValueStore keyValueStore,
+                                                     PriceFetchJob priceFetchJob) {
+        return new RangeAnalysisService(priceHistoryRepository, yahooTickerMap,
+                historicalFxRateProvider, keyValueStore, priceFetchJob);
     }
 }

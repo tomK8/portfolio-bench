@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Locates broker export files in a single input directory (default ~/Downloads).
@@ -30,11 +31,20 @@ public class HoldingFileLocator {
     }
 
     public Optional<Path> findMostRecent(AccountParser parser) throws IOException {
+        return findMostRecent(parser::supports);
+    }
+
+    /**
+     * Most recently modified regular file in the input dir matching {@code supports}. The
+     * {@link com.portfolio.parser.OrderParser} pipeline reuses this via a method reference,
+     * so order-file location shares the same "newest file wins" rule as holdings.
+     */
+    public Optional<Path> findMostRecent(Predicate<Path> supports) throws IOException {
         if (!Files.isDirectory(inputDir)) return Optional.empty();
         try (var stream = Files.list(inputDir)) {
             return stream
                     .filter(Files::isRegularFile)
-                    .filter(parser::supports)
+                    .filter(supports)
                     .max(Comparator.comparingLong(p -> p.toFile().lastModified()));
         }
     }

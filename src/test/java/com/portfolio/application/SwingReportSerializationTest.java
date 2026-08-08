@@ -59,7 +59,7 @@ class SwingReportSerializationTest {
         priceRepo.savePriceBars(path(tickers.tickerFor("BBB")));
         // CCC has no data → a missing-data symbol in the payload.
 
-        var service = new SwingAnalysisService(priceRepo, tickers, new KeyValueStore(dbDir), null);
+        var service = new SwingAnalysisService(priceRepo, tickers, new KeyValueStore(dbDir), null, null);
         SwingConfig cfg = service.baseConfigBuilder()
                 .symbols(List.of("AAA", "BBB", "CCC"))
                 .cluster(List.of("AAA", "BBB"))
@@ -77,7 +77,14 @@ class SwingReportSerializationTest {
         // And it must round-trip (a stronger check than substring matching).
         JsonNode root = mapper.readTree(json);
         assertEquals(3, root.get("perSymbol").size());
-        assertTrue(root.get("pooled").get("full").get("barriers").size() > 0);
-        assertTrue(root.get("pooled").get("full").get("barriers").get(0).has("bootstrap"));
+        JsonNode family = root.get("pooled").get("full").get("families").get(0);
+        JsonNode barriers = family.get("variants").get(0).get("barriers");
+        assertTrue(barriers.size() > 0);
+        assertTrue(barriers.get(0).has("bootstrap"));
+        // §A/§B/§E graph must serialise too (they carry nullable/NaN-prone figures).
+        assertTrue(family.has("eventLog"));
+        assertTrue(family.has("annual"));
+        assertTrue(family.get("maSplit").has("above"));
+        assertTrue(root.get("earningsHygiene").has("coverage"));
     }
 }

@@ -1,8 +1,11 @@
 package com.portfolio.web;
 
-import com.portfolio.application.FundamentalsFetchJob;
+import com.portfolio.application.PortfolioFundamentalsService;
 import com.portfolio.application.PriceFetchJob;
+import com.portfolio.application.WatchlistAlertJob;
 import com.portfolio.application.WatchlistService;
+import com.portfolio.domain.Instruments;
+import com.portfolio.application.WatchlistService.QuoteView;
 import com.portfolio.application.WatchlistService.Series;
 import com.portfolio.application.WatchlistService.WatchlistView;
 import com.portfolio.persistence.WatchlistRepository;
@@ -36,7 +39,8 @@ public class WatchlistController {
     private final WatchlistService watchlistService;
     private final WatchlistRepository watchlistRepo;
     private final PriceFetchJob priceFetchJob;
-    private final FundamentalsFetchJob fundamentalsFetchJob;
+    private final PortfolioFundamentalsService fundamentalsService;
+    private final WatchlistAlertJob watchlistAlertJob;
 
     // Single-thread so two quick adds queue instead of racing each other's SQLite writes.
     private final ExecutorService backfillExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -48,11 +52,13 @@ public class WatchlistController {
     public WatchlistController(WatchlistService watchlistService,
                                WatchlistRepository watchlistRepo,
                                PriceFetchJob priceFetchJob,
-                               FundamentalsFetchJob fundamentalsFetchJob) {
+                               PortfolioFundamentalsService fundamentalsService,
+                               WatchlistAlertJob watchlistAlertJob) {
         this.watchlistService = watchlistService;
         this.watchlistRepo = watchlistRepo;
         this.priceFetchJob = priceFetchJob;
-        this.fundamentalsFetchJob = fundamentalsFetchJob;
+        this.fundamentalsService = fundamentalsService;
+        this.watchlistAlertJob = watchlistAlertJob;
     }
 
     @GetMapping("/watchlist")
@@ -61,14 +67,25 @@ public class WatchlistController {
         return watchlistService.view();
     }
 
+    /** Lightweight near-real-time refresh (see {@link WatchlistService#quotes()}) — polled by the dashboard. */
+    @GetMapping("/watchlist/quotes")
+    @ResponseBody
+    public QuoteView quotes() {
+        return watchlistService.quotes();
+    }
+
     @PostMapping("/watchlist/add")
     @ResponseBody
     public WatchlistView add(@RequestParam("symbol") String symbol,
                              @RequestParam(name = "highPct", required = false) String highPct,
-                             @RequestParam(name = "movePct", required = false) String movePct) {
+                             @RequestParam(name = "movePct", required = false) String movePct,
+                             @RequestParam(name = "priceAbove", required = false) String priceAbove,
+                             @RequestParam(name = "priceBelow", required = false) String priceBelow) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase();
         if (sym.isEmpty()) throw new IllegalArgumentException("Symbol is required.");
-        watchlistRepo.add(sym, parsePct(highPct, "high threshold"), parsePct(movePct, "move threshold"));
+        watchlistRepo.add(sym, parsePct(highPct, "high threshold"), parsePct(movePct, "move threshold"),
+                parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
+        watchlistAlertJob.clearFiredFor(sym);   // new/changed triggers re-arm today (no stale dedup)
         backfillInBackground(sym);
         return watchlistService.view();
     }
@@ -77,9 +94,13 @@ public class WatchlistController {
     @ResponseBody
     public WatchlistView threshold(@RequestParam("symbol") String symbol,
                                    @RequestParam(name = "highPct", required = false) String highPct,
-                                   @RequestParam(name = "movePct", required = false) String movePct) {
+                                   @RequestParam(name = "movePct", required = false) String movePct,
+                                   @RequestParam(name = "priceAbove", required = false) String priceAbove,
+                                   @RequestParam(name = "priceBelow", required = false) String priceBelow) {
         watchlistRepo.updateThresholds(symbol, parsePct(highPct, "high threshold"),
-                parsePct(movePct, "move threshold"));
+                parsePct(movePct, "move threshold"),
+                parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
+        watchlistAlertJob.clearFiredFor(symbol);   // a corrected target re-arms same-day
         return watchlistService.view();
     }
 
@@ -87,7 +108,19 @@ public class WatchlistController {
     @ResponseBody
     public WatchlistView remove(@RequestParam("symbol") String symbol) {
         watchlistRepo.remove(symbol);
+        watchlistAlertJob.clearFiredFor(symbol);   // drop any fired flags for a symbol no longer watched
         return watchlistService.view();
+    }
+
+    /**
+     * The conventional gilts currently priced (from {@code GiltPriceFetchJob}) — feeds the
+     * Watchlist add-box autocomplete so a gilt buy-limit alert is entered by picking a valid,
+     * priced name (e.g. {@code GILT 4.75% 2043}) rather than typing one.
+     */
+    @GetMapping("/watchlist/gilts")
+    @ResponseBody
+    public java.util.List<String> gilts() {
+        return watchlistService.giltSymbols();
     }
 
     @GetMapping("/watchlist/series")
@@ -121,16 +154,24 @@ public class WatchlistController {
     }
 
     /**
-     * Fetch daily prices for a newly added symbol and refresh the fundamentals cache, off the
-     * request thread so the UI returns immediately. Intraday quotes arrive on the next scheduled
-     * intraday tick (≤1 min) via the mirrored watchlist symbol set.
+     * Fetch daily prices for a newly added symbol and refresh <em>that one symbol's</em>
+     * fundamentals, off the request thread so the UI returns immediately. Intraday quotes arrive
+     * on the next scheduled intraday tick (≤1 min) via the mirrored watchlist symbol set.
+     *
+     * <p>Deliberately narrow: the price fetch is skipped when the symbol's history is already
+     * fresh ({@link PriceFetchJob#fetchSingleIfStale}) and only the added symbol's fundamentals
+     * are refreshed (not the whole ~45-name universe). Both keep this background task's SQLite
+     * writes short so a following watchlist add/remove doesn't lose the writer lock and fail.
+     * The nightly/cron fundamentals refresh still covers the full universe.
      */
     private void backfillInBackground(String symbol) {
         backfillExecutor.submit(() -> {
             try {
-                int rows = priceFetchJob.fetchSingle(symbol);
+                int rows = priceFetchJob.fetchSingleIfStale(symbol);
                 log.info("Watchlist add backfill: {} → {} daily rows", symbol, rows);
-                fundamentalsFetchJob.run();
+                if (!Instruments.isBond(symbol)) {   // gilts have no Yahoo fundamentals coverage
+                    fundamentalsService.refreshSymbol(symbol);
+                }
             } catch (RuntimeException e) {
                 log.warn("Watchlist add backfill failed for {}", symbol, e);
             }
@@ -141,6 +182,20 @@ public class WatchlistController {
         if (s == null || s.isBlank()) return null;
         try {
             BigDecimal v = new BigDecimal(s.replace("%", "").trim());
+            if (v.signum() < 0) throw new IllegalArgumentException(name + " must not be negative.");
+            return v;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(name + " '" + s + "' is not a number.");
+        }
+    }
+
+    /** Parse a price level: blank → null (disabled); rejects negatives; strips any currency prefix. */
+    private static BigDecimal parsePrice(String s, String name) {
+        if (s == null || s.isBlank()) return null;
+        String cleaned = s.replaceAll("[£$€,\\s]", "").trim();
+        if (cleaned.isEmpty()) return null;
+        try {
+            BigDecimal v = new BigDecimal(cleaned);
             if (v.signum() < 0) throw new IllegalArgumentException(name + " must not be negative.");
             return v;
         } catch (NumberFormatException e) {

@@ -4,9 +4,11 @@ import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.domain.swing.ForwardReturns;
 import com.portfolio.domain.swing.SwingConfig;
+import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
+import com.portfolio.port.EarningsCalendarProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -25,7 +27,12 @@ class SwingAnalysisServiceTest {
     private final YahooTickerMap tickers = new YahooTickerMap();
 
     private SwingAnalysisService service(PriceHistoryRepository priceRepo) {
-        return new SwingAnalysisService(priceRepo, tickers, new KeyValueStore(dbDir), null);
+        return new SwingAnalysisService(priceRepo, tickers, new KeyValueStore(dbDir), null, null);
+    }
+
+    /** Navigate to the absolute family's "all"-variant §6 barriers of a regime. */
+    private static java.util.List<SwingReport.BarrierComparison> absBarriers(SwingReport.Regime r) {
+        return r.families().get(0).variants().get(0).barriers();
     }
 
     // Deterministic 60-bar path ending near today; includes down days that trip the −5% trigger.
@@ -114,8 +121,8 @@ class SwingAnalysisServiceTest {
         SwingReport.SymbolReport aaa = find(r, "AAA");
 
         // Every §6 time stop pairs the flush sim with its all-days placebo + bootstrap control.
-        assertFalse(aaa.full().barriers().isEmpty());
-        SwingReport.BarrierComparison cmp = aaa.full().barriers().get(0);
+        assertFalse(absBarriers(aaa.full()).isEmpty());
+        SwingReport.BarrierComparison cmp = absBarriers(aaa.full()).get(0);
         assertNotNull(cmp.flush());
         assertNotNull(cmp.placebo());
         assertNotNull(cmp.bootstrap());
@@ -123,6 +130,32 @@ class SwingAnalysisServiceTest {
         // Reconciliation identity holds on the flush sim.
         var f = cmp.flush();
         assertEquals(f.events(), f.tpFirst() + f.slFirst() + f.timeCount() + f.ambiguous() + f.open());
+    }
+
+    @Test
+    void regimeRunsBothTriggerFamiliesWithVariantsAndEngines() {
+        var priceRepo = new PriceHistoryRepository(new JdbcConnectionFactory(dbDir));
+        priceRepo.savePriceBars(path("AAA", 100));
+
+        SwingReport.Regime full = find(service(priceRepo).report(cfg()), "AAA").full();
+
+        // Two families (§C), in the order absolute then σ-scaled.
+        assertEquals(2, full.families().size());
+        assertEquals("abs", full.families().get(0).kind());
+        assertEquals("sigma", full.families().get(1).kind());
+        assertNotNull(full.familyOverlapCount());
+
+        for (SwingReport.FlushFamily fam : full.families()) {
+            // Two earnings variants (§D): all + ex-earnings.
+            assertEquals(2, fam.variants().size());
+            assertEquals("all", fam.variants().get(0).name());
+            assertEquals("ex-earnings", fam.variants().get(1).name());
+            assertNotNull(fam.eventLog());     // §A
+            assertNotNull(fam.annual());       // §B
+            assertNotNull(fam.maSplit());      // §E
+            // With no earnings source injected, the family is unverified.
+            assertFalse(fam.earningsVerified());
+        }
     }
 
     @Test
@@ -148,6 +181,34 @@ class SwingAnalysisServiceTest {
         assertTrue(pAbs.episodes() <= pAbs.triggerDays());
         // AAA and BBB share dates, so pooled episodes should be strictly below the summed count.
         assertTrue(pAbs.episodes() < pAbs.triggerDays() || pAbs.triggerDays() == 0);
+    }
+
+    @Test
+    void earningsProviderMarksVerifiedAndBuildsCoverage() {
+        var priceRepo = new PriceHistoryRepository(new JdbcConnectionFactory(dbDir));
+        priceRepo.savePriceBars(path("AAA", 100));
+        priceRepo.savePriceBars(path("BBB", 200));
+
+        // Fake provider: AAA is a "US filer" (verifiable, one earnings date), BBB is not.
+        EarningsCalendarProvider provider = new EarningsCalendarProvider() {
+            public List<LocalDate> earningsDates(String symbol) {
+                return "AAA".equals(symbol) ? List.of(LocalDate.now().minusDays(40)) : List.of();
+            }
+            public boolean isVerifiable(String symbol) { return "AAA".equals(symbol); }
+            public String sourceName() { return "fake"; }
+        };
+        var earnings = new EarningsService(provider, new EarningsDateRepository(new JdbcConnectionFactory(dbDir)), new KeyValueStore(dbDir));
+        var svc = new SwingAnalysisService(priceRepo, tickers, new KeyValueStore(dbDir), null, earnings);
+
+        SwingReport r = svc.report(cfg());
+        assertTrue(r.earningsHygiene().coverage().stream()
+                .anyMatch(c -> c.symbol().equals("AAA") && c.verified() && c.dateCount() == 1));
+        assertTrue(r.earningsHygiene().coverage().stream()
+                .anyMatch(c -> c.symbol().equals("BBB") && !c.verified()));
+
+        // Family verification follows the source: AAA verified, BBB unverified.
+        assertTrue(find(r, "AAA").full().families().get(0).earningsVerified());
+        assertFalse(find(r, "BBB").full().families().get(0).earningsVerified());
     }
 
     @Test

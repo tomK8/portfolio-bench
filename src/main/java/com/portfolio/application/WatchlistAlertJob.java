@@ -64,6 +64,26 @@ public class WatchlistAlertJob {
         }
     }
 
+    /**
+     * Drop every fired-dedup key for {@code symbol} (all triggers, all days) from the KV set.
+     * Called when a symbol's thresholds/levels change or it's removed: the dedup exists to avoid
+     * re-mailing the <em>same</em> setting, so a changed setting must re-arm. This fixes two
+     * things at once — a corrected target (e.g. an Above level moved to the Below column) can fire
+     * fresh the same day instead of being suppressed by the earlier firing, and a stale firing for
+     * a now-disabled trigger stops lingering in the fired set.
+     */
+    public void clearFiredFor(String symbol) {
+        if (symbol == null) return;
+        String prefix = symbol.trim().toUpperCase() + "|";
+        Set<String> kept = new LinkedHashSet<>();
+        boolean removed = false;
+        for (String k : kv.getStringSet(FIRED_KEY)) {
+            if (k.startsWith(prefix)) removed = true;
+            else kept.add(k);
+        }
+        if (removed) kv.putStringSet(FIRED_KEY, kept);
+    }
+
     private void evaluateAndNotify() {
         WatchlistView view = watchlistService.view();
         String today = LocalDate.now().toString();
@@ -84,6 +104,14 @@ public class WatchlistAlertJob {
             if (r.bigMove()) {
                 String key = r.symbol() + "|MOVE|" + today;
                 if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeMove(r));
+            }
+            if (r.aboveLevel()) {
+                String key = r.symbol() + "|ABOVE|" + today;
+                if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeLevel(r, true));
+            }
+            if (r.belowLevel()) {
+                String key = r.symbol() + "|BELOW|" + today;
+                if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeLevel(r, false));
             }
         }
 
@@ -123,6 +151,16 @@ public class WatchlistAlertJob {
         String amount = mv == null ? "" : pct(mv.abs());
         return r.symbol() + " " + dir + amount + " today — " + price(r)
                 + " (threshold " + plain(r.moveThresholdPct()) + "%)";
+    }
+
+    private static String describeLevel(Row r, boolean above) {
+        BigDecimal level = above ? r.priceAbove() : r.priceBelow();
+        // Name the column that fired ("Above"/"Below") so the email can't be read as the opposite
+        // direction — the whole point of the rename.
+        String dir = above ? "hit Above target" : "hit Below target";
+        String ccy = r.currency() == null ? "" : " " + r.currency();
+        String target = level == null ? "?" : level.stripTrailingZeros().toPlainString() + ccy;
+        return r.symbol() + " " + dir + " " + target + " — now " + price(r);
     }
 
     private static String price(Row r) {

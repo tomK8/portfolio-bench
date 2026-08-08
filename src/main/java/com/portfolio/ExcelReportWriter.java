@@ -4,6 +4,7 @@ import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PortfolioAggregator;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.Holding;
+import com.portfolio.domain.model.OpenOrder;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
@@ -14,6 +15,7 @@ import org.apache.poi.xssf.usermodel.XSSFColor;
 import org.apache.poi.xssf.usermodel.XSSFFont;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigDecimal;
@@ -23,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +62,8 @@ public class ExcelReportWriter {
     private static final int AGG_TOTAL_GAIN = 8;  // I  Total Gain (£) = gain + dividends
     private static final int AGG_TOTAL_GAIN_PCT = 9;  // J  Total Gain % = (gain + dividends) / cost
     private static final int AGG_SOURCES = 10;  // K
-    private static final int AGG_COLS = 11;
+    private static final int AGG_PCT = 11;  // L  Portfolio % = row Market Value GBP / portfolio total
+    private static final int AGG_COLS = 12;
 
     private static final byte[] GREEN = {(byte) 0, (byte) 176, (byte) 80};
     private static final byte[] RED = {(byte) 255, (byte) 0, (byte) 0};
@@ -77,6 +81,7 @@ public class ExcelReportWriter {
         CellStyle boldText = boldTextStyle(wb);
         CellStyle boldNum = numericStyle(wb, true);
         CellStyle inputCell = inputCellStyle(wb);
+        CellStyle pctData = pctStyle(wb, false);
 
         List<AggHolding> equities = rows.stream().filter(h -> !"CASH".equals(h.securityId())).collect(Collectors.toList());
         List<AggHolding> cashList = rows.stream().filter(h -> "CASH".equals(h.securityId())).collect(Collectors.toList());
@@ -107,15 +112,22 @@ public class ExcelReportWriter {
         // Header
         String[] headers = {"Security ID", "Quantity", "Avg Price Paid", "Exchange Currency",
                 "Market Value GBP", "Gain (£)", "Gain/Loss %", "Dividends (£)",
-                "Total Gain (£)", "Total Gain %", "Sources"};
+                "Total Gain (£)", "Total Gain %", "Sources", "Portfolio %"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
         sheet.setAutoFilter(new CellRangeAddress(0, nEquity, 0, AGG_COLS - 1));
 
+        // Portfolio % = this row's Market Value GBP (col E) ÷ the portfolio TOTAL (col E, total row).
+        // Written as a live Excel formula so it re-computes if the user edits the II SIPP cash input.
+        String portfolioTotalRef = "$E$" + (totalPoiRow + 1);
+
         // Equity rows
         int rowNum = 1;
         for (AggHolding h : equities) {
-            writeAggRow(sheet.createRow(rowNum++), h, dataText, dataNum, wb);
+            Row row = sheet.createRow(rowNum++);
+            writeAggRow(row, h, dataText, dataNum, wb);
+            formulaCell(row, AGG_PCT,
+                    "IFERROR(E" + (row.getRowNum() + 1) + "/" + portfolioTotalRef + ",\"\")", pctData);
         }
 
         // Cash section header
@@ -144,6 +156,8 @@ public class ExcelReportWriter {
                 setNumeric(row, AGG_MKTGBP, h.marketValueGbp(), dataNum);
                 styledCell(row, AGG_SOURCES, h.sources(), dataText);
             }
+            formulaCell(row, AGG_PCT,
+                    "IFERROR(E" + (row.getRowNum() + 1) + "/" + portfolioTotalRef + ",\"\")", pctData);
         }
         if (!wroteGbpCash) {
             Row row = sheet.createRow(rowNum);
@@ -153,6 +167,8 @@ public class ExcelReportWriter {
             setNumeric(row, AGG_AVG, BigDecimal.ONE, dataNum);
             formulaCell(row, AGG_MKTGBP, inputCellRef, dataNum);
             styledCell(row, AGG_SOURCES, II_SIPP, dataText);
+            formulaCell(row, AGG_PCT,
+                    "IFERROR(E" + (row.getRowNum() + 1) + "/" + portfolioTotalRef + ",\"\")", pctData);
         }
 
         // Total Cash row
@@ -647,6 +663,7 @@ public class ExcelReportWriter {
                     wb.createSheet("Portfolio Raw"), holdings, gbpRates, portfolioInputRef, dividendsBySymbol, wb);
             for (Map.Entry<String, Path> e : rawSources.entrySet())
                 writeRawSheet(e.getValue(), wb.createSheet(e.getKey()));
+            wb.setForceFormulaRecalculation(true);   // else formula cells (incl. Portfolio %) open blank
             write(wb, outputPath);
         }
     }
@@ -660,7 +677,111 @@ public class ExcelReportWriter {
                                    BigDecimal iiSippCash) throws IOException {
         try (Workbook wb = new XSSFWorkbook()) {
             writeAggregatedSheet(wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
+            wb.setForceFormulaRecalculation(true);   // else formula cells (incl. Portfolio %) open blank
             write(wb, outputPath);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Open orders workbook (streamed straight to the browser, not written to disk)
+    // -------------------------------------------------------------------------
+
+    /** Single-sheet workbook of the given open orders, returned as bytes for a direct download. */
+    public byte[] ordersWorkbook(List<OpenOrder> orders) throws IOException {
+        try (Workbook wb = new XSSFWorkbook();
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            writeOrdersSheet(wb.createSheet("Open Orders"), orders, wb);
+            wb.write(bos);
+            return bos.toByteArray();
+        }
+    }
+
+    private static void writeOrdersSheet(Sheet sheet, List<OpenOrder> orders, Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle qtyNum = numericStyle(wb, false);
+        Map<String, CellStyle> moneyStyles = new HashMap<>();   // reuse one style per number format
+
+        CellStyle pctStyle = wb.createCellStyle();
+        pctStyle.setDataFormat(wb.createDataFormat().getFormat("+0.00%;-0.00%"));
+        CellStyle volPctStyle = wb.createCellStyle();       // RV10 / RV30 — unsigned daily σ
+        volPctStyle.setDataFormat(wb.createDataFormat().getFormat("0.00%"));
+        CellStyle touchPctStyle = wb.createCellStyle();      // touch probability
+        touchPctStyle.setDataFormat(wb.createDataFormat().getFormat("0.0%"));
+        CellStyle sigmaStyle = wb.createCellStyle();         // signed σ distance to limit
+        sigmaStyle.setDataFormat(wb.createDataFormat().getFormat("+0.00;-0.00"));
+
+        String[] headers = {"Broker", "Symbol", "Side", "Type", "Quantity",
+                "Price", "Current", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
+                "P(touch 20d)", "Amount", "Amount GBP", "Date entered", "Expiry"};
+        Row hdr = sheet.createRow(0);
+        for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
+
+        int rowNum = 1;
+        for (OpenOrder o : orders) {
+            Row row = sheet.createRow(rowNum++);
+            styledCell(row, 0, o.broker(), text);
+            styledCell(row, 1, dashIfNull(o.symbol()), text);
+            styledCell(row, 2, dashIfNull(o.side()), text);
+            styledCell(row, 3, dashIfNull(o.orderType()), text);
+            if (o.quantity() != null) setNumeric(row, 4, o.quantity(), qtyNum);
+            if (o.price() != null) setMoney(row, 5, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
+            if (o.currentPrice() != null) setMoney(row, 6, o.currentPrice(), o.currency(), false, wb, moneyStyles);
+            if (o.distancePct() != null) setStyled(row, 7, o.distancePct(), pctStyle);
+            if (o.dailyVol10() != null) setStyled(row, 8, o.dailyVol10(), volPctStyle);
+            if (o.dailyVol30() != null) setStyled(row, 9, o.dailyVol30(), volPctStyle);
+            if (o.sigmaToLimit() != null) setStyled(row, 10, o.sigmaToLimit(), sigmaStyle);
+            if (o.touchProb5d() != null) setStyled(row, 11, o.touchProb5d(), touchPctStyle);
+            if (o.touchProb20d() != null) setStyled(row, 12, o.touchProb20d(), touchPctStyle);
+            if (o.amount() != null) setMoney(row, 13, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 14, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 15, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            String expiry = o.expiry() != null ? o.expiry().toString()
+                    : (o.duration() != null ? o.duration() : "");
+            styledCell(row, 16, expiry, text);
+        }
+        sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
+        autoSizeColumns(sheet, headers.length);
+    }
+
+    private static String dashIfNull(String s) {
+        return s != null ? s : "—";
+    }
+
+    /** Numeric cell carrying a raw fraction/number, formatted by a caller-supplied style. */
+    private static void setStyled(Row row, int col, BigDecimal value, CellStyle style) {
+        Cell cell = row.createCell(col);
+        cell.setCellValue(value.doubleValue());
+        cell.setCellStyle(style);
+    }
+
+    /**
+     * Numeric money cell formatted with the currency symbol via the cell's number format (so a
+     * mixed-currency sheet reads naturally and the value stays a real number). Estimated prices
+     * (II) get a literal "~" prefix in the format — matching the on-screen convention — while the
+     * underlying value stays numeric.
+     */
+    private static void setMoney(Row row, int col, BigDecimal value, String currency,
+                                 boolean estimated, Workbook wb, Map<String, CellStyle> cache) {
+        String prefix = (estimated ? "~" : "") + currencySymbolFor(currency);
+        String fmt = prefix.isEmpty() ? "#,##0.00" : "\"" + prefix + "\"#,##0.00";
+        CellStyle style = cache.computeIfAbsent(fmt, f -> {
+            CellStyle s = wb.createCellStyle();
+            s.setDataFormat(wb.createDataFormat().getFormat(f));
+            return s;
+        });
+        Cell cell = row.createCell(col);
+        cell.setCellValue(value.setScale(4, RoundingMode.HALF_UP).doubleValue());
+        cell.setCellStyle(style);
+    }
+
+    private static String currencySymbolFor(String ccy) {
+        if (ccy == null) return "";
+        return switch (ccy) {
+            case "GBP", "GBp" -> "£";
+            case "USD" -> "$";
+            case "EUR" -> "€";
+            default -> "";
+        };
     }
 }

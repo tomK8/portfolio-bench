@@ -28,6 +28,7 @@ public class PriceFetchJob {
 
     private static final int LOOKBACK_YEARS = 30;
     private static final long THROTTLE_MS = 500;   // be polite to Yahoo: ≤1 request / 500ms
+    private static final int FRESH_LOOKBACK_DAYS = 4;   // history newer than this skips a re-add backfill
 
     private final CashTransactionRepository cashRepo;
     private final PriceHistoryRepository priceRepo;
@@ -49,6 +50,10 @@ public class PriceFetchJob {
         Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
 
         for (String ticker : tickerSet) {
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("Daily price fetch interrupted — stopping early");
+                return;
+            }
             LocalDate latest = priceRepo.getLatestPriceDate(ticker);
             // First run backfills; subsequent runs include the latest stored day so its close
             // gets refreshed if it was captured mid-session.
@@ -79,6 +84,10 @@ public class PriceFetchJob {
         Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
         int refreshed = 0;
         for (String ticker : tickerSet) {
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("Price rebuild interrupted — stopping early");
+                return refreshed;
+            }
             // Cover anything already stored. If we have rows older than the lookback cutoff
             // (early portfolio history that the first backfill caught), we must refetch them
             // too — otherwise their stale adj_close survives the rebuild and pollutes
@@ -102,13 +111,45 @@ public class PriceFetchJob {
      * Yahoo. Returns the row count written; 0 means Yahoo had nothing or rejected the ticker.
      */
     public int fetchSingle(String symbol) {
+        return fetchSingle(symbol, LOOKBACK_YEARS);
+    }
+
+    /**
+     * Watchlist-add helper: only backfill when the symbol's daily history is missing or stale.
+     * A name that's already covered — held, or removed-then-re-added the same day — skips the
+     * ~{@value #LOOKBACK_YEARS}-year re-fetch entirely, so the add's single small SQLite write
+     * doesn't contend with a redundant multi-thousand-row upsert on the one writer (the source of
+     * the "add once, then everything blocks until refresh" contention). "Fresh" = a stored close
+     * within {@value #FRESH_LOOKBACK_DAYS} days (spans a Fri→Mon weekend plus a holiday). Bonds are
+     * no-ops (not on Yahoo). Returns the row count written; 0 means skipped or nothing to fetch.
+     */
+    public int fetchSingleIfStale(String symbol) {
+        if (com.portfolio.domain.Instruments.isBond(symbol)) return 0;
+        String ticker = tickers.tickerFor(symbol);
+        LocalDate latest = priceRepo.getLatestPriceDate(ticker);
+        if (latest != null && !latest.isBefore(LocalDate.now().minusDays(FRESH_LOOKBACK_DAYS))) {
+            log.info("fetchSingle skipped {} — history already fresh (latest {})", symbol, latest);
+            return 0;
+        }
+        return fetchSingle(symbol);
+    }
+
+    /**
+     * Same as {@link #fetchSingle(String)} but with an explicit lookback depth — the trend-filter
+     * backfill needs ~45 years for {@code ^NDX}/{@code ^IRX} (Yahoo serves the Nasdaq-100 index
+     * from 1985 and the 13-week T-bill yield from the 1960s), deeper than the standard window.
+     * Once the rows exist, the nightly incremental run maintains them from the latest stored day,
+     * and {@code runFullRebuild} already refetches from the earliest stored row when it predates
+     * the default window.
+     */
+    public int fetchSingle(String symbol, int lookbackYears) {
         if (com.portfolio.domain.Instruments.isBond(symbol)) {
             log.info("fetchSingle skipped {} — bonds are not on Yahoo", symbol);
             return 0;
         }
         String ticker = tickers.tickerFor(symbol);
         LocalDate today = LocalDate.now();
-        List<PriceBar> bars = fetcher.fetch(ticker, today.minusYears(LOOKBACK_YEARS), today);
+        List<PriceBar> bars = fetcher.fetch(ticker, today.minusYears(lookbackYears), today);
         int touched = priceRepo.upsertPriceBars(bars);
         log.info("fetchSingle {} → {}: {} rows ({} written)", symbol, ticker, bars.size(), touched);
         return touched;

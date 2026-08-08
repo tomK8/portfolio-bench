@@ -5,6 +5,7 @@ import com.portfolio.domain.model.PriceBar;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.HashSet;
@@ -37,6 +38,25 @@ public final class PriceStats {
      * two returns in the window (can't form a sample stdev). A fraction: {@code 0.32} = 32%/yr.
      */
     public static BigDecimal annualizedVol(List<PriceBar> barsAscending, int windowReturns) {
+        Double daily = dailyVolRaw(barsAscending, windowReturns);
+        if (daily == null) return null;
+        return BigDecimal.valueOf(daily * Math.sqrt(TRADING_DAYS)).setScale(SCALE, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Realized <em>daily</em> volatility = sample standard deviation of the last {@code windowReturns}
+     * daily log returns, <strong>not</strong> annualised. Returns {@code null} with fewer than two
+     * usable returns. A fraction: {@code 0.02} = 2% per day. {@link #annualizedVol} is exactly this
+     * scaled by {@code √252}.
+     */
+    public static BigDecimal dailyVol(List<PriceBar> barsAscending, int windowReturns) {
+        Double daily = dailyVolRaw(barsAscending, windowReturns);
+        if (daily == null) return null;
+        return BigDecimal.valueOf(daily).setScale(SCALE, RoundingMode.HALF_UP);
+    }
+
+    /** Shared unrounded daily-σ engine for {@link #annualizedVol} / {@link #dailyVol}; null if &lt;2 returns. */
+    private static Double dailyVolRaw(List<PriceBar> barsAscending, int windowReturns) {
         if (barsAscending == null || barsAscending.size() < 2 || windowReturns < 2) return null;
 
         int n = barsAscending.size();
@@ -61,9 +81,7 @@ public final class PriceStats {
             sumSq += d * d;
         }
         double variance = sumSq / (filled - 1);           // sample variance
-        double daily = Math.sqrt(variance);
-        double annual = daily * Math.sqrt(TRADING_DAYS);
-        return BigDecimal.valueOf(annual).setScale(SCALE, RoundingMode.HALF_UP);
+        return Math.sqrt(variance);
     }
 
     /**
@@ -115,11 +133,96 @@ public final class PriceStats {
     }
 
     /**
+     * Close {@code n} trading sessions before {@code today}: the close of the n-th most recent bar
+     * strictly dated before {@code today}. {@code n = 1} → the previous session's close (the base
+     * for a one-session / "today" return); {@code n = 2} → two sessions ago (the base for a
+     * two-session return — i.e. today's move plus the previous session's); and so on. Returns
+     * {@code null} when fewer than {@code n} such bars exist.
+     *
+     * <p>Session-based, unlike {@link #closeOnOrBefore}: over a weekend/holiday a calendar anchor
+     * collapses adjacent short windows onto the same base (on a Monday, {@code today−1}, {@code −2}
+     * and {@code −3} all resolve to Friday), making Today/2d/3d identical. Counting sessions keeps
+     * each window one trading day apart regardless of the calendar. Any bar dated {@code today}
+     * itself is skipped, so a live intraday {@code current} is compared against completed sessions.
+     *
+     * <p>Holidays need no calendar here — the daily series only has rows for real sessions on the
+     * symbol's own exchange (a US holiday leaves no US bar; a London name that traded that day keeps
+     * its bar), so walking bars is automatically per-exchange. Weekend-dated bars <em>are</em>
+     * skipped, though: {@code GiltPriceFetchJob} rolls the last price forward into {@code price_history}
+     * on Sat/Sun, and those phantom rows must not be counted as sessions.
+     */
+    public static Double closeNSessionsBefore(List<PriceBar> barsAscending, LocalDate today, int n) {
+        if (barsAscending == null || n < 1) return null;
+        int seen = 0;
+        for (int i = barsAscending.size() - 1; i >= 0; i--) {
+            LocalDate d = barsAscending.get(i).date();
+            if (!d.isBefore(today)) continue;                     // today's own bar or later
+            DayOfWeek dow = d.getDayOfWeek();
+            if (dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY) continue;  // phantom weekend row
+            if (++seen == n) return barsAscending.get(i).close();
+        }
+        return null;
+    }
+
+    /**
      * Simple percentage change {@code (current − base) / base} as a fraction, or {@code null}
      * when either input is missing or {@code base} is zero.
      */
     public static BigDecimal pctChange(Double current, Double base) {
         if (current == null || base == null || base == 0.0) return null;
         return BigDecimal.valueOf((current - base) / base).setScale(SCALE, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Signed distance from the {@code current} price to a {@code limit} price, measured in units of
+     * the return volatility over a {@code horizonSessions}-session horizon
+     * ({@code σ_h = dailyVol × √horizon}). Log-space: {@code ln(limit / current) / σ_h}. Positive when
+     * the limit sits above the current market (price must rise to reach it), negative below. Returns
+     * {@code null} when any input is missing/non-positive or the volatility is zero. Currency-free —
+     * both prices only enter as a ratio, so they need only share one currency (not GBP specifically).
+     */
+    public static BigDecimal sigmaDistance(BigDecimal current, BigDecimal limit,
+                                           BigDecimal dailyVol, int horizonSessions) {
+        if (current == null || limit == null || dailyVol == null || horizonSessions < 1) return null;
+        double c = current.doubleValue(), l = limit.doubleValue(), v = dailyVol.doubleValue();
+        if (c <= 0 || l <= 0 || v <= 0) return null;
+        double sigmaH = v * Math.sqrt(horizonSessions);
+        if (sigmaH <= 0) return null;
+        return BigDecimal.valueOf(Math.log(l / c) / sigmaH).setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Probability that a driftless geometric Brownian motion starting at the current price touches a
+     * barrier {@code |sigmaDistance|} volatility-units away at least once within the horizon: the
+     * first-passage reflection result {@code P = 2·Φ(−|d|)}, clamped to {@code [0, 1]}. At the barrier
+     * ({@code d = 0}) this is 1. Driftless is the neutral convention for a short (≈5-session) window —
+     * over a handful of days the drift term is negligible against the diffusion term. Returns
+     * {@code null} when {@code sigmaDistance} is null.
+     */
+    public static BigDecimal touchProbability(BigDecimal sigmaDistance) {
+        if (sigmaDistance == null) return null;
+        double d = Math.abs(sigmaDistance.doubleValue());
+        double p = 2.0 * normalCdf(-d);
+        p = Math.max(0.0, Math.min(1.0, p));
+        return BigDecimal.valueOf(p).setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /** Standard normal CDF {@code Φ(x)} via the {@link #erfc} approximation. */
+    static double normalCdf(double x) {
+        return 0.5 * erfc(-x / Math.sqrt(2.0));
+    }
+
+    /**
+     * Complementary error function via the Numerical Recipes {@code erfcc} rational approximation
+     * (fractional error &lt; 1.2e-7 everywhere) — ample for a touch-probability estimate and free of
+     * any external dependency.
+     */
+    static double erfc(double x) {
+        double z = Math.abs(x);
+        double t = 1.0 / (1.0 + 0.5 * z);
+        double ans = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196
+                + t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398
+                + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+        return x >= 0.0 ? ans : 2.0 - ans;
     }
 }

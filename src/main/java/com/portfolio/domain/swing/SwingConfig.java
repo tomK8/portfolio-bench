@@ -41,6 +41,16 @@ import java.util.List;
  *                           count of 20 can be only a handful of independent episodes
  * @param bootstrapIterations iterations for the §6 matched-random-bootstrap control
  * @param randomSeed         seed for the bootstrap RNG, so a re-run reproduces the same figures
+ * @param maWindow           trailing simple-moving-average window (sessions) for the §A/§E
+ *                           200d-MA regime flag
+ * @param flushSigmaMultiples σ-scaled flush multiples for the §C σ family's §5 profiles, e.g.
+ *                           {@code [2,2.5,3]} → a flush is an N-day cum return ≤ −k×σ×√N
+ * @param barrierSigmaK      the σ multiple that seeds the §C σ family's §6 barrier simulation
+ *                           (paired with {@code barrierFlushDays})
+ * @param eventWindowSessions ± trading-session window around an earnings date within which a
+ *                           trigger day / flush event is flagged as earnings-adjacent (§D)
+ * @param eventLogTimeStop   reference time stop (sessions) at which the §A event log and §B
+ *                           per-year breakdown resolve each event's simulated outcome
  */
 public record SwingConfig(
         List<String> symbols,
@@ -67,7 +77,12 @@ public record SwingConfig(
         int smallNFloor,
         int episodeFloor,
         int bootstrapIterations,
-        long randomSeed) {
+        long randomSeed,
+        int maWindow,
+        double[] flushSigmaMultiples,
+        double barrierSigmaK,
+        int eventWindowSessions,
+        int eventLogTimeStop) {
 
     public static final List<String> DEFAULT_SYMBOLS = List.of(
             "MU", "AMAT", "KLAC", "LRCX", "ASML", "AVGO", "INTC", "MRVL",
@@ -107,6 +122,11 @@ public record SwingConfig(
         private int episodeFloor = 5;
         private int bootstrapIterations = 1000;
         private long randomSeed = 42L;
+        private int maWindow = 200;
+        private double[] flushSigmaMultiples = {2.0, 2.5, 3.0};
+        private double barrierSigmaK = 2.5;
+        private int eventWindowSessions = 3;
+        private int eventLogTimeStop = 20;
 
         public Builder symbols(List<String> v) { if (v != null && !v.isEmpty()) symbols = v; return this; }
         public Builder cluster(List<String> v) { if (v != null && !v.isEmpty()) cluster = v; return this; }
@@ -125,13 +145,19 @@ public record SwingConfig(
         public Builder episodeFloor(int v) { if (v > 0) episodeFloor = v; return this; }
         public Builder bootstrapIterations(int v) { if (v > 0) bootstrapIterations = v; return this; }
         public Builder randomSeed(long v) { randomSeed = v; return this; }
+        public Builder maWindow(int v) { if (v > 0) maWindow = v; return this; }
+        public Builder flushSigmaMultiples(double[] v) { if (v != null && v.length > 0) flushSigmaMultiples = v; return this; }
+        public Builder barrierSigmaK(double v) { if (v > 0) barrierSigmaK = v; return this; }
+        public Builder eventWindowSessions(int v) { if (v >= 0) eventWindowSessions = v; return this; }
+        public Builder eventLogTimeStop(int v) { if (v > 0) eventLogTimeStop = v; return this; }
 
         public SwingConfig build() {
             return new SwingConfig(symbols, cluster, years, volWindows, sigmaWindow, horizons,
                     sigmaMultiples, absDrops, continuationDrop, flushDays, flushThresholds,
                     takeProfit, stopLoss, timeStops, followSessions, drawdownWindow,
                     barrierFlushDays, barrierFlushDrop, flushCooldown, clusterDownDay,
-                    corrWindows, smallNFloor, episodeFloor, bootstrapIterations, randomSeed);
+                    corrWindows, smallNFloor, episodeFloor, bootstrapIterations, randomSeed,
+                    maWindow, flushSigmaMultiples, barrierSigmaK, eventWindowSessions, eventLogTimeStop);
         }
     }
 }

@@ -1,0 +1,76 @@
+{
+  "data": {
+    "asOf": "Wed, Jul 15, 2026",
+    "headers": {
+      "time": "Time",
+      "symbol": "Symbol",
+      "name": "Company Name",
+      "marketCap": "Market Cap",
+      "epsForecast": "Consensus EPS* Forecast",
+      "noOfEsts": "# of Ests",
+      "lastYearRptDt": "Last Year's Report Date",
+      "lastYearEPS": "Last year's EPS*"
+    },
+    "rows": [
+      {
+        "time": "time-pre-market",
+        "symbol": "BIGCO",
+        "name": "Big Company Inc.",
+        "marketCap": "$665,246,306,497",
+        "fiscalQuarterEnding": "Jun/2026",
+        "epsForecast": "$7.98",
+        "noOfEsts": "12",
+        "lastYearRptDt": "7/16/2025",
+        "lastYearEPS": "$4.55"
+      },
+      {
+        "time": "time-after-hours",
+        "symbol": "LOSSCO",
+        "name": "Lossmaker Corp.",
+        "marketCap": "$1,025,141",
+        "fiscalQuarterEnding": "Jun/2026",
+        "epsForecast": "($0.11)",
+        "noOfEsts": "3",
+        "lastYearRptDt": "7/16/2025",
+        "lastYearEPS": "($0.20)"
+      },
+      {
+        "time": "time-not-supplied",
+        "symbol": "FLATCO",
+        "name": "Flat Earnings Ltd.",
+        "marketCap": "$5,000,000,000",
+        "fiscalQuarterEnding": "Jun/2026",
+        "epsForecast": "$0",
+        "noOfEsts": "1",
+        "lastYearRptDt": "7/16/2025",
+        "lastYearEPS": "$0.03"
+      },
+      {
+        "time": "time-pre-market",
+        "symbol": "SPARSE",
+        "name": "Sparse Data Co.",
+        "marketCap": "",
+        "fiscalQuarterEnding": "Jun/2026",
+        "epsForecast": "",
+        "noOfEsts": "",
+        "lastYearRptDt": "",
+        "lastYearEPS": "N/A"
+      },
+      {
+        "time": "time-pre-market",
+        "symbol": "",
+        "name": "Missing Symbol Inc.",
+        "marketCap": "$9,000,000,000",
+        "epsForecast": "$1.00",
+        "noOfEsts": "4",
+        "lastYearEPS": "$0.90"
+      }
+    ]
+  },
+  "message": null,
+  "status": {
+    "rCode": 200,
+    "bCodeMessage": null,
+    "developerMessage": null
+  }
+}

@@ -42,6 +42,63 @@ class PriceStatsTest {
     }
 
     @Test
+    void dailyVol_isAnnualizedVolWithoutRootT() {
+        List<PriceBar> bars = series(100, 110, 100, 110, 100);
+        BigDecimal daily = PriceStats.dailyVol(bars, 30);
+        BigDecimal annual = PriceStats.annualizedVol(bars, 30);
+        assertNotNull(daily);
+        // annualizedVol == dailyVol × √252 (the only difference between the two; each rounded to 8dp)
+        assertEquals(annual.doubleValue(), daily.doubleValue() * Math.sqrt(252.0), 1e-6);
+
+        double r = Math.log(1.1);
+        double expectedDaily = Math.sqrt(4 * r * r / 3.0);   // same hand-computed stdev, no √252
+        assertEquals(expectedDaily, daily.doubleValue(), 1e-8);
+    }
+
+    @Test
+    void dailyVol_null_whenTooFewReturns() {
+        assertNull(PriceStats.dailyVol(series(100.0), 10));
+        assertNull(PriceStats.dailyVol(List.of(), 10));
+    }
+
+    @Test
+    void sigmaDistance_signAndScale() {
+        // dailyVol 2%/day, horizon 5 → σ_5 = 0.02·√5 ≈ 0.0447214.
+        BigDecimal vol = new BigDecimal("0.02");
+        // limit 5% above current: ln(105/100)=0.0487902 → /0.0447214 ≈ 1.0910.
+        BigDecimal up = PriceStats.sigmaDistance(new BigDecimal("100"), new BigDecimal("105"), vol, 5);
+        assertNotNull(up);
+        assertEquals(0.0487902 / (0.02 * Math.sqrt(5)), up.doubleValue(), 1e-3);
+        assertTrue(up.signum() > 0, "limit above the market → positive");
+        // limit below current → negative, symmetric magnitude for the reciprocal ratio.
+        BigDecimal down = PriceStats.sigmaDistance(new BigDecimal("105"), new BigDecimal("100"), vol, 5);
+        assertTrue(down.signum() < 0);
+        // null guards
+        assertNull(PriceStats.sigmaDistance(null, new BigDecimal("100"), vol, 5));
+        assertNull(PriceStats.sigmaDistance(new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ZERO, 5));
+    }
+
+    @Test
+    void touchProbability_reflectionPrinciple() {
+        // At the barrier (d=0) → certain touch.
+        assertEquals(1.0, PriceStats.touchProbability(BigDecimal.ZERO).doubleValue(), 1e-9);
+        // 1σ away → 2·Φ(−1) ≈ 0.31731; sign-independent.
+        assertEquals(0.3173, PriceStats.touchProbability(new BigDecimal("1")).doubleValue(), 1e-3);
+        assertEquals(0.3173, PriceStats.touchProbability(new BigDecimal("-1")).doubleValue(), 1e-3);
+        // 3σ away → 2·Φ(−3) ≈ 0.0027, well under 1.
+        assertEquals(0.0027, PriceStats.touchProbability(new BigDecimal("3")).doubleValue(), 1e-3);
+        assertNull(PriceStats.touchProbability(null));
+    }
+
+    @Test
+    void normalCdf_knownValues() {
+        assertEquals(0.5, PriceStats.normalCdf(0.0), 1e-6);
+        assertEquals(0.8413447, PriceStats.normalCdf(1.0), 1e-5);
+        assertEquals(0.1586553, PriceStats.normalCdf(-1.0), 1e-5);
+        assertEquals(0.9772499, PriceStats.normalCdf(2.0), 1e-5);
+    }
+
+    @Test
     void annualizedVol_matchesHandComputedStdev() {
         // Alternating +10% / -10%(ish) returns: log returns are +ln(1.1), then price back etc.
         // Use a simple series with a known daily log-return stdev.
@@ -95,6 +152,59 @@ class PriceStatsTest {
                 ib("2026-01-05T14:30:00Z", 50), ib("2026-01-05T14:31:00Z", 50), ib("2026-01-05T14:32:00Z", 50));
         assertEquals(0.0, PriceStats.annualizedVolIntraday(flat).doubleValue(), 1e-12);
         assertNull(PriceStats.annualizedVolIntraday(List.of(ib("2026-01-05T14:30:00Z", 50))));
+    }
+
+    @Test
+    void closeNSessionsBefore_countsSessionsNotCalendarDays() {
+        // Wed/Thu/Fri closes; the following Monday is "today" (mid-session, no bar yet). A calendar
+        // anchor would map today−1/−2/−3 all onto Friday; session counting must stay one trading
+        // day apart.
+        List<PriceBar> bars = List.of(
+                bar("2026-07-01", 100),    // Wed
+                bar("2026-07-02", 110),    // Thu
+                bar("2026-07-03", 120));   // Fri
+        LocalDate monday = LocalDate.parse("2026-07-06");
+        assertEquals(120.0, PriceStats.closeNSessionsBefore(bars, monday, 1));   // previous session = Fri
+        assertEquals(110.0, PriceStats.closeNSessionsBefore(bars, monday, 2));   // 2 sessions ago = Thu
+        assertEquals(100.0, PriceStats.closeNSessionsBefore(bars, monday, 3));   // 3 sessions ago = Wed
+        assertNull(PriceStats.closeNSessionsBefore(bars, monday, 4));            // not enough sessions
+    }
+
+    @Test
+    void closeNSessionsBefore_skipsTodaysOwnBar() {
+        // Once today's daily bar is stored, n=1 must still be the *previous* session — the live
+        // current price supersedes today's close, so today's own bar is not a valid base.
+        List<PriceBar> bars = List.of(
+                bar("2026-07-02", 110),    // Thu
+                bar("2026-07-03", 120),    // Fri
+                bar("2026-07-06", 130));   // Mon (today)
+        LocalDate monday = LocalDate.parse("2026-07-06");
+        assertEquals(120.0, PriceStats.closeNSessionsBefore(bars, monday, 1));   // Fri, not Mon's 130
+        assertEquals(110.0, PriceStats.closeNSessionsBefore(bars, monday, 2));   // Thu
+    }
+
+    @Test
+    void closeNSessionsBefore_skipsPhantomWeekendBars() {
+        // GiltPriceFetchJob rolls the last price forward into price_history on Sat/Sun; those bars
+        // are not sessions and must not be counted (mirrors the 39 gilts with 07-04/07-05 rows).
+        List<PriceBar> bars = List.of(
+                bar("2026-07-01", 100),    // Wed
+                bar("2026-07-02", 110),    // Thu
+                bar("2026-07-03", 120),    // Fri
+                bar("2026-07-04", 120),    // Sat  (phantom roll-forward)
+                bar("2026-07-05", 120));   // Sun  (phantom roll-forward)
+        LocalDate monday = LocalDate.parse("2026-07-06");
+        assertEquals(120.0, PriceStats.closeNSessionsBefore(bars, monday, 1));   // Fri, not the Sat/Sun rows
+        assertEquals(110.0, PriceStats.closeNSessionsBefore(bars, monday, 2));   // Thu
+        assertEquals(100.0, PriceStats.closeNSessionsBefore(bars, monday, 3));   // Wed
+    }
+
+    @Test
+    void closeNSessionsBefore_guards() {
+        List<PriceBar> bars = List.of(bar("2026-07-03", 120));
+        assertNull(PriceStats.closeNSessionsBefore(bars, LocalDate.parse("2026-07-06"), 0));
+        assertNull(PriceStats.closeNSessionsBefore(null, LocalDate.parse("2026-07-06"), 1));
+        assertNull(PriceStats.closeNSessionsBefore(List.of(), LocalDate.parse("2026-07-06"), 1));
     }
 
     @Test

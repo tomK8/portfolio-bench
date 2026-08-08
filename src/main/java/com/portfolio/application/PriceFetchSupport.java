@@ -47,6 +47,18 @@ final class PriceFetchSupport {
         // Swing-strategy universe (many not held/traded) so the nightly daily job keeps their
         // 3-year history current for the Swing stats tab.
         symbols.addAll(kv.getStringSet(SwingAnalysisService.SWING_SYMBOLS_KEY));
+        // Trend-filter series (QQQ + ^NDX + ^IRX) so the nightly job maintains the backtest's
+        // primary/extension/cash history once the deep backfill has seeded it.
+        symbols.addAll(kv.getStringSet(TrendAnalysisService.TREND_SYMBOLS_KEY));
+        // Momentum-rotation universe + benchmarks so the nightly job keeps their deep history
+        // current for the Momentum tab (fetch set = universe ∪ benchmarks ∪ regime index).
+        symbols.addAll(kv.getStringSet(MomentumAnalysisService.MOMENTUM_SYMBOLS_KEY));
+        // Momentum-signals asset-class cohort (pinned ETF universe + benchmarks) for the
+        // five-variant signal comparison tab.
+        symbols.addAll(kv.getStringSet(MomentumSignalsService.SIGNALS_SYMBOLS_KEY));
+        // Range-strategy cohort (information-infrastructure names, mostly not held) so the
+        // nightly job keeps their daily history current for the Range floor tab.
+        symbols.addAll(kv.getStringSet(RangeAnalysisService.RANGE_SYMBOLS_KEY));
         for (String line : kv.getStringSet(HistoricalScenarioService.SUBSTITUTES_KEY)) {
             int eq = line.indexOf('=');
             if (eq <= 0 || eq >= line.length() - 1) continue;

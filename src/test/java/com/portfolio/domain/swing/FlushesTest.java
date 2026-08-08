@@ -180,6 +180,17 @@ class FlushesTest {
         assertEquals(1, pooled.episodes());
     }
 
+    @Test
+    void eventFilterExcludesFlushEntries() {
+        SwingSeries s = series(100, 100, 100, 85, 95, 95, 95, 95, 95, 95);
+        FlushTrigger trig = Flushes.absoluteBarrierTrigger(cfg());
+        assertEquals(1, Flushes.barriers(List.of(s), null, cfg(), trig, null).get(0).events());
+
+        // The lone event's date (idx3 = 2026-01-04) is excluded → no trades survive.
+        EventFilter exclude = (sym, date) -> date.equals(LocalDate.parse("2026-01-04"));
+        assertEquals(0, Flushes.barriers(List.of(s), null, cfg(), trig, exclude).get(0).events());
+    }
+
     private static void assertReconciles(Flushes.BarrierResult b) {
         assertEquals(b.events(),
                 b.tpFirst() + b.slFirst() + b.timeCount() + b.ambiguous() + b.open(),

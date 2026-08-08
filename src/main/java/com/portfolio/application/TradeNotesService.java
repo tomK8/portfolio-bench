@@ -51,7 +51,8 @@ public class TradeNotesService {
             entries.add(new TradeEntry(
                     r.rowid(), r.transactionDate(), r.account().dbValue(),
                     side, r.symbol(), Math.abs(r.quantity()), r.amount(), r.currency(),
-                    r.amountGbp(), r.description(), note, tagList,
+                    r.amountGbp(), pricePerShare(r.quantity(), r.amount()),
+                    r.description(), note, tagList,
                     n == null ? null : n.updatedAt()));
         }
         return new TradeJournal(entries, new Summary(entries.size(), annotated, tagCounts));
@@ -84,10 +85,30 @@ public class TradeNotesService {
         return s == null ? "" : s;
     }
 
+    /**
+     * Effective price per share in the trade's own currency, or {@code null} where the row
+     * doesn't represent a purchase or sale at a price.
+     *
+     * <p>The ledger stores no price column — only quantity and the cash amount — so this is
+     * derived. That makes it the price <em>including</em> whatever costs the broker folded
+     * into the cash movement (AJ Bell's amounts carry commission and stamp duty; the Roth
+     * and II amounts we see are gross trade value), which is why it's labelled "effective"
+     * rather than presented as the execution price.
+     *
+     * <p>Null rather than zero for the rows where the quotient is meaningless: a zero
+     * quantity (nothing to divide by) and a zero amount, which in this ledger means a
+     * "Stock Split Received" row — shares arriving for no cash. Those are real ledger
+     * entries, not errors, so they stay in the journal and simply show no price.
+     */
+    static Double pricePerShare(double quantity, double amount) {
+        if (quantity == 0 || amount == 0) return null;
+        return Math.abs(amount) / Math.abs(quantity);
+    }
+
     public record TradeEntry(long rowid, String date, String account, String side, String symbol,
                              double quantity, double amount, String currency, double amountGbp,
-                             String description, String note, List<String> tags,
-                             String updatedAt) {
+                             Double pricePerShare, String description, String note,
+                             List<String> tags, String updatedAt) {
     }
 
     public record Summary(int total, int annotated, Map<String, Integer> tagCounts) {

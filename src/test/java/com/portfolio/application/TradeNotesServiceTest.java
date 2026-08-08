@@ -149,4 +149,42 @@ class TradeNotesServiceTest {
 
         assertEquals(2, svc.journal().summary().tagCounts().get("fomo"));
     }
+
+    @Test
+    void pricePerShareDividesCashAmountByQuantityIgnoringSigns() {
+        // A buy books negative cash and (for some brokers) negative quantity; the price is
+        // positive either way.
+        assertEquals(25.0, TradeNotesService.pricePerShare(4.0, -100.0), 1e-9);
+        assertEquals(25.0, TradeNotesService.pricePerShare(-4.0, 100.0), 1e-9);
+        assertEquals(25.0, TradeNotesService.pricePerShare(4.0, 100.0), 1e-9);
+    }
+
+    @Test
+    void pricePerShareIsNullWhereTheQuotientWouldBeMeaningless() {
+        // "Stock Split Received": shares arrive for no cash. A £0.00 price would read as a
+        // free purchase rather than as "not a priced trade".
+        assertNull(TradeNotesService.pricePerShare(36.0, 0.0));
+        // No quantity to divide by.
+        assertNull(TradeNotesService.pricePerShare(0.0, 500.0));
+        assertNull(TradeNotesService.pricePerShare(0.0, 0.0));
+    }
+
+    @Test
+    void pricePerShareIsCarriedOntoTheJournalEntry() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var repo = new CashTransactionRepository(cf, new KeyValueStore(dbDir));
+        repo.saveAjBell(List.of(
+                new CashTransaction("2023-01-01", Account.AJBELL, TransactionType.TRANSACTION,
+                        "AAPL", 8.0, -1600.0, "GBP", 1.0, -1600.0, -1600.0, -1600.0, "Buy"),
+                new CashTransaction("2023-02-01", Account.AJBELL, TransactionType.TRANSACTION,
+                        "AAPL", 36.0, 0.0, "GBP", 1.0, 0.0, 0.0, 0.0, "Stock Split Received")));
+
+        var svc = new TradeNotesService(repo, new TradeNotesRepository(cf));
+        var trades = svc.journal().trades();
+        // newest-first: the split row leads
+        assertNull(trades.get(0).pricePerShare());
+        assertEquals(200.0, trades.get(1).pricePerShare(), 1e-9);
+        // the split row is still journalled, just without a price
+        assertEquals(2, svc.journal().summary().total());
+    }
 }

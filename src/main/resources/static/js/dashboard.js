@@ -4094,6 +4094,17 @@
                     { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             var qtyStr = t.quantity.toLocaleString('en-GB',
                     { maximumFractionDigits: 4 });
+            // Effective price per share, in the trade's own currency — the ledger has no price
+            // column, so the service derives it from the cash amount (and returns null for
+            // split receipts and zero-quantity rows, where the quotient means nothing).
+            // Shown native rather than GBP so it matches the price the broker quoted.
+            var pxStr = '—';
+            if (t.pricePerShare !== null && t.pricePerShare !== undefined) {
+                var sym = t.currency === 'USD' ? '$' : (t.currency === 'GBP' ? '£' : '');
+                pxStr = sym + t.pricePerShare.toLocaleString('en-GB',
+                        { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+                        (sym ? '' : ' ' + escapeHtml(t.currency || ''));
+            }
             var noteCell = '';
             if (t.tags && t.tags.length) {
                 noteCell += t.tags.map(function (tag) {
@@ -4118,6 +4129,7 @@
                 '<td class="txt"><span class="' + sideClass + '">' + t.side + '</span></td>' +
                 '<td class="txt"><b>' + escapeHtml(t.symbol) + '</b></td>' +
                 '<td>' + qtyStr + '</td>' +
+                '<td>' + pxStr + '</td>' +
                 '<td>' + amtStr + '</td>' +
                 '<td class="txt">' + noteCell + '</td>';
             tr.addEventListener('click', function (e) {
@@ -4133,7 +4145,7 @@
             tr.dataset.editorFor = t.rowid;
             tr.hidden = true;
             var td = document.createElement('td');
-            td.colSpan = 7;
+            td.colSpan = 8;
             var tagButtons = JOURNAL_TAGS.map(function (tag) {
                 var on = (t.tags || []).indexOf(tag) >= 0;
                 return '<span class="tag-toggle' + (on ? ' on' : '') +

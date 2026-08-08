@@ -125,7 +125,7 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   toggle + a collapsible Fundamentals section. See the Watchlist section below.
 
 - **Swing stats** — `GET /swing` → JSON, rendered as tables + a correlation heatmap under the
-  Tools group. Validation statistics for a short-term mean-reversion (dip-buy) strategy on a
+  Strategies group. Validation statistics for a short-term mean-reversion (dip-buy) strategy on a
   configurable high-vol semi/AI watchlist: realized-vol term structure; forward returns after
   down-day / flush triggers, always shown next to their unconditional baseline; an OHLC-touch
   barrier / time-stop trade simulation with full TP/SL/Time/Ambiguous/Open accounting, an all-days
@@ -139,7 +139,7 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   hygiene is now active via an EDGAR filing-date proxy (US filers only; others flagged unverified).
   See the Swing section below.
 
-- **Trend filter** — `GET /trend` → JSON, rendered as tables under the Tools group. Backtest of a
+- **Trend filter** — `GET /trend` → JSON, rendered as tables under the Strategies group. Backtest of a
   moving-average trend filter on the core Nasdaq-100 holding (QQQ total-return, spliced back with
   the ^NDX price index, cash leg from ^IRX): five signal clocks (month-anchored / daily
   first-touch / buffered ±x% / buffered N-in-a-row / monthly-close cross-check) × MA-length sweep,
@@ -147,7 +147,8 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   random-exposure bootstrap, calendar years, a named-episode table and an exportable trade log,
   plus an anchor-offset sweep and a live QQQ/EQQQ readout. See the Trend section below.
 
-- **Momentum** — `GET /momentum` → JSON, rendered as tables + a monthly grid under the Tools group.
+- **Momentum** — `GET /momentum` → JSON, rendered as tables + a monthly grid under the Strategies
+  group.
   Cross-sectional 12-1 momentum rotation over a fixed ~33-name US large-cap universe: rank monthly
   by trailing 12-month return skipping the last month, hold top N (3/4/5) equal-weighted. The point
   is the comparison against controls, not raw CAGR (the universe is survivorship-biased, flagged in
@@ -156,7 +157,7 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   turnover + cost drag, a 200d-MA regime split and momentum-crash diagnostics per variant; expanding
   window; exportable rebalance log. See the Momentum section below.
 
-- **Mom. signals** — `GET /momentum-signals` → JSON, rendered as tables under the Tools group.
+- **Mom. signals** — `GET /momentum-signals` → JSON, rendered as tables under the Strategies group.
   Five-variant signal-speed/overlay comparison on a **pinned 17-ETF asset-class universe**
   (sector SPDRs + EFA/EEM/TLT/IEF/GLD/REIT): V1 incumbent 12-1 (must reproduce the Momentum tab
   bit-for-bit — asserted in tests), V2 6-1 (same 252-session *eligibility*, so signal speed isn't
@@ -172,8 +173,8 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   random-N bootstrap per N ranks all five variants (the control is selection-agnostic). See the
   Momentum-signals section below.
 
-- **Range floor** — `GET /range` → JSON, rendered as tables + an annotated chart under the Tools
-  group. Pre-registered backtest of a percentile-floor range strategy on a fixed 12-name
+- **Range floor** — `GET /range` → JSON, rendered as tables + an annotated chart under the
+  Strategies group. Pre-registered backtest of a percentile-floor range strategy on a fixed 12-name
   information-infrastructure cohort (Family A exchanges: LSEG.L, DB1.DE, ICE, CME, NDAQ; Family B
   data/publishing: MSCI, SPGI, MCO, FDS, REL.L, WKL.AS, TRI; LSEG.L featured): buy when the close
   hits the trailing-252-session P10 (look-ahead-free, strictly-prior window) after ≥10 consecutive
@@ -199,6 +200,13 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   highlighted and pulled into a summary strip regardless of size. Forward-looking with estimates —
   the half the EDGAR filing-date proxy (Swing §D) can't serve. Rosters are cached and degrade to
   last-known on a feed outage. See the Earnings section below.
+
+Primary tab groups are **derived from the DOM** — `PANEL_TO_GROUP` / `GROUP_DEFAULT_PANEL` are
+built by scanning `.tabs-secondary[data-group]` strips, so moving a panel between groups is an
+HTML-only edit (no JS to keep in sync). A saved tab whose group changed still restores correctly:
+the per-group memory is validated with `PANEL_TO_GROUP[last] === g` before use. Groups are
+Holdings / Performance / Risk / Quality / **Strategies** (the five backtests: Swing stats, Trend
+filter, Momentum, Mom. signals, Range floor) / Tools (Reconcile, Journal, Watchlist, Earnings).
 
 Charts load lazily on first tab click, each behind a `xLoaded` latch set *before* the fetch so
 it runs once per page. **Every such loader must end in a `.catch`** that releases its own latch

@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 /**
  * Builds the historical GBP value timeline of the portfolio for the chart.
@@ -141,14 +142,33 @@ public class PortfolioValueService {
      * {@link #positionGbp}, so the series is dense and gap-free.
      */
     public List<DailyValue> dailyValues() {
+        return dailyValuesIn(null, null).values();
+    }
+
+    /**
+     * Windowed form of {@link #dailyValues()} — daily values for {@code [from, to]} only
+     * (either bound null = unbounded, {@code to} capped at today). The ledger is still
+     * replayed from its first row, because running quantities and cash have to be caught up
+     * before the window opens, but only in-window days are *valued* — and valuation is where
+     * the cost is. A one-year window prices ~365 days instead of every day since inception.
+     *
+     * <p>Also reports every symbol held during the window that has no {@code price_history}
+     * rows at all. Such a position values at zero on both boundaries without complaint, which
+     * silently shrinks the portfolio it's part of; callers surface the list rather than
+     * present a total that is quietly missing a holding.
+     */
+    public PeriodValues dailyValuesIn(LocalDate from, LocalDate to) {
         List<CashTransaction> txs = cashRepo.loadAllTransactions();
-        if (txs.isEmpty()) return List.of();
+        if (txs.isEmpty()) return new PeriodValues(List.of(), List.of());
 
         LocalDate start = LocalDate.parse(txs.get(0).transactionDate());
         LocalDate end = LocalDate.now();
+        if (to != null && to.isBefore(end)) end = to;
+        LocalDate firstSample = (from == null || from.isBefore(start)) ? start : from;
+        if (firstSample.isAfter(end)) return new PeriodValues(List.of(), List.of());
 
         Map<String, NavigableMap<LocalDate, PricePoint>> prices = loadPriceSeries(txs);
-        Map<String, NavigableMap<LocalDate, BigDecimal>> fx = preloadFx(start, end);
+        Map<String, NavigableMap<LocalDate, BigDecimal>> fx = preloadFx(firstSample, end);
 
         BigDecimal rothSeedUsd = settings.getBigDecimal(
                 CashTransactionRepository.ROTH_BROUGHT_FORWARD_KEY, BigDecimal.ZERO);
@@ -158,6 +178,7 @@ public class PortfolioValueService {
 
         Map<String, BigDecimal> qtyBySymbol = new HashMap<>();
         Map<String, BigDecimal> cashByAccountCcy = new HashMap<>();
+        Set<String> unpriced = new TreeSet<>();
 
         List<DailyValue> points = new ArrayList<>();
         int idx = 0;
@@ -171,12 +192,24 @@ public class PortfolioValueService {
                 cashByAccountCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
                 rothSeeded = true;
             }
-            BigDecimal invested = investedAt(sample, qtyBySymbol, prices, fx);
-            BigDecimal cash = cashAt(sample, cashByAccountCcy, fx);
-            points.add(new DailyValue(sample, invested.add(cash), invested));
+            if (!sample.isBefore(firstSample)) {
+                BigDecimal invested = investedAt(sample, qtyBySymbol, prices, fx);
+                BigDecimal cash = cashAt(sample, cashByAccountCcy, fx);
+                points.add(new DailyValue(sample, invested.add(cash), invested));
+                recordUnpriced(qtyBySymbol, prices, unpriced);
+            }
             sample = sample.plusDays(1);
         }
-        return points;
+        return new PeriodValues(points, List.copyOf(unpriced));
+    }
+
+    /** Held symbols (qty &gt; 0) with no stored price series — they valued at zero this sample. */
+    private static void recordUnpriced(Map<String, BigDecimal> qtyBySymbol,
+                                       Map<String, NavigableMap<LocalDate, PricePoint>> prices,
+                                       Set<String> unpriced) {
+        for (Map.Entry<String, BigDecimal> e : qtyBySymbol.entrySet()) {
+            if (e.getValue().signum() > 0 && !prices.containsKey(e.getKey())) unpriced.add(e.getKey());
+        }
     }
 
     /** Position-only GBP value at {@code sample} — same formula as {@link #valueAt} minus the cash legs. */
@@ -408,6 +441,14 @@ public class PortfolioValueService {
      * {@link PortfolioReturnService} to compute a cash-drag-free TWR.
      */
     public record DailyValue(LocalDate date, BigDecimal valueGbp, BigDecimal investedGbp) {
+    }
+
+    /**
+     * Result of a windowed {@link #dailyValuesIn} run: the daily samples themselves, plus any
+     * symbol held inside the window with no stored price history (valued at zero throughout —
+     * the caller is expected to say so rather than serve a silently understated total).
+     */
+    public record PeriodValues(List<DailyValue> values, List<String> unpricedSymbols) {
     }
 
     /**

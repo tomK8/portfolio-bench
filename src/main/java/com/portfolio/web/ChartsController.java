@@ -126,6 +126,23 @@ public class ChartsController {
         return portfolioReturnService.moneyWeightedSummary();
     }
 
+    /**
+     * Ledger-valued diff between two arbitrary dates: both boundaries priced from the cash
+     * ledger + stored closes + historical FX, plus the window's TWR. {@code from} defaults to
+     * a year back and {@code to} to today when blank. See
+     * {@link PortfolioReturnService#periodDiff}.
+     */
+    @GetMapping("/period-diff")
+    @ResponseBody
+    public PortfolioReturnService.PeriodDiff periodDiff(
+            @RequestParam(name = "from", required = false) String from,
+            @RequestParam(name = "to", required = false) String to) {
+        LocalDate toDate = (to == null || to.isBlank()) ? LocalDate.now() : LocalDate.parse(to);
+        LocalDate fromDate = (from == null || from.isBlank())
+                ? toDate.minusYears(1) : LocalDate.parse(from);
+        return portfolioReturnService.periodDiff(fromDate, toDate);
+    }
+
     @GetMapping("/risk")
     @ResponseBody
     public RiskTimeline risk() {

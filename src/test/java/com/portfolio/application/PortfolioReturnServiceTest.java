@@ -2,6 +2,8 @@ package com.portfolio.application;
 
 import com.portfolio.application.PortfolioReturnService.ReturnTimeline;
 import com.portfolio.application.PortfolioValueService.DailyValue;
+import com.portfolio.application.PortfolioValueService.PeriodValues;
+import com.portfolio.application.PortfolioReturnService.PeriodDiff;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.TransactionType;
@@ -36,6 +38,13 @@ class PortfolioReturnServiceTest {
     private PortfolioReturnService service(List<DailyValue> values,
                                            List<CashTransaction> contribs,
                                            HistoricalFxRateProvider fx) {
+        return service(values, contribs, fx, List.of());
+    }
+
+    private PortfolioReturnService service(List<DailyValue> values,
+                                           List<CashTransaction> contribs,
+                                           HistoricalFxRateProvider fx,
+                                           List<String> unpriced) {
         JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
         KeyValueStore kv = new KeyValueStore(dbDir);
         CashTransactionRepository repo = new CashTransactionRepository(cf, kv);
@@ -48,6 +57,16 @@ class PortfolioReturnServiceTest {
         PortfolioValueService stub = new PortfolioValueService(null, null, null, null, null) {
             @Override
             public List<DailyValue> dailyValues() { return values; }
+
+            /** Mimics the real windowing: inclusive both ends, clamped to what the series has. */
+            @Override
+            public PeriodValues dailyValuesIn(LocalDate from, LocalDate to) {
+                List<DailyValue> in = values.stream()
+                        .filter(v -> (from == null || !v.date().isBefore(from))
+                                && (to == null || !v.date().isAfter(to)))
+                        .toList();
+                return new PeriodValues(in, unpriced);
+            }
         };
         return new PortfolioReturnService(stub, repo, kv, fx);
     }
@@ -246,4 +265,158 @@ class PortfolioReturnServiceTest {
         assertNotNull(r);
         assertEquals(0.10, r.doubleValue(), 1e-6);
     }
+
+    // ---- periodDiff -------------------------------------------------------
+
+    @Test
+    void periodDiffSeparatesMarketGainFromContributions() {
+        // £100 → £150 but £50 of that walked in the door.
+        PeriodDiff d = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "150")
+        ), List.of(contrib("2024-01-02", 50.0)))
+                .periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-02"));
+
+        assertEquals(0, new BigDecimal("50").compareTo(d.valueChangeGbp()));
+        assertEquals(0, new BigDecimal("50").compareTo(d.contributionsGbp()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.gainGbp()), "nothing was earned");
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.totalReturn()), "TWR is contribution-neutral");
+    }
+
+    @Test
+    void periodDiffChainsTwrAcrossTheWindow() {
+        PeriodDiff d = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "110"),
+                dv("2024-01-03", "121")
+        ), List.of()).periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-03"));
+
+        assertEquals(0.21, d.totalReturn().doubleValue(), 1e-9, "1.10 × 1.10 − 1");
+        assertEquals(0.21, d.investedReturn().doubleValue(), 1e-9,
+                "no cash leg in the fixture, so the positions-only chain matches");
+        assertEquals(2, d.spanDays());
+    }
+
+    @Test
+    void periodDiffCountsFlowsAfterTheStartDateOnly() {
+        // The £50 landed on the start date, so it is part of the opening balance — the window
+        // neither credits it as a contribution nor lets it dent the return.
+        PeriodDiff d = service(List.of(
+                dv("2024-01-01", "150"),
+                dv("2024-01-02", "150")
+        ), List.of(contrib("2024-01-01", 50.0)))
+                .periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-02"));
+
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.contributionsGbp()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.totalReturn()));
+        assertEquals(0, new BigDecimal("150").compareTo(d.start().totalGbp()));
+    }
+
+    @Test
+    void periodDiffValuesOnlyTheRequestedDates() {
+        PeriodDiff d = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "200"),
+                dv("2024-01-03", "300"),
+                dv("2024-01-04", "400")
+        ), List.of()).periodDiff(LocalDate.parse("2024-01-02"), LocalDate.parse("2024-01-03"));
+
+        assertEquals("2024-01-02", d.from());
+        assertEquals("2024-01-03", d.to());
+        assertEquals(0, new BigDecimal("200").compareTo(d.start().totalGbp()));
+        assertEquals(0, new BigDecimal("300").compareTo(d.end().totalGbp()));
+        assertEquals(0, new BigDecimal("100").compareTo(d.valueChangeGbp()));
+    }
+
+    @Test
+    void periodDiffClampsToAvailableHistoryAndSaysSo() {
+        PeriodDiff d = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "110")
+        ), List.of()).periodDiff(LocalDate.parse("2020-01-01"), LocalDate.parse("2024-01-02"));
+
+        assertEquals("2024-01-01", d.from(), "echoes the date actually used");
+        assertTrue(d.warnings().stream().anyMatch(w -> w.contains("2024-01-01")),
+                "a clamped window must be visible, not silent: " + d.warnings());
+    }
+
+    @Test
+    void periodDiffRejectsAReversedWindow() {
+        PeriodDiff d = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "110")
+        ), List.of()).periodDiff(LocalDate.parse("2024-01-02"), LocalDate.parse("2024-01-01"));
+
+        assertNull(d.start());
+        assertNull(d.totalReturn());
+        assertEquals(1, d.warnings().size());
+    }
+
+    @Test
+    void periodDiffNeedsTwoSamples() {
+        PeriodDiff d = service(List.of(dv("2024-01-01", "100")), List.of())
+                .periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-02"));
+
+        assertNull(d.start());
+        assertFalse(d.warnings().isEmpty());
+    }
+
+    @Test
+    void periodDiffAnnualisesOnlyBeyondThirtyDays() {
+        PeriodDiff shortWindow = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "110")
+        ), List.of()).periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-02"));
+        assertNull(shortWindow.annualisedReturn(),
+                "compounding a one-day move 365× is noise, not a return");
+
+        PeriodDiff halfYear = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-07-01", "121")
+        ), List.of()).periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-07-01"));
+        assertEquals(Math.pow(1.21, 365.25 / 182.0) - 1.0,
+                halfYear.annualisedReturn().doubleValue(), 1e-6);
+    }
+
+    @Test
+    void periodDiffSurfacesHoldingsThatCouldNotBePriced() {
+        PeriodDiff d = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "110")
+        ), List.of(), EMPTY_FX, List.of("GILT 4.25% 2032"))
+                .periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-02"));
+
+        assertEquals(List.of("GILT 4.25% 2032"), d.unpricedSymbols());
+        assertTrue(d.warnings().stream().anyMatch(w -> w.contains("GILT 4.25% 2032")),
+                "a position valued at zero on both ends silently shrinks the portfolio");
+    }
+
+    @Test
+    void periodDiffSplitsValueIntoPositionsAndCash() {
+        PeriodDiff d = service(List.of(
+                new DailyValue(LocalDate.parse("2024-01-01"), new BigDecimal("100"), new BigDecimal("80")),
+                new DailyValue(LocalDate.parse("2024-01-02"), new BigDecimal("120"), new BigDecimal("95"))
+        ), List.of()).periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-02"));
+
+        assertEquals(0, new BigDecimal("80").compareTo(d.start().investedGbp()));
+        assertEquals(0, new BigDecimal("20").compareTo(d.start().cashGbp()));
+        assertEquals(0, new BigDecimal("25").compareTo(d.end().cashGbp()));
+    }
+
+
+    @Test
+    void positionsChainAnchorsAtTheFirstDayPositionsExist() {
+        // Window opens on pure cash, buys on day 2, then the position gains 10%. The
+        // positions return is that 10% — not "undefined because day 1 held nothing".
+        PeriodDiff d = service(List.of(
+                new DailyValue(LocalDate.parse("2024-01-01"), new BigDecimal("100"), BigDecimal.ZERO),
+                new DailyValue(LocalDate.parse("2024-01-02"), new BigDecimal("100"), new BigDecimal("100")),
+                new DailyValue(LocalDate.parse("2024-01-03"), new BigDecimal("110"), new BigDecimal("110"))
+        ), List.of()).periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-03"));
+
+        assertEquals(0.10, d.investedReturn().doubleValue(), 1e-9);
+        assertEquals("2024-01-02", d.investedFrom(),
+                "the tile must be able to say the positions leg started later than the window");
+    }
+
 }

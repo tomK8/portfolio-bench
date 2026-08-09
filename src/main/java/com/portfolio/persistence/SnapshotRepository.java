@@ -15,8 +15,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Daily portfolio totals. One row per snapshot date; a re-run on the same day
- * overwrites the existing row (so the latest figures win).
+ * Daily portfolio totals as the broker reported them at sync time. One row per snapshot
+ * date; a re-run on the same day overwrites the existing row (so the latest figures win).
+ *
+ * <p>Write-only from the app's point of view — the Period-diff panel that used to read these
+ * rows now values both of its boundaries itself from the cash ledger, so the table is kept as
+ * an audit trail of what each broker said, not as an input to any view.
  */
 public class SnapshotRepository {
 
@@ -54,53 +58,6 @@ public class SnapshotRepository {
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise snapshot table", e);
         }
-    }
-
-    /**
-     * All saved snapshots, oldest first. Used by the Snapshot-delta UI to populate the
-     * date picker and let the user diff any two points in time without re-computing.
-     */
-    public List<Snapshot> listAll() {
-        List<Snapshot> out = new java.util.ArrayList<>();
-        try (Connection conn = connections.open();
-             PreparedStatement ps = conn.prepareStatement(
-                     "SELECT snapshot_date_text, total_value_gbp, total_gain_gbp, " +
-                             "total_cash_gbp, return_pct, total_return, gbpusd, gbpeur " +
-                             "FROM portfolio_snapshots ORDER BY snapshot_date_text")) {
-            try (var rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    out.add(new Snapshot(rs.getString(1),
-                            BigDecimal.valueOf(rs.getDouble(2)),
-                            wrap(rs.getDouble(3), rs.wasNull()),
-                            wrap(rs.getDouble(4), rs.wasNull()),
-                            wrap(rs.getDouble(5), rs.wasNull()),
-                            wrap(rs.getDouble(6), rs.wasNull()),
-                            wrap(rs.getDouble(7), rs.wasNull()),
-                            wrap(rs.getDouble(8), rs.wasNull())));
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Could not list snapshots", e);
-        }
-        return out;
-    }
-
-    private static BigDecimal wrap(double v, boolean wasNull) {
-        return wasNull ? null : BigDecimal.valueOf(v);
-    }
-
-    /**
-     * One saved snapshot row. All totals are GBP except {@code gbpusd} / {@code gbpeur},
-     * which are FX rates (foreign per 1 GBP) at snapshot time.
-     */
-    public record Snapshot(String date,
-                           BigDecimal totalValueGbp,
-                           BigDecimal totalGainGbp,
-                           BigDecimal totalCashGbp,
-                           BigDecimal returnPct,
-                           BigDecimal totalReturn,
-                           BigDecimal gbpusd,
-                           BigDecimal gbpeur) {
     }
 
     public void saveSnapshot(BigDecimal totalGbp, BigDecimal totalGainGbp,

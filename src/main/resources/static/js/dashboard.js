@@ -171,7 +171,7 @@
             if (panelId === 'panel-mosig') setupMomentumSignals();
             if (panelId === 'panel-range') setupRange();
             if (panelId === 'panel-earnings') setupEarnings();
-            if (panelId === 'panel-snapshots') setupSnapshots();
+            if (panelId === 'panel-period') setupPeriodDiff();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
             if (panelId === 'panel-fundamentals') setupFundamentalsPanel();
@@ -3837,125 +3837,178 @@
                 });
         }
 
-        var snapshotsInitialized = false;
-        var snapshotsAll = [];
+        // Period diff: value the portfolio ourselves on two arbitrary dates (ledger replay +
+        // stored closes + historical FX) rather than diffing two broker-written snapshot rows.
+        var pdInitialized = false;
+        var pdSeq = 0;
 
-        function setupSnapshots() {
-            if (snapshotsInitialized) return;
-            snapshotsInitialized = true;
-            document.getElementById('snap-apply').addEventListener('click', applySnapshotDelta);
-            fetch('/snapshots').then(function (r) { return r.json(); }).then(function (snaps) {
-                snapshotsAll = snaps || [];
-                var fromSel = document.getElementById('snap-from');
-                var toSel = document.getElementById('snap-to');
-                if (!snapshotsAll.length) {
-                    document.getElementById('snap-empty').textContent =
-                            'No snapshots saved yet. Run "Aggregated Portfolio" on the Holdings tab to capture one.';
-                    return;
-                }
-                snapshotsAll.forEach(function (s) {
-                    var opt1 = document.createElement('option');
-                    opt1.value = s.date;
-                    opt1.textContent = s.date + '  (£' +
-                            parseFloat(s.totalValueGbp).toLocaleString('en-GB',
-                                    { maximumFractionDigits: 0 }) + ')';
-                    var opt2 = opt1.cloneNode(true);
-                    fromSel.appendChild(opt1);
-                    toSel.appendChild(opt2);
+        function setupPeriodDiff() {
+            if (pdInitialized) return;
+            pdInitialized = true;
+            document.querySelectorAll('#pd-presets .attr-preset').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    document.querySelectorAll('#pd-presets .attr-preset').forEach(function (b) {
+                        b.classList.remove('active');
+                    });
+                    btn.classList.add('active');
+                    pdApplyPreset(btn.dataset.preset);
+                    runPeriodDiff();
                 });
-                // Defaults: earliest → latest.
-                fromSel.value = snapshotsAll[0].date;
-                toSel.value = snapshotsAll[snapshotsAll.length - 1].date;
-                applySnapshotDelta();
             });
+            document.getElementById('pd-apply').addEventListener('click', function () {
+                document.querySelectorAll('#pd-presets .attr-preset').forEach(function (b) {
+                    b.classList.remove('active');
+                });
+                runPeriodDiff();
+            });
+            pdApplyPreset('ytd');
+            runPeriodDiff();
         }
 
-        function applySnapshotDelta() {
-            var from = document.getElementById('snap-from').value;
-            var to = document.getElementById('snap-to').value;
-            var status = document.getElementById('snap-status');
-            status.textContent = 'Loading…';
-            var url = '/snapshots/delta?from=' + encodeURIComponent(from) +
-                    '&to=' + encodeURIComponent(to);
-            fetch(url).then(function (r) {
-                if (!r.ok) return r.text().then(function (m) { throw new Error(m); });
-                return r.json();
-            }).then(function (data) {
-                status.textContent = '';
-                document.getElementById('snap-empty').style.display = 'none';
-                document.getElementById('snap-content').style.display = '';
-                renderSnapshotDelta(data);
-            }).catch(function (e) {
-                status.textContent = 'Error: ' + e.message;
-            });
+        function pdApplyPreset(preset) {
+            var to = new Date();
+            var from = new Date();
+            switch (preset) {
+                case '1m': from.setMonth(from.getMonth() - 1); break;
+                case '3m': from.setMonth(from.getMonth() - 3); break;
+                case '6m': from.setMonth(from.getMonth() - 6); break;
+                case 'ytd': from = new Date(to.getFullYear(), 0, 1); break;
+                case '1y': from.setFullYear(from.getFullYear() - 1); break;
+                case '3y': from.setFullYear(from.getFullYear() - 3); break;
+                case '5y': from.setFullYear(from.getFullYear() - 5); break;
+                // The server clamps to the first ledger date and says so in a warning.
+                case 'all': from = new Date(2000, 0, 1); break;
+            }
+            document.getElementById('pd-from').value = isoDate(from);
+            document.getElementById('pd-to').value = isoDate(to);
         }
 
-        function renderSnapshotDelta(data) {
-            var d = data.delta || {};
-            document.getElementById('snap-days').textContent = data.spanDays != null ? data.spanDays : '—';
-            setSignedMoney('snap-value', d.totalValueGbp);
-            // Percent change against the from-value for context.
-            var fromV = parseFloat(data.from.totalValueGbp);
-            var deltaV = parseFloat(d.totalValueGbp);
-            var pct = fromV ? ((deltaV / fromV) * 100) : null;
-            document.getElementById('snap-value-pct').textContent =
-                    pct != null ? ((pct >= 0 ? '+' : '') + pct.toFixed(2) + '%') : '';
-            setSignedMoney('snap-gain', d.totalGainGbp);
-            setSignedMoney('snap-cash', d.totalCashGbp);
-            var ret = document.getElementById('snap-return');
-            if (d.returnPct != null) {
-                var rp = parseFloat(d.returnPct) * 100;
-                ret.textContent = (rp >= 0 ? '+' : '') + rp.toFixed(2) + 'pp';
-                ret.className = 'value' + (rp >= 0 ? ' pos' : ' neg');
-            } else { ret.textContent = '—'; ret.className = 'value na'; }
-            setFxDelta('snap-usd', d.gbpusd);
-            setFxDelta('snap-eur', d.gbpeur);
+        function runPeriodDiff() {
+            var from = document.getElementById('pd-from').value;
+            var to = document.getElementById('pd-to').value;
+            if (!from || !to) return;
+            var status = document.getElementById('pd-status');
+            status.textContent = 'Valuing…';
+            // Same out-of-order guard as Attribution: clicking through the presets leaves
+            // several valuations in flight and a slow early one must not repaint over a
+            // later window.
+            var seq = ++pdSeq;
+            fetch('/period-diff?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to))
+                .then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Request failed'); });
+                    return r.json();
+                }).then(function (data) {
+                    if (seq !== pdSeq) return;
+                    status.textContent = '';
+                    renderPeriodDiff(data);
+                }).catch(function (err) {
+                    if (seq !== pdSeq) return;
+                    status.textContent = 'Error: ' + (err.message || String(err));
+                });
+        }
+
+        function renderPeriodDiff(data) {
+            renderPdWarnings(data.warnings);
+            if (!data.start || !data.end) {
+                document.getElementById('pd-content').style.display = 'none';
+                return;
+            }
+            document.getElementById('pd-content').style.display = '';
+
+            setPdPct('pd-twr', data.totalReturn);
+            document.getElementById('pd-twr-ann').textContent =
+                    data.annualisedReturn != null
+                            ? pdPctText(data.annualisedReturn) + ' annualised'
+                            : 'under 30 days';
+            setSignedMoney('pd-gain', data.gainGbp);
+            setPdMoney('pd-start', data.start.totalGbp);
+            setPdMoney('pd-end', data.end.totalGbp);
+            document.getElementById('pd-start-date').textContent = data.start.date;
+            document.getElementById('pd-end-date').textContent = data.end.date;
+            setSignedMoney('pd-change', data.valueChangeGbp);
+            document.getElementById('pd-change-pct').textContent =
+                    data.valueChangePct != null ? pdPctText(data.valueChangePct) : '';
+            setPdMoney('pd-contrib', data.contributionsGbp);
+            setPdPct('pd-invested', data.investedReturn);
+            // The positions chain can start after the window does (a window that opened on
+            // cash); say so rather than let the tile read as a same-window comparison.
+            document.getElementById('pd-invested-sub').textContent =
+                    (data.investedFrom && data.investedFrom !== data.from)
+                            ? 'ex-cash drag, from ' + data.investedFrom
+                            : 'ex-cash drag';
+            document.getElementById('pd-days').textContent = data.spanDays;
+
+            document.getElementById('pd-col-from').textContent = data.start.date;
+            document.getElementById('pd-col-to').textContent = data.end.date;
 
             var rows = [
-                ['Total value £', data.from.totalValueGbp, data.to.totalValueGbp, d.totalValueGbp],
-                ['Total gain £', data.from.totalGainGbp, data.to.totalGainGbp, d.totalGainGbp],
-                ['Cash £', data.from.totalCashGbp, data.to.totalCashGbp, d.totalCashGbp],
-                ['Return %', toPct(data.from.returnPct), toPct(data.to.returnPct), toPct(d.returnPct)],
-                ['GBP/USD', data.from.gbpusd, data.to.gbpusd, d.gbpusd],
-                ['GBP/EUR', data.from.gbpeur, data.to.gbpeur, d.gbpeur]
+                ['Total value £', data.start.totalGbp, data.end.totalGbp, 2],
+                ['Positions £', data.start.investedGbp, data.end.investedGbp, 2],
+                ['Cash £', data.start.cashGbp, data.end.cashGbp, 2],
+                ['GBP/USD', data.start.gbpusd, data.end.gbpusd, 4],
+                ['GBP/EUR', data.start.gbpeur, data.end.gbpeur, 4]
             ];
-            var tbody = document.querySelector('#snap-table tbody');
+            var tbody = document.querySelector('#pd-table tbody');
             tbody.innerHTML = '';
             rows.forEach(function (r) {
+                var a = r[1] == null ? null : parseFloat(r[1]);
+                var b = r[2] == null ? null : parseFloat(r[2]);
+                var delta = (a == null || b == null) ? null : b - a;
                 var tr = document.createElement('tr');
                 tr.innerHTML =
-                    '<td class="txt">' + r[0] + '</td>' +
-                    '<td>' + fmtAny(r[1]) + '</td>' +
-                    '<td>' + fmtAny(r[2]) + '</td>' +
-                    '<td>' + fmtAnyDelta(r[3]) + '</td>';
+                        '<td class="txt">' + r[0] + '</td>' +
+                        '<td>' + pdNum(a, r[3]) + '</td>' +
+                        '<td>' + pdNum(b, r[3]) + '</td>' +
+                        '<td class="' + (delta == null ? '' : delta >= 0 ? 'pos' : 'neg') + '">' +
+                        pdNumDelta(delta, r[3]) + '</td>';
                 tbody.appendChild(tr);
             });
         }
 
-        function setFxDelta(id, v) {
+        function renderPdWarnings(warnings) {
+            var box = document.getElementById('pd-warnings');
+            if (!warnings || !warnings.length) {
+                box.style.display = 'none';
+                box.innerHTML = '';
+                return;
+            }
+            box.style.display = '';
+            box.innerHTML = '<h4>Heads up</h4><ul>' + warnings.map(function (w) {
+                return '<li>' + escapeHtml(w) + '</li>';
+            }).join('') + '</ul>';
+        }
+
+        function setPdMoney(id, v) {
             var el = document.getElementById(id);
             if (v == null) { el.textContent = '—'; el.className = 'value na'; return; }
-            var n = parseFloat(v);
-            el.textContent = (n >= 0 ? '+' : '') + n.toFixed(4);
+            el.textContent = '£' + parseFloat(v).toLocaleString('en-GB',
+                    { minimumFractionDigits: 0, maximumFractionDigits: 0 });
             el.className = 'value';
         }
 
-        function toPct(v) {
-            return v == null ? null : parseFloat(v) * 100;
+        function setPdPct(id, frac) {
+            var el = document.getElementById(id);
+            if (frac == null) { el.textContent = '—'; el.className = 'value na'; return; }
+            var n = parseFloat(frac);
+            el.textContent = pdPctText(n);
+            el.className = 'value' + (n >= 0 ? ' pos' : ' neg');
         }
 
-        function fmtAny(v) {
-            if (v == null) return '—';
-            return parseFloat(v).toLocaleString('en-GB',
-                    { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        function pdPctText(frac) {
+            var n = parseFloat(frac) * 100;
+            return (n >= 0 ? '+' : '−') + Math.abs(n).toFixed(2) + '%';
         }
 
-        function fmtAnyDelta(v) {
+        function pdNum(v, decimals) {
             if (v == null) return '—';
-            var n = parseFloat(v);
-            var sign = n >= 0 ? '+' : '−';
-            return sign + Math.abs(n).toLocaleString('en-GB',
-                    { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+            return v.toLocaleString('en-GB',
+                    { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+        }
+
+        function pdNumDelta(v, decimals) {
+            if (v == null) return '—';
+            return (v >= 0 ? '+' : '−') + Math.abs(v).toLocaleString('en-GB',
+                    { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
         }
 
         var reconLoaded = false;

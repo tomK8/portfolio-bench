@@ -17,7 +17,6 @@ import com.portfolio.application.TradeNotesService;
 import com.portfolio.application.TradeNotesService.TradeJournal;
 import com.portfolio.application.WhatIfService;
 import com.portfolio.application.WhatIfService.Weight;
-import com.portfolio.persistence.SnapshotRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
@@ -30,7 +29,6 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -56,7 +54,6 @@ public class AnalysisController {
     private final WhatIfService whatIfService;
     private final HistoricalScenarioService scenarioService;
     private final TradeNotesService tradeNotesService;
-    private final SnapshotRepository snapshotRepo;
     private final ReconciliationService reconciliationService;
     private final HealthService healthService;
     private final PriceFetchJob priceFetchJob;
@@ -67,7 +64,6 @@ public class AnalysisController {
                               WhatIfService whatIfService,
                               HistoricalScenarioService scenarioService,
                               TradeNotesService tradeNotesService,
-                              SnapshotRepository snapshotRepo,
                               ReconciliationService reconciliationService,
                               HealthService healthService,
                               PriceFetchJob priceFetchJob) {
@@ -77,7 +73,6 @@ public class AnalysisController {
         this.whatIfService = whatIfService;
         this.scenarioService = scenarioService;
         this.tradeNotesService = tradeNotesService;
-        this.snapshotRepo = snapshotRepo;
         this.reconciliationService = reconciliationService;
         this.healthService = healthService;
         this.priceFetchJob = priceFetchJob;
@@ -284,43 +279,6 @@ public class AnalysisController {
         return tradeNotesService.save(rowid, note, tags);
     }
 
-    @GetMapping("/snapshots")
-    @ResponseBody
-    public List<SnapshotRepository.Snapshot> snapshots() {
-        return snapshotRepo.listAll();
-    }
-
-    /**
-     * Diff between two saved snapshots. The "from" defaults to the earliest, "to" to the
-     * latest. Returns a summary delta object; per-symbol drift isn't tracked because
-     * {@code portfolio_snapshots} stores only totals.
-     */
-    @GetMapping("/snapshots/delta")
-    @ResponseBody
-    public Map<String, Object> snapshotsDelta(@RequestParam(name = "from", required = false) String from,
-                                              @RequestParam(name = "to", required = false) String to) {
-        List<SnapshotRepository.Snapshot> all = snapshotRepo.listAll();
-        if (all.isEmpty()) {
-            return Map.of("from", null, "to", null, "delta", Map.of());
-        }
-        SnapshotRepository.Snapshot fromSnap = (from == null || from.isBlank())
-                ? all.get(0) : findByDate(all, from);
-        SnapshotRepository.Snapshot toSnap = (to == null || to.isBlank())
-                ? all.get(all.size() - 1) : findByDate(all, to);
-        if (fromSnap == null) throw new IllegalArgumentException("No snapshot for date " + from);
-        if (toSnap == null) throw new IllegalArgumentException("No snapshot for date " + to);
-        Map<String, Object> delta = new LinkedHashMap<>();
-        delta.put("totalValueGbp", subtract(toSnap.totalValueGbp(), fromSnap.totalValueGbp()));
-        delta.put("totalGainGbp", subtract(toSnap.totalGainGbp(), fromSnap.totalGainGbp()));
-        delta.put("totalCashGbp", subtract(toSnap.totalCashGbp(), fromSnap.totalCashGbp()));
-        delta.put("returnPct", subtract(toSnap.returnPct(), fromSnap.returnPct()));
-        delta.put("gbpusd", subtract(toSnap.gbpusd(), fromSnap.gbpusd()));
-        delta.put("gbpeur", subtract(toSnap.gbpeur(), fromSnap.gbpeur()));
-        long days = ChronoUnit.DAYS.between(
-                LocalDate.parse(fromSnap.date()), LocalDate.parse(toSnap.date()));
-        return Map.of("from", fromSnap, "to", toSnap, "delta", delta, "spanDays", days);
-    }
-
     @GetMapping("/reconciliation")
     @ResponseBody
     public Report reconciliation() {
@@ -331,16 +289,5 @@ public class AnalysisController {
     @ResponseBody
     public Health health() {
         return healthService.status();
-    }
-
-    private static SnapshotRepository.Snapshot findByDate(
-            List<SnapshotRepository.Snapshot> snaps, String date) {
-        for (var s : snaps) if (date.equals(s.date())) return s;
-        return null;
-    }
-
-    private static BigDecimal subtract(BigDecimal a, BigDecimal b) {
-        if (a == null || b == null) return null;
-        return a.subtract(b);
     }
 }

@@ -126,6 +126,28 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   `runAttribution` — several requests are in flight at once and a slow early one landing last
   would otherwise repaint the tiles for a window the buttons no longer show.
 
+- **Period diff** — `GET /period-diff?from=&to=` → JSON, rendered as stat tiles + a
+  From/To/Delta table under the Performance group. Compares the portfolio on **any two dates**,
+  valuing both boundaries from the cash ledger via `PortfolioReturnService.periodDiff` — it does
+  **not** read `portfolio_snapshots` any more. (It used to diff two saved broker-written snapshot
+  rows, which limited the picker to days a `/sync` happened to run and put the two ends on two
+  different brokers' conventions.) Three figures, deliberately all shown because they only agree
+  when no money moved: **Change** (raw end − start), **Gain** (change − contributions inside the
+  window = what the market did), and **Total return** — the chain-linked daily TWR
+  `Π(1 + (V_t − V_{t−1} − C_t)/V_{t−1}) − 1`, the same definition as the Returns tab, so a
+  full-history window reproduces its since-inception number. Annualised is blank under
+  `MIN_ANNUALIZE_DAYS` (30), same convention as Attribution. Flows are counted over
+  **`(from, to]`** — a contribution landing on the start date is part of the opening balance, not
+  of the window. Boundary valuation comes from `PortfolioValueService.dailyValuesIn(from, to)`,
+  the windowed form of `dailyValues()`: the ledger still replays from its first row (quantities
+  and cash must be caught up) but only in-window days are valued, so a 1y window prices ~365 days
+  instead of ~9,500. It also returns `unpricedSymbols` — anything held in the window with no
+  `price_history` rows values at zero on **both** ends, so it's surfaced as a warning rather than
+  quietly shrinking the portfolio (same lesson as Attribution's `excluded`). Reversed dates, a
+  window that predates the ledger, or a zero opening value degrade to null figures + a warning;
+  nothing throws. Per-symbol P&L over the same window stays on the Attribution tab — not
+  duplicated here.
+
 - **Watchlist** — `GET /watchlist` → JSON, rendered as a table under the Tools group. A
   user-maintained set of symbols (owned or not — *not* unioned with holdings, kept lean by
   design) for volatility trading. Each row joins live price + today's move + trailing
@@ -252,6 +274,7 @@ no `System.out` in production code.
 | Value-over-time chart | `GET /portfolio-value`     | `PortfolioValueService`   |
 | Allocation            | `GET /allocation`          | `AllocationService`       |
 | Attribution           | `GET /attribution`         | `AttributionService`      |
+| Period diff           | `GET /period-diff`         | `PortfolioReturnService.periodDiff` |
 | Watchlist             | `GET /watchlist`           | `WatchlistService`        |
 | Watchlist mutate      | `POST /watchlist/{add,remove,threshold,move}` | `WatchlistRepository` |
 | Watchlist popup chart | `GET /watchlist/series`    | `WatchlistService`        |
@@ -283,7 +306,9 @@ To convert native → GBP, **divide** by the rate.
 `com.portfolio.persistence` is the single owner of JDBC traffic. All repos route through
 `JdbcConnectionFactory`; each repo runs its DDL once in its constructor (not on every read/write).
 
-- `SnapshotRepository` — `portfolio_snapshots` (one row per snapshot date; re-run same day overwrites).
+- `SnapshotRepository` — `portfolio_snapshots` (one row per snapshot date; re-run same day
+  overwrites). **Write-only** since the Period-diff panel started valuing its own boundaries —
+  kept as an audit trail of what each broker reported at sync time, read by no view.
 - `CashTransactionRepository` — `cash_transactions`; per-broker save methods (`saveAjBell`,
   `saveRothIra`, `saveII`) hold each broker's dedup + balance-derivation rules. Reads:
   `loadDividendTransactions` (TRANSACTION + DIVIDEND, for dividend FIFO and the cash-ledger

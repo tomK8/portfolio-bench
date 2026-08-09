@@ -1,6 +1,7 @@
 package com.portfolio.application;
 
 import com.portfolio.application.PortfolioValueService.DailyValue;
+import com.portfolio.application.PortfolioValueService.PeriodValues;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.persistence.CashTransactionRepository;
@@ -39,6 +40,9 @@ import java.util.Map;
 public class PortfolioReturnService {
 
     private static final int SCALE = 10;
+
+    /** Windows shorter than this report no annualised return — see {@link #annualise}. */
+    private static final int MIN_ANNUALIZE_DAYS = 30;
     private static final BigDecimal DAYS_PER_YEAR = new BigDecimal("365.25");
 
     private final PortfolioValueService valueService;
@@ -130,6 +134,183 @@ public class PortfolioReturnService {
         List<AnnualReturn> annual = annualReturns(growthPoints, investedGrowthPoints);
         return new ReturnTimeline(growthPoints, contribPoints, drawdowns, annual,
                 summarise(growthPoints, drawdowns));
+    }
+
+    /**
+     * Diff the portfolio between two arbitrary dates, valuing both boundaries ourselves from
+     * the cash ledger + stored daily closes + historical FX — the same engine behind the
+     * Value-over-time and Returns charts. Nothing here reads {@code portfolio_snapshots}: the
+     * user picks any two dates, not just the days a broker export happened to be synced, and
+     * the two ends are valued on one consistent basis instead of two broker conventions.
+     *
+     * <p>Three different numbers answer "how did it do", and the panel shows all three because
+     * they diverge whenever money moved:
+     * <ul>
+     *   <li><b>Value change</b> — raw {@code end − start}. Includes contributions, so it
+     *       flatters any window you paid into.</li>
+     *   <li><b>Gain</b> — {@code value change − contributions in the window}: the money the
+     *       market actually made or lost.</li>
+     *   <li><b>Total return</b> — chain-linked daily TWR across the window,
+     *       {@code Π(1 + (V_t − V_{t−1} − C_t) / V_{t−1}) − 1}. Contribution-neutral and
+     *       therefore the figure to compare against an index. Same definition as the Returns
+     *       tab, so a window that spans the whole history reproduces its since-inception
+     *       number.</li>
+     * </ul>
+     *
+     * <p>The start date's own contributions belong to the opening balance, not to the window,
+     * so flows are counted over {@code (from, to]} — consistent with anchoring the TWR chain
+     * at the start-date close.
+     *
+     * <p>Degrades rather than throws: an unusable window (reversed dates, no ledger rows, a
+     * zero opening value that no return can be chained off) comes back with null figures and
+     * a warning for the UI to render.
+     */
+    public PeriodDiff periodDiff(LocalDate from, LocalDate to) {
+        List<String> warnings = new ArrayList<>();
+        LocalDate today = LocalDate.now();
+        if (to.isAfter(today)) {
+            warnings.add("To-date is in the future — clamped to " + today + ".");
+            to = today;
+        }
+        if (!from.isBefore(to)) {
+            return PeriodDiff.unavailable(from, to, "From-date must be earlier than to-date.");
+        }
+
+        PeriodValues pv = valueService.dailyValuesIn(from, to);
+        List<DailyValue> values = pv.values();
+        if (values.size() < 2) {
+            return PeriodDiff.unavailable(from, to,
+                    "No ledger data in that window — the portfolio's history starts later.");
+        }
+
+        DailyValue anchor = values.get(0);
+        DailyValue close = values.get(values.size() - 1);
+        if (anchor.date().isAfter(from)) {
+            warnings.add("Ledger history starts " + anchor.date()
+                    + " — the window opens there rather than at " + from + ".");
+        }
+        if (close.date().isBefore(to)) {
+            warnings.add("Valued through " + close.date() + " (latest available).");
+        }
+        if (!pv.unpricedSymbols().isEmpty()) {
+            warnings.add("No price history for " + String.join(", ", pv.unpricedSymbols())
+                    + " — held in this window and valued at zero on both ends.");
+        }
+
+        Map<LocalDate, BigDecimal> contribByDate = contributionsByDate();
+        Map<LocalDate, BigDecimal> investedFlowsByDate = investedFlowsByDate();
+
+        BigDecimal one = BigDecimal.ONE.setScale(SCALE, RoundingMode.HALF_UP);
+        BigDecimal contributions = BigDecimal.ZERO;
+        BigDecimal growth = anchor.valueGbp().signum() > 0 ? one : null;
+        BigDecimal prevV = anchor.valueGbp();
+
+        // The positions-only chain anchors at the first day positions actually exist, which
+        // need not be the window's first day — a window that opens on cash and buys later
+        // (the whole history, for one) would otherwise report no positions return at all.
+        // Its anchor is reported separately so the tile can say where it started.
+        BigDecimal investedGrowth = anchor.investedGbp().signum() > 0 ? one : null;
+        BigDecimal prevInvested = anchor.investedGbp();
+        LocalDate investedFrom = investedGrowth == null ? null : anchor.date();
+
+        for (int i = 1; i < values.size(); i++) {
+            DailyValue dv = values.get(i);
+            BigDecimal c = contribByDate.getOrDefault(dv.date(), BigDecimal.ZERO);
+            contributions = contributions.add(c);
+            if (growth != null && prevV.signum() > 0) {
+                BigDecimal r = dv.valueGbp().subtract(prevV).subtract(c)
+                        .divide(prevV, SCALE, RoundingMode.HALF_UP);
+                growth = growth.multiply(BigDecimal.ONE.add(r)).setScale(SCALE, RoundingMode.HALF_UP);
+            }
+            prevV = dv.valueGbp();
+
+            if (investedGrowth == null) {
+                if (dv.investedGbp().signum() > 0) {
+                    investedGrowth = one;
+                    investedFrom = dv.date();
+                    prevInvested = dv.investedGbp();
+                }
+                continue;   // no return on the anchor day itself
+            }
+            if (prevInvested.signum() > 0) {
+                BigDecimal ci = investedFlowsByDate.getOrDefault(dv.date(), BigDecimal.ZERO);
+                BigDecimal r = dv.investedGbp().subtract(prevInvested).subtract(ci)
+                        .divide(prevInvested, SCALE, RoundingMode.HALF_UP);
+                investedGrowth = investedGrowth.multiply(BigDecimal.ONE.add(r))
+                        .setScale(SCALE, RoundingMode.HALF_UP);
+            }
+            prevInvested = dv.investedGbp();
+        }
+
+        if (growth == null) {
+            warnings.add("Opening value was zero, so no return can be chained from "
+                    + anchor.date() + ".");
+        }
+
+        BigDecimal startValue = anchor.valueGbp();
+        BigDecimal endValue = close.valueGbp();
+        BigDecimal valueChange = endValue.subtract(startValue);
+        BigDecimal valueChangePct = startValue.signum() > 0
+                ? valueChange.divide(startValue, SCALE, RoundingMode.HALF_UP) : null;
+        BigDecimal totalReturn = growth == null ? null : growth.subtract(BigDecimal.ONE);
+        BigDecimal investedReturn = investedGrowth == null
+                ? null : investedGrowth.subtract(BigDecimal.ONE);
+        long spanDays = ChronoUnit.DAYS.between(anchor.date(), close.date());
+
+        Map<String, BigDecimal> usd = fxSeries("USD", anchor.date(), close.date());
+        Map<String, BigDecimal> eur = fxSeries("EUR", anchor.date(), close.date());
+
+        return new PeriodDiff(
+                anchor.date().toString(), close.date().toString(), spanDays,
+                endpoint(anchor, usd, eur), endpoint(close, usd, eur),
+                valueChange, valueChangePct,
+                contributions, valueChange.subtract(contributions),
+                totalReturn, annualise(totalReturn, spanDays), investedReturn,
+                investedFrom == null ? null : investedFrom.toString(),
+                pv.unpricedSymbols(), warnings);
+    }
+
+    private static Endpoint endpoint(DailyValue dv,
+                                     Map<String, BigDecimal> usd, Map<String, BigDecimal> eur) {
+        return new Endpoint(dv.date().toString(),
+                dv.valueGbp().setScale(2, RoundingMode.HALF_UP),
+                dv.investedGbp().setScale(2, RoundingMode.HALF_UP),
+                dv.valueGbp().subtract(dv.investedGbp()).setScale(2, RoundingMode.HALF_UP),
+                usd.get(dv.date().toString()), eur.get(dv.date().toString()));
+    }
+
+    /**
+     * The two boundary FX rates for one currency, keyed by date string. Returned as a map so a
+     * missing rate is simply an absent key — an FX outage leaves the two FX rows blank instead
+     * of failing the whole diff (the GBP totals never depended on these; they are display-only
+     * context, the valuations having already been converted inside the daily series).
+     */
+    private Map<String, BigDecimal> fxSeries(String ccy, LocalDate from, LocalDate to) {
+        Map<String, BigDecimal> out = new HashMap<>();
+        try {
+            Map<LocalDate, BigDecimal> series = fxProvider.fetchRateSeries(ccy, from.minusDays(14), to);
+            for (LocalDate d : List.of(from, to)) {
+                BigDecimal rate = HistoricalFxRateProvider.rateOnOrBefore(series, d);
+                if (rate != null) out.put(d.toString(), rate);
+            }
+        } catch (Exception e) {
+            // Display-only context — the diff stands without it.
+        }
+        return out;
+    }
+
+    /**
+     * Gross a period return up to a 365.25-day year. Null under {@link #MIN_ANNUALIZE_DAYS}
+     * (compounding a two-week move 26× produces a number nobody should read) and on a
+     * non-positive {@code 1 + r}, where the {@code pow} would go NaN. Same convention as
+     * {@code AttributionService}.
+     */
+    private static BigDecimal annualise(BigDecimal periodReturn, long days) {
+        if (periodReturn == null || days < MIN_ANNUALIZE_DAYS) return null;
+        double base = 1.0 + periodReturn.doubleValue();
+        if (base <= 0) return null;
+        return BigDecimal.valueOf(Math.pow(base, 365.25 / days) - 1.0)
+                .setScale(SCALE, RoundingMode.HALF_UP);
     }
 
     /**
@@ -500,6 +681,50 @@ public class PortfolioReturnService {
 
         public static MwrSummary empty() {
             return new MwrSummary(null, null, null, null);
+        }
+    }
+
+    /**
+     * One boundary of a {@link PeriodDiff}, valued from the ledger. {@code cashGbp} is the
+     * residual {@code total − invested}; {@code gbpusd} / {@code gbpeur} are the historical
+     * rates on that date (foreign per 1 GBP), null when FX was unavailable.
+     */
+    public record Endpoint(String date,
+                           BigDecimal totalGbp,
+                           BigDecimal investedGbp,
+                           BigDecimal cashGbp,
+                           BigDecimal gbpusd,
+                           BigDecimal gbpeur) {
+    }
+
+    /**
+     * Ledger-valued comparison of two dates. {@code from} / {@code to} echo the dates actually
+     * used, which can differ from the ones requested when the window was clamped to the
+     * available history (any clamp is spelled out in {@code warnings}). {@code investedFrom} is
+     * the day the positions-only chain anchored, which lags {@code from} whenever the window
+     * opened on cash. Returns are fractional (0.07 = +7%); every figure is nullable so an
+     * unusable window degrades to warnings.
+     */
+    public record PeriodDiff(String from,
+                             String to,
+                             long spanDays,
+                             Endpoint start,
+                             Endpoint end,
+                             BigDecimal valueChangeGbp,
+                             BigDecimal valueChangePct,
+                             BigDecimal contributionsGbp,
+                             BigDecimal gainGbp,
+                             BigDecimal totalReturn,
+                             BigDecimal annualisedReturn,
+                             BigDecimal investedReturn,
+                             String investedFrom,
+                             List<String> unpricedSymbols,
+                             List<String> warnings) {
+
+        static PeriodDiff unavailable(LocalDate from, LocalDate to, String warning) {
+            return new PeriodDiff(from.toString(), to.toString(), 0, null, null,
+                    null, null, null, null, null, null, null, null,
+                    List.of(), List.of(warning));
         }
     }
 }

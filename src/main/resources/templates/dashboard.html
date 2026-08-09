@@ -1171,7 +1171,7 @@
     <button class="tab" data-panel="panel-returns" type="button">Returns</button>
     <button class="tab" data-panel="panel-dividends" type="button">Dividends</button>
     <button class="tab" data-panel="panel-attribution" type="button">Attribution</button>
-    <button class="tab" data-panel="panel-snapshots" type="button">Snapshot diff</button>
+    <button class="tab" data-panel="panel-period" type="button">Period diff</button>
 </div>
 
 <div class="tabs tabs-secondary" data-group="group-risk">
@@ -2507,42 +2507,59 @@
     <div id="ea-source" class="muted" style="font-size: 0.78rem; margin-top: 0.6rem;"></div>
 </section>
 
-<section class="tab-panel" id="panel-snapshots">
+<section class="tab-panel" id="panel-period">
     <p class="muted" style="margin-top: 0">
-        Diff any two saved snapshots from <code>portfolio_snapshots</code>. Snapshots are
-        written each time you run "Aggregated Portfolio" on the holdings tab — the row
-        captures total value, gain, cash, return%, and FX. Per-symbol breakdown isn't
-        stored, so the delta here is portfolio-level only.
+        Compare the portfolio on any two dates. Both ends are valued <b>from the cash ledger</b>
+        — positions replayed from every trade and marked at that date's stored daily close, cash
+        converted at that date's historical FX — so the two ends sit on one consistent basis
+        instead of whatever the brokers happened to report on the days you synced. Same engine as
+        Value over time and Returns.
     </p>
-    <div class="benchmark-controls">
-        <label>From:
-            <select id="snap-from"></select>
-        </label>
-        <label>To:
-            <select id="snap-to"></select>
-        </label>
-        <button id="snap-apply" type="button">Diff</button>
-        <span id="snap-status" class="muted" style="font-size: 0.85rem;"></span>
+    <p class="muted">
+        Three numbers answer "how did it do", and they only agree when no money moved:
+        <b>Change</b> is the raw end − start, contributions included. <b>Gain</b> subtracts the
+        contributions paid in during the window — the money the market made. <b>Total return</b>
+        is the chain-linked daily time-weighted return, which is contribution-neutral and so the
+        one to hold against an index; over the full history it reproduces the Returns tab's
+        since-inception figure. <b>Annualised</b> is blank under 30 days — compounding a
+        two-week move 26× is noise. Per-symbol P&amp;L for the same window is on the
+        <b>Attribution</b> tab.
+    </p>
+    <div class="value-warnings" id="pd-warnings" style="display:none;"></div>
+    <div class="attr-controls">
+        <div class="attr-presets" id="pd-presets">
+            <button class="attr-preset" data-preset="1m" type="button">1m</button>
+            <button class="attr-preset" data-preset="3m" type="button">3m</button>
+            <button class="attr-preset" data-preset="6m" type="button">6m</button>
+            <button class="attr-preset active" data-preset="ytd" type="button">YTD</button>
+            <button class="attr-preset" data-preset="1y" type="button">1y</button>
+            <button class="attr-preset" data-preset="3y" type="button">3y</button>
+            <button class="attr-preset" data-preset="5y" type="button">5y</button>
+            <button class="attr-preset" data-preset="all" type="button">All</button>
+        </div>
+        <label>From: <input id="pd-from" type="date"/></label>
+        <label>To: <input id="pd-to" type="date"/></label>
+        <button id="pd-apply" type="button">Compare</button>
+        <span id="pd-status" class="muted" style="font-size: 0.85rem;"></span>
     </div>
-    <div id="snap-empty" class="muted" style="margin-top: 1rem;">
-        Loading snapshots…
-    </div>
-    <div id="snap-content" style="display: none;">
-        <div class="returns-stats" id="snap-stats">
-            <div class="returns-stat"><span class="label">Span (days)</span><span class="value na" id="snap-days">—</span></div>
-            <div class="returns-stat"><span class="label">Total value Δ</span><span class="value na" id="snap-value">—</span><span class="sub" id="snap-value-pct"></span></div>
-            <div class="returns-stat"><span class="label">Total gain Δ</span><span class="value na" id="snap-gain">—</span></div>
-            <div class="returns-stat"><span class="label">Cash Δ</span><span class="value na" id="snap-cash">—</span></div>
-            <div class="returns-stat"><span class="label">Return % Δ</span><span class="value na" id="snap-return">—</span></div>
-            <div class="returns-stat"><span class="label">GBP/USD Δ</span><span class="value na" id="snap-usd">—</span></div>
-            <div class="returns-stat"><span class="label">GBP/EUR Δ</span><span class="value na" id="snap-eur">—</span></div>
+
+    <div id="pd-content" style="display: none;">
+        <div class="returns-stats" id="pd-stats">
+            <div class="returns-stat"><span class="label">Total return</span><span class="value na" id="pd-twr">—</span><span class="sub" id="pd-twr-ann"></span></div>
+            <div class="returns-stat"><span class="label">Gain</span><span class="value na" id="pd-gain">—</span><span class="sub">market only</span></div>
+            <div class="returns-stat"><span class="label">Start value</span><span class="value" id="pd-start">—</span><span class="sub" id="pd-start-date"></span></div>
+            <div class="returns-stat"><span class="label">End value</span><span class="value" id="pd-end">—</span><span class="sub" id="pd-end-date"></span></div>
+            <div class="returns-stat"><span class="label">Change</span><span class="value na" id="pd-change">—</span><span class="sub" id="pd-change-pct"></span></div>
+            <div class="returns-stat"><span class="label">Contributions</span><span class="value" id="pd-contrib">—</span><span class="sub">paid in</span></div>
+            <div class="returns-stat"><span class="label">Positions return</span><span class="value na" id="pd-invested">—</span><span class="sub" id="pd-invested-sub">ex-cash drag</span></div>
+            <div class="returns-stat"><span class="label">Span (days)</span><span class="value" id="pd-days">—</span></div>
         </div>
 
-        <table id="snap-table" class="annual-table" style="margin-top: 1rem;">
+        <table id="pd-table" class="annual-table" style="margin-top: 1rem;">
             <thead><tr>
                 <th class="txt">Metric</th>
-                <th>From</th>
-                <th>To</th>
+                <th id="pd-col-from">From</th>
+                <th id="pd-col-to">To</th>
                 <th>Delta</th>
             </tr></thead>
             <tbody></tbody>

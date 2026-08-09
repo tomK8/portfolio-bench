@@ -1774,6 +1774,7 @@
 
         var attrInitialized = false;
         var attrChart = null;
+        var attrSeq = 0;
         var attrTableSortAttached = false;
 
         function setupAttribution() {
@@ -1829,15 +1830,21 @@
             if (!from) return;
             var status = document.getElementById('attr-status');
             status.textContent = 'Working…';
+            // Clicking through the presets leaves several requests in flight at once, and they
+            // don't come back in order — a slow earlier one landing last would repaint the tiles
+            // and chart with a window the buttons no longer show. Only the newest may render.
+            var seq = ++attrSeq;
             var url = '/attribution?from=' + encodeURIComponent(from) +
                     (to ? '&to=' + encodeURIComponent(to) : '');
             fetch(url).then(function (r) {
                 if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Request failed'); });
                 return r.json();
             }).then(function (data) {
+                if (seq !== attrSeq) return;
                 renderAttribution(data);
                 status.textContent = '';
             }).catch(function (err) {
+                if (seq !== attrSeq) return;
                 status.textContent = 'Error: ' + (err.message || String(err));
             });
         }
@@ -1861,6 +1868,7 @@
         }
 
         function renderAttribution(data) {
+            renderAttributionWarnings(data.excluded, data.from);
             document.getElementById('attr-stats').style.display = 'flex';
             setMoneyStat('attr-total-pnl', parseFloat(data.totalPnlGbp));
             setMoneyStat('attr-total-start', parseFloat(data.totalStartValueGbp));
@@ -1873,6 +1881,26 @@
 
             renderAttributionChart(data.rows);
             renderAttributionTable(data.rows, parseFloat(data.totalPnlGbp));
+        }
+
+        // Symbols the server couldn't value on a boundary. They're out of the rows and out of every
+        // total, so say which and why — a silent zero here reads as a gain the size of the position.
+        function renderAttributionWarnings(excluded, from) {
+            var warn = document.getElementById('attr-warnings');
+            if (!excluded || !excluded.length) {
+                warn.style.display = 'none';
+                warn.innerHTML = '';
+                return;
+            }
+            var items = excluded.map(function (e) {
+                return '<li><code>' + e.symbol + '</code> — ' + e.reason + '</li>';
+            }).join('');
+            warn.innerHTML = '<h4>' + excluded.length + ' symbol' + (excluded.length === 1 ? '' : 's') +
+                ' excluded</h4>' +
+                '<p>These could not be valued on a window boundary, so they are left out of the ' +
+                'table and of every total above. The remaining figures are internally consistent.</p>' +
+                '<ul>' + items + '</ul>';
+            warn.style.display = 'block';
         }
 
         function renderAttributionChart(rows) {
@@ -1932,8 +1960,10 @@
         function renderAttributionTable(rows, totalPnl) {
             var tbody = document.querySelector('#attr-table tbody');
             tbody.innerHTML = '';
-            // Use abs(totalPnl) as the denominator so winners and losers both report a positive
-            // share of the magnitude of the net P&L — easier to read than signed percentages.
+            // Share of the *net* P&L, signed, so the column sums to 100%. Note the denominator
+            // collapses when winners and losers cancel: a £5k loser against a £3.6k net reads as
+            // −138%. That's arithmetically right and deliberately kept — the blow-up is the signal
+            // that the net is small, not an error. Flagged in the header tooltip.
             var denom = Math.abs(totalPnl) > 0.005 ? Math.abs(totalPnl) : null;
             rows.forEach(function (r) {
                 var tr = document.createElement('tr');

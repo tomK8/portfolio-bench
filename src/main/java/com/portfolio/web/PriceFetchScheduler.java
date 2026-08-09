@@ -1,5 +1,6 @@
 package com.portfolio.web;
 
+import com.portfolio.application.CachedHistoricalFxRateProvider;
 import com.portfolio.application.FundamentalsFetchJob;
 import com.portfolio.application.GiltPriceFetchJob;
 import com.portfolio.application.ImportGiltPricesService;
@@ -31,18 +32,21 @@ public class PriceFetchScheduler {
     private final ImportGiltPricesService giltImportService;
     private final FundamentalsFetchJob fundamentalsJob;
     private final WatchlistAlertJob watchlistAlertJob;
+    private final CachedHistoricalFxRateProvider historicalFx;
 
     public PriceFetchScheduler(PriceFetchJob job, IntradayPriceFetchJob intradayJob,
                                GiltPriceFetchJob giltJob,
                                ImportGiltPricesService giltImportService,
                                FundamentalsFetchJob fundamentalsJob,
-                               WatchlistAlertJob watchlistAlertJob) {
+                               WatchlistAlertJob watchlistAlertJob,
+                               CachedHistoricalFxRateProvider historicalFx) {
         this.job = job;
         this.intradayJob = intradayJob;
         this.giltJob = giltJob;
         this.giltImportService = giltImportService;
         this.fundamentalsJob = fundamentalsJob;
         this.watchlistAlertJob = watchlistAlertJob;
+        this.historicalFx = historicalFx;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -52,6 +56,9 @@ public class PriceFetchScheduler {
         startDaemon("price-fetch-gilt-startup", this::giltQuietly);
         startDaemon("gilt-prices-import-startup", this::giltImportQuietly);
         startDaemon("fundamentals-refresh-startup", fundamentalsJob::run);
+        // Warms the whole USD/EUR history in one call each, so a cold start during a Frankfurter
+        // outage can still value non-GBP positions instead of silently reporting them as £0.
+        startDaemon("fx-history-warm-startup", historicalFx::warm);
     }
 
     @Scheduled(cron = "0 0 22 * * *", zone = "Europe/London")

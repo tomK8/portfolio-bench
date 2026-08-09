@@ -2598,12 +2598,20 @@
         every ledger row for that symbol (buys negative, sells positive, dividends positive,
         FX baked in at trade date). Captures realised + unrealised gains plus dividends. Trades at
         fair value contribute zero — only subsequent market moves and dividends do. Bonds use
-        the per-£100 nominal formula. Symbols with no <code>price_history</code> rows are
-        valued at zero on the boundaries (skewing the row).
+        the per-£100 nominal formula. A symbol whose value can't be established on a boundary
+        (no <code>price_history</code> rows, or no FX rate for its currency) is <b>excluded</b>
+        from the table and from every total, and listed in the warning above — valuing it at zero
+        instead would quietly overstate the P&amp;L by its whole position.
         End-value uses live intraday + live FX when the window ends today, daily close + historical FX otherwise.
+        <b>% of total</b> is each row's share of the <i>net</i> P&amp;L, so the column sums to 100%
+        — but when winners and losers nearly cancel, the denominator is small and individual
+        shares inflate past 100%.
         <b>Return %</b> = P&amp;L ÷ peak GBP capital deployed in the window; <b>Annualised %</b>
-        grosses that up to a 365-day year (so a 2% move over a month reads as ~27%).
+        grosses that up to a 365-day year (so a 2% move over a month reads as ~27%). It is blank
+        under 30 days: compounding a 5-day move 73× produces five-figure percentages that mean
+        nothing.
     </p>
+    <div class="value-warnings" id="attr-warnings" style="display:none;"></div>
     <div class="attr-controls">
         <div class="attr-presets" id="attr-presets">
             <button class="attr-preset" data-preset="5d" type="button">5d</button>
@@ -2640,9 +2648,9 @@
             <th data-sort="num">End £</th>
             <th data-sort="num">Cash flows £</th>
             <th data-sort="num" data-sort-dir="desc">P&amp;L £</th>
-            <th data-sort="num">% of total</th>
+            <th data-sort="num" title="Share of the net P&L. Sums to 100%, but inflates past 100% when winners and losers cancel and the net is small.">% of total</th>
             <th data-sort="num" title="P&L ÷ peak capital deployed in the window">Return %</th>
-            <th data-sort="num" title="Period return annualised to 365.25 days">Annualised %</th>
+            <th data-sort="num" title="Period return annualised to 365.25 days. Blank for windows under 30 days.">Annualised %</th>
         </tr></thead>
         <tbody></tbody>
     </table>

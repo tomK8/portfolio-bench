@@ -42,13 +42,17 @@ class AttributionServiceTest {
     Path dbDir;
 
     private AttributionService service() {
+        return service(FLAT_USD_FX);
+    }
+
+    private AttributionService service(HistoricalFxRateProvider fx) {
         JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
         KeyValueStore kv = new KeyValueStore(dbDir);
         return new AttributionService(
                 new CashTransactionRepository(cf, kv),
                 new PriceHistoryRepository(cf),
                 new IntradayPriceRepository(cf),
-                FLAT_USD_FX,
+                fx,
                 EMPTY_LIVE_FX,
                 new YahooTickerMap());
     }
@@ -270,6 +274,97 @@ class AttributionServiceTest {
         AttributionRow d = find(r, "DOOMED");
         assertEquals(0, new BigDecimal("-1.000000").compareTo(d.periodReturn()));
         assertNull(d.annualizedReturn());
+    }
+
+    // ---- boundaries that can't be valued ------------------------------------------------------
+    // Regression: a Frankfurter timeout used to leave the USD series absent, and every USD position
+    // silently valued at £0 on the start boundary while the end boundary priced fine — a phantom
+    // gain the size of the whole book. Excluded-and-named is the only safe answer.
+
+    @Test
+    void missingFxExcludesSymbolFromRowsAndTotals() {
+        HistoricalFxRateProvider brokenFx = (ccy, from, to) -> {
+            throw new IllegalStateException("request timed out");
+        };
+        repo().saveII(List.of(
+                trade("2025-12-15", "MSFT", 100, -10000),     // USD-priced
+                trade("2025-12-15", "MU", 100, -1000)));      // GBP-priced, unaffected
+        prices().upsertPriceBars(List.of(
+                bar("MSFT", "2026-01-01", 200.0), bar("MSFT", "2026-06-01", 250.0),
+                barGbp("MU", "2026-01-01", 10.0), barGbp("MU", "2026-06-01", 12.0)));
+
+        AttributionResult r = service(brokenFx).attribute(
+                LocalDate.parse("2026-01-01"), LocalDate.parse("2026-06-01"));
+
+        assertNull(find(r, "MSFT"), "unpriceable symbol must not appear as a row");
+        assertEquals(1, r.excluded().size());
+        assertEquals("MSFT", r.excluded().get(0).symbol());
+        assertTrue(r.excluded().get(0).reason().contains("USD"), r.excluded().get(0).reason());
+        // Totals cover only what survived: MU 100 × (12 − 10) = £200.
+        assertNotNull(find(r, "MU"));
+        assertEquals(0, new BigDecimal("200.00").compareTo(r.totalPnlGbp()));
+        assertEquals(0, new BigDecimal("1000.00").compareTo(r.totalStartValueGbp()));
+    }
+
+    @Test
+    void missingPriceHistoryExcludesSymbol() {
+        repo().saveII(List.of(trade("2025-12-15", "MCTS", 100, -1000)));   // never priced
+
+        AttributionResult r = service().attribute(
+                LocalDate.parse("2026-01-01"), LocalDate.parse("2026-06-01"));
+
+        assertNull(find(r, "MCTS"));
+        assertEquals(1, r.excluded().size());
+        assertEquals("MCTS", r.excluded().get(0).symbol());
+        assertTrue(r.excluded().get(0).reason().contains("no price history"));
+        assertEquals(0, BigDecimal.ZERO.compareTo(r.totalPnlGbp()));
+    }
+
+    @Test
+    void dividendOnSoldPositionNeedsNoValuationAndIsKept() {
+        // Nothing held on either boundary, so no price is required — the row must survive even
+        // though the symbol has no price_history at all.
+        repo().saveII(List.of(dividend("2026-03-10", "GONE", 50)));
+
+        AttributionResult r = service().attribute(
+                LocalDate.parse("2026-01-01"), LocalDate.parse("2026-06-01"));
+
+        assertTrue(r.excluded().isEmpty());
+        assertEquals(0, new BigDecimal("50.00").compareTo(find(r, "GONE").pnlGbp()));
+    }
+
+    // ---- annualisation floor -------------------------------------------------------------------
+
+    @Test
+    void shortWindowReportsNoAnnualisedReturn() {
+        // +10% over 5 days compounds to ~1,300,000% — arithmetically right, analytically useless.
+        repo().saveII(List.of(trade("2025-12-15", "NVO", 10, -1000)));
+        prices().upsertPriceBars(List.of(
+                barGbp("NVO", "2026-06-01", 100.0),
+                barGbp("NVO", "2026-06-06", 110.0)));
+
+        AttributionResult r = service().attribute(
+                LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-06"));
+
+        AttributionRow nvo = find(r, "NVO");
+        assertEquals(0.10, nvo.periodReturn().doubleValue(), 0.001, "period return still reported");
+        assertNull(nvo.annualizedReturn(), "5-day window must not annualise");
+    }
+
+    @Test
+    void thirtyDayWindowStillAnnualises() {
+        repo().saveII(List.of(trade("2025-12-15", "NVO", 10, -1000)));
+        prices().upsertPriceBars(List.of(
+                barGbp("NVO", "2026-06-01", 100.0),
+                barGbp("NVO", "2026-07-01", 110.0)));
+
+        AttributionResult r = service().attribute(
+                LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-01"));
+
+        AttributionRow nvo = find(r, "NVO");
+        assertNotNull(nvo.annualizedReturn(), "30 days is the floor, not below it");
+        // (1.10)^(365.25/30) − 1 ≈ 2.19
+        assertEquals(2.19, nvo.annualizedReturn().doubleValue(), 0.05);
     }
 
     @Test

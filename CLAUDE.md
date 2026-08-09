@@ -107,9 +107,24 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   horizontal bar + sortable table. Per-symbol GBP P&L over a window via
   `AttributionService` (formula: `end_value − start_value + window_cash_flows`). Each
   row also reports a period return (P&L ÷ peak GBP capital deployed in the window) and
-  the same return annualised to 365.25 days. End-value uses live intraday + live FX
+  the same return annualised to 365.25 days — **blank under `MIN_ANNUALIZE_DAYS` (30)**,
+  because compounding a 5-day move 73× yields five-figure percentages that swamp the column
+  (a real +6.7% over 5 days read as 11,299%). End-value uses live intraday + live FX
   when `to == today`, daily close + historical FX otherwise — so totals reconcile with
-  the cash-ledger view.
+  the cash-ledger view. A symbol whose boundary can't be valued (no `price_history`, or no FX
+  rate for its currency) is **excluded from the rows and from every total** and reported in
+  `AttributionResult.excluded`, which the UI renders as a yellow strip. Valuing it at zero
+  instead was silently catastrophic: an FX timeout put every USD position at £0 on the *start*
+  boundary while the end boundary still priced off the cached live rates, manufacturing a
+  ~£299k phantom gain that was indistinguishable from real data (2026-08-09). Boundary prices
+  come from two bulk `PriceHistoryRepository.loadPricesAsOf` queries, **not** whole series —
+  the old `loadPriceSeries` pulled ~245,000 rows per request to read 94 of them, which made a
+  5d window cost the same as `All` (~0.65s → ~0.10s). `% of total` is each row's share of the
+  *net* P&L, so it sums to 100% but inflates past 100% when winners and losers cancel — kept
+  deliberately (the blow-up says the net is small), flagged in the header tooltip. The panel's
+  preset buttons guard against out-of-order responses with an `attrSeq` latch in
+  `runAttribution` — several requests are in flight at once and a slow early one landing last
+  would otherwise repaint the tiles for a window the buttons no longer show.
 
 - **Watchlist** — `GET /watchlist` → JSON, rendered as a table under the Tools group. A
   user-maintained set of symbols (owned or not — *not* unioned with holdings, kept lean by
@@ -280,6 +295,16 @@ To convert native → GBP, **divide** by the rate.
 - `PriceHistoryRepository` — `price_history` (daily OHLCV).
 - `IntradayPriceRepository` — `price_intraday` (1-min closes). `loadLatestIntradayPrices` is a bulk
   query, not N round-trips.
+- `FxRateRepository` — `fx_rates` (one row per `(currency, date)`, rate in the app-wide
+  foreign-per-GBP convention). Cache behind `application/CachedHistoricalFxRateProvider`, which
+  is what `BeanConfiguration` wires as the `HistoricalFxRateProvider` bean — so all ~13
+  `fetchRateSeries` callers inherit it. Published past rates never change, so coverage is the
+  interval `[earliest, latest]` and only an uncovered head/tail is fetched; the tail is
+  re-checked at most once per 15 min per currency (a burst of tab clicks stampeding Frankfurter
+  is what caused the timeouts in the first place). **On a fetch failure it serves what's cached**
+  and only throws when the range is entirely uncached. `PriceFetchScheduler` warms the full
+  history on startup — 2000→today for USD+EUR is one call each, ~13,600 rows total, so a cold
+  start during a Frankfurter outage still prices non-GBP positions. Reads *and* writes degrade.
 - `EarningsDateRepository` — `earnings_dates` (§D earnings-proxy cache: one row per `(symbol, date)`;
   reads/cache-fill degrade, never throw).
 - `KeyValueStore` — file-backed scalar settings, one `<key>.txt` per key under `<db-dir>`:

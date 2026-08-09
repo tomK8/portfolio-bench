@@ -50,11 +50,26 @@ import java.util.TreeMap;
  *
  * <p>Bonds value at {@code qty × price / 100} (per-£100 nominal), matching the convention
  * used by {@link PortfolioValueService} and {@link com.portfolio.domain.PortfolioAggregator}.
+ *
+ * <p><b>A boundary that cannot be valued excludes the symbol</b> — from its row and from every
+ * total — and is reported in {@link AttributionResult#excluded()}. Valuing it at £0 instead
+ * (the old behaviour) is silently catastrophic: when a historical-FX fetch timed out, every USD
+ * position read as £0 at the window start while the end boundary still priced correctly off the
+ * cached live rates, manufacturing a ~£300k phantom gain that looked exactly like real data.
+ * Dropping the row and naming the reason keeps whatever remains internally consistent.
  */
 public class AttributionService {
 
     private static final Logger log = LoggerFactory.getLogger(AttributionService.class);
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+
+    /**
+     * Windows shorter than this report no annualised return. Annualisation is a compounding
+     * extrapolation: a perfectly ordinary +6.7% over 5 days grosses up to {@code 1.067^73 − 1} ≈
+     * 11,299%, which is arithmetically right and analytically worthless — it swamps the column and
+     * says nothing a reader can act on.
+     */
+    private static final int MIN_ANNUALIZE_DAYS = 30;
 
     private final CashTransactionRepository cashRepo;
     private final PriceHistoryRepository priceRepo;
@@ -85,26 +100,12 @@ public class AttributionService {
         List<CashTransaction> txs = cashRepo.loadAllTransactions();
         if (txs.isEmpty()) {
             return new AttributionResult(from.toString(), to.toString(), List.of(),
-                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, List.of());
         }
 
-        Map<String, NavigableMap<LocalDate, PricePoint>> prices = loadPriceSeries(txs);
-        Map<String, NavigableMap<LocalDate, BigDecimal>> fx = preloadFx(from, to);
-
-        // For the end-of-window valuation on today's date, prefer the live intraday quote +
-        // live FX — matches the cash-ledger view's totals, so the two screens reconcile to
-        // today's market rather than to yesterday's price_history close.
-        boolean endIsToday = to.equals(LocalDate.now());
-        Map<String, IntradayPrice> latestIntraday = Map.of();
-        Map<String, BigDecimal> liveRates = Map.of();
-        if (endIsToday) {
-            try {
-                liveRates = liveFxProvider.fetchRates();
-            } catch (Exception e) {
-                log.warn("Could not fetch live FX; end-of-window valuation falls back to historical FX", e);
-            }
-        }
-
+        // ---- replay first: it needs no prices, and its output tells us the only symbols and the
+        // only two dates worth loading prices for. (Loading every traded symbol's full series up
+        // front cost ~245,000 rows per request to read 94 of them.)
         Map<String, BigDecimal> qty = new HashMap<>();
         Map<String, BigDecimal> qtyAtStart = null;
         Map<String, BigDecimal> cashFlowsGbp = new HashMap<>();
@@ -138,7 +139,23 @@ public class AttributionService {
         symbols.addAll(qty.keySet());
         symbols.addAll(cashFlowsGbp.keySet());
 
+        Map<String, String> tickerBySymbol = tickersFor(symbols);
+        Map<String, PriceBar> startBars = barsAsOf(tickerBySymbol, from);
+        Map<String, PriceBar> endBars = from.equals(to) ? startBars : barsAsOf(tickerBySymbol, to);
+        Map<String, NavigableMap<LocalDate, BigDecimal>> fx = preloadFx(from, to);
+
+        // For the end-of-window valuation on today's date, prefer the live intraday quote +
+        // live FX — matches the cash-ledger view's totals, so the two screens reconcile to
+        // today's market rather than to yesterday's price_history close.
+        boolean endIsToday = to.equals(LocalDate.now());
+        Map<String, IntradayPrice> latestIntraday = Map.of();
+        Map<String, BigDecimal> liveRates = Map.of();
         if (endIsToday) {
+            try {
+                liveRates = liveFxProvider.fetchRates();
+            } catch (Exception e) {
+                log.warn("Could not fetch live FX; end-of-window valuation falls back to historical FX", e);
+            }
             Set<String> endHeld = new HashSet<>();
             for (Map.Entry<String, BigDecimal> e : qty.entrySet()) {
                 if (e.getValue().signum() > 0) endHeld.add(e.getKey());
@@ -149,23 +166,36 @@ public class AttributionService {
         long windowDays = ChronoUnit.DAYS.between(from, to);
 
         List<AttributionRow> rows = new ArrayList<>();
+        List<ExcludedSymbol> excluded = new ArrayList<>();
         for (String sym : symbols) {
             BigDecimal qStart = qtyAtStart.getOrDefault(sym, BigDecimal.ZERO);
             BigDecimal qEnd = qty.getOrDefault(sym, BigDecimal.ZERO);
             BigDecimal cf = cashFlowsGbp.getOrDefault(sym, BigDecimal.ZERO);
             if (qStart.signum() == 0 && qEnd.signum() == 0 && cf.signum() == 0) continue;
 
-            BigDecimal startVal = qStart.signum() > 0
-                    ? nullToZero(positionGbp(sym, qStart, from, prices, fx)) : BigDecimal.ZERO;
-            BigDecimal endVal;
+            // A boundary with no position needs no valuation, so a symbol that was only ever a
+            // dividend on an already-sold holding is never excluded for want of a price.
+            Valuation start = qStart.signum() > 0
+                    ? positionGbp(sym, qStart, from, startBars, fx) : Valuation.ZERO;
+            Valuation end;
             if (qEnd.signum() <= 0) {
-                endVal = BigDecimal.ZERO;
+                end = Valuation.ZERO;
             } else if (endIsToday && latestIntraday.containsKey(sym)) {
                 BigDecimal rt = rtPositionGbp(sym, qEnd, latestIntraday.get(sym), liveRates);
-                endVal = (rt != null) ? rt : nullToZero(positionGbp(sym, qEnd, to, prices, fx));
+                end = (rt != null) ? Valuation.of(rt) : positionGbp(sym, qEnd, to, endBars, fx);
             } else {
-                endVal = nullToZero(positionGbp(sym, qEnd, to, prices, fx));
+                end = positionGbp(sym, qEnd, to, endBars, fx);
             }
+            if (start.failed() || end.failed()) {
+                Valuation bad = start.failed() ? start : end;
+                String boundary = start.failed() ? "window start" : "window end";
+                excluded.add(new ExcludedSymbol(sym, bad.reason() + " (" + boundary + ")"));
+                log.warn("Attribution excludes {}: {} at the {}", sym, bad.reason(), boundary);
+                continue;
+            }
+
+            BigDecimal startVal = start.gbp();
+            BigDecimal endVal = end.gbp();
             BigDecimal pnl = endVal.subtract(startVal).add(cf);
             BigDecimal peakCapital = peakCapitalDeployed(
                     startVal, windowFlowsBySymbol.getOrDefault(sym, List.of()));
@@ -182,6 +212,7 @@ public class AttributionService {
                     annualized));
         }
         rows.sort(Comparator.comparing(AttributionRow::pnlGbp).reversed());
+        excluded.sort(Comparator.comparing(ExcludedSymbol::symbol));
 
         BigDecimal total = BigDecimal.ZERO;
         BigDecimal totalStart = BigDecimal.ZERO;
@@ -197,7 +228,8 @@ public class AttributionService {
                 totalStart.setScale(2, RoundingMode.HALF_UP),
                 totalEnd.setScale(2, RoundingMode.HALF_UP),
                 totalCashFlow.setScale(2, RoundingMode.HALF_UP),
-                total.setScale(2, RoundingMode.HALF_UP));
+                total.setScale(2, RoundingMode.HALF_UP),
+                excluded);
     }
 
     // ---- replay ---------------------------------------------------------------
@@ -224,19 +256,39 @@ public class AttributionService {
 
     // ---- valuation ------------------------------------------------------------
 
-    private static BigDecimal positionGbp(String symbol, BigDecimal qty, LocalDate sample,
-                                          Map<String, NavigableMap<LocalDate, PricePoint>> prices,
-                                          Map<String, NavigableMap<LocalDate, BigDecimal>> fx) {
-        NavigableMap<LocalDate, PricePoint> series = prices.get(symbol);
-        if (series == null) return null;
-        Map.Entry<LocalDate, PricePoint> entry = series.floorEntry(sample);
-        if (entry == null) entry = series.firstEntry();
-        PricePoint pp = entry.getValue();
+    /**
+     * A boundary valuation: a GBP amount, or the reason one could not be produced. The two failure
+     * modes have to stay distinguishable — "we hold no price data for this symbol" is a permanent
+     * data gap the user can fix, while "the FX series is missing" is a transient fetch failure that
+     * would otherwise poison an entire currency's worth of positions at once.
+     */
+    private record Valuation(BigDecimal gbp, String reason) {
+
+        private static final Valuation ZERO = new Valuation(BigDecimal.ZERO, null);
+
+        static Valuation of(BigDecimal gbp) {
+            return new Valuation(gbp, null);
+        }
+
+        static Valuation failed(String reason) {
+            return new Valuation(null, reason);
+        }
+
+        boolean failed() {
+            return reason != null;
+        }
+    }
+
+    private static Valuation positionGbp(String symbol, BigDecimal qty, LocalDate sample,
+                                         Map<String, PriceBar> bars,
+                                         Map<String, NavigableMap<LocalDate, BigDecimal>> fx) {
+        PriceBar bar = bars.get(symbol);
+        if (bar == null) return Valuation.failed("no price history");
         // splitFactor unwinds Yahoo's "today's basis" close back to the raw close on `sample`,
         // so qty × price matches the user's basis at the time. PortfolioValueService does
         // the same — keep them in sync if the formula changes.
-        BigDecimal price = BigDecimal.valueOf(pp.close() * pp.splitFactor());
-        String currency = pp.currency();
+        BigDecimal price = BigDecimal.valueOf(bar.close() * bar.splitFactor());
+        String currency = bar.currency();
         if ("GBp".equals(currency)) {
             price = price.movePointLeft(2);
             currency = "GBP";
@@ -244,21 +296,11 @@ public class AttributionService {
         BigDecimal native_ = Instruments.isBond(symbol)
                 ? price.multiply(qty).divide(HUNDRED, 10, RoundingMode.HALF_UP)
                 : price.multiply(qty);
-        return toGbp(native_, currency, sample, fx);
-    }
-
-    private static BigDecimal toGbp(BigDecimal native_, String currency, LocalDate sample,
-                                    Map<String, NavigableMap<LocalDate, BigDecimal>> fx) {
-        if ("GBP".equals(currency)) return native_;
+        if ("GBP".equals(currency)) return Valuation.of(native_);
         NavigableMap<LocalDate, BigDecimal> series = fx.get(currency);
-        if (series == null) return null;
-        BigDecimal rate = HistoricalFxRateProvider.rateOnOrBefore(series, sample);
-        if (rate == null || rate.signum() == 0) return null;
-        return native_.divide(rate, 10, RoundingMode.HALF_UP);
-    }
-
-    private static BigDecimal nullToZero(BigDecimal v) {
-        return v == null ? BigDecimal.ZERO : v;
+        BigDecimal rate = series == null ? null : HistoricalFxRateProvider.rateOnOrBefore(series, sample);
+        if (rate == null || rate.signum() == 0) return Valuation.failed("no " + currency + " FX rate");
+        return Valuation.of(native_.divide(rate, 10, RoundingMode.HALF_UP));
     }
 
     /**
@@ -279,14 +321,15 @@ public class AttributionService {
     }
 
     /**
-     * Annualise a period return over {@code days}. Returns the input unchanged when the window
-     * is &lt;= 0 days (annualisation undefined) and {@code null} when {@code 1 + r} would be
-     * non-positive (total wipeout — annualised value is −100% in the limit, but the {@code pow}
-     * call would underflow to NaN; report as null and let the UI render "—").
+     * Annualise a period return over {@code days}, to a 365.25-day year. Returns {@code null} for
+     * windows under {@link #MIN_ANNUALIZE_DAYS} (the extrapolation is noise at that length) and
+     * when {@code 1 + r} would be non-positive (total wipeout — annualised value is −100% in the
+     * limit, but the {@code pow} call would underflow to NaN; report as null and let the UI
+     * render "—").
      */
     private static BigDecimal annualize(BigDecimal periodReturn, long days) {
         if (periodReturn == null) return null;
-        if (days <= 0) return periodReturn;
+        if (days < MIN_ANNUALIZE_DAYS) return null;
         double base = 1.0 + periodReturn.doubleValue();
         if (base <= 0) return null;
         double annual = Math.pow(base, 365.25 / days) - 1.0;
@@ -324,12 +367,7 @@ public class AttributionService {
      */
     private Map<String, IntradayPrice> loadLatestIntradayBySymbol(Set<String> symbols) {
         if (symbols.isEmpty()) return Map.of();
-        Map<String, String> tickerBySymbol = new LinkedHashMap<>();
-        for (String sym : symbols) {
-            String upper = sym.toUpperCase();
-            String ticker = Instruments.isBond(sym) ? upper : tickerMap.tickerFor(sym);
-            tickerBySymbol.putIfAbsent(upper, ticker);
-        }
+        Map<String, String> tickerBySymbol = tickersFor(symbols);
         Map<String, IntradayPrice> byTicker = intradayRepo.loadLatestIntradayPrices(tickerBySymbol.values());
         Map<String, IntradayPrice> bySymbol = new HashMap<>();
         for (Map.Entry<String, String> e : tickerBySymbol.entrySet()) {
@@ -341,24 +379,32 @@ public class AttributionService {
 
     // ---- preloads -------------------------------------------------------------
 
-    private Map<String, NavigableMap<LocalDate, PricePoint>> loadPriceSeries(List<CashTransaction> txs) {
-        Set<String> symbols = new HashSet<>();
-        for (CashTransaction t : txs) {
-            String s = symbolOf(t);
-            if (s != null && t.type() == TransactionType.TRANSACTION) symbols.add(s);
-        }
-        Map<String, NavigableMap<LocalDate, PricePoint>> out = new HashMap<>();
-        LocalDate earliest = LocalDate.of(2000, 1, 1);
-        LocalDate latest = LocalDate.now();
+    /** Internal symbol → price-feed ticker; gilts are stored under the symbol itself. */
+    private Map<String, String> tickersFor(Set<String> symbols) {
+        Map<String, String> out = new LinkedHashMap<>();
         for (String sym : symbols) {
-            String ticker = Instruments.isBond(sym) ? sym : tickerMap.tickerFor(sym);
-            List<PriceBar> bars = priceRepo.getPriceHistory(ticker, earliest, latest);
-            if (bars.isEmpty()) continue;
-            NavigableMap<LocalDate, PricePoint> series = new TreeMap<>();
-            for (PriceBar b : bars) series.put(b.date(), new PricePoint(b.close(), b.splitFactor(), b.currency()));
-            out.put(sym, series);
+            String upper = sym.toUpperCase();
+            out.putIfAbsent(upper, Instruments.isBond(sym) ? upper : tickerMap.tickerFor(sym));
         }
         return out;
+    }
+
+    /**
+     * The newest bar at or before {@code asOf} per symbol — one bulk query, plus a second only for
+     * symbols with no bar that early, which ceil-fill to their oldest known bar (the same fallback
+     * the old whole-series lookup made with {@code firstEntry()}).
+     */
+    private Map<String, PriceBar> barsAsOf(Map<String, String> tickerBySymbol, LocalDate asOf) {
+        Set<String> tickers = new LinkedHashSet<>(tickerBySymbol.values());
+        Map<String, PriceBar> byTicker = priceRepo.loadPricesAsOf(tickers, asOf);
+        List<String> unpriced = tickers.stream().filter(t -> !byTicker.containsKey(t)).toList();
+        if (!unpriced.isEmpty()) byTicker.putAll(priceRepo.loadEarliestPrices(unpriced));
+        Map<String, PriceBar> bySymbol = new HashMap<>();
+        for (Map.Entry<String, String> e : tickerBySymbol.entrySet()) {
+            PriceBar bar = byTicker.get(e.getValue());
+            if (bar != null) bySymbol.put(e.getKey(), bar);
+        }
+        return bySymbol;
     }
 
     private Map<String, NavigableMap<LocalDate, BigDecimal>> preloadFx(LocalDate from, LocalDate to) {
@@ -377,16 +423,13 @@ public class AttributionService {
 
     // ---- DTOs -----------------------------------------------------------------
 
-    private record PricePoint(double close, double splitFactor, String currency) {
-    }
-
     /**
      * Per-symbol attribution: start/end GBP values, in-window cash flows (signed), the
      * period P&amp;L (= {@code endValueGbp − startValueGbp + cashFlowGbp}), and two
      * return-on-capital metrics. {@code periodReturn} is {@code pnl / peak_capital_deployed}
      * (fractional, e.g. 0.07 = +7%); {@code annualizedReturn} grosses that up to a 365.25-day
-     * year. Both are {@code null} when peak capital is zero (a position the window didn't
-     * fund — e.g. only dividends, no actual exposure).
+     * year, and is null for windows under 30 days. Both are {@code null} when peak capital is
+     * zero (a position the window didn't fund — e.g. only dividends, no actual exposure).
      */
     public record AttributionRow(String symbol,
                                  BigDecimal startValueGbp,
@@ -397,11 +440,16 @@ public class AttributionService {
                                  BigDecimal annualizedReturn) {
     }
 
+    /** A symbol left out of {@code rows} and every total, with why it couldn't be valued. */
+    public record ExcludedSymbol(String symbol, String reason) {
+    }
+
     public record AttributionResult(String from, String to,
                                     List<AttributionRow> rows,
                                     BigDecimal totalStartValueGbp,
                                     BigDecimal totalEndValueGbp,
                                     BigDecimal totalCashFlowGbp,
-                                    BigDecimal totalPnlGbp) {
+                                    BigDecimal totalPnlGbp,
+                                    List<ExcludedSymbol> excluded) {
     }
 }

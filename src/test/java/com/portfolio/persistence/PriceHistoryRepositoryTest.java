@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -35,6 +36,46 @@ class PriceHistoryRepositoryTest {
     private CashTransactionRepository newCashRepo() {
         JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
         return new CashTransactionRepository(cf, new KeyValueStore(dbDir));
+    }
+
+    // ---- bulk as-of lookups --------------------------------------------------------------------
+    // Boundary valuations need two points per symbol, not whole series. AttributionService used to
+    // load ~245,000 rows per request to read 94 of them.
+
+    @Test
+    void loadPricesAsOfReturnsNewestBarAtOrBeforeThatDatePerSymbol() {
+        PriceHistoryRepository repo = newPriceRepo();
+        repo.savePriceBars(List.of(
+                bar("AAA", "2026-01-05", 10.0, 10.0, 1L),
+                bar("AAA", "2026-01-09", 11.0, 11.0, 1L),
+                bar("AAA", "2026-01-20", 12.0, 12.0, 1L),   // after the as-of date
+                bar("BBB", "2026-01-02", 50.0, 50.0, 1L)));
+
+        Map<String, PriceBar> got = repo.loadPricesAsOf(
+                List.of("AAA", "BBB", "CCC"), LocalDate.parse("2026-01-10"));
+
+        assertEquals(2, got.size(), "CCC has no rows at all");
+        assertEquals(LocalDate.parse("2026-01-09"), got.get("AAA").date());
+        assertEquals(11.0, got.get("AAA").close(), 1e-9);
+        assertEquals(50.0, got.get("BBB").close(), 1e-9);
+    }
+
+    @Test
+    void loadPricesAsOfOmitsSymbolsWhoseHistoryStartsLater() {
+        PriceHistoryRepository repo = newPriceRepo();
+        repo.savePriceBars(List.of(bar("LATE", "2026-07-31", 99.0, 99.0, 1L)));
+
+        assertTrue(repo.loadPricesAsOf(List.of("LATE"), LocalDate.parse("2026-07-30")).isEmpty());
+        // ...and loadEarliestPrices is the ceil-fill partner for exactly that case.
+        assertEquals(LocalDate.parse("2026-07-31"),
+                repo.loadEarliestPrices(List.of("LATE")).get("LATE").date());
+    }
+
+    @Test
+    void bulkLookupsOnEmptyInputTouchNothing() {
+        PriceHistoryRepository repo = newPriceRepo();
+        assertTrue(repo.loadPricesAsOf(List.of(), LocalDate.parse("2026-01-01")).isEmpty());
+        assertTrue(repo.loadEarliestPrices(List.of()).isEmpty());
     }
 
     @Test

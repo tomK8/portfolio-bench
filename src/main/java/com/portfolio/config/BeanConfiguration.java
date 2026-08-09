@@ -2,6 +2,7 @@ package com.portfolio.config;
 
 import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.CachingFxRateProvider;
+import com.portfolio.application.CachedHistoricalFxRateProvider;
 import com.portfolio.adapter.CikRegistry;
 import com.portfolio.adapter.EdgarEarningsFetcher;
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
@@ -23,6 +24,7 @@ import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.FxRateRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
@@ -73,9 +75,20 @@ public class BeanConfiguration {
         return new CachingFxRateProvider(new FrankfurterFxClient(), Duration.ofMinutes(15));
     }
 
+    /**
+     * Historical GBP FX, cached on disk. Published past rates never change, so the cache is
+     * indefinitely valid and the API is touched only for an uncovered head or tail — which is what
+     * stops a burst of tab clicks from timing Frankfurter out and silently zeroing every non-GBP
+     * position on a window boundary. Every {@code fetchRateSeries} caller inherits this.
+     */
     @Bean
-    public HistoricalFxRateProvider historicalFxRateProvider() {
-        return new FrankfurterFxClient();
+    public CachedHistoricalFxRateProvider historicalFxRateProvider(FxRateRepository fxRateRepository) {
+        return new CachedHistoricalFxRateProvider(fxRateRepository, new FrankfurterFxClient());
+    }
+
+    @Bean
+    public FxRateRepository fxRateRepository(JdbcConnectionFactory jdbcConnectionFactory) {
+        return new FxRateRepository(jdbcConnectionFactory);
     }
 
     @Bean

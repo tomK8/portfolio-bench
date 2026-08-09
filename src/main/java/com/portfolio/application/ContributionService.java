@@ -21,10 +21,13 @@ import java.util.Map;
  * doesn't go back that far), so it's represented as a flat line at the
  * {@code roth_balance_brought_forward} seed across the same x-range as the other lines.
  *
- * <p><b>II SIPP caveat:</b> some II {@code CONTRIBUTION} rows are "Trf from AJ Bell"
- * internal transfers, not external money. The corresponding outflow doesn't appear on the
- * AJBell side in {@code cash_transactions} (the SIPP cash statement export doesn't record
- * outbound pension transfers), so we treat all classified contributions equally here.
+ * <p><b>Internal transfers:</b> some II {@code CONTRIBUTION} rows are "Trf from AJ Bell"
+ * internal transfers, not external money. The AJ Bell cash statement does record the outbound
+ * leg — a negative "Pension payment requested" / "Transfer Out", also classified
+ * {@code CONTRIBUTION} — so the pair nets to zero in any total, and all classified
+ * contributions can be treated equally here. That holds only while both brokers' statements
+ * are imported: a transfer whose outbound leg hasn't been imported yet reads as new money on
+ * the II line until it is.
  */
 public class ContributionService {
 

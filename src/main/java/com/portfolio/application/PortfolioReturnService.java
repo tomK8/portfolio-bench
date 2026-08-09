@@ -32,10 +32,11 @@ import java.util.Map;
  * {@code G_now / G_then − 1} for the appropriate {@code then}; windows longer than a year are
  * annualised as {@code (G_now / G_then)^(365.25/days) − 1}.
  *
- * <p>Known limitation: II's "Trf from AJ Bell" rows are recorded as contributions on the II
- * side without a matching outflow on the AJBell side (see {@link ContributionService}). That
- * inflates total contributions and depresses computed TWR on those days. The effect is
- * concentrated on transfer dates; trailing windows that don't cross such a date are unaffected.
+ * <p>Internal AJ Bell → II SIPP transfers do not distort this: II's "Trf from AJ Bell" row is
+ * matched by a negative "Pension payment requested" / "Transfer Out" on the AJ Bell side, both
+ * classified {@code CONTRIBUTION}, so the pair nets to zero in {@code C} (see
+ * {@link ContributionService}). A transfer whose outbound leg hasn't been imported yet would
+ * read as new money and depress the TWR on that date until the AJ Bell statement is imported.
  */
 public class PortfolioReturnService {
 
@@ -148,8 +149,11 @@ public class PortfolioReturnService {
      * <ul>
      *   <li><b>Value change</b> — raw {@code end − start}. Includes contributions, so it
      *       flatters any window you paid into.</li>
-     *   <li><b>Gain</b> — {@code value change − contributions in the window}: the money the
-     *       market actually made or lost.</li>
+     *   <li><b>Gain</b> — {@code value change − external flows in the window}: the money the
+     *       market actually made or lost. External flows are reported as two separate figures,
+     *       because they are two different things: {@code contributionsGbp} is money paid in,
+     *       {@code broughtForwardGbp} is an account's opening balance entering the ledger.
+     *       Both must come off the gain; only the first is a contribution.</li>
      *   <li><b>Total return</b> — chain-linked daily TWR across the window,
      *       {@code Π(1 + (V_t − V_{t−1} − C_t) / V_{t−1}) − 1}. Contribution-neutral and
      *       therefore the figure to compare against an index. Same definition as the Returns
@@ -197,11 +201,15 @@ public class PortfolioReturnService {
                     + " — held in this window and valued at zero on both ends.");
         }
 
-        Map<LocalDate, BigDecimal> contribByDate = contributionsByDate();
+        // Kept apart for reporting even though the return maths adds them: one is money paid
+        // in, the other is an account's opening balance arriving in the ledger.
+        Map<LocalDate, BigDecimal> contribByDate = ledgerContributionsByDate();
+        Map<LocalDate, BigDecimal> broughtFwdByDate = broughtForwardByDate();
         Map<LocalDate, BigDecimal> investedFlowsByDate = investedFlowsByDate();
 
         BigDecimal one = BigDecimal.ONE.setScale(SCALE, RoundingMode.HALF_UP);
         BigDecimal contributions = BigDecimal.ZERO;
+        BigDecimal broughtForward = BigDecimal.ZERO;
         BigDecimal growth = anchor.valueGbp().signum() > 0 ? one : null;
         BigDecimal prevV = anchor.valueGbp();
 
@@ -215,8 +223,11 @@ public class PortfolioReturnService {
 
         for (int i = 1; i < values.size(); i++) {
             DailyValue dv = values.get(i);
-            BigDecimal c = contribByDate.getOrDefault(dv.date(), BigDecimal.ZERO);
-            contributions = contributions.add(c);
+            BigDecimal contrib = contribByDate.getOrDefault(dv.date(), BigDecimal.ZERO);
+            BigDecimal bf = broughtFwdByDate.getOrDefault(dv.date(), BigDecimal.ZERO);
+            BigDecimal c = contrib.add(bf);
+            contributions = contributions.add(contrib);
+            broughtForward = broughtForward.add(bf);
             if (growth != null && prevV.signum() > 0) {
                 BigDecimal r = dv.valueGbp().subtract(prevV).subtract(c)
                         .divide(prevV, SCALE, RoundingMode.HALF_UP);
@@ -247,6 +258,14 @@ public class PortfolioReturnService {
                     + anchor.date() + ".");
         }
 
+        BigDecimal externalFlows = contributions.add(broughtForward);
+        if (broughtForward.signum() != 0) {
+            warnings.add(String.format(
+                    "£%,.0f of the external flows is an opening balance brought forward, not "
+                    + "money paid in — an account's recorded history starts inside this window.",
+                    broughtForward));
+        }
+
         BigDecimal startValue = anchor.valueGbp();
         BigDecimal endValue = close.valueGbp();
         BigDecimal valueChange = endValue.subtract(startValue);
@@ -264,7 +283,7 @@ public class PortfolioReturnService {
                 anchor.date().toString(), close.date().toString(), spanDays,
                 endpoint(anchor, usd, eur), endpoint(close, usd, eur),
                 valueChange, valueChangePct,
-                contributions, valueChange.subtract(contributions),
+                contributions, broughtForward, valueChange.subtract(externalFlows),
                 totalReturn, annualise(totalReturn, spanDays), investedReturn,
                 investedFrom == null ? null : investedFrom.toString(),
                 pv.unpricedSymbols(), warnings);
@@ -408,27 +427,51 @@ public class PortfolioReturnService {
     }
 
     /**
-     * Sum every external GBP cash flow per date: ledger {@code CONTRIBUTION} rows in
-     * {@code amountGbp} (FX baked in at import time), plus the Roth USD seed converted at
-     * the FX rate on Roth's earliest ledger date.
+     * Every external GBP cash flow per date — the {@code C} term of the TWR formula. Two
+     * different things land here and the TWR needs both: ledger {@code CONTRIBUTION} rows,
+     * and the Roth USD brought-forward seed converted at the FX rate on Roth's earliest
+     * ledger date. The seed is not money anyone paid in; it is an opening balance for an
+     * account whose recorded history simply starts there. But the portfolio's value still
+     * jumps by it for a non-market reason on that one day, so leaving it out would book the
+     * whole opening balance as a one-day gain.
+     *
+     * <p>Reporting has to keep them apart even though the maths doesn't — see
+     * {@link #ledgerContributionsByDate()} and {@link #broughtForwardByDate()}. Labelling the
+     * combined figure "contributions" made a £138k account opening read as £138k paid in.
      */
     private Map<LocalDate, BigDecimal> contributionsByDate() {
+        Map<LocalDate, BigDecimal> out = ledgerContributionsByDate();
+        for (Map.Entry<LocalDate, BigDecimal> e : broughtForwardByDate().entrySet()) {
+            out.merge(e.getKey(), e.getValue(), BigDecimal::add);
+        }
+        return out;
+    }
+
+    /**
+     * Ledger {@code CONTRIBUTION} rows only, in {@code amountGbp} (FX baked in at import).
+     * Internal AJ Bell → II SIPP transfers appear on both sides — a negative "Pension payment
+     * requested" / "Transfer Out" on AJ Bell against the matching "Trf from AJ Bell" on II —
+     * so they net to zero here, provided both brokers' statements have been imported. A
+     * transfer whose outbound leg is missing would overstate this figure until it is.
+     */
+    private Map<LocalDate, BigDecimal> ledgerContributionsByDate() {
         Map<LocalDate, BigDecimal> out = new HashMap<>();
         for (CashTransaction t : cashRepo.loadContributions()) {
             out.merge(LocalDate.parse(t.transactionDate()),
                     BigDecimal.valueOf(t.amountGbp()), BigDecimal::add);
         }
+        return out;
+    }
+
+    /** The Roth USD opening balance as a single GBP step on Roth's earliest ledger date. */
+    private Map<LocalDate, BigDecimal> broughtForwardByDate() {
         BigDecimal rothSeedUsd = settings.getBigDecimal(
                 CashTransactionRepository.ROTH_BROUGHT_FORWARD_KEY, BigDecimal.ZERO);
         String rothStartStr = cashRepo.earliestTransactionDate(Account.ROTH_IRA);
-        if (rothSeedUsd.signum() > 0 && rothStartStr != null) {
-            LocalDate rothStart = LocalDate.parse(rothStartStr);
-            BigDecimal seedGbp = rothSeedToGbp(rothSeedUsd, rothStart);
-            if (seedGbp.signum() > 0) {
-                out.merge(rothStart, seedGbp, BigDecimal::add);
-            }
-        }
-        return out;
+        if (rothSeedUsd.signum() <= 0 || rothStartStr == null) return Map.of();
+        LocalDate rothStart = LocalDate.parse(rothStartStr);
+        BigDecimal seedGbp = rothSeedToGbp(rothSeedUsd, rothStart);
+        return seedGbp.signum() > 0 ? Map.of(rothStart, seedGbp) : Map.of();
     }
 
     /**
@@ -713,6 +756,7 @@ public class PortfolioReturnService {
                              BigDecimal valueChangeGbp,
                              BigDecimal valueChangePct,
                              BigDecimal contributionsGbp,
+                             BigDecimal broughtForwardGbp,
                              BigDecimal gainGbp,
                              BigDecimal totalReturn,
                              BigDecimal annualisedReturn,
@@ -723,7 +767,7 @@ public class PortfolioReturnService {
 
         static PeriodDiff unavailable(LocalDate from, LocalDate to, String warning) {
             return new PeriodDiff(from.toString(), to.toString(), 0, null, null,
-                    null, null, null, null, null, null, null, null,
+                    null, null, null, null, null, null, null, null, null,
                     List.of(), List.of(warning));
         }
     }

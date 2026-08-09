@@ -301,7 +301,11 @@ To convert native → GBP, **divide** by the rate.
   `fetchRateSeries` callers inherit it. Published past rates never change, so coverage is the
   interval `[earliest, latest]` and only an uncovered head/tail is fetched; the tail is
   re-checked at most once per 15 min per currency (a burst of tab clicks stampeding Frankfurter
-  is what caused the timeouts in the first place). **On a fetch failure it serves what's cached**
+  is what caused the timeouts in the first place) — and a gap the source can never fill costs
+  nothing: a weekend-only gap is skipped outright (Frankfurter follows ECB working days, so on a
+  Sunday the series legitimately ends Friday), and a re-check that returns nothing newer backs off
+  to `NO_PROGRESS_TTL` (1h) instead of re-asking every quarter hour until today's ~16:00 CET
+  publication. A `Clock` is injectable purely so those calendar rules are unit-testable. **On a fetch failure it serves what's cached**
   and only throws when the range is entirely uncached. `PriceFetchScheduler` warms the full
   history on startup — 2000→today for USD+EUR is one call each, ~13,600 rows total, so a cold
   start during a Frankfurter outage still prices non-GBP positions. Reads *and* writes degrade.

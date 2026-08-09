@@ -3929,6 +3929,11 @@
             document.getElementById('pd-change-pct').textContent =
                     data.valueChangePct != null ? pdPctText(data.valueChangePct) : '';
             setPdMoney('pd-contrib', data.contributionsGbp);
+            // Opening balances only exist for some windows; an empty tile reading £0 would
+            // just be a question mark, so the tile is absent unless it applies.
+            var bf = data.broughtForwardGbp == null ? 0 : parseFloat(data.broughtForwardGbp);
+            document.getElementById('pd-bf-tile').style.display = bf === 0 ? 'none' : '';
+            if (bf !== 0) setPdMoney('pd-bf', data.broughtForwardGbp);
             setPdPct('pd-invested', data.investedReturn);
             // The positions chain can start after the window does (a window that opened on
             // cash); say so rather than let the tile read as a same-window comparison.

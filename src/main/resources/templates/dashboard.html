@@ -2517,13 +2517,21 @@
     </p>
     <p class="muted">
         Three numbers answer "how did it do", and they only agree when no money moved:
-        <b>Change</b> is the raw end − start, contributions included. <b>Gain</b> subtracts the
-        contributions paid in during the window — the money the market made. <b>Total return</b>
-        is the chain-linked daily time-weighted return, which is contribution-neutral and so the
-        one to hold against an index; over the full history it reproduces the Returns tab's
-        since-inception figure. <b>Annualised</b> is blank under 30 days — compounding a
-        two-week move 26× is noise. Per-symbol P&amp;L for the same window is on the
-        <b>Attribution</b> tab.
+        <b>Change</b> is the raw end − start, external money included. <b>Gain</b> takes that
+        money back out — the market's own contribution. <b>Total return</b> is the chain-linked
+        daily time-weighted return, which is flow-neutral and so the one to hold against an
+        index; over the full history it reproduces the Returns tab's since-inception figure.
+        <b>Annualised</b> is blank under 30 days — compounding a two-week move 26× is noise.
+        Per-symbol P&amp;L for the same window is on the <b>Attribution</b> tab.
+    </p>
+    <p class="muted">
+        External money is split in two because it is two different things. <b>Contributions</b>
+        is money paid in, from the ledger's contribution rows; an internal AJ&nbsp;Bell → II SIPP
+        transfer nets to zero across them, since the outbound leg is recorded on the AJ Bell side.
+        <b>Brought forward</b> (shown only when it applies) is an account's opening balance
+        arriving in the ledger — the Roth IRA's history starts mid-way, so its opening balance
+        lands on one day as a step. It is not money paid in, but it does have to come off the
+        gain, or the whole opening balance would read as a one-day profit.
     </p>
     <div class="value-warnings" id="pd-warnings" style="display:none;"></div>
     <div class="attr-controls">
@@ -2551,6 +2559,7 @@
             <div class="returns-stat"><span class="label">End value</span><span class="value" id="pd-end">—</span><span class="sub" id="pd-end-date"></span></div>
             <div class="returns-stat"><span class="label">Change</span><span class="value na" id="pd-change">—</span><span class="sub" id="pd-change-pct"></span></div>
             <div class="returns-stat"><span class="label">Contributions</span><span class="value" id="pd-contrib">—</span><span class="sub">paid in</span></div>
+            <div class="returns-stat" id="pd-bf-tile" style="display:none;"><span class="label">Brought forward</span><span class="value" id="pd-bf">—</span><span class="sub">opening balance</span></div>
             <div class="returns-stat"><span class="label">Positions return</span><span class="value na" id="pd-invested">—</span><span class="sub" id="pd-invested-sub">ex-cash drag</span></div>
             <div class="returns-stat"><span class="label">Span (days)</span><span class="value" id="pd-days">—</span></div>
         </div>

@@ -76,6 +76,12 @@ class PortfolioReturnServiceTest {
         return new DailyValue(LocalDate.parse(date), v, v);  // existing fixtures have no cash → invested = total
     }
 
+    /** The outbound leg of an internal transfer — AJ Bell books it as a negative contribution. */
+    private static CashTransaction transferOut(String date, double amountGbp) {
+        return new CashTransaction(date, Account.AJBELL, TransactionType.CONTRIBUTION, "GBP",
+                0.0, amountGbp, "GBP", 1.0, amountGbp, null, null, "Pension payment requested");
+    }
+
     private static CashTransaction contrib(String date, double amountGbp) {
         return new CashTransaction(date, Account.II, TransactionType.CONTRIBUTION, "GBP",
                 0.0, amountGbp, "GBP", 1.0, amountGbp, null, null, "test");
@@ -417,6 +423,67 @@ class PortfolioReturnServiceTest {
         assertEquals(0.10, d.investedReturn().doubleValue(), 1e-9);
         assertEquals("2024-01-02", d.investedFrom(),
                 "the tile must be able to say the positions leg started later than the window");
+    }
+
+
+    @Test
+    void broughtForwardOpeningBalanceIsNotReportedAsAContribution() {
+        // The Roth seed lands on Roth's earliest ledger date as a step in portfolio value.
+        // It must come off the gain (it is not a market move) but it is not money paid in,
+        // and reporting it as a contribution made a £138k account opening read as £138k paid in.
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
+        KeyValueStore kv = new KeyValueStore(dbDir);
+        CashTransactionRepository repo = new CashTransactionRepository(cf, kv);
+        repo.saveRothIra(List.of(new CashTransaction(
+                "2024-01-02", Account.ROTH_IRA, TransactionType.TRANSACTION, "AAPL",
+                1.0, -50.0, "USD", 2.0, -25.0, null, null, "buy")), new BigDecimal("200"));
+        repo.saveII(List.of(contrib("2024-01-03", 10.0)));
+
+        // USD at 2.0 per GBP → the $200 seed is £100.
+        HistoricalFxRateProvider fx = (ccy, from, to) -> {
+            TreeMap<LocalDate, BigDecimal> m = new TreeMap<>();
+            m.put(LocalDate.parse("2024-01-01"), new BigDecimal("2.0"));
+            return m;
+        };
+        PortfolioValueService stub = new PortfolioValueService(null, null, null, null, null) {
+            @Override
+            public PeriodValues dailyValuesIn(LocalDate from, LocalDate to) {
+                return new PeriodValues(List.of(
+                        dv("2024-01-01", "100"),
+                        dv("2024-01-02", "200"),   // +£100 seed, no market move
+                        dv("2024-01-03", "210")    // +£10 contribution, no market move
+                ), List.of());
+            }
+        };
+        PeriodDiff d = new PortfolioReturnService(stub, repo, kv, fx)
+                .periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-03"));
+
+        assertEquals(0, new BigDecimal("10").compareTo(d.contributionsGbp()),
+                "only the ledger contribution counts as paid in");
+        assertEquals(0, new BigDecimal("100").compareTo(d.broughtForwardGbp()),
+                "the opening balance is reported on its own");
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.gainGbp()),
+                "both flows come off the gain — the market did nothing here");
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.totalReturn()),
+                "and neither may show up as return");
+        assertTrue(d.warnings().stream().anyMatch(w -> w.contains("opening balance")),
+                "the window must say an opening balance is inside it: " + d.warnings());
+    }
+
+    @Test
+    void internalTransfersBetweenAccountsNetToZero() {
+        // An AJ Bell → II SIPP transfer is a contribution row on both sides: negative out of
+        // AJ Bell, positive into II. Neither is external money, and they must cancel.
+        PeriodDiff d = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "100")
+        ), List.of(
+                transferOut("2024-01-02", -5000.0),
+                contrib("2024-01-02", 5000.0)
+        )).periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-02"));
+
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.contributionsGbp()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.gainGbp()));
     }
 
 }

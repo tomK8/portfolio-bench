@@ -6,6 +6,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -34,7 +36,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *       {@code [earliest, latest]}; only an uncovered head or tail is ever fetched. In steady
  *       state a request makes <b>no</b> network call at all.</li>
  *   <li>The tail is re-checked at most once per {@link #TAIL_TTL} per currency, so a burst of tab
- *       clicks can't stampede the API — the very thing that broke it.</li>
+ *       clicks can't stampede the API — the very thing that broke it. A gap the source can never
+ *       fill costs nothing: a weekend is skipped outright, and a re-check that doesn't advance the
+ *       series backs off to {@link #NO_PROGRESS_TTL}.</li>
  *   <li>On a fetch failure, serve whatever is cached and log WARN. Only propagate the exception
  *       when the cache holds nothing for the range, preserving the contract callers already
  *       handle (they catch and warn).</li>
@@ -51,18 +55,32 @@ public class CachedHistoricalFxRateProvider implements HistoricalFxRateProvider 
     /** How often the newest end of a currency's series may be re-checked against the API. */
     private static final Duration TAIL_TTL = Duration.ofMinutes(15);
 
+    /**
+     * Backoff after a re-check that fetched nothing newer. Today's rate publishes mid-afternoon
+     * CET, and bank holidays never publish at all, so before then every request would otherwise
+     * pay a pointless round-trip to be told the series still ends yesterday.
+     */
+    private static final Duration NO_PROGRESS_TTL = Duration.ofHours(1);
+
     /** Currencies and start date used by {@link #warm()}; everything else fills in on demand. */
     private static final List<String> WARM_CURRENCIES = List.of("USD", "EUR");
     private static final LocalDate WARM_FROM = LocalDate.of(2000, 1, 1);
 
     private final FxRateRepository repo;
     private final HistoricalFxRateProvider delegate;
+    private final Clock clock;
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
-    private final Map<String, Instant> lastTailAttempt = new ConcurrentHashMap<>();
+    private final Map<String, Instant> nextTailAttempt = new ConcurrentHashMap<>();
 
     public CachedHistoricalFxRateProvider(FxRateRepository repo, HistoricalFxRateProvider delegate) {
+        this(repo, delegate, Clock.systemDefaultZone());
+    }
+
+    /** Test seam: pins "now" so the weekend/backoff rules can be exercised on a fixed calendar. */
+    CachedHistoricalFxRateProvider(FxRateRepository repo, HistoricalFxRateProvider delegate, Clock clock) {
         this.repo = repo;
         this.delegate = delegate;
+        this.clock = clock;
     }
 
     @Override
@@ -85,40 +103,62 @@ public class CachedHistoricalFxRateProvider implements HistoricalFxRateProvider 
         LocalDate earliest = repo.earliest(currency);
         LocalDate latest = repo.latest(currency);
         if (earliest == null || latest == null) {
-            return fetchAndStore(currency, start, end);
+            return fetchAndStore(currency, start, end).failure();
         }
         Exception failure = null;
         if (start.isBefore(earliest)) {
-            failure = fetchAndStore(currency, start, earliest);
+            failure = fetchAndStore(currency, start, earliest).failure();
         }
         // Rates only exist up to today; clamp so a caller's `to.plusDays(1)` doesn't make the tail
         // look permanently missing and re-fetch on every request.
-        LocalDate wantTo = end.isAfter(LocalDate.now()) ? LocalDate.now() : end;
-        if (wantTo.isAfter(latest) && tailDue(currency)) {
-            // Armed here and nowhere else: a cold or head fetch covers a range it was actually
+        LocalDate today = LocalDate.now(clock);
+        LocalDate wantTo = end.isAfter(today) ? today : end;
+        if (wantTo.isAfter(latest) && hasWeekday(latest, wantTo) && tailDue(currency)) {
+            // Scheduled here and nowhere else: a cold or head fetch covers a range it was actually
             // asked for, so it must not throttle a later, genuinely-new tail. What needs guarding
             // is the repeat case — the cache already ends at yesterday, today's rate isn't
             // published yet, so `latest` never advances and every request would re-ask.
-            lastTailAttempt.put(currency, Instant.now());
-            Exception tail = fetchAndStore(currency, latest, wantTo);
-            if (tail != null && failure == null) failure = tail;
+            Fetch tail = fetchAndStore(currency, latest, wantTo);
+            boolean advanced = tail.newest() != null && tail.newest().isAfter(latest);
+            nextTailAttempt.put(currency,
+                    Instant.now(clock).plus(advanced ? TAIL_TTL : NO_PROGRESS_TTL));
+            if (tail.failure() != null && failure == null) failure = tail.failure();
         }
         return failure;
     }
 
-    private boolean tailDue(String currency) {
-        Instant last = lastTailAttempt.get(currency);
-        return last == null || Duration.between(last, Instant.now()).compareTo(TAIL_TTL) >= 0;
+    /**
+     * Is there any day the source could publish in {@code (after, to]}? Frankfurter follows ECB
+     * working days, so a gap made only of weekend dates can never close — on a Sunday the series
+     * legitimately ends on Friday, and re-asking every quarter of an hour until Monday just makes
+     * one unlucky request per interval pay a round-trip for nothing.
+     */
+    private static boolean hasWeekday(LocalDate after, LocalDate to) {
+        for (LocalDate d = after.plusDays(1); !d.isAfter(to); d = d.plusDays(1)) {
+            DayOfWeek dow = d.getDayOfWeek();
+            if (dow != DayOfWeek.SATURDAY && dow != DayOfWeek.SUNDAY) return true;
+        }
+        return false;
     }
 
-    private Exception fetchAndStore(String currency, LocalDate from, LocalDate to) {
+    private boolean tailDue(String currency) {
+        Instant next = nextTailAttempt.get(currency);
+        return next == null || !Instant.now(clock).isBefore(next);
+    }
+
+    /** Outcome of one delegate call: the failure if it threw, and the newest date it returned. */
+    private record Fetch(Exception failure, LocalDate newest) {
+    }
+
+    private Fetch fetchAndStore(String currency, LocalDate from, LocalDate to) {
         try {
             Map<LocalDate, BigDecimal> fetched = delegate.fetchRateSeries(currency, from, to);
             repo.save(currency, fetched);
-            return null;
+            LocalDate newest = fetched.keySet().stream().max(LocalDate::compareTo).orElse(null);
+            return new Fetch(null, newest);
         } catch (Exception e) {
             log.warn("Historical FX fetch failed for {} over {}..{}; serving cached rates", currency, from, to, e);
-            return e;
+            return new Fetch(e, null);
         }
     }
 
@@ -128,7 +168,7 @@ public class CachedHistoricalFxRateProvider implements HistoricalFxRateProvider 
      * a no-op once the cache is populated.
      */
     public void warm() {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(clock);
         for (String ccy : WARM_CURRENCIES) {
             try {
                 fetchRateSeries(ccy, WARM_FROM, today);

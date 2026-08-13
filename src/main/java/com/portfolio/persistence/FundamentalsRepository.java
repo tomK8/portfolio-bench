@@ -15,6 +15,7 @@ import java.sql.Types;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -47,16 +48,29 @@ public class FundamentalsRepository {
                 target_mean_price REAL,
                 extra_json        TEXT,
                 labels_json       TEXT,
+                sector_weights_json TEXT,
+                top_holdings_json   TEXT,
                 missing           INTEGER NOT NULL DEFAULT 0,
                 fetched_at        TEXT    NOT NULL
             )""";
+
+    /**
+     * Added after the table shipped, so existing databases need them bolted on. Same idempotent
+     * pattern as {@code CashTransactionRepository}: attempt, ignore the "duplicate column"
+     * failure on a database that already has them.
+     */
+    private static final String[] MIGRATIONS = {
+            "ALTER TABLE fundamentals_snapshot ADD COLUMN sector_weights_json TEXT",
+            "ALTER TABLE fundamentals_snapshot ADD COLUMN top_holdings_json TEXT"
+    };
 
     private static final String UPSERT_SQL = """
             INSERT INTO fundamentals_snapshot
                 (internal_symbol, currency, price, market_cap, trailing_pe, forward_pe,
                  peg_ratio, beta, week52_high, week52_low, target_mean_price,
-                 extra_json, labels_json, missing, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 extra_json, labels_json, sector_weights_json, top_holdings_json,
+                 missing, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(internal_symbol) DO UPDATE SET
                 currency          = excluded.currency,
                 price             = excluded.price,
@@ -70,6 +84,8 @@ public class FundamentalsRepository {
                 target_mean_price = excluded.target_mean_price,
                 extra_json        = excluded.extra_json,
                 labels_json       = excluded.labels_json,
+                sector_weights_json = excluded.sector_weights_json,
+                top_holdings_json   = excluded.top_holdings_json,
                 missing           = excluded.missing,
                 fetched_at        = excluded.fetched_at""";
 
@@ -80,6 +96,13 @@ public class FundamentalsRepository {
         this.connections = connections;
         try (Connection conn = connections.open(); Statement ddl = conn.createStatement()) {
             ddl.execute(CREATE_TABLE);
+            for (String migration : MIGRATIONS) {
+                try {
+                    ddl.execute(migration);
+                } catch (java.sql.SQLException alreadyApplied) {
+                    // Column already present — the table was created with it, or a prior run added it.
+                }
+            }
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise fundamentals_snapshot table", e);
         }
@@ -101,8 +124,12 @@ public class FundamentalsRepository {
             setNullableDecimal(ps, 11, q.targetMeanPrice());
             ps.setString(12, mapper.writeValueAsString(q.extra() == null ? Map.of() : q.extra()));
             ps.setString(13, mapper.writeValueAsString(q.labels() == null ? Map.of() : q.labels()));
-            ps.setInt(14, q.missing() ? 1 : 0);
-            ps.setString(15, fetchedAt.toString());
+            ps.setString(14, mapper.writeValueAsString(
+                    q.sectorWeights() == null ? Map.of() : q.sectorWeights()));
+            ps.setString(15, mapper.writeValueAsString(
+                    q.topHoldings() == null ? List.of() : q.topHoldings()));
+            ps.setInt(16, q.missing() ? 1 : 0);
+            ps.setString(17, fetchedAt.toString());
             ps.executeUpdate();
         } catch (Exception e) {
             log.warn("Could not save fundamentals for {}", internalSymbol, e);
@@ -118,7 +145,8 @@ public class FundamentalsRepository {
              ResultSet rs = st.executeQuery(
                      "SELECT internal_symbol, currency, price, market_cap, trailing_pe, forward_pe, " +
                              "peg_ratio, beta, week52_high, week52_low, target_mean_price, " +
-                             "extra_json, labels_json, missing, fetched_at " +
+                             "extra_json, labels_json, sector_weights_json, top_holdings_json, " +
+                             "missing, fetched_at " +
                              "FROM fundamentals_snapshot ORDER BY internal_symbol")) {
             while (rs.next()) {
                 String sym = rs.getString(1);
@@ -138,8 +166,10 @@ public class FundamentalsRepository {
                         readDecimal(rs, 11),
                         extra,
                         labels,
-                        rs.getInt(14) != 0);
-                out.put(sym, new Cached(q, Instant.parse(rs.getString(15))));
+                        parseSectorWeights(rs.getString(14)),
+                        parseFundHoldings(rs.getString(15)),
+                        rs.getInt(16) != 0);
+                out.put(sym, new Cached(q, Instant.parse(rs.getString(17))));
             }
         } catch (Exception e) {
             log.warn("Could not load fundamentals snapshot", e);
@@ -164,6 +194,26 @@ public class FundamentalsRepository {
         } catch (Exception e) {
             log.warn("Could not parse fundamentals labels JSON", e);
             return Map.of();
+        }
+    }
+
+    private Map<String, BigDecimal> parseSectorWeights(String json) {
+        if (json == null || json.isBlank()) return Map.of();
+        try {
+            return mapper.readValue(json, new TypeReference<Map<String, BigDecimal>>() {});
+        } catch (Exception e) {
+            log.warn("Could not parse fund sector-weights JSON", e);
+            return Map.of();
+        }
+    }
+
+    private List<QuoteSummary.FundHolding> parseFundHoldings(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            return mapper.readValue(json, new TypeReference<List<QuoteSummary.FundHolding>>() {});
+        } catch (Exception e) {
+            log.warn("Could not parse fund top-holdings JSON", e);
+            return List.of();
         }
     }
 

@@ -103,6 +103,8 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   snapshot of the full breakdown on any chosen day. Weekly cadence (~550 samples
   over a 10-year history) via `AllocationService`; latest sample always pinned to
   today so the snapshot reflects current state even mid-week.
+  **Sector & AI/Tech block** sits at the **top of the Breakdown sub-view**
+  (`GET /allocation/sectors` → `SectorBreakdownService`) — see the Sector section below.
 - **Attribution** — `GET /attribution?from=YYYY-MM-DD&to=YYYY-MM-DD` → JSON, Chart.js
   horizontal bar + sortable table. Per-symbol GBP P&L over a window via
   `AttributionService` (formula: `end_value − start_value + window_cash_flows`). Each
@@ -1011,6 +1013,59 @@ data says so. Read-only; never touches the ledger.
   never by `report()`**. Standard 30y fetch suffices (no deep-lookback special case — the cohort
   all lists post-1996).
 
+## Sector & AI/Tech breakdown
+
+Current-snapshot composition by sector, rendered at the **top of Allocation → Breakdown** (the
+existing charts shift down). `GET /allocation/sectors` → `SectorBreakdownService`. Two
+**orthogonal** answers from one pass, which is the whole design: the sector split is a partition
+(buckets sum to the portfolio total), while **AI/Tech cuts across buckets** — GICS files
+GOOG/META/NFLX under Communication Services and AMZN/TSLA under Consumer Cyclical, so a
+sector-only rollup reads Tech at ~11% when the real AI/Tech figure is ~34% of total / ~44% of
+invested.
+
+- **Values** come from `AllocationService.currentPoint()` — the single-sample form of
+  `timeline()` (same idiom as `PortfolioValueService.dailyValuesIn`), sharing one `replay()` so
+  the block cannot disagree with the charts beneath it. The ledger still replays from its first
+  row, but none of the ~550 weekly snapshots are valued. **Don't use `SyncFromCashService.sync()`**
+  here — it hits the network for FX on every call, throws on failure, and drops equities with no
+  intraday quote.
+- **`domain.SectorBucket`** — 14 buckets incl. `FIXED_INCOME`/`CASH`/`COMMODITIES` as top-level
+  (so equity percentages aren't diluted by gilts or idle cash) and `UNCLASSIFIED`.
+  `fromYahooSector` accepts **both** Yahoo spellings — display form from `summaryProfile`
+  ("Financial Services") and snake_case from `topHoldings` ("financial_services") — which is what
+  lets a fund's constituent sectors and a directly-held stock's sector be compared at all.
+- **`domain.SectorClassifier`** (framework-free, unit-tested). Resolution order:
+  `Instruments.isBond` → `override.<SYMBOL>` → **fund look-through** → Yahoo sector →
+  `UNCLASSIFIED`. Anything unclassifiable is surfaced by name in an amber strip, never absorbed
+  into a neighbouring bucket (same discipline as Attribution's `excluded`).
+- **Fund look-through is fetched, never maintained.** Yahoo's `topHoldings` module (added to the
+  existing `YahooQuoteSummaryFetcher` module list — **zero extra HTTP calls**, those ETFs were
+  already being fetched) returns `sectorWeightings` + top-10 `holdings`; both persist as JSON
+  columns on `fundamentals_snapshot` and refresh with `FundamentalsFetchJob`. A hand-written
+  weight table was rejected because it would have been **wrong on day one**: MCTS reads as a
+  semis fund by name but is 29.8% tech / 23.4% consumer / 18.6% comms (Tencent, Alibaba, CATL —
+  it's China tech), and EQQQ is 57.8% tech, not the ~100% an eyeball guess suggests. A fund that
+  stops returning weights falls to `UNCLASSIFIED` and is surfaced — never served stale.
+  Weights are normalised by their own sum (Yahoo's total ~1.0001) and the rounding remainder is
+  pushed onto the largest bucket, so **look-through never creates or destroys value** — asserted
+  in `SectorClassifierTest`.
+- **AI/Tech share.** Direct: sector is Technology, **or** the symbol is in `aitech.include`.
+  Fund: the `technology` weight in full, **plus** each named top-10 constituent on the list whose
+  own sector is *not* Technology — the **double-count guard** (NVDA/AAPL/MSFT are already inside
+  the technology weight). A constituent with no cached sector is **skipped**, keeping the result
+  a genuine **lower bound**; Yahoo names only the top 10 (~46% of EQQQ), so the UI renders it as
+  `≥` with the name-coverage %.
+- **`resources/sectors.properties`** holds only *judgements*, nothing that drifts: `override.*`
+  for bullion ETCs Yahoo has no sector for, and `aitech.include` (GOOG/GOOGL/META/AMZN/NFLX +
+  TSLA/BABA; V/MA and LSEG/REL deliberately excluded). No weights, no as-of dates.
+- **UI**: basis toggle (% of total / % of invested, both computed server-side so it toggles
+  without a refetch), AI/Tech tile split direct vs via-fund, doughnut, table with a
+  **direct / via-fund** column keeping the inferred part visible, and a collapsible per-fund
+  provenance table. The block lives in its **own `#sector-block` container**, and `loadSectors`
+  passes that id to `panelLoadFailed`/`clearPanelError` — passing the sub-view id would destroy
+  the allocation charts' canvases on a sectors failure. Two independent latches
+  (`loadBreakdownSubview` calls both) so one endpoint's blip doesn't take the other down.
+
 ## Earnings calendar
 
 Read-only earnings calendar (Earnings tab, under Tools). `GET /earnings` → JSON, rendered client-side
@@ -1043,7 +1098,30 @@ deliberately a **separate port** (`port/EarningsCalendarFeed`, `forDate(LocalDat
   can't fan out. Market-cap floor filters the per-day tables (the "major" filter) but **never**
   `myHoldings`. Held set = `held_symbols` KV (the /sync-persisted holdings); US internal symbols equal
   their US tickers so a direct membership test suffices.
-- `web/EarningsController` — `GET /earnings?back=&forward=&minCapB=&refresh=`. `minCapB` is `$`
-  **billions** (UI select), converted to whole dollars. No backfill/mutation endpoints — a pure feed
-  read, independent of the price/cash pipelines (like Open orders). Not wired into
-  `PriceFetchSupport` (no Yahoo prices involved).
+- `web/EarningsController` — `GET /earnings?back=&forward=&holdingsForward=&minCapB=&refresh=`.
+  `minCapB` is `$` **billions** (UI select), converted to whole dollars. No backfill/mutation
+  endpoints — a pure feed read, independent of the price/cash pipelines (like Open orders). Not
+  wired into `PriceFetchSupport` (no Yahoo prices involved).
+
+**Your-holdings section (ranked by position size).** Above the per-day tables, the tab renders
+every held position ordered by GBP value, with its portfolio weight beside the date/session/EPS
+estimate. `holdingsForward` is a **separate look-ahead** from the daily tables' `forward` (default
+21d vs 3d) — browsing the market wants a few days, "when do my own positions report" wants a few
+weeks; the day loop scans `max(forward, holdingsForward)` but only `forward` becomes a `Day`.
+`MAX_FORWARD` was raised 14 → 45 for this (each extra date is one cached GET; past dates cache
+forever, future share the 3h `REFRESH_TTL`).
+
+Position sizes come from `AllocationService.currentPoint()` — the same snapshot the sector block
+uses — and **degrade**: on failure the section still renders, unranked, plus a warning.
+`HoldingRow.state` is the load-bearing part, separating three things a blank row conflates:
+- `REPORTING` — a date was found;
+- `NOT_COVERED` — a **non-US listing this US-only feed never carries**, detected by a dotted
+  exchange suffix on `YahooTickerMap.tickerFor` (`.L/.PA/.AS/.DE`). This correctly leaves **ASML
+  covered** (it maps to itself = the Nasdaq ADR line). Without this state, LGEN (5.0%) and BNP
+  (4.6%) — the #2 and #3 single-name positions — were indistinguishable from names with nothing
+  due. 12 held names currently land here.
+- `NONE_SCHEDULED` — covered, nothing due in the window.
+
+Funds and bonds are **dropped entirely** (no earnings to report). Funds are identified by a
+non-empty cached `sectorWeights` (the same `topHoldings` data the sector block uses) — needed
+because every held ETF has a `.L` ticker and would otherwise be mislabelled "not covered".

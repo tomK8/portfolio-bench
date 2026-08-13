@@ -25,6 +25,8 @@ public class EarningsController {
     /**
      * @param back    calendar days before today (default 2)
      * @param forward calendar days after today (default 3)
+     * @param holdingsForward look-ahead for the holdings section only (default 21) — separate from
+     *                {@code forward} because "when do my own positions report" is worth more notice
      * @param minCapB market-cap floor in <b>$ billions</b> for the per-day tables (0/absent = all) —
      *                the "major earnings" filter; never applied to the user's own holdings
      * @param refresh bypass cache freshness and re-pull even today's roster (the Refresh button)
@@ -34,12 +36,13 @@ public class EarningsController {
     public EarningsCalendarReport earnings(
             @RequestParam(name = "back", defaultValue = "2") int back,
             @RequestParam(name = "forward", defaultValue = "3") int forward,
+            @RequestParam(name = "holdingsForward", defaultValue = "21") int holdingsForward,
             @RequestParam(name = "minCapB", required = false) Double minCapB,
             @RequestParam(name = "refresh", defaultValue = "false") boolean refresh) {
 
         Long minMarketCap = (minCapB != null && minCapB > 0)
                 ? Math.round(minCapB * 1_000_000_000d)
                 : null;
-        return earningsService.report(back, forward, minMarketCap, refresh);
+        return earningsService.report(back, forward, holdingsForward, minMarketCap, refresh);
     }
 }

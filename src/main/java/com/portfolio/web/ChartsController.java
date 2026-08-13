@@ -24,6 +24,8 @@ import com.portfolio.application.PortfolioRiskService;
 import com.portfolio.application.PortfolioRiskService.RiskTimeline;
 import com.portfolio.application.PortfolioValueService;
 import com.portfolio.application.PortfolioValueService.ValueTimeline;
+import com.portfolio.application.SectorBreakdown;
+import com.portfolio.application.SectorBreakdownService;
 import com.portfolio.application.PositionDetailService;
 import com.portfolio.application.PositionDetailService.PositionDetail;
 import com.portfolio.application.TargetAllocationService;
@@ -61,6 +63,7 @@ public class ChartsController {
     private final BenchmarkReturnService benchmarkReturnService;
     private final AllocationService allocationService;
     private final TargetAllocationService targetAllocationService;
+    private final SectorBreakdownService sectorBreakdownService;
     private final AttributionService attributionService;
     private final DividendIncomeService dividendIncomeService;
     private final DividendAuditService dividendAuditService;
@@ -77,6 +80,7 @@ public class ChartsController {
                             BenchmarkReturnService benchmarkReturnService,
                             AllocationService allocationService,
                             TargetAllocationService targetAllocationService,
+                            SectorBreakdownService sectorBreakdownService,
                             AttributionService attributionService,
                             DividendIncomeService dividendIncomeService,
                             DividendAuditService dividendAuditService,
@@ -92,6 +96,7 @@ public class ChartsController {
         this.benchmarkReturnService = benchmarkReturnService;
         this.allocationService = allocationService;
         this.targetAllocationService = targetAllocationService;
+        this.sectorBreakdownService = sectorBreakdownService;
         this.attributionService = attributionService;
         this.dividendIncomeService = dividendIncomeService;
         this.dividendAuditService = dividendAuditService;
@@ -201,6 +206,17 @@ public class ChartsController {
     @ResponseBody
     public AllocationTimeline allocation() {
         return allocationService.timeline();
+    }
+
+    /**
+     * Sector + AI/Tech breakdown of the current portfolio, shown above the allocation charts.
+     * Funds are looked through to their own sector weights, so an index ETF contributes to the
+     * buckets it actually holds rather than sitting as one opaque row.
+     */
+    @GetMapping("/allocation/sectors")
+    @ResponseBody
+    public SectorBreakdown allocationSectors() {
+        return sectorBreakdownService.breakdown();
     }
 
     @GetMapping("/allocation/targets")

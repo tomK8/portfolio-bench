@@ -1486,6 +1486,7 @@
         var sectorData = null;
         var sectorDonut = null;
         var sectorBasis = 'total';   // 'total' | 'invested'
+        var sectorEscBound = false;  // document-level, so it can't go through bindOnce
         // Bucket → colour. Fixed per bucket rather than positional, so a bucket keeps its
         // colour as rows reorder; grey tones are reserved for the non-equity buckets and
         // red for Unclassified, which is meant to draw the eye.
@@ -1515,6 +1516,22 @@
                     });
                     renderSectors();
                 });
+                // Delegated: renderSectorTable replaces the table's innerHTML on every basis
+                // toggle, so per-row listeners would be lost. The <table> element itself persists.
+                bindOnce(document.getElementById('sector-table'), 'click', function (ev) {
+                    var tr = ev.target.closest('tr[data-bucket]');
+                    if (tr) openSectorDetail(tr.getAttribute('data-bucket'));
+                });
+                bindOnce(document.getElementById('sector-detail-close'), 'click', closeSectorDetail);
+                bindOnce(document.getElementById('sector-detail-modal'), 'click', function (ev) {
+                    if (ev.target.id === 'sector-detail-modal') closeSectorDetail();
+                });
+                if (!sectorEscBound) {
+                    sectorEscBound = true;
+                    document.addEventListener('keydown', function (ev) {
+                        if (ev.key === 'Escape') closeSectorDetail();
+                    });
+                }
                 renderSectors();
             }).catch(function (e) {
                 sectorsLoaded = false;
@@ -1549,6 +1566,54 @@
             renderSectorAiContributors(d);
             renderSectorUnclassified(d);
             renderSectorFundNotes(d);
+        }
+
+        /**
+         * Drill-down popup: every position feeding one bucket. The unit is the position, not the
+         * underlying company — a fund shows as one row carrying its slice, because Yahoo names
+         * only a fund's top 10 and several of ours resolve almost none of themselves. Listing
+         * positions keeps the rows summing to the bucket exactly.
+         */
+        function openSectorDetail(bucket) {
+            if (!sectorData) return;
+            var row = (sectorData.rows || []).filter(function (r) { return r.bucket === bucket; })[0];
+            if (!row) return;
+
+            document.getElementById('sector-detail-title').textContent = row.label;
+            var pct = sectorPct(row);
+            document.getElementById('sector-detail-sub').textContent =
+                fmtMoney(parseFloat(row.gbp)) + '  ·  ' + fmtPct(pct)
+                + (sectorBasis === 'invested' ? ' of invested' : ' of total');
+
+            var list = row.constituents || [];
+            var html = '<tr><th class="lbl">Holding</th><th>Value</th><th>% of sector</th>'
+                + '<th class="lbl">How</th></tr>';
+            if (!list.length) {
+                html += '<tr><td colspan="4" class="muted">No detail available.</td></tr>';
+            }
+            var isCash = bucket === 'CASH';
+            list.forEach(function (c) {
+                var how = isCash ? 'cash balance'
+                    : c.viaFund
+                        ? 'via fund' + (c.shareOfPosition != null
+                            ? ' (' + fmtPct(c.shareOfPosition) + ' of ' + escapeHtml(c.label) + ')' : '')
+                        : 'held directly';
+                html += '<tr>'
+                    + '<td class="lbl">' + escapeHtml(c.label) + '</td>'
+                    + '<td>' + fmtMoney(parseFloat(c.gbp)) + '</td>'
+                    + '<td>' + fmtPct(c.pctOfBucket) + '</td>'
+                    + '<td class="lbl muted' + (c.viaFund ? ' sector-viafund' : '') + '">' + how + '</td>'
+                    + '</tr>';
+            });
+            html += '<tr style="font-weight:600;border-top:2px solid #ccc;">'
+                + '<td class="lbl">Total</td><td>' + fmtMoney(parseFloat(row.gbp)) + '</td>'
+                + '<td>100.0%</td><td></td></tr>';
+            document.getElementById('sector-detail-table').innerHTML = html;
+            document.getElementById('sector-detail-modal').classList.add('open');
+        }
+
+        function closeSectorDetail() {
+            document.getElementById('sector-detail-modal').classList.remove('open');
         }
 
         var SECTOR_AI_SOURCE = {
@@ -1649,6 +1714,15 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    // The dataset is built from `rows` in order, so the clicked element's index
+                    // maps straight back to a bucket — clicking a slice is the same gesture as
+                    // clicking its table row.
+                    onClick: function (evt, elements) {
+                        if (elements && elements.length) {
+                            var r = rows[elements[0].index];
+                            if (r) openSectorDetail(r.bucket);
+                        }
+                    },
                     plugins: {
                         legend: { position: 'right', labels: { boxWidth: 12, font: { size: 10 } } },
                         tooltip: {
@@ -1671,7 +1745,8 @@
                 + '<th>Direct</th><th>Via fund</th></tr>';
             rows.forEach(function (r) {
                 var viaFund = parseFloat(r.viaFundGbp || 0);
-                html += '<tr>'
+                html += '<tr class="sector-clickable" data-bucket="' + escapeHtml(r.bucket) + '"'
+                    + ' title="Click to see what makes up ' + escapeHtml(r.label) + '">'
                     + '<td class="lbl"><span style="display:inline-block;width:9px;height:9px;'
                     + 'border-radius:2px;margin-right:6px;background:'
                     + (SECTOR_COLORS[r.bucket] || '#999') + '"></span>' + escapeHtml(r.label) + '</td>'

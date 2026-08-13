@@ -1023,9 +1023,12 @@ GOOG/META/NFLX under Communication Services and AMZN/TSLA under Consumer Cyclica
 sector-only rollup reads Tech at ~11% when the real AI/Tech figure is ~34% of total / ~44% of
 invested.
 
-- **Values** come from `AllocationService.currentPoint()` — the single-sample form of
+- **Values** come from `AllocationService.currentSnapshot()` — the single-sample form of
   `timeline()` (same idiom as `PortfolioValueService.dailyValuesIn`), sharing one `replay()` so
-  the block cannot disagree with the charts beneath it. The ledger still replays from its first
+  the block cannot disagree with the charts beneath it. It returns the point **plus the
+  per-`(account, currency)` cash detail** the replay tracks and otherwise discards; that detail is
+  deliberately **not** on `AllocationPoint`, which `GET /allocation` serialises ~550 times.
+  `currentPoint()` remains as the thin accessor (`EarningsCalendarService` uses it). The ledger still replays from its first
   row, but none of the ~550 weekly snapshots are valued. **Don't use `SyncFromCashService.sync()`**
   here — it hits the network for FX on every call, throws on failure, and drops equities with no
   intraday quote.
@@ -1081,7 +1084,21 @@ invested.
   visible, plus two collapsible sections — per-fund look-through provenance, and a per-position
   breakdown of the AI/Tech figure (`AiContributor.source` = `TECHNOLOGY_SECTOR` / `TAGGED` /
   `FUND`; a `TAGGED` row names the sector it's actually filed under, which is the whole
-  explanation in one cell). The block lives in its **own `#sector-block` container**, and `loadSectors`
+  explanation in one cell).
+- **Sector drill-down.** Clicking a table row **or its doughnut segment** opens
+  `#sector-detail-modal` (standard `.modal-backdrop` + `open` class; Close / backdrop / Escape all
+  dismiss) listing every position feeding that bucket — `Row.constituents`, riding on the same
+  payload, no extra fetch. The unit is the **position, not the underlying company**: a fund is one
+  row carrying its slice ("EQQQ — via fund (17.8% of EQQQ)"). Name-level decomposition was
+  rejected on the data — Yahoo publishes only a fund's top 10 and the foreign lines aren't in the
+  fundamentals cache, so resolvable coverage runs EQQQ 46.3% / SPX5 36.4% / **RBTX 5.9% / MCTS
+  0%**; a popup built on that would look like a full decomposition while showing a third of one.
+  Positions keep every penny accounted for — constituents sum to the bucket and `pctOfBucket` sums
+  to 1. The `CASH` bucket's constituents are the per-`(account, currency)` balances. The row
+  click-handler is **delegated from the `<table>`**, since `renderSectorTable` replaces its
+  innerHTML on every basis toggle.
+
+  The block lives in its **own `#sector-block` container**, and `loadSectors`
   passes that id to `panelLoadFailed`/`clearPanelError` — passing the sub-view id would destroy
   the allocation charts' canvases on a sectors failure. Two independent latches
   (`loadBreakdownSubview` calls both) so one endpoint's blip doesn't take the other down.

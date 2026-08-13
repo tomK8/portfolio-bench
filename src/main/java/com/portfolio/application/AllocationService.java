@@ -66,7 +66,23 @@ public class AllocationService {
     }
 
     public AllocationTimeline timeline() {
-        return new AllocationTimeline(replay(true));
+        return new AllocationTimeline(replay(true).points());
+    }
+
+    /**
+     * Today's composition plus the cash detail behind it — the per-{@code (account, currency)}
+     * balances the replay already tracks and otherwise discards.
+     *
+     * <p>Kept off {@link AllocationPoint} deliberately: that record is serialised ~550 times by
+     * {@code GET /allocation}, and hanging a map off every point would bloat the chart payload for
+     * data only the sector drill-down needs.
+     *
+     * @return the current snapshot, or {@code null} when the ledger is empty
+     */
+    public CurrentSnapshot currentSnapshot() {
+        Replay r = replay(false);
+        if (r.points().isEmpty()) return null;
+        return new CurrentSnapshot(r.points().get(r.points().size() - 1), r.cashGbpByAccountCcy());
     }
 
     /**
@@ -81,13 +97,13 @@ public class AllocationService {
      * @return the current point, or {@code null} when the ledger is empty
      */
     public AllocationPoint currentPoint() {
-        List<AllocationPoint> points = replay(false);
-        return points.isEmpty() ? null : points.get(points.size() - 1);
+        CurrentSnapshot snapshot = currentSnapshot();
+        return snapshot == null ? null : snapshot.point();
     }
 
-    private List<AllocationPoint> replay(boolean weeklySamples) {
+    private Replay replay(boolean weeklySamples) {
         List<CashTransaction> txs = cashRepo.loadAllTransactions();
-        if (txs.isEmpty()) return List.of();
+        if (txs.isEmpty()) return new Replay(List.of(), Map.of());
 
         LocalDate start = LocalDate.parse(txs.get(0).transactionDate());
         LocalDate today = LocalDate.now();
@@ -137,7 +153,28 @@ public class AllocationService {
         if (points.isEmpty() || !points.get(points.size() - 1).date().equals(today.toString())) {
             points.add(snapshot(today, qty, cashByAcctCcy, prices, fx));
         }
-        return points;
+        return new Replay(points, cashDetailGbp(cashByAcctCcy, today, fx));
+    }
+
+    /**
+     * Per-{@code (account, currency)} cash in GBP at {@code sample}. Uses the same {@link #toGbp}
+     * conversion {@link #snapshot} applies to the aggregate, so the parts reconcile to the
+     * {@code cashGbp} the point reports rather than drifting on a second rounding path.
+     */
+    private Map<String, BigDecimal> cashDetailGbp(Map<String, BigDecimal> cashByAcctCcy,
+                                                  LocalDate sample,
+                                                  Map<String, NavigableMap<LocalDate, BigDecimal>> fx) {
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> e : cashByAcctCcy.entrySet()) {
+            BigDecimal n = e.getValue();
+            if (n.signum() == 0) continue;
+            String ccy = e.getKey().substring(e.getKey().indexOf('|') + 1);
+            BigDecimal g = toGbp(n, ccy, sample, fx);
+            if (g != null && g.signum() != 0) {
+                out.put(e.getKey(), g.setScale(2, RoundingMode.HALF_UP));
+            }
+        }
+        return out;
     }
 
     private AllocationPoint snapshot(LocalDate sample,
@@ -275,5 +312,16 @@ public class AllocationService {
     }
 
     public record AllocationTimeline(List<AllocationPoint> points) {
+    }
+
+    /**
+     * Today's point plus the cash detail behind its {@code cashGbp}, keyed
+     * {@code "<Account.dbValue()>|<CCY>"} (e.g. {@code "AJBell|GBP"}).
+     */
+    public record CurrentSnapshot(AllocationPoint point, Map<String, BigDecimal> cashGbpByAccountCcy) {
+    }
+
+    /** Internal replay result — the samples plus the final cash detail, which the points drop. */
+    private record Replay(List<AllocationPoint> points, Map<String, BigDecimal> cashGbpByAccountCcy) {
     }
 }

@@ -810,6 +810,11 @@
 
         .sector-viafund { color: #888; }
 
+        #sector-table tr.sector-clickable { cursor: pointer; }
+        #sector-table tr.sector-clickable:hover { background: #eef4fb; }
+        html[data-theme="dark"] #sector-table tr.sector-clickable:hover { background: #23303d; }
+        #sector-donut { cursor: pointer; }
+
         .whatif-summary {
             display: flex;
             gap: 1.5rem;
@@ -1388,6 +1393,17 @@
             <summary class="muted">Fund look-through detail</summary>
             <div class="full-bleed"><table class="swing-tbl" id="sector-fund-table"></table></div>
         </details>
+
+        <div id="sector-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+            <div class="modal-box" style="max-width: 640px;">
+                <h3 id="sector-detail-title">—</h3>
+                <div id="sector-detail-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;"></div>
+                <table class="swing-tbl" id="sector-detail-table"></table>
+                <div class="modal-actions">
+                    <button id="sector-detail-close" type="button">Close</button>
+                </div>
+            </div>
+        </div>
         </div>
 
         <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid #e2e2e2;">

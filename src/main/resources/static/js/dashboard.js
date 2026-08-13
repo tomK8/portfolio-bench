@@ -314,14 +314,22 @@
 
         var allocPanelInitialized = false;
         function setupAllocationPanel() {
-            loadAllocation();
+            loadBreakdownSubview();
             if (allocPanelInitialized) return;
             allocPanelInitialized = true;
             bindSubviewToggle(document.getElementById('alloc-toggle'), {
-                'alloc-view-breakdown': loadAllocation,
+                'alloc-view-breakdown': loadBreakdownSubview,
                 'alloc-view-concentration': loadConcentration,
                 'alloc-view-currency': loadCurrency
             });
+        }
+
+        // The Breakdown sub-view holds two independent fetches. They keep separate latches so a
+        // failure in one still leaves the other retryable on its own — a shared latch would let a
+        // sector-endpoint blip take the charts down with it.
+        function loadBreakdownSubview() {
+            loadSectors();
+            loadAllocation();
         }
 
         var fundPanelInitialized = false;
@@ -1472,6 +1480,195 @@
         ];
         var ALLOC_OTHER_COLOR = '#cccccc';
         var ALLOC_TOP_N = 12;
+
+        // ---- sector & AI/Tech block (top of the Breakdown sub-view) ---------------
+        var sectorsLoaded = false;
+        var sectorData = null;
+        var sectorDonut = null;
+        var sectorBasis = 'total';   // 'total' | 'invested'
+        // Bucket → colour. Fixed per bucket rather than positional, so a bucket keeps its
+        // colour as rows reorder; grey tones are reserved for the non-equity buckets and
+        // red for Unclassified, which is meant to draw the eye.
+        var SECTOR_COLORS = {
+            TECH_AI: '#1f77b4', COMMS_MEDIA: '#17becf', FINANCIALS: '#2ca02c',
+            HEALTHCARE: '#9467bd', CONSUMER: '#ff7f0e', INDUSTRIALS_DEFENCE: '#8c564b',
+            ENERGY: '#bcbd22', MATERIALS_MINING: '#e377c2', UTILITIES_INFRA: '#aec7e8',
+            REAL_ESTATE: '#ffbb78', FIXED_INCOME: '#7f7f7f', COMMODITIES: '#c5b0d5',
+            CASH: '#cccccc', UNCLASSIFIED: '#d62728'
+        };
+
+        function loadSectors() {
+            if (sectorsLoaded) return;
+            sectorsLoaded = true;
+            clearPanelError('sector-block');
+            fetch('/allocation/sectors').then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function (data) {
+                sectorData = data;
+                bindOnce(document.getElementById('sector-basis'), 'click', function (ev) {
+                    var btn = ev.target.closest('button[data-basis]');
+                    if (!btn) return;
+                    sectorBasis = btn.getAttribute('data-basis');
+                    document.querySelectorAll('#sector-basis button').forEach(function (b) {
+                        b.classList.toggle('active', b === btn);
+                    });
+                    renderSectors();
+                });
+                renderSectors();
+            }).catch(function (e) {
+                sectorsLoaded = false;
+                panelLoadFailed('sector-block', e, loadSectors);
+            });
+        }
+
+        function sectorPct(row) {
+            return sectorBasis === 'invested' ? row.pctOfInvested : row.pctOfTotal;
+        }
+
+        function renderSectors() {
+            var d = sectorData;
+            if (!d) return;
+            var warn = d.warnings || [];
+            document.getElementById('sector-warnings').innerHTML = warn.length
+                ? '<div class="mo-banner">' + warn.map(escapeHtml).join('<br>') + '</div>' : '';
+
+            var rows = d.rows || [];
+            if (!rows.length) {
+                document.getElementById('sector-empty').textContent =
+                    'Nothing to classify yet.';
+                return;
+            }
+            document.getElementById('sector-empty').style.display = 'none';
+            document.getElementById('sector-body').style.display = 'flex';
+            document.getElementById('sector-table-wrap').style.display = '';
+
+            renderSectorAiTile(d);
+            renderSectorDonut(rows);
+            renderSectorTable(d, rows);
+            renderSectorUnclassified(d);
+            renderSectorFundNotes(d);
+        }
+
+        function renderSectorAiTile(d) {
+            var ai = d.aiTech || {};
+            var pct = sectorBasis === 'invested' ? ai.pctOfInvested : ai.pctOfTotal;
+            // "≥" is load-bearing: Yahoo names only a fund's top 10 holdings, so qualifying
+            // names in the unnamed tail cannot be counted and the figure understates.
+            document.getElementById('sector-ai-value').textContent =
+                (ai.lowerBound ? '≥ ' : '') + fmtPct(pct);
+            document.getElementById('sector-ai-sub').textContent =
+                fmtMoney(parseFloat(ai.gbp || 0))
+                + (sectorBasis === 'invested' ? ' of invested' : ' of total');
+
+            var direct = parseFloat(ai.directGbp || 0);
+            var viaFund = parseFloat(ai.viaFundGbp || 0);
+            document.getElementById('sector-ai-split').innerHTML =
+                'Held directly: <b>' + fmtMoney(direct) + '</b><br>'
+                + '<span class="sector-viafund">Via funds: <b>' + fmtMoney(viaFund) + '</b></span>';
+
+            document.getElementById('sector-ai-note').innerHTML = ai.lowerBound
+                ? 'A lower bound. Technology weight inside each fund counts in full; named '
+                + 'constituents outside Technology (Alphabet, Amazon, Meta…) are added only where '
+                + 'the fund discloses them, and Yahoo publishes just the top 10.'
+                : 'Counts holdings whose sector is Technology, plus the mega-cap internet names '
+                + 'GICS files elsewhere.';
+        }
+
+        function renderSectorDonut(rows) {
+            var ctx = document.getElementById('sector-donut').getContext('2d');
+            if (sectorDonut) sectorDonut.destroy();
+            var total = rows.reduce(function (a, r) { return a + parseFloat(r.gbp); }, 0);
+            sectorDonut = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: rows.map(function (r) { return r.label; }),
+                    datasets: [{
+                        data: rows.map(function (r) { return parseFloat(r.gbp); }),
+                        backgroundColor: rows.map(function (r) {
+                            return SECTOR_COLORS[r.bucket] || '#999';
+                        }),
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right', labels: { boxWidth: 12, font: { size: 10 } } },
+                        tooltip: {
+                            callbacks: {
+                                label: function (c) {
+                                    var v = c.parsed;
+                                    var share = total ? (v / total * 100).toFixed(1) : '0.0';
+                                    return c.label + ': ' + fmtMoney(v) + '  (' + share + '%)';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderSectorTable(d, rows) {
+            var basisLabel = sectorBasis === 'invested' ? '% of invested' : '% of total';
+            var html = '<tr><th class="lbl">Sector</th><th>Value</th><th>' + basisLabel + '</th>'
+                + '<th>Direct</th><th>Via fund</th></tr>';
+            rows.forEach(function (r) {
+                var viaFund = parseFloat(r.viaFundGbp || 0);
+                html += '<tr>'
+                    + '<td class="lbl"><span style="display:inline-block;width:9px;height:9px;'
+                    + 'border-radius:2px;margin-right:6px;background:'
+                    + (SECTOR_COLORS[r.bucket] || '#999') + '"></span>' + escapeHtml(r.label) + '</td>'
+                    + '<td>' + fmtMoney(parseFloat(r.gbp)) + '</td>'
+                    + '<td>' + fmtPct(sectorPct(r)) + '</td>'
+                    + '<td>' + fmtMoney(parseFloat(r.directGbp || 0)) + '</td>'
+                    + '<td class="sector-viafund">'
+                    + (viaFund ? fmtMoney(viaFund) : '—') + '</td>'
+                    + '</tr>';
+            });
+            // The Total row always states the portfolio total; the invested figure rides alongside
+            // as context, because on the invested basis the buckets sum to something smaller than
+            // this row's value and a bare "100%" would be wrong.
+            html += '<tr style="font-weight:600;border-top:2px solid #ccc;">'
+                + '<td class="lbl">Total</td>'
+                + '<td>' + fmtMoney(parseFloat(d.totalGbp)) + '</td>'
+                + '<td>' + (sectorBasis === 'invested' ? '—' : '100.0%') + '</td>'
+                + '<td colspan="2" class="muted" style="font-weight:400;">'
+                + 'of which invested ' + fmtMoney(parseFloat(d.investedGbp)) + '</td></tr>';
+            document.getElementById('sector-table').innerHTML = html;
+        }
+
+        function renderSectorUnclassified(d) {
+            var list = d.unclassified || [];
+            document.getElementById('sector-unclassified').innerHTML = list.length
+                ? '<div class="mo-banner" style="margin-top:0.6rem;"><b>Unclassified — '
+                + 'excluded from every sector above:</b> '
+                + list.map(function (u) {
+                    return escapeHtml(u.symbol) + ' (' + fmtMoney(parseFloat(u.gbp)) + ')';
+                }).join(' · ') + '</div>'
+                : '';
+        }
+
+        function renderSectorFundNotes(d) {
+            var funds = d.lookThrough || [];
+            var el = document.getElementById('sector-lookthrough');
+            if (!funds.length) { el.style.display = 'none'; return; }
+            el.style.display = '';
+            var html = '<tr><th class="lbl">Fund</th><th>Value</th><th>Technology</th>'
+                + '<th>Named holdings</th><th class="lbl">Weights fetched</th></tr>';
+            funds.forEach(function (f) {
+                html += '<tr>'
+                    + '<td class="lbl">' + escapeHtml(f.symbol) + '</td>'
+                    + '<td>' + fmtMoney(parseFloat(f.gbp)) + '</td>'
+                    + '<td>' + fmtPct(f.techPct) + '</td>'
+                    + '<td>' + fmtPct(f.nameCoveragePct) + '</td>'
+                    + '<td class="lbl muted">'
+                    + escapeHtml((f.fetchedAt || '—').replace('T', ' ').slice(0, 16)) + '</td>'
+                    + '</tr>';
+            });
+            document.getElementById('sector-fund-table').innerHTML = html;
+        }
 
         function loadAllocation() {
             if (allocLoaded) return;
@@ -7996,6 +8193,8 @@
             document.getElementById('ea-refresh').addEventListener('click', function () { runEarnings(true); });
             document.getElementById('ea-mincap').addEventListener('change', function () { runEarnings(false); });
             document.getElementById('ea-mine').addEventListener('change', renderEarnings);
+            document.getElementById('ea-holdings-forward')
+                .addEventListener('change', function () { runEarnings(false); });
             runEarnings(false); // auto-load on first open
         }
 
@@ -8005,7 +8204,8 @@
         function runEarnings(refresh) {
             eaStatus(refresh ? 'Refreshing from Nasdaq…' : 'Loading…');
             var q = 'back=' + encodeURIComponent(eaVal('ea-back') || '2')
-                + '&forward=' + encodeURIComponent(eaVal('ea-forward') || '3');
+                + '&forward=' + encodeURIComponent(eaVal('ea-forward') || '3')
+                + '&holdingsForward=' + encodeURIComponent(eaVal('ea-holdings-forward') || '21');
             var cap = eaVal('ea-mincap');
             if (cap) q += '&minCapB=' + encodeURIComponent(cap);
             if (refresh) q += '&refresh=true';
@@ -8037,6 +8237,62 @@
             return '<span class="ea-badge ' + cls + '">' + escapeHtml(t || 'TBD') + '</span>';
         }
 
+        /**
+         * The holdings section: positions ranked by size, with the coverage caveat spelled out.
+         * A UK/EU listing that the US-only Nasdaq feed cannot see is labelled "not covered" rather
+         * than silently omitted — otherwise a large position with an unknown date looks exactly
+         * like one with nothing due.
+         */
+        function renderEarningsHoldings(rep) {
+            var rows = rep.holdings || [];
+            var reporting = rows.filter(function (r) { return r.state === 'REPORTING'; });
+            var notCovered = rows.filter(function (r) { return r.state === 'NOT_COVERED'; });
+            var quiet = rows.filter(function (r) { return r.state === 'NONE_SCHEDULED'; });
+
+            var html = '';
+            if (reporting.length) {
+                html += '<tr><th class="lbl">Symbol</th><th class="lbl">Company</th><th>Weight</th>'
+                    + '<th>Value</th><th>Date</th><th>When</th><th>EPS est</th><th>LY EPS</th></tr>';
+                reporting.forEach(function (r) {
+                    // Anything at or above 2% of the book is a position whose print actually
+                    // moves the portfolio — worth making findable at a glance.
+                    var big = r.pctOfPortfolio != null && parseFloat(r.pctOfPortfolio) >= 0.02;
+                    html += '<tr' + (big ? ' style="font-weight:600;"' : '') + '>'
+                        + '<td class="lbl">' + escapeHtml(r.symbol) + '</td>'
+                        + '<td class="lbl">' + escapeHtml(r.companyName || '—') + '</td>'
+                        + '<td>' + fmtPct(r.pctOfPortfolio) + '</td>'
+                        + '<td>' + (r.gbpValue == null ? '—' : fmtMoney(parseFloat(r.gbpValue))) + '</td>'
+                        + '<td>' + escapeHtml(r.date || '—') + '</td>'
+                        + '<td>' + eaTimeBadge(r.time) + '</td>'
+                        + '<td>' + eaEps(r.epsForecast) + '</td>'
+                        + '<td>' + eaEps(r.lastYearEps) + '</td>'
+                        + '</tr>';
+                });
+            } else {
+                html = '<tr><td class="muted">None of your holdings report in the next '
+                    + (rep.holdingsForwardDays || 21) + ' days.</td></tr>';
+            }
+            document.getElementById('ea-holdings-table').innerHTML = html;
+
+            var other = '';
+            if (notCovered.length) {
+                other += '<div class="mo-banner"><b>Not covered by the US calendar</b> — these are '
+                    + 'non-US listings this feed never carries, so a blank here means "unknown", '
+                    + 'not "nothing due": '
+                    + notCovered.map(function (r) {
+                        return escapeHtml(r.symbol) + ' <span class="muted">('
+                            + fmtPct(r.pctOfPortfolio) + ')</span>';
+                    }).join(' · ') + '</div>';
+            }
+            if (quiet.length) {
+                other += '<div class="muted" style="font-size:0.78rem;margin-top:0.35rem;">'
+                    + 'Covered, nothing scheduled in the window: '
+                    + quiet.map(function (r) { return escapeHtml(r.symbol); }).join(', ')
+                    + '</div>';
+            }
+            document.getElementById('ea-holdings-other').innerHTML = other;
+        }
+
         function renderEarnings() {
             var rep = earnReport;
             if (!rep) return;
@@ -8044,14 +8300,7 @@
             (rep.heldSymbols || []).forEach(function (s) { held[s] = true; });
             var mineOnly = document.getElementById('ea-mine').checked;
 
-            // Summary strip: the user's own holdings across the window (unfiltered by market cap).
-            var mine = rep.myHoldings || [];
-            document.getElementById('ea-mine-summary').innerHTML = mine.length
-                ? '<b>Your holdings reporting in this window:</b> ' + mine.map(function (e) {
-                    return escapeHtml(e.symbol) + ' <span class="muted">(' + e.date
-                        + (e.time && e.time !== 'TBD' ? ' ' + e.time : '') + ')</span>';
-                }).join(' · ')
-                : '<b>Your holdings:</b> none reporting in this window.';
+            renderEarningsHoldings(rep);
             document.getElementById('ea-mine-wrap').style.display = 'block';
 
             var warn = rep.warnings || [];

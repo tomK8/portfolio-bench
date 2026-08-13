@@ -25,7 +25,10 @@ import java.security.KeyStore;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -50,6 +53,7 @@ public class YahooQuoteSummaryFetcher {
     private static final String URL_FMT =
             "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s" +
                     "?modules=price,summaryDetail,defaultKeyStatistics,financialData,summaryProfile" +
+                    ",topHoldings" +
                     ",cashflowStatementHistoryQuarterly,incomeStatementHistoryQuarterly" +
                     ",balanceSheetHistoryQuarterly" +
                     "&crumb=%s";
@@ -222,6 +226,7 @@ public class YahooQuoteSummaryFetcher {
         JsonNode dks = r.path("defaultKeyStatistics");
         JsonNode fin = r.path("financialData");
         JsonNode prof = r.path("summaryProfile");
+        JsonNode th = r.path("topHoldings");
         JsonNode cfsQ = r.path("cashflowStatementHistoryQuarterly").path("cashflowStatements");
         JsonNode issQ = r.path("incomeStatementHistoryQuarterly").path("incomeStatementHistory");
         JsonNode bsQ = r.path("balanceSheetHistoryQuarterly").path("balanceSheetStatements");
@@ -318,7 +323,48 @@ public class YahooQuoteSummaryFetcher {
         labels.put("country", text(prof, "country"));
 
         return new QuoteSummary(ticker, currency, currentPrice, marketCap, trailingPe, forwardPe,
-                pegRatio, beta, week52High, week52Low, targetMeanPrice, extra, labels, false);
+                pegRatio, beta, week52High, week52Low, targetMeanPrice, extra, labels,
+                parseSectorWeights(th), parseFundHoldings(th), false);
+    }
+
+    /**
+     * Fund sector composition from the {@code topHoldings} module — present for ETFs and funds,
+     * absent for ordinary stocks (yielding an empty map, which the classifier reads as "not a
+     * fund"). Yahoo ships each sector as its own single-key object
+     * ({@code [{"technology":{"raw":0.5782}}, …]}) with snake_case keys, and the weights sum to
+     * ~1.0. Duplicate keys are summed defensively rather than last-one-wins.
+     */
+    private static Map<String, BigDecimal> parseSectorWeights(JsonNode th) {
+        JsonNode arr = th.path("sectorWeightings");
+        if (!arr.isArray()) return Map.of();
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        for (JsonNode entry : arr) {
+            for (Iterator<String> it = entry.fieldNames(); it.hasNext(); ) {
+                String key = it.next();
+                BigDecimal w = num(entry, key);
+                if (w != null && w.signum() != 0) out.merge(key, w, BigDecimal::add);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The fund's named constituents — Yahoo publishes only the top 10, so this covers roughly
+     * half of a broad index fund by weight. Used to attribute a fund's AI/Tech share beyond its
+     * raw technology weight; the shortfall is why that figure is reported as a lower bound.
+     */
+    private static List<QuoteSummary.FundHolding> parseFundHoldings(JsonNode th) {
+        JsonNode arr = th.path("holdings");
+        if (!arr.isArray()) return List.of();
+        List<QuoteSummary.FundHolding> out = new ArrayList<>();
+        for (JsonNode h : arr) {
+            String symbol = text(h, "symbol");
+            BigDecimal weight = num(h, "holdingPercent");
+            if (symbol != null && weight != null) {
+                out.add(new QuoteSummary.FundHolding(symbol, text(h, "holdingName"), weight));
+            }
+        }
+        return List.copyOf(out);
     }
 
     /**
@@ -426,10 +472,34 @@ public class YahooQuoteSummaryFetcher {
                                BigDecimal targetMeanPrice,
                                Map<String, BigDecimal> extra,
                                Map<String, String> labels,
+                               Map<String, BigDecimal> sectorWeights,
+                               List<FundHolding> topHoldings,
                                boolean missing) {
+
+        /**
+         * Back-compatible form for every caller that has no fund composition to supply — which
+         * is all of them outside {@link #parse}, since composition only ever comes from Yahoo.
+         */
+        public QuoteSummary(String symbol, String currency, BigDecimal price, BigDecimal marketCap,
+                            BigDecimal trailingPe, BigDecimal forwardPe, BigDecimal pegRatio,
+                            BigDecimal beta, BigDecimal week52High, BigDecimal week52Low,
+                            BigDecimal targetMeanPrice, Map<String, BigDecimal> extra,
+                            Map<String, String> labels, boolean missing) {
+            this(symbol, currency, price, marketCap, trailingPe, forwardPe, pegRatio, beta,
+                    week52High, week52Low, targetMeanPrice, extra, labels,
+                    Map.of(), List.of(), missing);
+        }
+
         public static QuoteSummary empty(String symbol) {
             return new QuoteSummary(symbol, null, null, null, null, null, null, null, null,
                     null, null, Map.of(), Map.of(), true);
+        }
+
+        /**
+         * One named constituent of a fund. {@code weight} is a fraction of fund NAV (0.0804 =
+         * 8.04%), in the same scale as {@link #sectorWeights}.
+         */
+        public record FundHolding(String symbol, String name, BigDecimal weight) {
         }
     }
 }

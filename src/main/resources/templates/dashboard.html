@@ -765,6 +765,51 @@
             margin-top: 0.1rem;
         }
 
+        .sector-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-top: 0;
+        }
+
+        .sector-basis button {
+            font-size: 0.75rem;
+            padding: 0.2rem 0.6rem;
+            border: 1px solid #ccc;
+            background: #fff;
+            cursor: pointer;
+        }
+
+        .sector-basis button:first-child { border-radius: 3px 0 0 3px; }
+        .sector-basis button:last-child { border-radius: 0 3px 3px 0; border-left: none; }
+        .sector-basis button.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
+
+        .sector-layout {
+            display: flex;
+            gap: 1.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-top: 0.6rem;
+        }
+
+        .sector-side { flex: 1 1 220px; min-width: 220px; }
+        .sector-chart { flex: 1 1 320px; min-width: 280px; height: 300px; }
+
+        .sector-side .returns-stat .value { font-size: 1.6rem; }
+
+        .sector-splitline {
+            font-size: 0.78rem;
+            color: #555;
+            margin-top: 0.5rem;
+            line-height: 1.5;
+        }
+
+        .sector-note { font-size: 0.72rem; margin-top: 0.5rem; }
+
+        .sector-viafund { color: #888; }
+
         .whatif-summary {
             display: flex;
             gap: 1.5rem;
@@ -1283,6 +1328,56 @@
     </div>
 
     <div class="subview active" id="alloc-view-breakdown">
+        <!-- Own container, not the whole sub-view: panelLoadFailed destroys every canvas it
+             finds, so scoping the sector block keeps a sectors-endpoint failure from tearing
+             down the allocation charts below it. -->
+        <div id="sector-block">
+        <div class="sector-head">
+            <h3 style="margin: 0; font-size: 1rem;">Sector &amp; AI/Tech exposure</h3>
+            <div class="sector-basis" id="sector-basis">
+                <button type="button" class="active" data-basis="total">% of total</button>
+                <button type="button" data-basis="invested">% of invested</button>
+            </div>
+        </div>
+        <p class="muted" style="margin-top: 0.35rem;">
+            Today's composition by sector. Funds are <b>looked through</b> to the sectors they
+            actually hold, so an index ETF contributes to each bucket in proportion to its own
+            holdings rather than sitting as one opaque row — the <i>via fund</i> column keeps that
+            inferred part visible. Sector weights are fetched from Yahoo and refresh with the rest
+            of the fundamentals; nothing here is hand-maintained.
+        </p>
+        <div id="sector-warnings"></div>
+        <div id="sector-empty" class="muted">Loading…</div>
+
+        <div class="sector-layout" id="sector-body" style="display:none;">
+            <div class="sector-side">
+                <div class="returns-stats" style="margin: 0;">
+                    <div class="returns-stat">
+                        <span class="label">AI/Tech exposure</span>
+                        <span class="value" id="sector-ai-value">—</span>
+                        <span class="sub" id="sector-ai-sub"></span>
+                    </div>
+                </div>
+                <div class="sector-splitline" id="sector-ai-split"></div>
+                <p class="muted sector-note" id="sector-ai-note"></p>
+            </div>
+            <div class="sector-chart">
+                <canvas id="sector-donut"></canvas>
+            </div>
+        </div>
+
+        <div class="full-bleed" id="sector-table-wrap" style="display:none;">
+            <table class="swing-tbl" id="sector-table"></table>
+        </div>
+        <div id="sector-unclassified"></div>
+        <details id="sector-lookthrough" style="display:none; margin-top: 0.6rem;">
+            <summary class="muted">Fund look-through detail</summary>
+            <div class="full-bleed"><table class="swing-tbl" id="sector-fund-table"></table></div>
+        </details>
+        </div>
+
+        <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid #e2e2e2;">
+
         <p class="muted" style="margin-top: 0">
             Weekly snapshots from the first ledger date through today, derived from the same
             forward-replay as the value chart. Three views below: cash vs invested (the
@@ -2490,6 +2585,14 @@
                 <option value="200">≥ $200B</option>
             </select>
         </label>
+        <label title="how far ahead the holdings section looks — independent of the daily tables above">My holdings ahead:
+            <select id="ea-holdings-forward">
+                <option value="7">7 days</option>
+                <option value="14">14 days</option>
+                <option value="21" selected>21 days</option>
+                <option value="45">45 days</option>
+            </select>
+        </label>
         <label title="show only days/rows that are your holdings"><input id="ea-mine" type="checkbox"/> My holdings only</label>
         <button id="ea-run" type="button">Run</button>
         <button id="ea-refresh" type="button" title="Force a fresh pull from Nasdaq (bypass cache)">Refresh</button>
@@ -2499,7 +2602,9 @@
     <div id="ea-empty" class="muted" style="margin-top: 1rem;">Click <b>Run</b> to load the calendar.</div>
 
     <div id="ea-mine-wrap" style="display:none; margin-top: 0.8rem;">
-        <div class="swing-span" id="ea-mine-summary"></div>
+        <h3 style="margin: 0 0 0.3rem; font-size: 0.95rem;">Your holdings</h3>
+        <div class="full-bleed"><table class="swing-tbl" id="ea-holdings-table"></table></div>
+        <div id="ea-holdings-other" style="margin-top: 0.4rem;"></div>
     </div>
 
     <div id="ea-warnings" style="margin-top: 0.5rem;"></div>

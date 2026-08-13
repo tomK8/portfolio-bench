@@ -66,8 +66,28 @@ public class AllocationService {
     }
 
     public AllocationTimeline timeline() {
+        return new AllocationTimeline(replay(true));
+    }
+
+    /**
+     * Today's composition only — the single-sample form of {@link #timeline()}, in the same spirit
+     * as {@code PortfolioValueService.dailyValuesIn}. The ledger still replays from its first row
+     * (quantities and cash have to be caught up), but none of the ~550 weekly snapshots are valued,
+     * so callers that only want the current breakdown don't pay for a decade of history.
+     *
+     * <p>Shares one replay path with {@link #timeline()} so the sector panel and the chart beneath
+     * it cannot disagree about what is held today.
+     *
+     * @return the current point, or {@code null} when the ledger is empty
+     */
+    public AllocationPoint currentPoint() {
+        List<AllocationPoint> points = replay(false);
+        return points.isEmpty() ? null : points.get(points.size() - 1);
+    }
+
+    private List<AllocationPoint> replay(boolean weeklySamples) {
         List<CashTransaction> txs = cashRepo.loadAllTransactions();
-        if (txs.isEmpty()) return new AllocationTimeline(List.of());
+        if (txs.isEmpty()) return List.of();
 
         LocalDate start = LocalDate.parse(txs.get(0).transactionDate());
         LocalDate today = LocalDate.now();
@@ -86,18 +106,20 @@ public class AllocationService {
 
         List<AllocationPoint> points = new ArrayList<>();
         int idx = 0;
-        LocalDate sample = start;
-        while (!sample.isAfter(today)) {
-            while (idx < txs.size() && !LocalDate.parse(txs.get(idx).transactionDate()).isAfter(sample)) {
-                apply(qty, cashByAcctCcy, txs.get(idx));
-                idx++;
+        if (weeklySamples) {
+            LocalDate sample = start;
+            while (!sample.isAfter(today)) {
+                while (idx < txs.size() && !LocalDate.parse(txs.get(idx).transactionDate()).isAfter(sample)) {
+                    apply(qty, cashByAcctCcy, txs.get(idx));
+                    idx++;
+                }
+                if (!rothSeeded && rothStart != null && !sample.isBefore(rothStart)) {
+                    cashByAcctCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
+                    rothSeeded = true;
+                }
+                points.add(snapshot(sample, qty, cashByAcctCcy, prices, fx));
+                sample = sample.plusDays(SAMPLE_INTERVAL_DAYS);
             }
-            if (!rothSeeded && rothStart != null && !sample.isBefore(rothStart)) {
-                cashByAcctCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
-                rothSeeded = true;
-            }
-            points.add(snapshot(sample, qty, cashByAcctCcy, prices, fx));
-            sample = sample.plusDays(SAMPLE_INTERVAL_DAYS);
         }
         // Replay remaining transactions through today and append a final sample so the latest
         // composition is in the series even if it's mid-week (the user opening the snapshot
@@ -106,10 +128,16 @@ public class AllocationService {
             apply(qty, cashByAcctCcy, txs.get(idx));
             idx++;
         }
+        // Seed here too: the weekly loop only sees sample dates, so a Roth start falling between
+        // the last sample and today would otherwise miss its seed — and on the currentPoint path
+        // there is no weekly loop to have applied it at all.
+        if (!rothSeeded && rothStart != null && !rothStart.isAfter(today)) {
+            cashByAcctCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
+        }
         if (points.isEmpty() || !points.get(points.size() - 1).date().equals(today.toString())) {
             points.add(snapshot(today, qty, cashByAcctCcy, prices, fx));
         }
-        return new AllocationTimeline(points);
+        return points;
     }
 
     private AllocationPoint snapshot(LocalDate sample,

@@ -22,6 +22,7 @@ import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.EarningsDateRepository;
+import com.portfolio.domain.SectorClassifier;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.FxRateRepository;
@@ -319,6 +320,18 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public SectorClassifier sectorClassifier() {
+        return new SectorClassifier();
+    }
+
+    @Bean
+    public SectorBreakdownService sectorBreakdownService(AllocationService allocationService,
+                                                        FundamentalsRepository fundamentalsRepository,
+                                                        SectorClassifier sectorClassifier) {
+        return new SectorBreakdownService(allocationService, fundamentalsRepository, sectorClassifier);
+    }
+
+    @Bean
     public AttributionService attributionService(CashTransactionRepository cashTransactionRepository,
                                                  PriceHistoryRepository priceHistoryRepository,
                                                  IntradayPriceRepository intradayPriceRepository,
@@ -567,8 +580,12 @@ public class BeanConfiguration {
     @Bean
     public EarningsCalendarService earningsCalendarService(EarningsCalendarFeed earningsCalendarFeed,
                                                            EarningsCalendarRepository earningsCalendarRepository,
-                                                           KeyValueStore keyValueStore) {
-        return new EarningsCalendarService(earningsCalendarFeed, earningsCalendarRepository, keyValueStore);
+                                                           KeyValueStore keyValueStore,
+                                                           AllocationService allocationService,
+                                                           FundamentalsRepository fundamentalsRepository,
+                                                           YahooTickerMap yahooTickerMap) {
+        return new EarningsCalendarService(earningsCalendarFeed, earningsCalendarRepository,
+                keyValueStore, allocationService, fundamentalsRepository, yahooTickerMap);
     }
 
     @Bean

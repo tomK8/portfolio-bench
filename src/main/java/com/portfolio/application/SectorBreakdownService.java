@@ -1,0 +1,196 @@
+package com.portfolio.application;
+
+import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
+import com.portfolio.application.AllocationService.AllocationPoint;
+import com.portfolio.domain.SectorBucket;
+import com.portfolio.domain.SectorClassifier;
+import com.portfolio.persistence.FundamentalsRepository;
+
+import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Builds the sector + AI/Tech breakdown of the current portfolio.
+ *
+ * <p>Values come from {@link AllocationService#currentPoint()} — the same forward-replay that draws
+ * the charts directly beneath this block, so the two can never disagree about what is held.
+ * Classification comes from {@link SectorClassifier}, fed with the cached Yahoo sector for each
+ * symbol and, for funds, their sector weights and named constituents.
+ *
+ * <p>Everything degrades: an empty ledger, a missing fundamentals cache or an unclassifiable
+ * position each produce a warning and a partial answer rather than an exception. The one thing
+ * that is never done quietly is dropping value — anything that cannot be placed lands in
+ * {@link SectorBucket#UNCLASSIFIED} and is listed by name, because a bucket that silently
+ * swallowed it would understate exactly the concentration this panel is for.
+ */
+public class SectorBreakdownService {
+
+    private static final MathContext MC = MathContext.DECIMAL64;
+    private static final int GBP_SCALE = 2;
+    private static final int PCT_SCALE = 6;
+    private static final String CASH_SYMBOL = "CASH";
+
+    private final AllocationService allocationService;
+    private final FundamentalsRepository fundamentalsRepo;
+    private final SectorClassifier classifier;
+
+    public SectorBreakdownService(AllocationService allocationService,
+                                  FundamentalsRepository fundamentalsRepo,
+                                  SectorClassifier classifier) {
+        this.allocationService = allocationService;
+        this.fundamentalsRepo = fundamentalsRepo;
+        this.classifier = classifier;
+    }
+
+    public SectorBreakdown breakdown() {
+        List<String> warnings = new ArrayList<>();
+
+        AllocationPoint point = allocationService.currentPoint();
+        if (point == null) {
+            warnings.add("No cash-ledger transactions yet — nothing to classify.");
+            return empty(warnings);
+        }
+
+        Map<String, FundamentalsRepository.Cached> cache = fundamentalsRepo.loadAll();
+        if (cache.isEmpty()) {
+            warnings.add("Fundamentals cache is empty, so no sector is known for any holding. "
+                    + "It fills on the next background refresh.");
+        }
+
+        Map<SectorBucket, BigDecimal> total = new EnumMap<>(SectorBucket.class);
+        Map<SectorBucket, BigDecimal> direct = new EnumMap<>(SectorBucket.class);
+        Map<SectorBucket, BigDecimal> viaFund = new EnumMap<>(SectorBucket.class);
+        List<SectorBreakdown.Contributor> unclassified = new ArrayList<>();
+        List<SectorBreakdown.Contributor> aiContributors = new ArrayList<>();
+        List<SectorBreakdown.FundNote> fundNotes = new ArrayList<>();
+
+        BigDecimal aiTotal = BigDecimal.ZERO;
+        BigDecimal aiDirect = BigDecimal.ZERO;
+        BigDecimal aiViaFund = BigDecimal.ZERO;
+        boolean lowerBound = false;
+
+        for (Map.Entry<String, BigDecimal> e : point.symbolGbp().entrySet()) {
+            String symbol = e.getKey();
+            BigDecimal gbp = e.getValue();
+            if (gbp == null || gbp.signum() == 0 || CASH_SYMBOL.equalsIgnoreCase(symbol)) continue;
+
+            QuoteSummary quote = quoteFor(cache, symbol);
+            SectorClassifier.Classification c = classifier.classify(new SectorClassifier.Position(
+                    symbol, gbp,
+                    quote == null ? null : quote.labels().get("sector"),
+                    quote == null ? Map.of() : quote.sectorWeights(),
+                    constituentsOf(quote, cache)));
+
+            for (Map.Entry<SectorBucket, BigDecimal> b : c.byBucket().entrySet()) {
+                total.merge(b.getKey(), b.getValue(), BigDecimal::add);
+                (c.fund() ? viaFund : direct).merge(b.getKey(), b.getValue(), BigDecimal::add);
+                if (b.getKey() == SectorBucket.UNCLASSIFIED && b.getValue().signum() > 0) {
+                    unclassified.add(new SectorBreakdown.Contributor(symbol, b.getValue()));
+                }
+            }
+            if (c.aiTechGbp().signum() > 0) {
+                aiTotal = aiTotal.add(c.aiTechGbp());
+                if (c.fund()) {
+                    aiViaFund = aiViaFund.add(c.aiTechGbp());
+                    lowerBound = true;
+                } else {
+                    aiDirect = aiDirect.add(c.aiTechGbp());
+                }
+                aiContributors.add(new SectorBreakdown.Contributor(symbol, c.aiTechGbp()));
+            }
+            if (c.fund()) {
+                fundNotes.add(new SectorBreakdown.FundNote(
+                        symbol, gbp,
+                        cache.containsKey(symbol) ? cache.get(symbol).fetchedAt().toString() : null,
+                        c.nameCoverage(),
+                        quote == null ? null : quote.sectorWeights().get("technology")));
+            }
+        }
+
+        BigDecimal cashGbp = point.cashGbp() == null ? BigDecimal.ZERO : point.cashGbp();
+        if (cashGbp.signum() != 0) total.merge(SectorBucket.CASH, cashGbp, BigDecimal::add);
+
+        BigDecimal totalGbp = point.totalGbp();
+        BigDecimal investedGbp = point.investedGbp();
+
+        List<SectorBreakdown.Row> rows = new ArrayList<>();
+        for (Map.Entry<SectorBucket, BigDecimal> b : total.entrySet()) {
+            if (b.getValue().signum() == 0) continue;
+            SectorBucket bucket = b.getKey();
+            rows.add(new SectorBreakdown.Row(
+                    bucket.name(), bucket.label(), scaled(b.getValue()),
+                    fraction(b.getValue(), totalGbp),
+                    // Cash is the thing "invested" is measured against, so a share-of-invested
+                    // for it would be nonsense rather than merely uninteresting.
+                    bucket == SectorBucket.CASH ? null : fraction(b.getValue(), investedGbp),
+                    scaled(direct.getOrDefault(bucket, BigDecimal.ZERO)),
+                    scaled(viaFund.getOrDefault(bucket, BigDecimal.ZERO))));
+        }
+        rows.sort(Comparator.comparing(SectorBreakdown.Row::gbp).reversed());
+
+        if (!unclassified.isEmpty()) {
+            unclassified.sort(Comparator.comparing(SectorBreakdown.Contributor::gbp).reversed());
+            warnings.add(unclassified.size() + " position(s) could not be classified and are "
+                    + "excluded from every sector — see the list below.");
+        }
+        aiContributors.sort(Comparator.comparing(SectorBreakdown.Contributor::gbp).reversed());
+        fundNotes.sort(Comparator.comparing(SectorBreakdown.FundNote::gbp).reversed());
+
+        SectorBreakdown.AiTech aiTech = new SectorBreakdown.AiTech(
+                scaled(aiTotal), fraction(aiTotal, totalGbp), fraction(aiTotal, investedGbp),
+                scaled(aiDirect), scaled(aiViaFund), lowerBound, aiContributors);
+
+        return new SectorBreakdown(point.date(), totalGbp, investedGbp, scaled(cashGbp),
+                rows, aiTech, unclassified, fundNotes, warnings);
+    }
+
+    /**
+     * The fundamentals row for a symbol. Bonds and anything never fetched simply have none, which
+     * the classifier reads as "no sector known" — not an error.
+     */
+    private static QuoteSummary quoteFor(Map<String, FundamentalsRepository.Cached> cache, String symbol) {
+        FundamentalsRepository.Cached c = cache.get(symbol);
+        return c == null ? null : c.quote();
+    }
+
+    /**
+     * A fund's named constituents, each resolved to its own sector from the same cache. Doing the
+     * lookup here keeps {@link SectorClassifier} free of any repository dependency; a constituent
+     * we hold no fundamentals for arrives with a null sector, which the classifier treats as
+     * "skip" rather than guessing.
+     */
+    private static List<SectorClassifier.Constituent> constituentsOf(
+            QuoteSummary quote, Map<String, FundamentalsRepository.Cached> cache) {
+        if (quote == null || quote.topHoldings().isEmpty()) return List.of();
+        List<SectorClassifier.Constituent> out = new ArrayList<>();
+        for (QuoteSummary.FundHolding h : quote.topHoldings()) {
+            QuoteSummary q = quoteFor(cache, h.symbol());
+            out.add(new SectorClassifier.Constituent(
+                    h.symbol(), h.weight(), q == null ? null : q.labels().get("sector")));
+        }
+        return out;
+    }
+
+    private static SectorBreakdown empty(List<String> warnings) {
+        return new SectorBreakdown(null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                List.of(),
+                new SectorBreakdown.AiTech(BigDecimal.ZERO, null, null,
+                        BigDecimal.ZERO, BigDecimal.ZERO, false, List.of()),
+                List.of(), List.of(), warnings);
+    }
+
+    private static BigDecimal fraction(BigDecimal part, BigDecimal whole) {
+        if (part == null || whole == null || whole.signum() == 0) return null;
+        return part.divide(whole, MC).setScale(PCT_SCALE, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal scaled(BigDecimal v) {
+        return v == null ? null : v.setScale(GBP_SCALE, RoundingMode.HALF_UP);
+    }
+}

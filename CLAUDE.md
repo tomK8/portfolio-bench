@@ -561,6 +561,44 @@ block the web UI.
 US listings map to themselves; non-US need an exchange suffix (`.L` London, `.PA` Paris, `.AS`
 Amsterdam, `.DE` Frankfurt).
 
+**A missing mapping fails in two different ways**, which is why the identity fallback is warned
+about rather than trusted. Unmapped `PHP` (Primary Health Properties, LSE) resolved to a US mutual
+fund delisted in 2019 — no data, so the position simply lost its RT value; unmapped `BLND` (British
+Land, LSE, ~440p) resolves to a *live* NYSE ticker near $1.50, which would have priced the holding
+wrongly instead of not at all. Two signals cover the first case, one covers the second:
+- `PriceFetchJob` warns on a **first-ever** fetch that comes back empty (`PriceFetchSupport.warnNoPriceData`,
+  the one place that wording lives) — restricted to first-ever because a quiet fetch is routine for
+  an established ticker. The message branches: an unmapped symbol gets the copy-paste line to add,
+  a mapped one is told to correct its existing entry. The intraday job deliberately stays silent
+  (it runs every minute; the same warning would be log spam).
+- On a first-ever fetch that *does* return data through the identity fallback,
+  `PriceFetchSupport.noteIdentityTicker` logs at INFO what was assumed. That is the only signal that
+  catches the BLND shape, and it can't be a warning — every US name is legitimately unmapped.
+- Both sync views surface `SyncResult.unpricedSymbols` (`SyncPortfolioService.unpricedSymbols`,
+  shared static): held symbols with **no intraday quote and no daily close ever stored**, rendered
+  as their own panel naming the ticker actually tried. A missing intraday quote alone stays in the
+  existing "Missing intraday prices" panel — that's an ordinary stale feed. Bonds are excluded (the
+  gilt scraper, not Yahoo, prices them).
+
+**Three name→symbol maps, all needed for one new instrument** — a name is only fully wired when it
+appears in all three, and PHP (Primary Health Properties, Aug 2026) is the worked example of what
+each one costs when missed:
+1. `AJBellCashStatementParser.SYMBOL_RULES` — cash-ledger description → internal symbol. Unmapped,
+   `resolveSymbol` falls back to the cleaned investment name, so the ledger stored
+   `PRIMARY HEALTH PROPERTIES PLC` while the holdings file called the same position `PHP`: the
+   ledger view lost the position, and the reconciliation panel reported the whole £10k as a diff.
+   Now warns at parse time naming the string it stored.
+2. `AJBellOrdersParser.NAME_TO_SYMBOL` — order-export investment name → internal symbol. Unmapped,
+   the order still lists (under its full name) but resolves to no ticker, so Current / vs limit /
+   σ→lim / P(touch) are all blank. Now warns via `symbolOrName`.
+3. `yahoo-tickers.properties` — internal symbol → Yahoo ticker (above).
+
+A stale ledger row left by (1) has to be corrected in place —
+`UPDATE cash_transactions SET symbol='PHP' WHERE symbol='PRIMARY HEALTH PROPERTIES PLC'` — because
+the AJBell dedup key is `(transaction_date, type, symbol, amount_gbp)`: leave it and the next
+import of the same statement inserts a *second* row under the newly-mapped symbol and double-counts
+the position.
+
 **`close` vs `adj_close`:** use `close` for "market value of the position on date X", `adj_close`
 for total-return calculations. **`YahooPriceFetcher` re-derives `adj_close` from the
 `events.dividends` and `events.splits` stream on every fetch** — Yahoo's bundled `adjclose`

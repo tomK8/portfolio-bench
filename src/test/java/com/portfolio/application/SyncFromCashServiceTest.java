@@ -117,5 +117,42 @@ class SyncFromCashServiceTest {
         assertTrue(r.holdings().isEmpty());
         assertTrue(r.missingIntradayPrices().contains("GILT 4.75% 2038"));
         assertTrue(r.dailyCloseFallbacks().isEmpty());
+        // Gilts are priced by their own scraper and have no Yahoo listing, so a missing gilt price
+        // must never be reported as a ticker-mapping problem.
+        assertTrue(r.unpricedSymbols().isEmpty());
+    }
+
+    @Test
+    void symbolWithNoIntradayAndNoDailyHistoryIsFlaggedAsNeedingATickerMapping() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2026-08-01", "PHP", 10000.0, 10000.0)));
+
+        var svc = new SyncFromCashService(cashRepo, new IntradayPriceRepository(cf),
+                () -> Map.of(), new YahooTickerMap(), new PriceHistoryRepository(cf));
+        SyncResult r = svc.sync();
+
+        // Names the ticker actually tried — that is the string the properties file has to change.
+        assertEquals(List.of("PHP (ticker PHP.L)"), r.unpricedSymbols());
+    }
+
+    @Test
+    void symbolWithDailyHistoryButNoIntradayIsNotATickerMappingProblem() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2023-01-01", "AAPL", 5.0, 500.0)));
+        var histRepo = new PriceHistoryRepository(cf);
+        histRepo.savePriceBars(List.of(new PriceBar("AAPL",
+                java.time.LocalDate.of(2026, 8, 12), null, null, null, 190.0, 190.0, 1.0, null, "USD")));
+
+        var svc = new SyncFromCashService(cashRepo, new IntradayPriceRepository(cf),
+                () -> Map.of(), new YahooTickerMap(), histRepo);
+        SyncResult r = svc.sync();
+
+        // A stale intraday feed is ordinary; the mapping resolves fine.
+        assertTrue(r.missingIntradayPrices().contains("AAPL"));
+        assertTrue(r.unpricedSymbols().isEmpty());
     }
 }

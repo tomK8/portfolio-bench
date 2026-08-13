@@ -21,7 +21,9 @@ public record SyncResult(
         List<CashRecon> cashRecon,
         List<String> missingIntradayPrices,
         List<String> dailyCloseFallbacks,
-        List<AssetRecon> assetRecon) {
+        List<AssetRecon> assetRecon,
+        /** Held symbols with no price feed at all — see {@code SyncPortfolioService.unpricedSymbols}. */
+        List<String> unpricedSymbols) {
 
     /** Per {@code (account, currency)} comparison of holdings-side vs ledger-side cash, in GBP. */
     public record CashRecon(String account, String currency,
@@ -36,6 +38,6 @@ public record SyncResult(
 
     public static SyncResult empty(Map<String, BigDecimal> rates) {
         return new SyncResult(List.of(), null, rates, BigDecimal.ZERO, List.of(), true,
-                List.of(), List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), List.of(), List.of());
     }
 }

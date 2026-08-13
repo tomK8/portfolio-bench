@@ -18,6 +18,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Parses AJ Bell SIPP {@code activeorders*.csv} exports.
@@ -30,6 +32,8 @@ import java.util.regex.Pattern;
  * currency alongside the pound-denominated Amount.
  */
 public class AJBellOrdersParser implements OrderParser {
+
+    private static final Logger log = LoggerFactory.getLogger(AJBellOrdersParser.class);
 
     private static final Pattern FILENAME = Pattern.compile("activeorders.*\\.csv", Pattern.CASE_INSENSITIVE);
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
@@ -46,6 +50,9 @@ public class AJBellOrdersParser implements OrderParser {
         NAME_TO_SYMBOL.put("eqqq", "EQQQ");
         NAME_TO_SYMBOL.put("london stock exchange", "LSEG");
         NAME_TO_SYMBOL.put("relx", "REL");
+        NAME_TO_SYMBOL.put("primary health", "PHP");
+        NAME_TO_SYMBOL.put("londonmetric", "LMP");
+        NAME_TO_SYMBOL.put("british land", "BLND");
     }
 
     /** Internal symbol for an AJ Bell investment name, or null when unmapped. */
@@ -65,7 +72,14 @@ public class AJBellOrdersParser implements OrderParser {
      */
     static String symbolOrName(String investmentName) {
         String mapped = symbolFor(investmentName);
-        return mapped != null ? mapped : investmentName;
+        if (mapped != null) return mapped;
+        // Visible in the Symbol column, but it resolves to no ticker — so the order shows no
+        // Current price, no vs-limit and no touch probability. Say so at parse time; the column
+        // being blank looks like a dead feed rather than a missing line in this map.
+        log.warn("[AJBell orders] No symbol mapping for \"{}\" — the order will show without live "
+                + "price columns. Add a NAME_TO_SYMBOL keyword for it (and the ticker to "
+                + "yahoo-tickers.properties).", investmentName);
+        return investmentName;
     }
 
     @Override

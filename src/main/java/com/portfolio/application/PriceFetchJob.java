@@ -65,6 +65,15 @@ public class PriceFetchJob {
             List<PriceBar> bars = fetcher.fetch(ticker, from, today);
             int touched = priceRepo.upsertPriceBars(bars);
             log.info("Fetched {} rows for {} ({} written)", bars.size(), ticker, touched);
+            // Only on the first-ever fetch for a ticker: an empty response means the ticker is
+            // wrong, and a populated one still deserves a note if we reached it by identity.
+            if (latest == null) {
+                // Only an identity-resolved ticker is also the internal symbol; for a mapped
+                // one the job never sees the left-hand side, so it reports the ticker alone.
+                if (bars.isEmpty()) PriceFetchSupport.warnNoPriceData(log,
+                        tickers.resolvedByIdentity(ticker) ? ticker : null, ticker);
+                else if (tickers.resolvedByIdentity(ticker)) PriceFetchSupport.noteIdentityTicker(log, ticker);
+            }
             PriceFetchSupport.sleep(THROTTLE_MS);
         }
     }
@@ -152,6 +161,9 @@ public class PriceFetchJob {
         List<PriceBar> bars = fetcher.fetch(ticker, today.minusYears(lookbackYears), today);
         int touched = priceRepo.upsertPriceBars(bars);
         log.info("fetchSingle {} → {}: {} rows ({} written)", symbol, ticker, bars.size(), touched);
+        if (bars.isEmpty() && priceRepo.getLatestPriceDate(ticker) == null) {
+            PriceFetchSupport.warnNoPriceData(log, symbol, ticker);
+        }
         return touched;
     }
 }

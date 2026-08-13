@@ -103,9 +103,10 @@ public class SyncPortfolioService {
                 aggregated, iiSippCashGbp, iiSippCashUsd, gathered.rates());
         List<String> missingIntraday = missingIntradayPrices(aggregated);
         for (String sym : missingIntraday) log.warn("No intraday price for held symbol {}", sym);
+        List<String> unpriced = unpricedSymbols(missingIntraday, tickerBySymbol, priceHistory);
         List<SyncResult.AssetRecon> assetRecon = reconcileAssets(aggregated, latestBySymbol, gathered.rates());
         return new SyncResult(aggregated, totals, gathered.rates(), iiSippCash, sources, false,
-                recon, missingIntraday, List.of(), assetRecon);
+                recon, missingIntraday, List.of(), assetRecon, unpriced);
     }
 
     /**
@@ -200,6 +201,33 @@ public class SyncPortfolioService {
         for (AggHolding h : aggregated) {
             if ("CASH".equals(h.securityId())) continue;
             if (h.rtMarketValueGbp() == null) out.add(h.securityId());
+        }
+        return out;
+    }
+
+    /**
+     * The subset of unpriced symbols that has no price feed <em>at all</em> — no intraday quote and
+     * not one daily close ever stored. Shared with {@link SyncFromCashService} so both views name
+     * the same names.
+     *
+     * <p>A missing intraday quote alone is ordinary (a stale feed, a pruned retention window). No
+     * daily history either means the symbol has never resolved to anything on Yahoo, and by far the
+     * likeliest cause is a missing entry in {@code yahoo-tickers.properties}: the identity fallback
+     * sent {@code PHP} (Primary Health Properties, LSE) to a US mutual fund that stopped trading in
+     * 2019. The dashboard names the ticker actually tried, because that is what has to change.
+     * Bonds are excluded — gilts are priced by their own scraper and have no Yahoo listing to map.
+     */
+    static List<String> unpricedSymbols(List<String> missingIntraday,
+                                        Map<String, String> tickerBySymbol,
+                                        PriceHistoryRepository priceHistory) {
+        List<String> out = new ArrayList<>();
+        for (String sym : missingIntraday) {
+            if (Instruments.isBond(sym)) continue;
+            String ticker = tickerBySymbol.get(sym.toUpperCase());
+            if (ticker == null) continue;
+            if (priceHistory.getLatestPriceDate(ticker) != null) continue;
+            PriceFetchSupport.warnNoPriceData(log, sym, ticker);
+            out.add(sym.equals(ticker) ? sym : sym + " (ticker " + ticker + ")");
         }
         return out;
     }

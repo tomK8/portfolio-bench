@@ -67,12 +67,14 @@ public class SectorBreakdownService {
         Map<SectorBucket, BigDecimal> direct = new EnumMap<>(SectorBucket.class);
         Map<SectorBucket, BigDecimal> viaFund = new EnumMap<>(SectorBucket.class);
         List<SectorBreakdown.Contributor> unclassified = new ArrayList<>();
-        List<SectorBreakdown.Contributor> aiContributors = new ArrayList<>();
+        List<SectorBreakdown.AiContributor> aiContributors = new ArrayList<>();
         List<SectorBreakdown.FundNote> fundNotes = new ArrayList<>();
 
         BigDecimal aiTotal = BigDecimal.ZERO;
         BigDecimal aiDirect = BigDecimal.ZERO;
         BigDecimal aiViaFund = BigDecimal.ZERO;
+        BigDecimal aiFromTechSector = BigDecimal.ZERO;
+        BigDecimal aiCrossSector = BigDecimal.ZERO;
         boolean lowerBound = false;
 
         for (Map.Entry<String, BigDecimal> e : point.symbolGbp().entrySet()) {
@@ -96,13 +98,21 @@ public class SectorBreakdownService {
             }
             if (c.aiTechGbp().signum() > 0) {
                 aiTotal = aiTotal.add(c.aiTechGbp());
+                aiFromTechSector = aiFromTechSector.add(c.fromTechSectorGbp());
+                aiCrossSector = aiCrossSector.add(c.crossSectorGbp());
                 if (c.fund()) {
                     aiViaFund = aiViaFund.add(c.aiTechGbp());
                     lowerBound = true;
                 } else {
                     aiDirect = aiDirect.add(c.aiTechGbp());
                 }
-                aiContributors.add(new SectorBreakdown.Contributor(symbol, c.aiTechGbp()));
+                SectorBucket own = c.byBucket().keySet().stream().findFirst().orElse(null);
+                String source = c.fund() ? "FUND"
+                        : (c.fromTechSectorGbp().signum() > 0 ? "TECHNOLOGY_SECTOR" : "TAGGED");
+                aiContributors.add(new SectorBreakdown.AiContributor(
+                        symbol, c.aiTechGbp(), source,
+                        c.fund() || own == null ? null : own.label(),
+                        c.fromTechSectorGbp(), c.crossSectorGbp()));
             }
             if (c.fund()) {
                 fundNotes.add(new SectorBreakdown.FundNote(
@@ -139,12 +149,13 @@ public class SectorBreakdownService {
             warnings.add(unclassified.size() + " position(s) could not be classified and are "
                     + "excluded from every sector — see the list below.");
         }
-        aiContributors.sort(Comparator.comparing(SectorBreakdown.Contributor::gbp).reversed());
+        aiContributors.sort(Comparator.comparing(SectorBreakdown.AiContributor::gbp).reversed());
         fundNotes.sort(Comparator.comparing(SectorBreakdown.FundNote::gbp).reversed());
 
         SectorBreakdown.AiTech aiTech = new SectorBreakdown.AiTech(
                 scaled(aiTotal), fraction(aiTotal, totalGbp), fraction(aiTotal, investedGbp),
-                scaled(aiDirect), scaled(aiViaFund), lowerBound, aiContributors);
+                scaled(aiDirect), scaled(aiViaFund),
+                scaled(aiFromTechSector), scaled(aiCrossSector), lowerBound, aiContributors);
 
         return new SectorBreakdown(point.date(), totalGbp, investedGbp, scaled(cashGbp),
                 rows, aiTech, unclassified, fundNotes, warnings);
@@ -181,7 +192,8 @@ public class SectorBreakdownService {
         return new SectorBreakdown(null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 List.of(),
                 new SectorBreakdown.AiTech(BigDecimal.ZERO, null, null,
-                        BigDecimal.ZERO, BigDecimal.ZERO, false, List.of()),
+                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                        false, List.of()),
                 List.of(), List.of(), warnings);
     }
 

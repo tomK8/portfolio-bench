@@ -13,7 +13,13 @@ package com.portfolio.domain;
  */
 public enum SectorBucket {
 
-    TECH_AI("Tech/AI"),
+    // Label is plain "Technology" because that is exactly what it is — the GICS Technology
+    // sector. It was briefly "Tech/AI", which implied it captured the AI names too and led
+    // straight to the misreading the AI/Tech tile exists to answer (Alphabet, Amazon and Meta
+    // are AI/Tech bets but GICS files them elsewhere, so they are *not* in this bucket).
+    // The constant name stays TECH_AI: it is the JSON `bucket` key and the SECTOR_COLORS key
+    // in dashboard.js, and renaming it would buy nothing while risking a silent colour miss.
+    TECH_AI("Technology"),
     COMMS_MEDIA("Communications/Media"),
     FINANCIALS("Financials"),
     HEALTHCARE("Healthcare"),

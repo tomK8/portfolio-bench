@@ -1546,8 +1546,60 @@
             renderSectorAiTile(d);
             renderSectorDonut(rows);
             renderSectorTable(d, rows);
+            renderSectorAiContributors(d);
             renderSectorUnclassified(d);
             renderSectorFundNotes(d);
+        }
+
+        var SECTOR_AI_SOURCE = {
+            TECHNOLOGY_SECTOR: 'Technology sector',
+            TAGGED: 'Tagged',
+            FUND: 'Fund look-through'
+        };
+
+        /**
+         * Takes the AI/Tech figure apart, one row per contributing position. The Source column is
+         * the payload: a TAGGED row names the sector it is actually filed under, which is the
+         * entire explanation for why it isn't in the Technology bucket.
+         */
+        function renderSectorAiContributors(d) {
+            var ai = d.aiTech || {};
+            var list = ai.contributors || [];
+            var el = document.getElementById('sector-ai-detail');
+            if (!list.length) { el.style.display = 'none'; return; }
+            el.style.display = '';
+
+            document.getElementById('sector-ai-detail-head').innerHTML =
+                'Held directly <b>' + fmtMoney(parseFloat(ai.directGbp || 0)) + '</b> · '
+                + 'via funds <b>' + fmtMoney(parseFloat(ai.viaFundGbp || 0)) + '</b>. '
+                + 'The <i>From Technology</i> column totals the Technology row of the table above; '
+                + 'the <i>Cross-sector</i> column is everything the standard classification files '
+                + 'somewhere else.';
+
+            var html = '<tr><th class="lbl">Symbol</th><th>AI/Tech value</th>'
+                + '<th class="lbl">Source</th><th>From Technology</th><th>Cross-sector</th></tr>';
+            list.forEach(function (c) {
+                var src = SECTOR_AI_SOURCE[c.source] || c.source;
+                if (c.source === 'TAGGED' && c.sectorLabel) {
+                    src += ' — ' + c.sectorLabel;
+                }
+                var ft = parseFloat(c.fromTechSectorGbp || 0);
+                var cs = parseFloat(c.crossSectorGbp || 0);
+                html += '<tr>'
+                    + '<td class="lbl">' + escapeHtml(c.symbol) + '</td>'
+                    + '<td>' + fmtMoney(parseFloat(c.gbp)) + '</td>'
+                    + '<td class="lbl muted">' + escapeHtml(src) + '</td>'
+                    + '<td>' + (ft ? fmtMoney(ft) : '—') + '</td>'
+                    + '<td class="sector-viafund">' + (cs ? fmtMoney(cs) : '—') + '</td>'
+                    + '</tr>';
+            });
+            html += '<tr style="font-weight:600;border-top:2px solid #ccc;">'
+                + '<td class="lbl">Total</td>'
+                + '<td>' + fmtMoney(parseFloat(ai.gbp || 0)) + '</td>'
+                + '<td></td>'
+                + '<td>' + fmtMoney(parseFloat(ai.fromTechSectorGbp || 0)) + '</td>'
+                + '<td>' + fmtMoney(parseFloat(ai.crossSectorGbp || 0)) + '</td></tr>';
+            document.getElementById('sector-ai-table').innerHTML = html;
         }
 
         function renderSectorAiTile(d) {
@@ -1561,11 +1613,14 @@
                 fmtMoney(parseFloat(ai.gbp || 0))
                 + (sectorBasis === 'invested' ? ' of invested' : ' of total');
 
-            var direct = parseFloat(ai.directGbp || 0);
-            var viaFund = parseFloat(ai.viaFundGbp || 0);
+            // The bridge, not the direct/fund split: this is the line that explains why the tile
+            // and the Technology row differ, which is the question the panel kept prompting.
+            var fromTech = parseFloat(ai.fromTechSectorGbp || 0);
+            var cross = parseFloat(ai.crossSectorGbp || 0);
             document.getElementById('sector-ai-split').innerHTML =
-                'Held directly: <b>' + fmtMoney(direct) + '</b><br>'
-                + '<span class="sector-viafund">Via funds: <b>' + fmtMoney(viaFund) + '</b></span>';
+                'Technology sector: <b>' + fmtMoney(fromTech) + '</b><br>'
+                + '<span class="sector-viafund">+ AI names filed in other sectors: <b>'
+                + fmtMoney(cross) + '</b></span>';
 
             document.getElementById('sector-ai-note').innerHTML = ai.lowerBound
                 ? 'A lower bound. Technology weight inside each fund counts in full; named '

@@ -1346,6 +1346,15 @@
             inferred part visible. Sector weights are fetched from Yahoo and refresh with the rest
             of the fundamentals; nothing here is hand-maintained.
         </p>
+        <p class="muted sector-note" style="margin-top: 0.35rem;">
+            <b>Two different measures.</b> The <b>sector table</b> is a partition — every position
+            sits in exactly one bucket and the buckets sum to the whole portfolio, following the
+            standard classification (which files Alphabet under Communications and Amazon under
+            Consumer). The <b>AI/Tech theme</b> tile cuts <i>across</i> those buckets: it is the
+            Technology bucket <i>plus</i> the AI names classified elsewhere. It is therefore
+            <b>not a row in the table and must not be added to it</b> — doing so would count the
+            Technology bucket twice.
+        </p>
         <div id="sector-warnings"></div>
         <div id="sector-empty" class="muted">Loading…</div>
 
@@ -1353,7 +1362,7 @@
             <div class="sector-side">
                 <div class="returns-stats" style="margin: 0;">
                     <div class="returns-stat">
-                        <span class="label">AI/Tech exposure</span>
+                        <span class="label">AI/Tech theme (cross-sector)</span>
                         <span class="value" id="sector-ai-value">—</span>
                         <span class="sub" id="sector-ai-sub"></span>
                     </div>
@@ -1370,6 +1379,11 @@
             <table class="swing-tbl" id="sector-table"></table>
         </div>
         <div id="sector-unclassified"></div>
+        <details id="sector-ai-detail" style="display:none; margin-top: 0.6rem;">
+            <summary class="muted">What makes up the AI/Tech theme figure</summary>
+            <p class="muted sector-note" id="sector-ai-detail-head"></p>
+            <div class="full-bleed"><table class="swing-tbl" id="sector-ai-table"></table></div>
+        </details>
         <details id="sector-lookthrough" style="display:none; margin-top: 0.6rem;">
             <summary class="muted">Fund look-through detail</summary>
             <div class="full-bleed"><table class="swing-tbl" id="sector-fund-table"></table></div>

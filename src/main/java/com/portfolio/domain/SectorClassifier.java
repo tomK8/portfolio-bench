@@ -111,10 +111,14 @@ public class SectorClassifier {
     }
 
     private Classification single(SectorBucket bucket, BigDecimal gbp, String symbol) {
-        boolean aiTech = bucket == SectorBucket.TECH_AI || aiTechInclude.contains(symbol);
+        boolean fromSector = bucket == SectorBucket.TECH_AI;
+        boolean aiTech = fromSector || aiTechInclude.contains(symbol);
+        BigDecimal zero = BigDecimal.ZERO.setScale(GBP_SCALE);
         return new Classification(
                 Map.of(bucket, scaled(gbp)),
-                aiTech ? scaled(gbp) : BigDecimal.ZERO.setScale(GBP_SCALE),
+                aiTech ? scaled(gbp) : zero,
+                fromSector ? scaled(gbp) : zero,
+                aiTech && !fromSector ? scaled(gbp) : zero,
                 false,
                 null);
     }
@@ -163,7 +167,21 @@ public class SectorClassifier {
 
         BigDecimal coverage = namedCoverage.divide(totalWeight, MC);
         if (coverage.compareTo(BigDecimal.ONE) > 0) coverage = BigDecimal.ONE;
-        return new Classification(byBucket, scaled(aiTechGbp), true, coverage);
+
+        // Split against the *bucket* value rather than recomputing from the technology weight, so
+        // the bridge the UI prints ("Technology sector + AI names filed elsewhere = the total")
+        // holds to the penny against the Technology row itself.
+        //
+        // A fund's AI/Tech share contains its whole technology slice by construction — the two are
+        // only ever added to. So a scaled total below the bucket means absorbRounding pushed its
+        // remainder here, not that the theme is genuinely smaller; lift it back. Clamping the other
+        // way instead (min) left the parts a penny short of the Technology row across a portfolio,
+        // which is visible once the contributor column is totalled.
+        BigDecimal techBucket = byBucket.getOrDefault(SectorBucket.TECH_AI,
+                BigDecimal.ZERO.setScale(GBP_SCALE));
+        BigDecimal scaledAi = scaled(aiTechGbp).max(techBucket);
+        return new Classification(byBucket, scaledAi, techBucket, scaledAi.subtract(techBucket),
+                true, coverage);
     }
 
     private static void absorbRounding(Map<SectorBucket, BigDecimal> byBucket, BigDecimal target) {
@@ -212,13 +230,22 @@ public class SectorClassifier {
     }
 
     /**
-     * @param byBucket     GBP per bucket; sums exactly to the position value
-     * @param aiTechGbp    GBP counting as AI/Tech — a lower bound when {@code fund} is true
-     * @param fund         whether this was resolved by look-through
-     * @param nameCoverage fraction of the fund identified by name, {@code null} for direct holdings
+     * @param byBucket           GBP per bucket; sums exactly to the position value
+     * @param aiTechGbp          GBP counting as AI/Tech — a lower bound when {@code fund} is true
+     * @param fromTechSectorGbp  the part of {@code aiTechGbp} that is already in the Technology
+     *                           bucket, i.e. equal to {@code byBucket[TECH_AI]}
+     * @param crossSectorGbp     the part filed under some other sector (Alphabet in
+     *                           Communications, Amazon in Consumer …). Reported explicitly rather
+     *                           than left for the caller to subtract, so the bridge the UI prints
+     *                           — {@code aiTechGbp = fromTechSectorGbp + crossSectorGbp} — cannot
+     *                           be silently broken by a later change to the AI/Tech rule.
+     * @param fund               whether this was resolved by look-through
+     * @param nameCoverage       fraction of the fund identified by name, {@code null} when direct
      */
     public record Classification(Map<SectorBucket, BigDecimal> byBucket,
                                  BigDecimal aiTechGbp,
+                                 BigDecimal fromTechSectorGbp,
+                                 BigDecimal crossSectorGbp,
                                  boolean fund,
                                  BigDecimal nameCoverage) {
     }

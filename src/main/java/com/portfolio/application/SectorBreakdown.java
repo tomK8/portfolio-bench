@@ -38,6 +38,14 @@ public record SectorBreakdown(
     }
 
     /**
+     * The cross-cutting theme figure. <b>Not a row in {@link #rows()} and must never be added to
+     * it</b> — it already contains the whole Technology bucket, so summing them double-counts.
+     *
+     * <p>{@code gbp = fromTechSectorGbp + crossSectorGbp} exactly, and {@code fromTechSectorGbp}
+     * equals the Technology row's value. That bridge is what makes the difference between this
+     * number and the Technology bucket legible on screen: everything else here is filed by GICS
+     * under Communication Services, Consumer Cyclical and the like.
+     *
      * @param lowerBound true when any fund contributed, meaning the real figure is at least this.
      *                   Yahoo names only a fund's top 10 holdings, so qualifying names in the
      *                   unnamed tail cannot be counted — the UI renders this as "≥".
@@ -47,8 +55,27 @@ public record SectorBreakdown(
                          BigDecimal pctOfInvested,
                          BigDecimal directGbp,
                          BigDecimal viaFundGbp,
+                         BigDecimal fromTechSectorGbp,
+                         BigDecimal crossSectorGbp,
                          boolean lowerBound,
-                         List<Contributor> contributors) {
+                         List<AiContributor> contributors) {
+    }
+
+    /**
+     * One position feeding the AI/Tech figure, with why it counts.
+     *
+     * @param source      {@code TECHNOLOGY_SECTOR} (its own sector is Technology),
+     *                    {@code TAGGED} (an agreed name GICS files elsewhere) or {@code FUND}
+     *                    (attributed by look-through, so typically a blend of both)
+     * @param sectorLabel the position's own sector bucket — what makes a TAGGED row
+     *                    self-explanatory ("Tagged — Communications/Media")
+     */
+    public record AiContributor(String symbol,
+                                BigDecimal gbp,
+                                String source,
+                                String sectorLabel,
+                                BigDecimal fromTechSectorGbp,
+                                BigDecimal crossSectorGbp) {
     }
 
     public record Contributor(String symbol, BigDecimal gbp) {

@@ -167,6 +167,74 @@ class SectorClassifierTest {
         assertEquals(0, c.aiTechGbp().compareTo(gbp("500.00")));
     }
 
+    // ---- the bridge between the Technology bucket and the AI/Tech figure -------
+
+    @Test
+    void aiTechAlwaysSplitsIntoTechSectorPlusCrossSector() {
+        // The identity the UI prints on screen, across all three shapes a position can take.
+        for (Classification c : List.of(
+                classifier().classify(Position.direct("NVDA", gbp("25018.00"), "Technology")),
+                classifier().classify(Position.direct("GOOG", gbp("76415.00"), "Communication Services")),
+                classifier().classify(eqqq(gbp("218100.00"))))) {
+            assertEquals(0, c.fromTechSectorGbp().add(c.crossSectorGbp()).compareTo(c.aiTechGbp()),
+                    "fromTechSector + crossSector must equal the AI/Tech total exactly");
+            assertEquals(0, c.fromTechSectorGbp().compareTo(bucket(c, SectorBucket.TECH_AI)),
+                    "the tech-sector part is precisely the Technology bucket");
+        }
+    }
+
+    @Test
+    void aTechnologyNameIsEntirelyTechSectorAndATaggedNameEntirelyCrossSector() {
+        Classification nvda = classifier().classify(
+                Position.direct("NVDA", gbp("25018.00"), "Technology"));
+        assertEquals(0, nvda.fromTechSectorGbp().compareTo(gbp("25018.00")));
+        assertEquals(0, nvda.crossSectorGbp().signum());
+
+        Classification goog = classifier().classify(
+                Position.direct("GOOG", gbp("76415.00"), "Communication Services"));
+        assertEquals(0, goog.fromTechSectorGbp().signum(),
+                "GOOG contributes nothing to the Technology bucket — that is the whole point");
+        assertEquals(0, goog.crossSectorGbp().compareTo(gbp("76415.00")));
+    }
+
+    @Test
+    void aNameThatIsNotAiTechAtAllContributesToNeitherSide() {
+        Classification c = classifier().classify(
+                Position.direct("HSBA", gbp("7622.00"), "Financial Services"));
+
+        assertEquals(0, c.aiTechGbp().signum());
+        assertEquals(0, c.fromTechSectorGbp().signum());
+        assertEquals(0, c.crossSectorGbp().signum());
+    }
+
+    @Test
+    void fundSplitsBetweenItsTechnologyWeightAndItsNamedAiHoldings() {
+        Classification c = classifier().classify(eqqq(gbp("218100.00")));
+
+        assertEquals(0, c.fromTechSectorGbp().compareTo(gbp("126092.82")),
+                "the 57.82% technology weight, normalised");
+        assertEquals(0, c.crossSectorGbp().compareTo(gbp("30991.21")),
+                "AMZN + GOOGL + GOOG + META, all filed outside Technology");
+    }
+
+    @Test
+    void anAlmostAllTechFundStillMatchesItsTechnologyBucketToThePenny() {
+        // SEMI's real shape: 99.88% technology with three slivers elsewhere, and no AI-tagged
+        // constituent outside Technology. absorbRounding pushes its remainder onto the Technology
+        // bucket, so a naive split leaves the parts a penny under the row they must reconcile to.
+        Map<String, BigDecimal> weights = new LinkedHashMap<>();
+        weights.put("technology", new BigDecimal("0.9988"));
+        weights.put("consumer_cyclical", new BigDecimal("0.0001"));
+        weights.put("basic_materials", new BigDecimal("0.0001"));
+        weights.put("industrials", new BigDecimal("0.0010"));
+        Classification c = classifier().classify(new Position("SEMI", gbp("15456.33"), null,
+                weights, List.of(new Constituent("MU", new BigDecimal("0.087"), "Technology"))));
+
+        assertEquals(0, c.fromTechSectorGbp().compareTo(bucket(c, SectorBucket.TECH_AI)));
+        assertEquals(0, c.fromTechSectorGbp().add(c.crossSectorGbp()).compareTo(c.aiTechGbp()));
+        assertTrue(c.crossSectorGbp().signum() >= 0, "cross-sector can never go negative");
+    }
+
     @Test
     void fundReportsHowMuchOfItIsIdentifiedByName() {
         Classification c = classifier().classify(eqqq(gbp("218100.00")));

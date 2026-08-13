@@ -1049,6 +1049,23 @@ invested.
   Weights are normalised by their own sum (Yahoo's total ~1.0001) and the rounding remainder is
   pushed onto the largest bucket, so **look-through never creates or destroys value** — asserted
   in `SectorClassifierTest`.
+- **Two different measures — do not add them.** The sector table is a **partition** (every
+  position in exactly one bucket, buckets sum to the portfolio); the AI/Tech tile is an
+  **overlay** that cuts across buckets. The `TECH_AI` bucket's label is plain **"Technology"**
+  (it *is* the GICS Technology sector; the constant name stays `TECH_AI` because it's the JSON
+  key and the `SECTOR_COLORS` key in `dashboard.js`), and the tile reads **"AI/Tech theme
+  (cross-sector)"**. They were briefly "Tech/AI" and "AI/Tech" — the same two words reversed,
+  inches apart — which reliably read as a bug. **The AI/Tech figure is not a row in the table
+  and must never be summed with it**: it already contains the whole Technology bucket.
+  The bridge is exact and printed on screen:
+  `aiTechGbp = fromTechSectorGbp + crossSectorGbp`, with `fromTechSectorGbp` **equal to the
+  Technology row**. Currently £443,186 = £296,877 + £146,309 (£112,805 held directly —
+  GOOG/AMZN/META/BABA/TSLA/NFLX — plus £33,504 of the same names inside the ETFs). Both parts are
+  computed in `SectorClassifier` rather than subtracted by the caller, so a later change to the
+  AI/Tech rule can't silently break the bridge; `SectorClassifierTest` asserts the identity and
+  that `fromTechSectorGbp` equals the bucket. For funds the split is taken against the *bucket*
+  value (`min`, then subtract), because that bucket may have absorbed a rounding penny from
+  `absorbRounding` and the printed arithmetic has to hold to the penny.
 - **AI/Tech share.** Direct: sector is Technology, **or** the symbol is in `aitech.include`.
   Fund: the `technology` weight in full, **plus** each named top-10 constituent on the list whose
   own sector is *not* Technology — the **double-count guard** (NVDA/AAPL/MSFT are already inside
@@ -1059,9 +1076,12 @@ invested.
   for bullion ETCs Yahoo has no sector for, and `aitech.include` (GOOG/GOOGL/META/AMZN/NFLX +
   TSLA/BABA; V/MA and LSEG/REL deliberately excluded). No weights, no as-of dates.
 - **UI**: basis toggle (% of total / % of invested, both computed server-side so it toggles
-  without a refetch), AI/Tech tile split direct vs via-fund, doughnut, table with a
-  **direct / via-fund** column keeping the inferred part visible, and a collapsible per-fund
-  provenance table. The block lives in its **own `#sector-block` container**, and `loadSectors`
+  without a refetch), AI/Tech tile showing the **bridge** (Technology sector + AI names filed in
+  other sectors), doughnut, table with a **direct / via-fund** column keeping the inferred part
+  visible, plus two collapsible sections — per-fund look-through provenance, and a per-position
+  breakdown of the AI/Tech figure (`AiContributor.source` = `TECHNOLOGY_SECTOR` / `TAGGED` /
+  `FUND`; a `TAGGED` row names the sector it's actually filed under, which is the whole
+  explanation in one cell). The block lives in its **own `#sector-block` container**, and `loadSectors`
   passes that id to `panelLoadFailed`/`clearPanelError` — passing the sub-view id would destroy
   the allocation charts' canvases on a sectors failure. Two independent latches
   (`loadBreakdownSubview` calls both) so one endpoint's blip doesn't take the other down.

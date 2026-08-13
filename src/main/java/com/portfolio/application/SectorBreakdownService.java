@@ -51,11 +51,12 @@ public class SectorBreakdownService {
     public SectorBreakdown breakdown() {
         List<String> warnings = new ArrayList<>();
 
-        AllocationPoint point = allocationService.currentPoint();
-        if (point == null) {
+        AllocationService.CurrentSnapshot snapshot = allocationService.currentSnapshot();
+        if (snapshot == null) {
             warnings.add("No cash-ledger transactions yet — nothing to classify.");
             return empty(warnings);
         }
+        AllocationPoint point = snapshot.point();
 
         Map<String, FundamentalsRepository.Cached> cache = fundamentalsRepo.loadAll();
         if (cache.isEmpty()) {
@@ -66,6 +67,9 @@ public class SectorBreakdownService {
         Map<SectorBucket, BigDecimal> total = new EnumMap<>(SectorBucket.class);
         Map<SectorBucket, BigDecimal> direct = new EnumMap<>(SectorBucket.class);
         Map<SectorBucket, BigDecimal> viaFund = new EnumMap<>(SectorBucket.class);
+        // What feeds each bucket, for the click-through popup. The classifier already produces
+        // this split per position; previously only the totals were kept.
+        Map<SectorBucket, List<SectorBreakdown.Constituent>> members = new EnumMap<>(SectorBucket.class);
         List<SectorBreakdown.Contributor> unclassified = new ArrayList<>();
         List<SectorBreakdown.AiContributor> aiContributors = new ArrayList<>();
         List<SectorBreakdown.FundNote> fundNotes = new ArrayList<>();
@@ -90,9 +94,13 @@ public class SectorBreakdownService {
                     constituentsOf(quote, cache)));
 
             for (Map.Entry<SectorBucket, BigDecimal> b : c.byBucket().entrySet()) {
+                if (b.getValue().signum() == 0) continue;
                 total.merge(b.getKey(), b.getValue(), BigDecimal::add);
                 (c.fund() ? viaFund : direct).merge(b.getKey(), b.getValue(), BigDecimal::add);
-                if (b.getKey() == SectorBucket.UNCLASSIFIED && b.getValue().signum() > 0) {
+                members.computeIfAbsent(b.getKey(), k -> new ArrayList<>())
+                        .add(new SectorBreakdown.Constituent(symbol, b.getValue(), null, c.fund(),
+                                c.fund() ? fraction(b.getValue(), gbp) : null));
+                if (b.getKey() == SectorBucket.UNCLASSIFIED) {
                     unclassified.add(new SectorBreakdown.Contributor(symbol, b.getValue()));
                 }
             }
@@ -124,7 +132,16 @@ public class SectorBreakdownService {
         }
 
         BigDecimal cashGbp = point.cashGbp() == null ? BigDecimal.ZERO : point.cashGbp();
-        if (cashGbp.signum() != 0) total.merge(SectorBucket.CASH, cashGbp, BigDecimal::add);
+        if (cashGbp.signum() != 0) {
+            total.merge(SectorBucket.CASH, cashGbp, BigDecimal::add);
+            // Cash is one number on the row but four balances underneath; the drill-down is the
+            // only place that distinction is visible, so keep the per-(account, currency) detail.
+            for (Map.Entry<String, BigDecimal> e : snapshot.cashGbpByAccountCcy().entrySet()) {
+                members.computeIfAbsent(SectorBucket.CASH, k -> new ArrayList<>())
+                        .add(new SectorBreakdown.Constituent(
+                                e.getKey().replace("|", " · "), e.getValue(), null, false, null));
+            }
+        }
 
         BigDecimal totalGbp = point.totalGbp();
         BigDecimal investedGbp = point.investedGbp();
@@ -140,7 +157,8 @@ public class SectorBreakdownService {
                     // for it would be nonsense rather than merely uninteresting.
                     bucket == SectorBucket.CASH ? null : fraction(b.getValue(), investedGbp),
                     scaled(direct.getOrDefault(bucket, BigDecimal.ZERO)),
-                    scaled(viaFund.getOrDefault(bucket, BigDecimal.ZERO))));
+                    scaled(viaFund.getOrDefault(bucket, BigDecimal.ZERO)),
+                    finaliseConstituents(members.get(bucket), b.getValue())));
         }
         rows.sort(Comparator.comparing(SectorBreakdown.Row::gbp).reversed());
 
@@ -159,6 +177,22 @@ public class SectorBreakdownService {
 
         return new SectorBreakdown(point.date(), totalGbp, investedGbp, scaled(cashGbp),
                 rows, aiTech, unclassified, fundNotes, warnings);
+    }
+
+    /**
+     * Orders a bucket's members by value and fills in each one's share of the bucket, which can
+     * only be computed once the bucket total is known.
+     */
+    private static List<SectorBreakdown.Constituent> finaliseConstituents(
+            List<SectorBreakdown.Constituent> members, BigDecimal bucketTotal) {
+        if (members == null || members.isEmpty()) return List.of();
+        List<SectorBreakdown.Constituent> out = new ArrayList<>();
+        for (SectorBreakdown.Constituent c : members) {
+            out.add(new SectorBreakdown.Constituent(c.label(), scaled(c.gbp()),
+                    fraction(c.gbp(), bucketTotal), c.viaFund(), c.shareOfPosition()));
+        }
+        out.sort(Comparator.comparing(SectorBreakdown.Constituent::gbp).reversed());
+        return List.copyOf(out);
     }
 
     /**

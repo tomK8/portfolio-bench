@@ -34,7 +34,26 @@ public record SectorBreakdown(
      */
     public record Row(String bucket, String label, BigDecimal gbp,
                       BigDecimal pctOfTotal, BigDecimal pctOfInvested,
-                      BigDecimal directGbp, BigDecimal viaFundGbp) {
+                      BigDecimal directGbp, BigDecimal viaFundGbp,
+                      List<Constituent> constituents) {
+    }
+
+    /**
+     * One position feeding a bucket, for the click-through popup. The unit is the <b>position</b>,
+     * not the underlying company: a fund arrives as a single row carrying its slice, because Yahoo
+     * names only a fund's top 10 holdings and several of ours resolve almost none of themselves
+     * (MCTS 0%, RBTX 5.9%). Listing positions keeps every penny of the bucket accounted for.
+     *
+     * @param label            symbol, or {@code "AJBell · GBP"} for a cash balance
+     * @param pctOfBucket      share of the bucket this row represents
+     * @param shareOfPosition  for a fund slice, how much of that fund landed in this bucket
+     *                         (0.178 = 17.8% of EQQQ); {@code null} for a directly-held position
+     */
+    public record Constituent(String label,
+                              BigDecimal gbp,
+                              BigDecimal pctOfBucket,
+                              boolean viaFund,
+                              BigDecimal shareOfPosition) {
     }
 
     /**

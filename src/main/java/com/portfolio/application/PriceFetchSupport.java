@@ -5,6 +5,7 @@ import com.portfolio.domain.Instruments;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.WatchlistRepository;
+import org.slf4j.Logger;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -72,6 +73,48 @@ final class PriceFetchSupport {
             out.add(tickers.tickerFor(symbol));
         }
         return out;
+    }
+
+    /**
+     * The single wording for "we have no prices for this and here is the fix", shared by the daily
+     * and intraday jobs so a symbol that needs a mapping says the same thing wherever it surfaces.
+     * The {@code symbol} is the internal name when known (null when only the resolved ticker is in
+     * hand) — equal to {@code ticker} for an unmapped symbol, which is the case that gets the
+     * copy-paste fix rather than a "correct the existing entry" nudge.
+     *
+     * <p>Fired only when nothing has <em>ever</em> been stored for the ticker: an established name
+     * returning no rows is an ordinary quiet fetch (weekend, already current), while a first fetch
+     * that comes back empty means the ticker itself is wrong — the identity fallback aimed
+     * {@code PHP} (Primary Health Properties, LSE) at a US mutual fund delisted in 2019.
+     */
+    static void warnNoPriceData(Logger log, String symbol, String ticker) {
+        if (ticker.equals(symbol)) {
+            log.warn("No price data for {} — nothing on Yahoo answers to that ticker, which we tried "
+                    + "only because the symbol has no entry in yahoo-tickers.properties. Add one: "
+                    + "{}={}.L for a London listing (.PA Paris, .AS Amsterdam, .DE Frankfurt).",
+                    symbol, symbol, symbol);
+        } else if (symbol != null) {
+            log.warn("No price data for {} — its yahoo-tickers.properties mapping to {} does not "
+                    + "resolve on Yahoo. Correct the {} entry.", symbol, ticker, symbol);
+        } else {
+            log.warn("No price data for ticker {} — check the yahoo-tickers.properties entry that "
+                    + "maps to it.", ticker);
+        }
+    }
+
+    /**
+     * One-time notice that a symbol is being priced through the identity fallback rather than an
+     * explicit mapping. Absence from the map is legitimate for US listings, so this is INFO, not a
+     * warning — but it is worth a line in the log because the fallback can silently hit a *real*
+     * foreign instrument: unmapped {@code BLND} (British Land, LSE, ~440p) resolves to an unrelated
+     * NYSE ticker trading near $1.50, which prices the position wrongly instead of not at all.
+     * {@link #warnNoPriceData} cannot catch that case — data does come back.
+     */
+    static void noteIdentityTicker(Logger log, String ticker) {
+        log.info("First price fetch for {} — no entry in yahoo-tickers.properties, assuming a US "
+                + "listing of the same name. If it is a non-US listing, add the mapping "
+                + "(e.g. {}={}.L) — the identity fallback can resolve to an unrelated instrument.",
+                ticker, ticker, ticker);
     }
 
     /** Cooperative sleep — restores the interrupt flag instead of swallowing it. */

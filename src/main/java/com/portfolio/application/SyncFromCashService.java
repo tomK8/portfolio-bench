@@ -144,7 +144,8 @@ public class SyncFromCashService {
         if (sources.isEmpty()) sources.add("cash ledger");
 
         return new SyncResult(aggregated, totals, rates, BigDecimal.ZERO, sources, false,
-                List.of(), missingIntraday, dailyCloseFallbacks, List.of());
+                List.of(), missingIntraday, dailyCloseFallbacks, List.of(),
+                SyncPortfolioService.unpricedSymbols(missingIntraday, tickerBySymbol, priceHistory));
     }
 
     /**

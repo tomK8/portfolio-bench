@@ -72,4 +72,32 @@ class AJBellOrdersParserTest {
         assertEquals("Some Brand New ETF PLC", orders.get(0).symbol(),
                 "unmapped name falls through to the symbol field");
     }
+
+    /**
+     * The three UK REITs bought in Aug 2026. An unmapped name still renders (as the full name), but
+     * resolves to no ticker, so its Current / vs-limit / touch-probability columns stay blank —
+     * which is what prompted the mapping.
+     */
+    @Test
+    void parse_mapsUkReitNamesToInternalSymbols(@TempDir Path dir) throws Exception {
+        Path f = dir.resolve("activeorders.csv");
+        Files.writeString(f, """
+                "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"
+                "Primary Health Properties PLC","44626CHCC62","Buy","Limit","0","10053.5","93.71p","13/08/2026","30/10/2026","In progress"
+                "LondonMetric Property PLC","44626CHCKP7","Buy","Limit","0","7038.5","193.2p","13/08/2026","30/10/2026","In progress"
+                "British Land Co PLC","44626CHCPMG","Buy","Limit","0","5028.5","434.7p","13/08/2026","10/11/2026","In progress"
+                """);
+
+        List<OpenOrder> orders = parser.parse(f);
+        assertEquals(List.of("PHP", "LMP", "BLND"),
+                orders.stream().map(OpenOrder::symbol).toList());
+        // Pence normalised to pounds, same as every other London price.
+        assertEquals(0, orders.get(2).price().compareTo(new BigDecimal("4.347")));
+    }
+
+    @Test
+    void symbolOrName_fallsThroughUnmappedNamesUnchanged() {
+        assertEquals("PHP", AJBellOrdersParser.symbolOrName("Primary Health Properties PLC"));
+        assertEquals("Some New Holding PLC", AJBellOrdersParser.symbolOrName("Some New Holding PLC"));
+    }
 }

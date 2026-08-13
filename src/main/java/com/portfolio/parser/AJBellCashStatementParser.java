@@ -68,6 +68,11 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             new SymbolRule(Pattern.compile("SOCIETE GENERALE"), "GLE"),
             new SymbolRule(Pattern.compile("RHEINMETALL"), "RHM"),
             new SymbolRule(Pattern.compile("LONDON.*EXCHANGE"), "LSEG"),
+            // UK REITs. LONDONMETRIC is listed after LONDON.*EXCHANGE only for grouping — the two
+            // can't collide, "LondonMetric Property PLC" carries no "EXCHANGE".
+            new SymbolRule(Pattern.compile("PRIMARY HEALTH"), "PHP"),
+            new SymbolRule(Pattern.compile("LONDONMETRIC"), "LMP"),
+            new SymbolRule(Pattern.compile("BRITISH LAND"), "BLND"),
             new SymbolRule(Pattern.compile("\\bRELX\\b"), "REL"),
             new SymbolRule(Pattern.compile("H.{0,3}S.{0,3}BC"), "HSBA"),
             new SymbolRule(Pattern.compile("(?:INVESCO|POWERSHARES).*EQQQ"), "EQQQ"),
@@ -100,7 +105,18 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             if (rule.pattern().matcher(upper).find()) return rule.ticker();
         }
 
-        return cleanName(name);
+        // No rule matched: the ledger keeps the cleaned-up investment name as its symbol, which is
+        // visible but wrong for every symbol-keyed join downstream — the holdings file calls the
+        // same position PHP while the ledger calls it PRIMARY HEALTH PROPERTIES PLC, so the two
+        // views stop agreeing (the reconciliation panel showed the whole position as a diff) and
+        // no price feed will ever resolve the long name. Warn with the fix at parse time rather
+        // than leaving it to be noticed downstream.
+        String cleaned = cleanName(name);
+        log.warn("[AJBell cash] No symbol rule for \"{}\" — storing it as \"{}\". Add a SYMBOL_RULES "
+                + "entry mapping it to the ticker used in the holdings file, and a matching line in "
+                + "yahoo-tickers.properties, or this position will not price or reconcile.",
+                name, cleaned);
+        return cleaned;
     }
 
     // ---- CashTransactionParser ----

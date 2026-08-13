@@ -5,7 +5,9 @@ import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.TransactionType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
@@ -117,5 +119,37 @@ class AJBellCashStatementParserTest {
         parser.parse(FIXTURE).forEach(t ->
                 assertTrue(t.transactionDate().matches("\\d{4}-\\d{2}-\\d{2}"),
                         "Date not ISO: " + t.transactionDate()));
+    }
+
+    /**
+     * The ledger's symbol has to match the ticker the holdings file uses, or the two portfolio
+     * views key the same position differently — an unmapped "Primary Health Properties PLC" sat in
+     * the ledger under its full name while the holdings side called it PHP, so the reconciliation
+     * panel reported the entire position as a diff and no price feed could ever resolve it.
+     */
+    @Test
+    void parse_mapsUkReitNamesToTheHoldingsFileTicker(@TempDir Path dir) throws Exception {
+        Path f = dir.resolve("cashstatements.csv");
+        Files.writeString(f, """
+                "Date","Description","Reference","Settlement date","Receipt (GBP)","Payment (GBP)","Balance (GBP)"
+                "13/08/2026","Purchase 5000 British Land Co PLC","44626BLND1","15/08/2026","0","-5028.50","1,000.00"
+                "13/08/2026","Purchase 3000 LondonMetric Property PLC","44626LMP01","15/08/2026","0","-3018.50","6,028.50"
+                "12/08/2026","Purchase 10573 Primary Health Properties PLC","44626PHP01","14/08/2026","0","-10052.58","9,047.00"
+                """);
+
+        List<String> symbols = parser.parse(f).stream().map(CashTransaction::symbol).toList();
+        assertEquals(List.of("PHP", "LMP", "BLND"), symbols, "rows come back oldest-first");
+    }
+
+    /** An unmapped name still parses — it just keeps its cleaned-up name as the symbol (and warns). */
+    @Test
+    void parse_unmappedNameKeepsCleanedNameAsSymbol(@TempDir Path dir) throws Exception {
+        Path f = dir.resolve("cashstatements.csv");
+        Files.writeString(f, """
+                "Date","Description","Reference","Settlement date","Receipt (GBP)","Payment (GBP)","Balance (GBP)"
+                "13/08/2026","Purchase 100 Some New Holding PLC ORD GBP0.01","44626NEW01","15/08/2026","0","-500.00","1,000.00"
+                """);
+
+        assertEquals("SOME NEW HOLDING PLC", parser.parse(f).get(0).symbol());
     }
 }

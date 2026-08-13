@@ -40,6 +40,19 @@
             </ul>
         </div>
 
+        <div th:if="${result.unpricedSymbols != null and !result.unpricedSymbols.isEmpty()}"
+             class="value-warnings">
+            <h4>No price data — ticker mapping needed</h4>
+            <p>These held symbols have no intraday quote <em>and</em> no daily close on record, so
+                nothing on Yahoo has ever answered to the ticker shown. Add a line to
+                <code>src/main/resources/yahoo-tickers.properties</code> — non-US listings need an
+                exchange suffix (<code>.L</code> London, <code>.PA</code> Paris, <code>.AS</code>
+                Amsterdam, <code>.DE</code> Frankfurt), e.g. <code>PHP=PHP.L</code>:</p>
+            <ul>
+                <li th:each="s : ${result.unpricedSymbols}"><code th:text="${s}">SYM</code></li>
+            </ul>
+        </div>
+
         <div th:if="${(result.cashRecon != null and !result.cashRecon.isEmpty())
                        or (result.assetRecon != null and !result.assetRecon.isEmpty())}"
              class="cash-recon">

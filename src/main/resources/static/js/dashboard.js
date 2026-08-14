@@ -120,6 +120,205 @@
             }
         }
 
+        // ── Instrument mappings ─────────────────────────────────────────────────────
+        // A new instrument needs a name mapping (broker description → symbol) and/or a ticker
+        // mapping (symbol → Yahoo ticker) before anything can price it. Both are offered inline
+        // wherever the gap shows: the Open orders panel and both sync tabs' unpriced-symbol panels.
+        // Those fragments are htmx-swapped, so binding per fragment would mean re-attaching after
+        // every swap — one delegated listener on the body handles every .map-row instead.
+
+        function mapVal(row, sel) {
+            var el = row.querySelector(sel);
+            return el ? el.value.trim() : '';
+        }
+
+        function mapStatus(row, text, cls) {
+            var el = row.querySelector('.map-status');
+            if (!el) return;
+            el.textContent = text;
+            el.className = 'map-status' + (cls ? ' ' + cls : '');
+        }
+
+        // The listing's own name and currency are the point of showing a probe: a ticker that
+        // resolves to the wrong live instrument prices the position wrongly rather than not at all,
+        // and reading back "British Land ... USD" is the only thing that catches it at entry time.
+        function mapProbeText(p) {
+            if (!p || !p.found) return (p && p.message) || 'Yahoo returned nothing for that ticker.';
+            var bits = [];
+            if (p.name) bits.push(p.name);
+            if (p.currency) bits.push(p.currency);
+            if (p.exchange) bits.push(p.exchange);
+            if (p.lastClose != null) bits.push('last ' + p.lastClose + (p.lastDate ? ' on ' + p.lastDate : ''));
+            return '\u2713 ' + (bits.length ? bits.join(' \u00b7 ') : 'found');
+        }
+
+        function mapPost(url, params) {
+            var body = new URLSearchParams();
+            Object.keys(params).forEach(function (k) {
+                if (params[k] !== null && params[k] !== undefined && params[k] !== '') body.append(k, params[k]);
+            });
+            return fetch(url, {method: 'POST', body: body}).then(function (r) {
+                if (!r.ok) {
+                    return r.text().then(function (t) {
+                        throw new Error((t || '').slice(0, 300) || ('HTTP ' + r.status));
+                    });
+                }
+                return r.json();
+            });
+        }
+
+        function mapRenderList(container, view) {
+            var html = '';
+            if (view.aliases && view.aliases.length) {
+                html += '<h5>Name mappings (yours)</h5><table class="map-table"><tr>'
+                    + '<th class="lbl">Match text</th><th class="lbl">Symbol</th>'
+                    + '<th class="lbl">From</th><th></th></tr>';
+                view.aliases.forEach(function (a) {
+                    html += '<tr><td class="lbl"><code>' + escapeHtml(a.keyword) + '</code></td>'
+                        + '<td class="lbl">' + escapeHtml(a.symbol) + '</td>'
+                        + '<td class="lbl muted">' + escapeHtml(a.rawName || '—') + '</td>'
+                        + '<td><button type="button" class="map-delete" data-keyword="'
+                        + escapeHtml(a.keyword) + '">Remove</button></td></tr>';
+                });
+                html += '</table>';
+            }
+            html += '<h5>Ticker mappings (yours)</h5>';
+            if (view.tickers && view.tickers.length) {
+                html += '<table class="map-table"><tr><th class="lbl">Symbol</th>'
+                    + '<th class="lbl">Yahoo ticker</th><th class="lbl">Currency</th>'
+                    + '<th class="lbl">Checked</th><th></th></tr>';
+                view.tickers.forEach(function (t) {
+                    html += '<tr><td class="lbl">' + escapeHtml(t.symbol) + '</td>'
+                        + '<td class="lbl"><code>' + escapeHtml(t.yahooTicker) + '</code></td>'
+                        + '<td class="lbl">' + escapeHtml(t.currency || '—') + '</td>'
+                        + '<td class="lbl muted">' + (t.verifiedAt ? escapeHtml(t.verifiedAt.slice(0, 10)) : 'not checked') + '</td>'
+                        + '<td><button type="button" class="map-delete" data-symbol="'
+                        + escapeHtml(t.symbol) + '">Remove</button></td></tr>';
+                });
+                html += '</table>';
+            } else {
+                html += '<p class="muted">None yet — mappings you add from a warning panel appear here.</p>';
+            }
+            if (view.builtIn && view.builtIn.length) {
+                html += '<h5>Built in (' + view.builtIn.length + ')</h5>'
+                    + '<p class="muted">Shipped with the app. A mapping you add for the same symbol '
+                    + 'overrides it.</p><p class="map-builtin">';
+                html += view.builtIn.map(function (b) {
+                    return '<code>' + escapeHtml(b.symbol) + ' \u2192 ' + escapeHtml(b.yahooTicker) + '</code>';
+                }).join(' ');
+                html += '</p>';
+            }
+            container.innerHTML = html;
+        }
+
+        function mapLoadList(container) {
+            container.textContent = 'Loading\u2026';
+            fetch('/mappings')
+                .then(function (r) { return r.json(); })
+                .then(function (view) { mapRenderList(container, view); })
+                .catch(function (err) {
+                    container.textContent = 'Could not load the mapping list — ' + err.message;
+                });
+        }
+
+        // Complete the ticker box from the symbol as it is typed (XWHS → XWHS.L on a sterling
+        // order). Only while the box is still ours: the moment the user edits it by hand the
+        // auto-fill stands down, so a hand-typed ticker is never overwritten.
+        document.body.addEventListener('input', function (ev) {
+            var el = ev.target;
+            if (!el.classList) return;
+            var row = el.closest ? el.closest('.map-row') : null;
+            if (!row) return;
+
+            if (el.classList.contains('map-ticker')) {
+                el.dataset.auto = '';
+                return;
+            }
+            if (!el.classList.contains('map-symbol')) return;
+            var tickerBox = row.querySelector('.map-ticker');
+            if (!tickerBox || (tickerBox.value && tickerBox.dataset.auto !== '1')) return;
+            var sym = el.value.trim().toUpperCase();
+            tickerBox.value = sym ? sym + (sym.indexOf('.') >= 0 ? '' : (row.dataset.suffix || '')) : '';
+            tickerBox.dataset.auto = '1';
+        });
+
+        document.body.addEventListener('click', function (ev) {
+            if (!ev.target.closest) return;
+
+            var summary = ev.target.closest('.map-list-toggle');
+            if (summary) {
+                var details = summary.parentElement;
+                // Fires before the open state flips, so !open means it is being opened now.
+                if (details && !details.open) {
+                    var body = details.querySelector('.map-list-body');
+                    if (body) setTimeout(function () { mapLoadList(body); }, 0);
+                }
+                return;
+            }
+
+            var del = ev.target.closest('.map-delete');
+            if (del) {
+                var listBody = del.closest('.map-list-body');
+                del.disabled = true;
+                mapPost('/mappings/delete', {symbol: del.dataset.symbol || '', keyword: del.dataset.keyword || ''})
+                    .then(function (view) { if (listBody) mapRenderList(listBody, view); })
+                    .catch(function (err) {
+                        del.disabled = false;
+                        if (listBody) listBody.insertAdjacentHTML('afterbegin',
+                            '<p class="map-status map-bad">' + escapeHtml(err.message) + '</p>');
+                    });
+                return;
+            }
+
+            var btn = ev.target.closest('.map-verify, .map-save');
+            if (!btn) return;
+            var row = btn.closest('.map-row');
+            if (!row) return;
+
+            if (btn.classList.contains('map-verify')) {
+                var probeTicker = mapVal(row, '.map-ticker');
+                if (!probeTicker) { mapStatus(row, 'Enter a Yahoo ticker first.', 'map-bad'); return; }
+                mapStatus(row, 'Checking ' + probeTicker + '\u2026', '');
+                mapPost('/mappings/verify', {ticker: probeTicker})
+                    .then(function (p) { mapStatus(row, mapProbeText(p), p.found ? 'map-good' : 'map-bad'); })
+                    .catch(function (err) { mapStatus(row, err.message, 'map-bad'); });
+                return;
+            }
+
+            var params = {
+                symbol: mapVal(row, '.map-symbol') || row.dataset.symbol || '',
+                ticker: mapVal(row, '.map-ticker'),
+                keyword: mapVal(row, '.map-keyword'),
+                rawName: row.dataset.name || '',
+                force: btn.dataset.force === '1' ? 'true' : 'false'
+            };
+            if (!params.symbol) {
+                mapStatus(row, 'Enter the symbol this app should use for the instrument.', 'map-bad');
+                return;
+            }
+            btn.disabled = true;
+            mapStatus(row, 'Saving\u2026', '');
+            mapPost('/mappings/save', params)
+                .then(function (res) {
+                    btn.disabled = false;
+                    if (!res.ok) {
+                        mapStatus(row, res.message, 'map-bad');
+                        var force = row.querySelector('.map-force');
+                        if (force) force.hidden = false;
+                        return;
+                    }
+                    mapStatus(row, res.message, 'map-good');
+                    row.querySelectorAll('input, button').forEach(function (el) { el.disabled = true; });
+                    // Prices are backfilled on a background thread, so give it a moment before
+                    // repainting — otherwise the row comes back mapped but still priceless.
+                    if (row.dataset.reload === 'orders') setTimeout(loadOrders, 3500);
+                })
+                .catch(function (err) {
+                    btn.disabled = false;
+                    mapStatus(row, err.message, 'map-bad');
+                });
+        });
+
         var TAB_KEY = 'portfolio-bench.active-tab';
         var GROUP_KEY_PREFIX = 'portfolio-bench.last-sub.';
 

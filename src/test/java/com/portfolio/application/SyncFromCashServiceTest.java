@@ -133,8 +133,10 @@ class SyncFromCashServiceTest {
                 () -> Map.of(), new YahooTickerMap(), new PriceHistoryRepository(cf));
         SyncResult r = svc.sync();
 
-        // Names the ticker actually tried — that is the string the properties file has to change.
-        assertEquals(List.of("PHP (ticker PHP.L)"), r.unpricedSymbols());
+        // Names the ticker actually tried — kept as its own field so the dashboard can pre-fill
+        // the inline mapping editor with it, not just print it.
+        assertEquals(List.of(new SyncResult.UnpricedSymbol("PHP", "PHP.L")), r.unpricedSymbols());
+        assertEquals("PHP (ticker PHP.L)", r.unpricedSymbols().get(0).display());
     }
 
     @Test

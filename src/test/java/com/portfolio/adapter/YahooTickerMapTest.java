@@ -2,6 +2,9 @@ package com.portfolio.adapter;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class YahooTickerMapTest {
@@ -58,4 +61,54 @@ class YahooTickerMapTest {
         assertFalse(map.resolvedByIdentity("EQQQ.L"));
     }
 
+    // ---- user overrides (the ticker_mappings overlay) ---------------------------------------
+
+    @Test
+    void userOverrideAddsAMappingTheFileDoesNotHave() {
+        YahooTickerMap m = new YahooTickerMap(() -> Map.of("XWHS", "XWHS.L"));
+        assertEquals("XWHS.L", m.tickerFor("XWHS"));
+        assertTrue(m.hasMapping("XWHS"));
+        assertFalse(m.resolvedByIdentity("XWHS.L"));
+    }
+
+    /**
+     * A committed mapping that turns out to be wrong has to be correctable without a release —
+     * that is the whole reason the overlay wins rather than merely filling gaps.
+     */
+    @Test
+    void userOverrideBeatsTheCommittedFile() {
+        YahooTickerMap m = new YahooTickerMap(() -> Map.of("PHP", "PHP.XX"));
+        assertEquals("PHP.XX", m.tickerFor("PHP"));
+    }
+
+    @Test
+    void reloadPicksUpAMappingAddedAfterConstruction() {
+        Map<String, String> live = new HashMap<>();
+        YahooTickerMap m = new YahooTickerMap(() -> Map.copyOf(live));
+        assertEquals("XWHS", m.tickerFor("XWHS"), "identity until mapped");
+
+        live.put("XWHS", "XWHS.L");
+        assertEquals("XWHS", m.tickerFor("XWHS"), "cached — no per-lookup read");
+
+        m.reload();
+        assertEquals("XWHS.L", m.tickerFor("XWHS"));
+    }
+
+    @Test
+    void overrideKeysAreCaseInsensitiveAndBlanksAreIgnored() {
+        Map<String, String> raw = new HashMap<>();
+        raw.put("xwhs", " XWHS.L ");
+        raw.put("EMPTY", "");
+        YahooTickerMap m = new YahooTickerMap(() -> raw);
+
+        assertEquals("XWHS.L", m.tickerFor("XWHS"));
+        assertEquals("EMPTY", m.tickerFor("EMPTY"), "a blank ticker is not a mapping");
+    }
+
+    @Test
+    void builtInMappingsListTheCommittedFileOnly() {
+        YahooTickerMap m = new YahooTickerMap(() -> Map.of("XWHS", "XWHS.L"));
+        assertEquals("EQQQ.L", m.builtInMappings().get("EQQQ"));
+        assertFalse(m.builtInMappings().containsKey("XWHS"));
+    }
 }

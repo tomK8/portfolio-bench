@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -97,7 +98,21 @@ class AJBellOrdersParserTest {
 
     @Test
     void symbolOrName_fallsThroughUnmappedNamesUnchanged() {
-        assertEquals("PHP", AJBellOrdersParser.symbolOrName("Primary Health Properties PLC"));
-        assertEquals("Some New Holding PLC", AJBellOrdersParser.symbolOrName("Some New Holding PLC"));
+        assertEquals("PHP", parser.symbolOrName("Primary Health Properties PLC"));
+        assertEquals("Some New Holding PLC", parser.symbolOrName("Some New Holding PLC"));
+    }
+
+    /** A keyword added on the dashboard maps a name the committed table has never heard of. */
+    @Test
+    void symbolOrName_usesUserAddedAliases() {
+        var p = new AJBellOrdersParser(() -> Map.of("xtrackers msci world health", "XWHS"));
+        assertEquals("XWHS", p.symbolOrName("Xtrackers MSCI World Health Care ETF 1C GBP"));
+    }
+
+    /** User keywords are consulted first, so a committed rule aimed at the wrong name is fixable. */
+    @Test
+    void userAliasesOverrideTheCommittedKeywords() {
+        var p = new AJBellOrdersParser(() -> Map.of("relx", "REL2"));
+        assertEquals("REL2", p.symbolOrName("RELX PLC"));
     }
 }

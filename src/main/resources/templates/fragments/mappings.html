@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!--
+  Inline instrument-mapping editors, shared by every view that can notice a mapping is missing:
+  the two sync tabs (symbol known, ticker wrong or absent) and Open orders (which can also be
+  missing the description → symbol step). The markup is deliberately dumb — dashboard.js drives
+  every .map-row through one delegated listener, so these fragments work after any htmx swap.
+-->
+
+<!-- Held symbols nothing has ever priced: the ticker mapping is missing or wrong. -->
+<div th:fragment="unpriced(unpriced)" class="value-warnings">
+    <h4>No price data — ticker mapping needed</h4>
+    <p>These held symbols have no intraday quote <em>and</em> no daily close on record, so nothing
+        on Yahoo has ever answered to the ticker tried. Fix it here — check the ticker first, then
+        save. Non-US listings need an exchange suffix (<code>.L</code> London, <code>.PA</code>
+        Paris, <code>.AS</code> Amsterdam, <code>.DE</code> Frankfurt). The mapping is stored in the
+        database, applies immediately and overrides the built-in one.</p>
+
+    <div class="map-row" th:each="u : ${unpriced}" th:attr="data-symbol=${u.symbol}">
+        <div class="map-instrument">
+            <strong th:text="${u.symbol}">SYM</strong>
+            <span class="muted" th:text="'tried ' + ${u.ticker}">tried SYM</span>
+        </div>
+        <label>Yahoo ticker
+            <input class="map-ticker" type="text" th:value="${u.ticker}" size="12" spellcheck="false">
+        </label>
+        <button type="button" class="map-verify">Check</button>
+        <button type="button" class="map-save">Save</button>
+        <button type="button" class="map-save map-force" data-force="1" hidden>Save anyway</button>
+        <span class="map-status"></span>
+    </div>
+</div>
+
+<!-- The full mapping list: the user's rows (editable) above the committed baseline (read-only). -->
+<details th:fragment="list" class="map-list">
+    <summary class="map-list-toggle">All instrument mappings</summary>
+    <div class="map-list-body">Loading…</div>
+</details>
+
+</body>
+</html>

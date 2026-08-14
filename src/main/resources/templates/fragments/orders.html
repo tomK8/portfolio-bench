@@ -24,6 +24,44 @@
             </ul>
         </div>
 
+        <div th:if="${!orders.unmapped.isEmpty()}" class="value-warnings">
+            <h4>Instruments with no mapping</h4>
+            <p>These orders show no live price because the instrument isn't mapped yet — the broker's
+                export names it but carries no ticker, and/or nothing on Yahoo has ever answered to
+                the ticker tried. Add the mapping here: check the ticker first, then save. It's
+                stored in the database, applies immediately without a restart, and the match text is
+                shared with the cash statement — so the position won't strand in the ledger when the
+                trade settles.</p>
+
+            <div class="map-row" th:each="u : ${orders.unmapped}"
+                 th:attr="data-name=${u.name}, data-symbol=${u.symbol}, data-suffix=${u.tickerSuffix}"
+                 data-reload="orders">
+                <div class="map-instrument">
+                    <strong th:text="${u.name}">Instrument</strong>
+                    <span class="muted" th:text="${u.needsAlias}
+                            ? ${u.broker} + ' — no symbol, so no ticker either'
+                            : ${u.broker} + ' — nothing has ever priced under ' + ${u.triedTicker}">broker</span>
+                </div>
+                <label th:if="${u.needsAlias}">Match text
+                    <input class="map-keyword" type="text" th:value="${u.suggestedKeyword}"
+                           size="30" spellcheck="false"
+                           title="Any lowercase phrase from the broker's description. Kept short on purpose so the orders export and the cash statement both match it.">
+                </label>
+                <label th:if="${u.needsAlias}">Symbol
+                    <input class="map-symbol" type="text" size="8" spellcheck="false"
+                           placeholder="XWHS" title="The short symbol this app should use for the instrument.">
+                </label>
+                <label>Yahoo ticker
+                    <input class="map-ticker" type="text" th:value="${u.suggestedTicker}"
+                           size="12" spellcheck="false" placeholder="XWHS.L">
+                </label>
+                <button type="button" class="map-verify">Check</button>
+                <button type="button" class="map-save">Save</button>
+                <button type="button" class="map-save map-force" data-force="1" hidden>Save anyway</button>
+                <span class="map-status"></span>
+            </div>
+        </div>
+
         <div class="note" th:if="${orders.orders.isEmpty()}">
             No open orders — every order in the exported files has been filled, cancelled or expired.
         </div>
@@ -84,6 +122,8 @@
             GBP) is folded into the order value.
         </p>
     </div>
+
+    <div th:replace="~{fragments/mappings :: list}"></div>
 
 </div>
 

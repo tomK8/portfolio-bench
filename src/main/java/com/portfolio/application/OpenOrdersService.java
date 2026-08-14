@@ -25,6 +25,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -64,6 +65,9 @@ public class OpenOrdersService {
     private static final int TOUCH_HORIZON_SESSIONS_LONG = 20;
     /** Calendar-day lookback loaded per symbol to compute the daily-vol windows (≈ 60 sessions of margin). */
     private static final int VOL_LOOKBACK_DAYS = 90;
+
+    /** Words taken from an instrument description when suggesting a match keyword. */
+    private static final int KEYWORD_WORDS = 4;
 
     private final HoldingFileLocator fileLocator;
     private final List<OrderParser> parsers;
@@ -149,7 +153,8 @@ public class OpenOrdersService {
         }
 
         enrichWithCurrentPrice(orders, rates);
-        return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty());
+        return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
+                unmappedInstruments(orders));
     }
 
     /**
@@ -285,6 +290,81 @@ public class OpenOrdersService {
         return gbp.multiply(tr);
     }
 
+    /**
+     * The instruments this view could not price for want of a mapping.
+     *
+     * <p>Runs after enrichment, so "could not price" is the same fact the user is looking at: the
+     * Current column is blank. That alone is not enough — a stale feed also blanks it — so a symbol
+     * only qualifies when <em>no daily close has ever been stored</em> under its resolved ticker,
+     * the same test {@code SyncPortfolioService.unpricedSymbols} applies. Bonds are excluded: gilts
+     * are priced by their own scraper and have no Yahoo listing to map.
+     */
+    private List<UnmappedInstrument> unmappedInstruments(List<OpenOrder> orders) {
+        Map<String, UnmappedInstrument> byKey = new LinkedHashMap<>();
+        for (OpenOrder o : orders) {
+            String sym = o.symbol();
+            if (sym == null || sym.isBlank() || Instruments.isBond(sym)) continue;
+            if (o.currentPrice() != null) continue;
+
+            // The AJ Bell orders parser passes an unmapped description through as the symbol, so
+            // symbol == name is exactly "this description matched no keyword". The other parsers
+            // export a real ticker alongside a descriptive name, which never collide.
+            boolean needsAlias = o.name() != null && o.name().equals(sym);
+
+            String ticker = tickerFor(sym);
+            if (!needsAlias && history.getLatestPriceDate(ticker) != null) continue;
+
+            String key = needsAlias ? "name:" + o.name() : "sym:" + sym.toUpperCase();
+            byKey.putIfAbsent(key, new UnmappedInstrument(
+                    o.broker(),
+                    o.name() != null ? o.name() : sym,
+                    needsAlias ? null : sym,
+                    needsAlias,
+                    needsAlias ? suggestKeyword(o.name()) : null,
+                    needsAlias ? null : suggestTicker(sym, o.currency()),
+                    needsAlias ? null : ticker,
+                    exchangeSuffix(o.currency())));
+        }
+        return List.copyOf(byKey.values());
+    }
+
+    /**
+     * A match phrase for an instrument description: the first {@link #KEYWORD_WORDS} words,
+     * lowercased and stripped of punctuation. Short on purpose — the same instrument is described
+     * slightly differently in the orders export and the cash statement ("… ETF 1C GBP" vs the same
+     * with an "ORD" tail), and one keyword should catch both. It is only a suggestion; the field is
+     * editable.
+     */
+    static String suggestKeyword(String name) {
+        if (name == null) return "";
+        String[] words = name.toLowerCase().replaceAll("[^a-z0-9 ]", " ").trim().split("\\s+");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(KEYWORD_WORDS, words.length); i++) {
+            if (words[i].isEmpty()) continue;
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(words[i]);
+        }
+        return sb.toString();
+    }
+
+    /** A starting guess at the Yahoo ticker: London listings need the {@code .L} suffix. */
+    static String suggestTicker(String symbol, String currency) {
+        if (symbol == null) return "";
+        String sym = symbol.trim().toUpperCase();
+        if (sym.contains(".")) return sym;
+        return sym + exchangeSuffix(currency);
+    }
+
+    /**
+     * The exchange suffix the order's currency implies, so the dashboard can complete the ticker box
+     * as the symbol is typed — the symbol isn't known server-side for an unmapped description.
+     * Sterling means London here; a EUR order could be any of three exchanges, so it gets nothing
+     * rather than a guess that would be wrong two thirds of the time.
+     */
+    static String exchangeSuffix(String currency) {
+        return ("GBP".equals(currency) || "GBp".equals(currency)) ? ".L" : "";
+    }
+
     private static String displayKey(OpenOrder o) {
         if (o.symbol() != null && !o.symbol().isBlank()) return o.symbol();
         return o.name();
@@ -310,10 +390,33 @@ public class OpenOrdersService {
     }
 
     /**
+     * Instruments on the order list that carry no usable mapping, so the dashboard can offer to add
+     * one inline instead of asking for a source edit.
+     *
+     * <p>Two distinct gaps, which need different inputs from the user and so are distinguished here
+     * rather than lumped into one "unmapped" flag:
+     * <ul>
+     *   <li><b>{@code needsAlias}</b> — the broker's export carries no ticker and the description
+     *       matched no keyword, so the parser passed the description straight through as the symbol.
+     *       Both a name mapping and a ticker mapping are missing.</li>
+     *   <li>otherwise — the symbol is known but nothing has ever priced under its resolved ticker.
+     *       Only the ticker mapping is missing (or the existing one is wrong).</li>
+     * </ul>
+     *
+     * @param triedTicker the ticker actually resolved and looked up — for an unmapped symbol that is
+     *                    the identity fallback, which is what has to change.
+     */
+    public record UnmappedInstrument(String broker, String name, String symbol, boolean needsAlias,
+                                     String suggestedKeyword, String suggestedTicker,
+                                     String triedTicker, String tickerSuffix) {
+    }
+
+    /**
      * @param empty true when no order file was found for any broker (distinct from "files found,
      *              but nothing open") so the view can show the right message.
      */
     public record OrdersReport(List<OpenOrder> orders, List<String> sources,
-                               List<String> warnings, boolean empty) {
+                               List<String> warnings, boolean empty,
+                               List<UnmappedInstrument> unmapped) {
     }
 }

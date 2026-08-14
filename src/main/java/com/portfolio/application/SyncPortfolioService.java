@@ -103,7 +103,7 @@ public class SyncPortfolioService {
                 aggregated, iiSippCashGbp, iiSippCashUsd, gathered.rates());
         List<String> missingIntraday = missingIntradayPrices(aggregated);
         for (String sym : missingIntraday) log.warn("No intraday price for held symbol {}", sym);
-        List<String> unpriced = unpricedSymbols(missingIntraday, tickerBySymbol, priceHistory);
+        List<SyncResult.UnpricedSymbol> unpriced = unpricedSymbols(missingIntraday, tickerBySymbol, priceHistory);
         List<SyncResult.AssetRecon> assetRecon = reconcileAssets(aggregated, latestBySymbol, gathered.rates());
         return new SyncResult(aggregated, totals, gathered.rates(), iiSippCash, sources, false,
                 recon, missingIntraday, List.of(), assetRecon, unpriced);
@@ -217,17 +217,17 @@ public class SyncPortfolioService {
      * 2019. The dashboard names the ticker actually tried, because that is what has to change.
      * Bonds are excluded — gilts are priced by their own scraper and have no Yahoo listing to map.
      */
-    static List<String> unpricedSymbols(List<String> missingIntraday,
-                                        Map<String, String> tickerBySymbol,
-                                        PriceHistoryRepository priceHistory) {
-        List<String> out = new ArrayList<>();
+    static List<SyncResult.UnpricedSymbol> unpricedSymbols(List<String> missingIntraday,
+                                                           Map<String, String> tickerBySymbol,
+                                                           PriceHistoryRepository priceHistory) {
+        List<SyncResult.UnpricedSymbol> out = new ArrayList<>();
         for (String sym : missingIntraday) {
             if (Instruments.isBond(sym)) continue;
             String ticker = tickerBySymbol.get(sym.toUpperCase());
             if (ticker == null) continue;
             if (priceHistory.getLatestPriceDate(ticker) != null) continue;
             PriceFetchSupport.warnNoPriceData(log, sym, ticker);
-            out.add(sym.equals(ticker) ? sym : sym + " (ticker " + ticker + ")");
+            out.add(new SyncResult.UnpricedSymbol(sym, ticker));
         }
         return out;
     }

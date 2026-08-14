@@ -23,12 +23,25 @@ public record SyncResult(
         List<String> dailyCloseFallbacks,
         List<AssetRecon> assetRecon,
         /** Held symbols with no price feed at all — see {@code SyncPortfolioService.unpricedSymbols}. */
-        List<String> unpricedSymbols) {
+        List<UnpricedSymbol> unpricedSymbols) {
 
     /** Per {@code (account, currency)} comparison of holdings-side vs ledger-side cash, in GBP. */
     public record CashRecon(String account, String currency,
                             BigDecimal holdingsGbp, BigDecimal ledgerGbp, BigDecimal diffGbp,
                             boolean warn) {
+    }
+
+    /**
+     * A held symbol nothing has ever priced, with the Yahoo ticker actually tried — kept as two
+     * fields rather than one display string so the dashboard can offer to correct the mapping
+     * inline, pre-filled, instead of only naming the problem.
+     */
+    public record UnpricedSymbol(String symbol, String ticker) {
+
+        /** "PHP" when the ticker is the symbol itself, else "PHP (ticker PHP.L)". */
+        public String display() {
+            return symbol.equals(ticker) ? symbol : symbol + " (ticker " + ticker + ")";
+        }
     }
 
     /** Per-symbol comparison of holdings-side RT market value vs ledger-side RT market value, in GBP. */

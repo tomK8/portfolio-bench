@@ -21,6 +21,7 @@ import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
+import com.portfolio.persistence.InstrumentMappingRepository;
 import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.domain.SectorClassifier;
 import com.portfolio.domain.StyleClassifier;
@@ -152,12 +153,13 @@ public class BeanConfiguration {
                                                IntradayPriceRepository intradayPriceRepository,
                                                PriceHistoryRepository priceHistoryRepository,
                                                YahooTickerMap yahooTickerMap,
+                                               InstrumentMappingRepository instrumentMappingRepository,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
                 : Path.of(outputDir);
         return new OpenOrdersService(holdingFileLocator, List.of(
-                new AJBellOrdersParser(),
+                new AJBellOrdersParser(instrumentMappingRepository::loadAliases),
                 new IIOrdersParser(),
                 new RothOrdersParser()), fxRateProvider, excelReportWriter, dir,
                 intradayPriceRepository, priceHistoryRepository, yahooTickerMap);
@@ -406,8 +408,10 @@ public class BeanConfiguration {
 
     @Bean
     public AjBellCashImporter ajBellCashImporter(JdbcConnectionFactory jdbcConnectionFactory,
-                                                 CashTransactionRepository cashTransactionRepository) {
-        return new AjBellCashImporter(jdbcConnectionFactory.dbDir(), cashTransactionRepository);
+                                                 CashTransactionRepository cashTransactionRepository,
+                                                 InstrumentMappingRepository instrumentMappingRepository) {
+        return new AjBellCashImporter(jdbcConnectionFactory.dbDir(), cashTransactionRepository,
+                instrumentMappingRepository::loadAliases);
     }
 
     @Bean
@@ -433,8 +437,28 @@ public class BeanConfiguration {
     }
 
     @Bean
-    public YahooTickerMap yahooTickerMap() {
-        return new YahooTickerMap();
+    public InstrumentMappingRepository instrumentMappingRepository(JdbcConnectionFactory connections) {
+        return new InstrumentMappingRepository(connections);
+    }
+
+    /**
+     * Committed {@code yahoo-tickers.properties} plus the user's {@code ticker_mappings} overlay.
+     * A method reference, not the loaded map: the singleton re-reads it on every mutation, so a
+     * mapping added on the dashboard reaches all ~30 consumers without a restart.
+     */
+    @Bean
+    public YahooTickerMap yahooTickerMap(InstrumentMappingRepository instrumentMappingRepository) {
+        return new YahooTickerMap(instrumentMappingRepository::loadTickerMappings);
+    }
+
+    @Bean
+    public InstrumentMappingService instrumentMappingService(InstrumentMappingRepository instrumentMappingRepository,
+                                                             YahooTickerMap yahooTickerMap,
+                                                             YahooPriceFetcher yahooPriceFetcher,
+                                                             PriceFetchJob priceFetchJob,
+                                                             CashTransactionRepository cashTransactionRepository) {
+        return new InstrumentMappingService(instrumentMappingRepository, yahooTickerMap,
+                yahooPriceFetcher, priceFetchJob, cashTransactionRepository);
     }
 
     @Bean

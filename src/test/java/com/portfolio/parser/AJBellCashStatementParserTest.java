@@ -152,4 +152,26 @@ class AJBellCashStatementParserTest {
 
         assertEquals("SOME NEW HOLDING PLC", parser.parse(f).get(0).symbol());
     }
+
+    /**
+     * The ledger's fallback stores the cleaned-up investment name, which then agrees with nothing
+     * else in the app (the holdings file calls the same position by its short symbol). A keyword
+     * added on the dashboard fixes it at parse time for every later import.
+     */
+    @Test
+    void userAliasesResolveDescriptionsTheCommittedRulesMiss(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("cashstatements.csv");
+        Files.writeString(file, """
+                "Date","Description","Reference","Settlement date","Receipt (GBP)","Payment (GBP)","Balance (GBP)"
+                "14/08/2026","Purchase 100 Xtrackers MSCI World Health Care ETF 1C GBP","44626XW1","18/08/2026","0","-4568.50","1,000.00"
+                """);
+
+        var mapped = new AJBellCashStatementParser(() -> java.util.Map.of("xtrackers msci world health", "XWHS"));
+        assertEquals("XWHS", mapped.parse(file).get(0).symbol());
+
+        // Without the alias the same row strands under the long name — the state this fixes.
+        assertEquals("XTRACKERS MSCI WORLD HEALTH CARE ETF 1C GBP",
+                new AJBellCashStatementParser().parse(file).get(0).symbol());
+    }
+
 }

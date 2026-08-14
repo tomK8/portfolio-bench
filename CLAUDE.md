@@ -46,7 +46,8 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `IntradayBar`, `IntradayPrice`.
 - `port` — `FxRateProvider`, `HistoricalFxRateProvider` (interfaces, faked in tests).
 - `adapter` — `FrankfurterFxClient` (Jackson + shared HttpClient with timeouts),
-  `HoldingFileLocator`, `YahooPriceFetcher`, `YahooTickerMap`.
+  `HoldingFileLocator`, `YahooPriceFetcher` (incl. `probe` — the pre-save ticker check),
+  `YahooTickerMap` (committed properties + the user's `ticker_mappings` overlay, hot-reloaded).
 - `parser` — `AccountParser` / `CashTransactionParser` interfaces + impls.
 - `persistence` — `JdbcConnectionFactory` + its repositories + `KeyValueStore`. See below.
 - `application` — `PortfolioGatherer`, `SyncPortfolioService`, `SyncFromCashService`
@@ -290,6 +291,8 @@ no `System.out` in production code.
 | Style breakdown       | `GET /allocation/styles`   | `StyleBreakdownService`   |
 | Attribution           | `GET /attribution`         | `AttributionService`      |
 | Period diff           | `GET /period-diff`         | `PortfolioReturnService.periodDiff` |
+| Instrument mappings   | `GET /mappings`            | `InstrumentMappingService`|
+| Mapping verify/save/delete | `POST /mappings/{verify,save,delete}` | `InstrumentMappingService` |
 | Watchlist             | `GET /watchlist`           | `WatchlistService`        |
 | Watchlist mutate      | `POST /watchlist/{add,remove,threshold,move}` | `WatchlistRepository` |
 | Watchlist popup chart | `GET /watchlist/series`    | `WatchlistService`        |
@@ -351,6 +354,9 @@ To convert native → GBP, **divide** by the rate.
   start during a Frankfurter outage still prices non-GBP positions. Reads *and* writes degrade.
 - `EarningsDateRepository` — `earnings_dates` (§D earnings-proxy cache: one row per `(symbol, date)`;
   reads/cache-fill degrade, never throw).
+- `InstrumentMappingRepository` — `ticker_mappings` (symbol → Yahoo ticker, overriding
+  `yahoo-tickers.properties`) + `instrument_aliases` (description keyword → symbol). Reads degrade,
+  the dashboard's writes throw. See "Adding a mapping from the dashboard".
 - `KeyValueStore` — file-backed scalar settings, one `<key>.txt` per key under `<db-dir>`:
   - `ii_sipp_cash_last` — last II SIPP **GBP** cash balance entered on the dashboard.
   - `ii_sipp_cash_last_usd` — last II SIPP **USD** cash balance entered on the dashboard.
@@ -444,12 +450,13 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   dealt/executed/filled/cancelled/expired/…; anything else, incl. an unseen "still working" status,
   is shown rather than dropped).
 - `AJBellOrdersParser` — `activeorders*.csv`. The export names the instrument but carries no
-  ticker, so `symbol` is mapped from the name by keyword (`symbolOrName` over `NAME_TO_SYMBOL`:
-  EQQQ / LSEG / REL — the same internal symbols used elsewhere; add a line when a new AJ Bell name
-  appears). An **unmapped** name falls straight through as the `symbol` (the table has no Name
-  column), so a new instrument shows its full name in the Symbol column — the cue to add a mapping —
-  rather than "—"; it just won't resolve to a live quote until mapped. `name` still carries the full
-  text on the record (unused by the view). Prices are London pence ("53800p") → normalised to pounds
+  ticker, so `symbol` is mapped from the name by keyword (`symbolOrName` over the user's
+  `instrument_aliases` first, then the committed `NAME_TO_SYMBOL`: EQQQ / LSEG / REL — the same
+  internal symbols used elsewhere). An **unmapped** name falls straight through as the `symbol` (the
+  table has no Name column), so a new instrument shows its full name in the Symbol column — and the
+  panel offers the mapping inline (see "Adding a mapping from the dashboard"); it just won't resolve
+  to a live quote until mapped. `name` still carries the full text on the record, and
+  `symbol.equals(name)` is what flags the row as needing an alias. Prices are London pence ("53800p") → normalised to pounds
   so the row is single-currency (GBP). Statuses: "In progress" (open), "Dealt" (filled).
 - `IIOrdersParser` — UUID `.csv`, **header-sniffed** (`Submitted` + `Settlement Date` + `Status`) to
   distinguish from II holdings/cash UUID CSVs. `Type` bundles side+ordertype ("SELL/LIMIT"); currency
@@ -563,9 +570,11 @@ mapped to Yahoo tickers via `YahooTickerMap`. 500ms throttle between requests
 `PortfolioBenchApplication`. Startup runs are on daemon threads so first-run backfill doesn't
 block the web UI.
 
-**Adding a Yahoo ticker mapping:** add `internal=YAHOO` to `resources/yahoo-tickers.properties`.
-US listings map to themselves; non-US need an exchange suffix (`.L` London, `.PA` Paris, `.AS`
-Amsterdam, `.DE` Frankfurt).
+**Adding a Yahoo ticker mapping:** normally from the dashboard (Open orders or either sync tab
+offers the field inline, with a live check) — it lands in `ticker_mappings` and overrides the file.
+The committed baseline `resources/yahoo-tickers.properties` takes `internal=YAHOO` lines and is
+still the right place for a mapping worth shipping. US listings map to themselves; non-US need an
+exchange suffix (`.L` London, `.PA` Paris, `.AS` Amsterdam, `.DE` Frankfurt).
 
 **A missing mapping fails in two different ways**, which is why the identity fallback is warned
 about rather than trusted. Unmapped `PHP` (Primary Health Properties, LSE) resolved to a US mutual
@@ -586,24 +595,78 @@ wrongly instead of not at all. Two signals cover the first case, one covers the 
   existing "Missing intraday prices" panel — that's an ordinary stale feed. Bonds are excluded (the
   gilt scraper, not Yahoo, prices them).
 
-**Three name→symbol maps, all needed for one new instrument** — a name is only fully wired when it
-appears in all three, and PHP (Primary Health Properties, Aug 2026) is the worked example of what
-each one costs when missed:
-1. `AJBellCashStatementParser.SYMBOL_RULES` — cash-ledger description → internal symbol. Unmapped,
-   `resolveSymbol` falls back to the cleaned investment name, so the ledger stored
-   `PRIMARY HEALTH PROPERTIES PLC` while the holdings file called the same position `PHP`: the
-   ledger view lost the position, and the reconciliation panel reported the whole £10k as a diff.
-   Now warns at parse time naming the string it stored.
-2. `AJBellOrdersParser.NAME_TO_SYMBOL` — order-export investment name → internal symbol. Unmapped,
-   the order still lists (under its full name) but resolves to no ticker, so Current / vs limit /
-   σ→lim / P(touch) are all blank. Now warns via `symbolOrName`.
-3. `yahoo-tickers.properties` — internal symbol → Yahoo ticker (above).
+**Two mapping layers, both now user-editable at runtime** — a new instrument is only fully wired
+when both exist. PHP (Primary Health Properties, Aug 2026) is the worked example of what each one
+costs when missed:
+1. **Description keyword → internal symbol.** Committed baselines are
+   `AJBellCashStatementParser.SYMBOL_RULES` (cash-ledger description) and
+   `AJBellOrdersParser.NAME_TO_SYMBOL` (order-export investment name); both now consult the
+   `instrument_aliases` table **first**. Unmapped, the cash parser falls back to the cleaned
+   investment name, so the ledger stored `PRIMARY HEALTH PROPERTIES PLC` while the holdings file
+   called the same position `PHP`: the ledger view lost the position and reconciliation reported
+   the whole £10k as a diff. The order parser passes the description through as the symbol, so the
+   order lists but resolves to no ticker (Current / vs limit / σ→lim / P(touch) all blank). Both
+   still warn at parse time.
+2. **Internal symbol → Yahoo ticker.** `yahoo-tickers.properties` is the committed baseline;
+   `ticker_mappings` rows **override** it (see below).
 
-A stale ledger row left by (1) has to be corrected in place —
-`UPDATE cash_transactions SET symbol='PHP' WHERE symbol='PRIMARY HEALTH PROPERTIES PLC'` — because
-the AJBell dedup key is `(transaction_date, type, symbol, amount_gbp)`: leave it and the next
-import of the same statement inserts a *second* row under the newly-mapped symbol and double-counts
-the position.
+The alias pool is deliberately **one table, not one per broker** — AJ Bell's orders export and its
+cash statement describe the same instrument in near-identical words, so a single keyword
+("xtrackers msci world health") fixes the Symbol column *and* keeps the ledger row from stranding
+when the trade settles. Matching is lowercase `contains`, longest keyword first (a specific phrase
+must beat a shorter one that also matches).
+
+## Adding a mapping from the dashboard
+
+`InstrumentMappingService` (+ `InstrumentMappingRepository`, `MappingsController`) — mappings are
+added where the gap shows up, not by editing a source file and redeploying. Two SQLite tables:
+`ticker_mappings` (symbol → Yahoo ticker, an *overlay* on the properties file — a row here wins, so
+a wrong committed mapping is correctable without a release) and `instrument_aliases` (keyword →
+symbol, above). `YahooTickerMap` takes a `Supplier<Map<String,String>>` for the overlay (so the
+adapter needs no persistence dependency), caches it, and `reload()`s after every mutation — the
+singleton's ~30 consumers pick it up with no restart. The no-arg constructor (properties only) is
+kept because ~50 tests use it.
+
+Three things happen together on save, and all three are load-bearing:
+1. **Check before saving.** `YahooPriceFetcher.probe(ticker)` — one chart call returning
+   found/reachable plus the listing's **name, currency, exchange and last close**. Those context
+   fields are the point: a mapping that resolves to *nothing* is easy to spot later (the position
+   never prices), but one that resolves to the **wrong live listing** is not — `BLND` probes as
+   "Blend Labs, Inc. · USD · NYSE · last 1.52", which is the trap made visible at entry time.
+   `request()` keeps the body on a non-200 so Yahoo's 404 ("No data found, symbol may be delisted")
+   is distinguishable from an unreachable Yahoo; only the second offers "Save anyway".
+2. **Take effect immediately** — `reload()` plus a background `PriceFetchJob.fetchSingle` on a
+   single-thread daemon executor, so the price columns fill in rather than waiting for the nightly
+   job (XWHS.L backfilled 3,662 bars in ~3s).
+3. **Repair what the gap already broke** — `CashTransactionRepository.renameSymbol` re-keys ledger
+   rows stranded under the long description, replacing the manual
+   `UPDATE cash_transactions SET symbol=…` this file used to prescribe. In-place is the only option:
+   the AJBell dedup key is `(transaction_date, type, symbol, amount_gbp)`, so leaving the old rows
+   and re-importing inserts a *second* set under the new symbol and double-counts the position. The
+   re-key is deliberately **narrow** — only stored symbols containing a space (a stranded
+   description; a ticker never has one) and not `Instruments.isBond`. Without that guard the keyword
+   "bp" would re-key the genuine `BP.` position, and a rename is not undoable from the dashboard.
+   The repaired-row count is reported in the response, never silent.
+
+**UI**: `fragments/mappings.html` holds two shared fragments — `unpriced(...)` (ticker-only editor,
+used by both sync tabs' unpriced-symbols panels) and `list` (the collapsible "All instrument
+mappings" list at the foot of Open orders: your rows with Remove buttons, then the committed
+baseline read-only). Open orders renders its own richer row (match text + symbol + ticker) from
+`OrdersReport.unmapped`, computed by `OpenOrdersService.unmappedInstruments` after enrichment:
+`needsAlias` is exactly `symbol.equals(name)` (the AJ Bell parser's fall-through contract — the
+other two brokers export a real ticker alongside a descriptive name, which never collide), else the
+symbol resolved but `getLatestPriceDate` is null, the same "never priced" test
+`SyncPortfolioService.unpricedSymbols` applies. `SyncResult.unpricedSymbols` is
+`List<UnpricedSymbol>` (symbol + ticker, `display()` for the old string) so the editor can be
+pre-filled rather than only naming the problem.
+
+All of it is driven by **one delegated listener on `document.body`** in `dashboard.js` (`mapVal` /
+`mapStatus` / `mapProbeText` / `mapPost` / `mapLoadList`) rather than per-fragment binding — these
+fragments are htmx-swapped, so anything bound inside them would need re-attaching after every swap.
+Typing a symbol completes the ticker box (`XWHS` → `XWHS.L`, suffix from the order's currency via
+`exchangeSuffix`; EUR gets nothing, it spans three exchanges) and stands down the moment the ticker
+is hand-edited. A successful save on the orders panel repaints it after 3.5s — the backfill is on a
+background thread, and repainting immediately would show the row mapped but still priceless.
 
 **`close` vs `adj_close`:** use `close` for "market value of the position on date X", `adj_close`
 for total-return calculations. **`YahooPriceFetcher` re-derives `adj_close` from the

@@ -90,15 +90,15 @@ final class PriceFetchSupport {
     static void warnNoPriceData(Logger log, String symbol, String ticker) {
         if (ticker.equals(symbol)) {
             log.warn("No price data for {} — nothing on Yahoo answers to that ticker, which we tried "
-                    + "only because the symbol has no entry in yahoo-tickers.properties. Add one: "
-                    + "{}={}.L for a London listing (.PA Paris, .AS Amsterdam, .DE Frankfurt).",
-                    symbol, symbol, symbol);
+                    + "only because the symbol has no mapping. Add one on the dashboard (the sync "
+                    + "and Open orders tabs offer the field inline, and check the ticker before "
+                    + "saving): {} → {}.L for a London listing (.PA Paris, .AS Amsterdam, .DE "
+                    + "Frankfurt).", symbol, symbol, symbol);
         } else if (symbol != null) {
-            log.warn("No price data for {} — its yahoo-tickers.properties mapping to {} does not "
-                    + "resolve on Yahoo. Correct the {} entry.", symbol, ticker, symbol);
+            log.warn("No price data for {} — its mapping to {} does not resolve on Yahoo. Correct "
+                    + "it on the dashboard; a user mapping overrides the committed one.", symbol, ticker);
         } else {
-            log.warn("No price data for ticker {} — check the yahoo-tickers.properties entry that "
-                    + "maps to it.", ticker);
+            log.warn("No price data for ticker {} — check the mapping that resolves to it.", ticker);
         }
     }
 
@@ -111,10 +111,9 @@ final class PriceFetchSupport {
      * {@link #warnNoPriceData} cannot catch that case — data does come back.
      */
     static void noteIdentityTicker(Logger log, String ticker) {
-        log.info("First price fetch for {} — no entry in yahoo-tickers.properties, assuming a US "
-                + "listing of the same name. If it is a non-US listing, add the mapping "
-                + "(e.g. {}={}.L) — the identity fallback can resolve to an unrelated instrument.",
-                ticker, ticker, ticker);
+        log.info("First price fetch for {} — no mapping, assuming a US listing of the same name. If "
+                + "it is a non-US listing, add the mapping on the dashboard (e.g. {} → {}.L) — the "
+                + "identity fallback can resolve to an unrelated instrument.", ticker, ticker, ticker);
     }
 
     /** Cooperative sleep — restores the interrupt flag instead of swallowing it. */

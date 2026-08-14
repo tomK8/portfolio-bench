@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -61,6 +62,22 @@ public class AJBellCashStatementParser implements CashTransactionParser {
     // Compressed GILT names: HM TREA0.2525  (coupon=0.25, year=25→2025)
     private static final Pattern PAT_GILT_HM_TREA = Pattern.compile(
             "(?i)HM\\s+TREA(\\d+\\.\\d{2})(\\d{2})\\b");
+    /**
+     * User-added keyword → symbol aliases from {@code instrument_aliases}, longest keyword first.
+     * Consulted before {@link #SYMBOL_RULES}; read per parse so a mapping added on the dashboard
+     * applies to the next import without a restart.
+     */
+    private final Supplier<Map<String, String>> aliasSource;
+
+    /** Committed rules only — the default for tests and any alias-store-less context. */
+    public AJBellCashStatementParser() {
+        this(Map::of);
+    }
+
+    public AJBellCashStatementParser(Supplier<Map<String, String>> aliasSource) {
+        this.aliasSource = aliasSource == null ? Map::of : aliasSource;
+    }
+
     private static final List<SymbolRule> SYMBOL_RULES = List.of(
             new SymbolRule(Pattern.compile("BRITISH AMERICAN TOBACCO"), "BATS"),
             new SymbolRule(Pattern.compile("BANK OF AMERICA"), "BAC"),
@@ -96,9 +113,19 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             new SymbolRule(Pattern.compile("\\bBP\\b|\\bB\\s+P\\b"), "BP.")
     );
 
-    private static String resolveSymbol(String name) {
+    private String resolveSymbol(String name) {
         String bondId = tryExtractGiltId(name);
         if (bondId != null) return bondId;
+
+        // User-added aliases first, so a keyword entered on the dashboard also overrides a
+        // committed rule that turns out to match the wrong instrument.
+        String lower = name.toLowerCase();
+        Map<String, String> aliases = aliasSource.get();
+        if (aliases != null) {
+            for (Map.Entry<String, String> e : aliases.entrySet()) {
+                if (lower.contains(e.getKey())) return e.getValue();
+            }
+        }
 
         String upper = name.toUpperCase();
         for (SymbolRule rule : SYMBOL_RULES) {
@@ -112,9 +139,9 @@ public class AJBellCashStatementParser implements CashTransactionParser {
         // no price feed will ever resolve the long name. Warn with the fix at parse time rather
         // than leaving it to be noticed downstream.
         String cleaned = cleanName(name);
-        log.warn("[AJBell cash] No symbol rule for \"{}\" — storing it as \"{}\". Add a SYMBOL_RULES "
-                + "entry mapping it to the ticker used in the holdings file, and a matching line in "
-                + "yahoo-tickers.properties, or this position will not price or reconcile.",
+        log.warn("[AJBell cash] No symbol rule for \"{}\" — storing it as \"{}\". Map it from the "
+                + "Open orders tab (saving a name mapping there also rewrites ledger rows already "
+                + "stored under the long name), or this position will not price or reconcile.",
                 name, cleaned);
         return cleaned;
     }

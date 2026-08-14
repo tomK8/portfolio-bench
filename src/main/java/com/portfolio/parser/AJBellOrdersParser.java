@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,7 +43,11 @@ public class AJBellOrdersParser implements OrderParser {
      * AJ Bell's active-orders export names the instrument but carries no ticker, so map the
      * (long) investment name to the app's internal symbol by keyword — the same symbols used
      * elsewhere (YahooTickerMap adds the .L suffix: EQQQ→EQQQ.L, LSEG→LSEG.L, REL→REL.L).
-     * First matching keyword wins; add a line here when a new AJ Bell name shows up in orders.
+     * First matching keyword wins.
+     *
+     * <p>This is the committed baseline only. User-added keywords come from
+     * {@code instrument_aliases} via {@link #aliasSource} and are consulted <em>first</em>, so a
+     * new instrument is mapped from the dashboard rather than from a source edit.
      */
     private static final Map<String, String> NAME_TO_SYMBOL = new LinkedHashMap<>();
 
@@ -55,10 +60,32 @@ public class AJBellOrdersParser implements OrderParser {
         NAME_TO_SYMBOL.put("british land", "BLND");
     }
 
+    /**
+     * User-added keyword → symbol aliases, longest keyword first. Read per parse (the export is
+     * re-parsed on every tab click, so a mapping added on the dashboard takes effect on the next
+     * one) and never cached here.
+     */
+    private final Supplier<Map<String, String>> aliasSource;
+
+    /** Committed keywords only — the default for tests and any alias-store-less context. */
+    public AJBellOrdersParser() {
+        this(Map::of);
+    }
+
+    public AJBellOrdersParser(Supplier<Map<String, String>> aliasSource) {
+        this.aliasSource = aliasSource == null ? Map::of : aliasSource;
+    }
+
     /** Internal symbol for an AJ Bell investment name, or null when unmapped. */
-    static String symbolFor(String investmentName) {
+    String symbolFor(String investmentName) {
         if (investmentName == null) return null;
         String lower = investmentName.toLowerCase();
+        Map<String, String> aliases = aliasSource.get();
+        if (aliases != null) {
+            for (Map.Entry<String, String> e : aliases.entrySet()) {
+                if (lower.contains(e.getKey())) return e.getValue();
+            }
+        }
         for (Map.Entry<String, String> e : NAME_TO_SYMBOL.entrySet()) {
             if (lower.contains(e.getKey())) return e.getValue();
         }
@@ -70,15 +97,16 @@ public class AJBellOrdersParser implements OrderParser {
      * investment name (so an unmapped name is visible and can be turned into a {@link #NAME_TO_SYMBOL}
      * entry rather than silently vanishing). It won't resolve to a live quote until mapped — fine.
      */
-    static String symbolOrName(String investmentName) {
+    String symbolOrName(String investmentName) {
         String mapped = symbolFor(investmentName);
         if (mapped != null) return mapped;
         // Visible in the Symbol column, but it resolves to no ticker — so the order shows no
         // Current price, no vs-limit and no touch probability. Say so at parse time; the column
-        // being blank looks like a dead feed rather than a missing line in this map.
+        // being blank looks like a dead feed rather than a missing mapping. The Open orders tab
+        // spots the same fall-through (symbol == name) and offers the mapping inline.
         log.warn("[AJBell orders] No symbol mapping for \"{}\" — the order will show without live "
-                + "price columns. Add a NAME_TO_SYMBOL keyword for it (and the ticker to "
-                + "yahoo-tickers.properties).", investmentName);
+                + "price columns. Add it from the Open orders tab, which offers the mapping "
+                + "inline, or add a NAME_TO_SYMBOL keyword.", investmentName);
         return investmentName;
     }
 

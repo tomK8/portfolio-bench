@@ -432,6 +432,36 @@ public class CashTransactionRepository {
         return symbols;
     }
 
+    /**
+     * Re-key every ledger row stored under {@code from} to {@code to}, returning the number of rows
+     * changed.
+     *
+     * <p>This is the fix-up for a description that was imported before its symbol mapping existed:
+     * the parser's fallback stores the cleaned-up investment name ("PRIMARY HEALTH PROPERTIES PLC")
+     * while the holdings file calls the same position "PHP", so the ledger view loses the position
+     * and reconciliation reports the whole holding as a diff. It has to happen <em>in place</em>,
+     * not by re-importing: the AJBell dedup key is {@code (transaction_date, type, symbol,
+     * amount_gbp)}, so leaving the old rows and re-importing the statement would insert a second
+     * set under the new symbol and double-count the position.
+     *
+     * <p>A dashboard-triggered write, so it throws on failure.
+     */
+    public int renameSymbol(String from, String to) {
+        if (from == null || to == null || from.isBlank() || to.isBlank() || from.equals(to)) return 0;
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE cash_transactions SET symbol = ? WHERE symbol = ?")) {
+            ps.setString(1, to);
+            ps.setString(2, from);
+            int updated = ps.executeUpdate();
+            if (updated > 0) log.info("Re-keyed {} ledger row(s) from \"{}\" to \"{}\"", updated, from, to);
+            return updated;
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Could not re-key ledger rows from \"" + from + "\" to \"" + to + "\".", e);
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     /**

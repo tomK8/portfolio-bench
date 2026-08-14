@@ -229,4 +229,66 @@ class OpenOrdersServiceTest {
         Row row = sheet.createRow(rowNum);
         for (int i = 0; i < values.length; i++) row.createCell(1 + i).setCellValue(values[i]);
     }
+
+    // ---- unmapped-instrument detection (the inline mapping editor's input) -------------------
+
+    /**
+     * The AJ Bell export names an instrument it carries no ticker for, so the parser passes the
+     * description through as the symbol. Both mappings are missing, and the panel has to say so —
+     * a blank Current column on its own looks like a dead feed.
+     */
+    @Test
+    void reportsAnUnmappedInstrumentNameWithASuggestedKeyword(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("activeorders.csv"), """
+                "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"
+                "Xtrackers MSCI World Health Care ETF 1C GBP","44626XW1","Buy","Limit","100","4568.50","4565p","14/08/2026","30/10/2026","In progress"
+                """);
+
+        List<OpenOrdersService.UnmappedInstrument> unmapped = service(dir).load().unmapped();
+
+        assertEquals(1, unmapped.size());
+        OpenOrdersService.UnmappedInstrument u = unmapped.get(0);
+        assertTrue(u.needsAlias());
+        assertNull(u.symbol(), "there is no symbol yet — the user supplies it");
+        assertEquals("Xtrackers MSCI World Health Care ETF 1C GBP", u.name());
+        assertEquals("xtrackers msci world health", u.suggestedKeyword());
+        assertEquals(".L", u.tickerSuffix(), "a sterling order completes the ticker box for London");
+    }
+
+    /** A mapped symbol that has simply never priced needs only the ticker half. */
+    @Test
+    void reportsAMappedSymbolThatHasNeverPriced(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("activeorders.csv"), """
+                "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"
+                "Primary Health Properties PLC","44626PHP1","Buy","Limit","100","9500.00","95p","14/08/2026","30/10/2026","In progress"
+                """);
+
+        List<OpenOrdersService.UnmappedInstrument> unmapped = service(dir).load().unmapped();
+
+        assertEquals(1, unmapped.size());
+        assertFalse(unmapped.get(0).needsAlias());
+        assertEquals("PHP", unmapped.get(0).symbol());
+        assertEquals("PHP.L", unmapped.get(0).triedTicker());
+    }
+
+    /** One row per instrument, however many orders rest on it. */
+    @Test
+    void dedupesRepeatedOrdersOnTheSameInstrument(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("activeorders.csv"), """
+                "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"
+                "Xtrackers MSCI World Health Care ETF 1C GBP","44626XW1","Buy","Limit","100","4568.50","4565p","14/08/2026","30/10/2026","In progress"
+                "Xtrackers MSCI World Health Care ETF 1C GBP","44626XW2","Buy","Limit","200","9113.50","4555p","14/08/2026","30/10/2026","In progress"
+                """);
+
+        assertEquals(1, service(dir).load().unmapped().size());
+    }
+
+    @Test
+    void suggestsTheLondonSuffixOnlyForSterlingListings() {
+        assertEquals("XWHS.L", OpenOrdersService.suggestTicker("xwhs", "GBP"));
+        assertEquals("NVDA", OpenOrdersService.suggestTicker("NVDA", "USD"));
+        assertEquals("BRK.B", OpenOrdersService.suggestTicker("BRK.B", "GBP"), "already qualified");
+        assertEquals("", OpenOrdersService.exchangeSuffix("EUR"), "EUR spans three exchanges — no guess");
+    }
+
 }

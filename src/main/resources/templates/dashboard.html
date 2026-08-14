@@ -815,6 +815,60 @@
         html[data-theme="dark"] #sector-table tr.sector-clickable:hover { background: #23303d; }
         #sector-donut { cursor: pointer; }
 
+        /* Style block. Reuses the sector block's head/basis/layout classes; only the 2x2 grid
+           and its cells are new, because nothing else on the dashboard is shaped like one. */
+        .style-quadrant {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.4rem;
+            margin-top: 0.6rem;
+        }
+
+        .style-cell {
+            border: 1px solid #e2e2e2;
+            border-radius: 6px;
+            padding: 0.5rem 0.6rem;
+            background: #fafafa;
+        }
+
+        .style-cell .style-cell-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: #666;
+        }
+
+        .style-cell .style-cell-value { font-size: 1.15rem; font-weight: 600; }
+        .style-cell .style-cell-sub { font-size: 0.72rem; color: #777; }
+        .style-cell.style-value  { border-left: 3px solid #2ca02c; }
+        .style-cell.style-growth { border-left: 3px solid #1f77b4; }
+        .style-cell.style-both   { border-left: 3px solid #9467bd; }
+        .style-cell.style-none   { border-left: 3px solid #bbb; }
+
+        .style-axis-note {
+            font-size: 0.7rem;
+            color: #888;
+            margin-top: 0.35rem;
+        }
+
+        #style-table tr.style-clickable { cursor: pointer; }
+        #style-table tr.style-clickable:hover { background: #eef4fb; }
+        #style-table tr.style-structural td { color: #777; }
+        #style-donut { cursor: pointer; }
+
+        /* The Why column carries a comma-separated list of every test a holding passed, which
+           is long by design. Let it wrap instead of running off the edge of the modal. */
+        #style-detail-table td:last-child {
+            white-space: normal;
+            min-width: 190px;
+            line-height: 1.35;
+        }
+
+        html[data-theme="dark"] .style-cell { background: #1c242c; border-color: #33404d; }
+        html[data-theme="dark"] .style-cell .style-cell-label { color: #9fb0c0; }
+        html[data-theme="dark"] .style-cell .style-cell-sub { color: #8b9aa8; }
+        html[data-theme="dark"] #style-table tr.style-clickable:hover { background: #23303d; }
+
         .whatif-summary {
             display: flex;
             gap: 1.5rem;
@@ -1333,6 +1387,81 @@
     </div>
 
     <div class="subview active" id="alloc-view-breakdown">
+        <!-- Own container for the same reason the sector block has one: panelLoadFailed destroys
+             every canvas it finds, so a styles-endpoint failure must not tear down the sector
+             doughnut or the allocation charts below it. -->
+        <div id="style-block">
+        <div class="sector-head">
+            <h3 style="margin: 0; font-size: 1rem;">Investment style — growth vs value/income</h3>
+            <div class="sector-basis" id="style-basis">
+                <button type="button" class="active" data-basis="total">% of total</button>
+                <button type="button" data-basis="invested">% of invested</button>
+            </div>
+        </div>
+        <p class="muted" style="margin-top: 0.35rem;">
+            Today's holdings scored on <b>two independent axes</b> — how cheap it is, and how fast
+            it is growing — from the same fundamentals cache the Quality tab uses. Nothing here is
+            hand-maintained: the thresholds are checked in, every number scored against them is
+            fetched.
+        </p>
+        <p class="muted sector-note" style="margin-top: 0.35rem;">
+            <b>Style is a 2×2, not a spectrum.</b> A holding can be cheap <i>and</i> growing (a
+            cheap compounder) or neither, and collapsing that onto one value↔growth line forces a
+            third of the book into whichever end it happens to sit nearer. <b>Income cuts across
+            all four cells</b> — it is an overlay like the AI/Tech tile below, not a fifth bucket,
+            so it must not be added to the table. Funds sit outside the 2×2 entirely: Yahoo
+            publishes their aggregate price multiples but not their earnings growth, so there is
+            no growth axis to score and inferring one would turn missing data into a finding.
+        </p>
+        <div id="style-warnings"></div>
+        <div id="style-empty" class="muted">Loading…</div>
+
+        <div class="sector-layout" id="style-body" style="display:none;">
+            <div class="sector-side">
+                <div class="returns-stats" style="margin: 0;">
+                    <div class="returns-stat">
+                        <span class="label">Income holdings (cross-cutting)</span>
+                        <span class="value" id="style-income-value">—</span>
+                        <span class="sub" id="style-income-sub"></span>
+                    </div>
+                </div>
+                <div class="sector-splitline" id="style-income-split"></div>
+                <div class="style-quadrant" id="style-quadrant"></div>
+                <p class="style-axis-note">
+                    Cheap = weighted pass rate ≥ 50% across forward P/E, EV/EBITDA, P/S and
+                    dividend yield. Growing = the same across revenue growth, FCF growth, earnings
+                    growth and P/E compression. Click any row for the per-holding scores.
+                </p>
+            </div>
+            <div class="sector-chart">
+                <canvas id="style-donut"></canvas>
+            </div>
+        </div>
+
+        <div class="full-bleed" id="style-table-wrap" style="display:none;">
+            <table class="swing-tbl" id="style-table"></table>
+        </div>
+        <div id="style-unknown"></div>
+        <details id="style-income-detail" style="display:none; margin-top: 0.6rem;">
+            <summary class="muted">What makes up the income figure</summary>
+            <p class="muted sector-note" id="style-income-detail-head"></p>
+            <div class="full-bleed"><table class="swing-tbl" id="style-income-table"></table></div>
+        </details>
+
+        <div id="style-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+            <div class="modal-box" style="max-width: 720px;">
+                <h3 id="style-detail-title">—</h3>
+                <div id="style-detail-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;"></div>
+                <table class="swing-tbl" id="style-detail-table"></table>
+                <div class="modal-actions">
+                    <button id="style-detail-close" type="button">Close</button>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid #e2e2e2;">
+
         <!-- Own container, not the whole sub-view: panelLoadFailed destroys every canvas it
              finds, so scoping the sector block keeps a sectors-endpoint failure from tearing
              down the allocation charts below it. -->

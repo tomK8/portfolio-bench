@@ -26,6 +26,8 @@ import com.portfolio.application.PortfolioValueService;
 import com.portfolio.application.PortfolioValueService.ValueTimeline;
 import com.portfolio.application.SectorBreakdown;
 import com.portfolio.application.SectorBreakdownService;
+import com.portfolio.application.StyleBreakdown;
+import com.portfolio.application.StyleBreakdownService;
 import com.portfolio.application.PositionDetailService;
 import com.portfolio.application.PositionDetailService.PositionDetail;
 import com.portfolio.application.TargetAllocationService;
@@ -64,6 +66,7 @@ public class ChartsController {
     private final AllocationService allocationService;
     private final TargetAllocationService targetAllocationService;
     private final SectorBreakdownService sectorBreakdownService;
+    private final StyleBreakdownService styleBreakdownService;
     private final AttributionService attributionService;
     private final DividendIncomeService dividendIncomeService;
     private final DividendAuditService dividendAuditService;
@@ -81,6 +84,7 @@ public class ChartsController {
                             AllocationService allocationService,
                             TargetAllocationService targetAllocationService,
                             SectorBreakdownService sectorBreakdownService,
+                            StyleBreakdownService styleBreakdownService,
                             AttributionService attributionService,
                             DividendIncomeService dividendIncomeService,
                             DividendAuditService dividendAuditService,
@@ -97,6 +101,7 @@ public class ChartsController {
         this.allocationService = allocationService;
         this.targetAllocationService = targetAllocationService;
         this.sectorBreakdownService = sectorBreakdownService;
+        this.styleBreakdownService = styleBreakdownService;
         this.attributionService = attributionService;
         this.dividendIncomeService = dividendIncomeService;
         this.dividendAuditService = dividendAuditService;
@@ -217,6 +222,17 @@ public class ChartsController {
     @ResponseBody
     public SectorBreakdown allocationSectors() {
         return sectorBreakdownService.breakdown();
+    }
+
+    /**
+     * Investment-style breakdown of the current portfolio, shown above the sector block. Answers
+     * the question the sector split cannot: how much of the book is cheap, how much is growing,
+     * how much is both, and how much of it pays an income.
+     */
+    @GetMapping("/allocation/styles")
+    @ResponseBody
+    public StyleBreakdown allocationStyles() {
+        return styleBreakdownService.breakdown();
     }
 
     @GetMapping("/allocation/targets")

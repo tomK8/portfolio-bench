@@ -103,8 +103,10 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   snapshot of the full breakdown on any chosen day. Weekly cadence (~550 samples
   over a 10-year history) via `AllocationService`; latest sample always pinned to
   today so the snapshot reflects current state even mid-week.
-  **Sector & AI/Tech block** sits at the **top of the Breakdown sub-view**
-  (`GET /allocation/sectors` → `SectorBreakdownService`) — see the Sector section below.
+  The Breakdown sub-view carries two blocks above those charts, each with its own latch:
+  the **Investment-style block** at the very top (`GET /allocation/styles` →
+  `StyleBreakdownService`) and the **Sector & AI/Tech block** beneath it
+  (`GET /allocation/sectors` → `SectorBreakdownService`) — see both sections below.
 - **Attribution** — `GET /attribution?from=YYYY-MM-DD&to=YYYY-MM-DD` → JSON, Chart.js
   horizontal bar + sortable table. Per-symbol GBP P&L over a window via
   `AttributionService` (formula: `end_value − start_value + window_cash_flows`). Each
@@ -284,6 +286,8 @@ no `System.out` in production code.
 | Contributions chart   | `GET /contributions`       | `ContributionService`     |
 | Value-over-time chart | `GET /portfolio-value`     | `PortfolioValueService`   |
 | Allocation            | `GET /allocation`          | `AllocationService`       |
+| Sector breakdown      | `GET /allocation/sectors`  | `SectorBreakdownService`  |
+| Style breakdown       | `GET /allocation/styles`   | `StyleBreakdownService`   |
 | Attribution           | `GET /attribution`         | `AttributionService`      |
 | Period diff           | `GET /period-diff`         | `PortfolioReturnService.periodDiff` |
 | Watchlist             | `GET /watchlist`           | `WatchlistService`        |
@@ -1012,6 +1016,90 @@ data says so. Read-only; never touches the ledger.
   `PriceFetchSupport.tickersToFetch`; written by constructor seed + `ensureBackfilled` **only —
   never by `report()`**. Standard 30y fetch suffices (no deep-lookback special case — the cohort
   all lists post-1996).
+
+## Investment-style breakdown (growth vs value/income)
+
+Current-snapshot composition by **investment style**, rendered at the very **top of Allocation →
+Breakdown**, above the sector block. `GET /allocation/styles` → `StyleBreakdownService`. Answers
+what the sector split cannot: how much of the book is cheap, how much is growing, how much is
+both, and how much of it pays an income.
+
+- **Style is a 2×2, not a spectrum.** Cheapness and growth are scored independently, so
+  `VALUE_GROWTH` (a cheap compounder) and `NEITHER` (expensive without the growth to justify it)
+  are real cells rather than rounding errors. Collapsing them onto one value↔growth line forces a
+  third of the book into whichever end it sits nearer — a loss-making biotech on a *negative*
+  earnings multiple came out as "value" in the one-dimensional prototype.
+- **Values** come from `AllocationService.currentSnapshot()` — the same replay the sector block and
+  the charts below use, so the three can never disagree about what is held.
+- **Zero new fetching.** Every input was already in `fundamentals_snapshot`. The one addition is
+  fund-level valuation, parsed from `topHoldings.equityHoldings` — a sub-object of a module
+  `YahooQuoteSummaryFetcher` **already requested** for sector look-through. **Yahoo ships those
+  inverted**: `priceToEarnings` arrives as `0.03396` for a Nasdaq-100 tracker (the earnings
+  *yield*, 1/29.4), so `putFundValuation` reciprocates once at the edge — storing them verbatim
+  would put every fund under a P/E of 1 and read as the cheapest thing in the portfolio. They go
+  into `extra` under `fund*` keys, which is free-form JSON on the way to SQLite, so **no
+  migration**.
+- **`domain.StyleBucket`** — the 2×2 (`VALUE`/`GROWTH`/`VALUE_GROWTH`/`NEITHER`) plus structural
+  buckets `FUND_VALUE`/`FUND_BLEND`/`FUND_GROWTH`, `FIXED_INCOME`, `NON_EQUITY` (bullion: no
+  earnings, no sales, no yield — a property of the asset, not a data gap), `CASH` and `UNKNOWN`.
+  `scored()` marks which came out of the score; the UI dims the rest so the growth-vs-value
+  comparison is read off comparable rows only.
+- **`domain.StyleClassifier`** (framework-free, unit-tested). Resolution order:
+  `Instruments.isBond` → `override.<SYMBOL>` → fund → equity 2×2. Each axis scores
+  **achieved ÷ available** over weighted flags, so an absent metric abstains rather than counting
+  against the position; an axis with fewer than `min.metrics` (2) inputs is not scored at all and
+  the position lands in `UNKNOWN`, surfaced by name (same discipline as Attribution's `excluded`).
+
+**Four data landmines, all found by running the thing against the real portfolio first:**
+1. **Thresholds are absolute, not percentile ranks within the portfolio.** Ranking within a book
+   holding both deep-value European banks and 85%-growth semis put the mega-caps mid-pack on
+   *both* axes: GOOG, MSFT, AMZN, V and MA all came out "neither". That is an artefact of the peer
+   set, not a judgement. Absolute anchors put them in Growth, which is obviously right.
+2. **`priceToBook` is corrupt for non-US listings** — a currency-scale artefact reporting AZN at
+   479.7 (really ≈4.8), REL at 3676.6 (≈36.8), ASML at 1563 (≈15.6). It would have marked every UK
+   and European holding as ruinously expensive, exactly backwards for an income book. **Not used
+   for direct holdings**; P/E, P/S and EV/EBITDA carry the value axis. The fund-level P/B from
+   `equityHoldings` is unaffected and is used.
+3. **`earningsGrowth` is single-quarter YoY and wild** (MU +1368%, AV. +979%, LGEN +507%), and
+   **P/E compression fires for any cyclical whose earnings are recovering**. At their first weights
+   (0.5 + 0.7 of a 2.2 denominator) the pair outvoted flat revenue and scored a recovering bank at
+   0.545 — a growth label for a value stock. Now 0.4 and 0.5 against revenue growth's 1.0, so real
+   top-line growth is close to necessary. Guarded by
+   `StyleClassifierTest.cyclicalWithFlatRevenueIsNotGrowth`.
+4. **A missing `dividendYield` means "pays none", not "unknown".** Yahoo omits the field entirely
+   for a non-payer, so it is read as a genuine zero whenever any other metric is present —
+   otherwise the denominator shrinks and every growth name gets a free pass on the value axis.
+   `fcfGrowthYoy` has **zero coverage** in practice (Yahoo isn't returning 8 quarters); it is still
+   wired and simply abstains.
+
+**Funds sit outside the 2×2 on purpose.** Yahoo publishes a fund's aggregate price multiples but
+returns null for `threeYearEarningsGrowth` on every fund held here, so there is no growth axis to
+measure. Inferring "expensive therefore growth" would convert an absence of data into a finding,
+so they get their own three buckets and the gap stays visible. `threeYearEarningsGrowth` is
+deliberately **not stored** — its scale (fraction or percent, inverted or not) is unverifiable
+when no value has ever been observed.
+
+**Income is an overlay, not a fifth bucket** — the same relationship the AI/Tech tile has to the
+sector table. Income names already sit in whichever cell they scored into (mostly Value, but BP.
+and LGEN are in Value+Growth), so **the tile must never be added to the table**. `portfolioYield`
+is value-weighted over scored non-fund holdings and is a **lower bound**: funds pay distributions
+Yahoo does not publish, so they are in neither the numerator nor the base, and a warning says so.
+
+**`resources/style.properties`** holds only *judgements* — thresholds, weights, and `override.*`
+for instruments no multiple can describe (mirroring `sectors.properties`: PHGP/GBS/SGBX bullion →
+`NON_EQUITY`, VGOV → `FIXED_INCOME`). No per-symbol multiples, no as-of dates, nothing that drifts.
+
+**UI**: basis toggle (% of total / % of invested, both computed server-side so it toggles without
+a refetch), an income tile with the yield and annual figure, the **2×2 grid** (`.style-quadrant`,
+left column cheap / top row growing), a doughnut, and a table whose Basis column separates
+"scored on both axes" from "structural" and "not scored — see below". Clicking a table row, a
+doughnut segment **or a quadrant cell** opens `#style-detail-modal` listing every holding in that
+bucket with its two scores and **the individual tests it passed** — a placement you can argue with
+beats one you can only accept. The row handler is delegated from the `<table>`, since the basis
+toggle replaces its innerHTML. The block lives in its own **`#style-block`** container and passes
+that id to `panelLoadFailed`/`clearPanelError`, so a styles failure cannot destroy the sector
+doughnut or the allocation canvases below it; `loadBreakdownSubview` now drives **three**
+independent latches.
 
 ## Sector & AI/Tech breakdown
 

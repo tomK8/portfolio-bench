@@ -324,10 +324,11 @@
             });
         }
 
-        // The Breakdown sub-view holds two independent fetches. They keep separate latches so a
-        // failure in one still leaves the other retryable on its own — a shared latch would let a
-        // sector-endpoint blip take the charts down with it.
+        // The Breakdown sub-view holds three independent fetches. They keep separate latches so a
+        // failure in one still leaves the others retryable on their own — a shared latch would let
+        // a single endpoint blip take the whole sub-view down with it.
         function loadBreakdownSubview() {
+            loadStyles();
             loadSectors();
             loadAllocation();
         }
@@ -1480,6 +1481,292 @@
         ];
         var ALLOC_OTHER_COLOR = '#cccccc';
         var ALLOC_TOP_N = 12;
+
+        // ---- investment-style block (very top of the Breakdown sub-view) ----------
+        var stylesLoaded = false;
+        var styleData = null;
+        var styleDonut = null;
+        var styleBasis = 'total';   // 'total' | 'invested'
+        var styleEscBound = false;  // document-level, so it can't go through bindOnce
+        // Bucket → colour, fixed per bucket so a bucket keeps its colour as rows reorder. Green
+        // reads as value and blue as growth throughout the block (the quadrant cells use the same
+        // two), purple for the cell that is both; greys are reserved for the structural buckets
+        // and red for Unclassified, which is meant to draw the eye.
+        var STYLE_COLORS = {
+            VALUE: '#2ca02c', GROWTH: '#1f77b4', VALUE_GROWTH: '#9467bd', NEITHER: '#c7c7c7',
+            FUND_VALUE: '#98df8a', FUND_BLEND: '#aec7e8', FUND_GROWTH: '#6baed6',
+            FIXED_INCOME: '#7f7f7f', NON_EQUITY: '#c5b0d5', CASH: '#cccccc',
+            UNKNOWN: '#d62728'
+        };
+
+        function loadStyles() {
+            if (stylesLoaded) return;
+            stylesLoaded = true;
+            clearPanelError('style-block');
+            fetch('/allocation/styles').then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function (data) {
+                styleData = data;
+                bindOnce(document.getElementById('style-basis'), 'click', function (ev) {
+                    var btn = ev.target.closest('button[data-basis]');
+                    if (!btn) return;
+                    styleBasis = btn.getAttribute('data-basis');
+                    document.querySelectorAll('#style-basis button').forEach(function (b) {
+                        b.classList.toggle('active', b === btn);
+                    });
+                    renderStyles();
+                });
+                // Delegated from the <table>: renderStyleTable replaces its innerHTML on every
+                // basis toggle, so per-row listeners would not survive. The element itself does.
+                bindOnce(document.getElementById('style-table'), 'click', function (ev) {
+                    var tr = ev.target.closest('tr[data-bucket]');
+                    if (tr) openStyleDetail(tr.getAttribute('data-bucket'));
+                });
+                bindOnce(document.getElementById('style-quadrant'), 'click', function (ev) {
+                    var cell = ev.target.closest('[data-bucket]');
+                    if (cell) openStyleDetail(cell.getAttribute('data-bucket'));
+                });
+                bindOnce(document.getElementById('style-detail-close'), 'click', closeStyleDetail);
+                bindOnce(document.getElementById('style-detail-modal'), 'click', function (ev) {
+                    if (ev.target.id === 'style-detail-modal') closeStyleDetail();
+                });
+                if (!styleEscBound) {
+                    styleEscBound = true;
+                    document.addEventListener('keydown', function (ev) {
+                        if (ev.key === 'Escape') closeStyleDetail();
+                    });
+                }
+                renderStyles();
+            }).catch(function (e) {
+                stylesLoaded = false;
+                panelLoadFailed('style-block', e, loadStyles);
+            });
+        }
+
+        function stylePct(row) {
+            return styleBasis === 'invested' ? row.pctOfInvested : row.pctOfTotal;
+        }
+
+        function renderStyles() {
+            var d = styleData;
+            if (!d) return;
+            var warn = d.warnings || [];
+            document.getElementById('style-warnings').innerHTML = warn.length
+                ? '<div class="mo-banner">' + warn.map(escapeHtml).join('<br>') + '</div>' : '';
+
+            var rows = d.rows || [];
+            if (!rows.length) {
+                document.getElementById('style-empty').textContent = 'Nothing to classify yet.';
+                return;
+            }
+            document.getElementById('style-empty').style.display = 'none';
+            document.getElementById('style-body').style.display = 'flex';
+            document.getElementById('style-table-wrap').style.display = '';
+
+            renderStyleIncomeTile(d);
+            renderStyleQuadrant(d);
+            renderStyleDonut(rows);
+            renderStyleTable(d, rows);
+            renderStyleIncomeContributors(d);
+            renderStyleUnknown(d);
+        }
+
+        function renderStyleIncomeTile(d) {
+            var inc = d.income || {};
+            var gbp = parseFloat(inc.gbp || 0);
+            document.getElementById('style-income-value').textContent = fmtMoney(gbp);
+            var pct = styleBasis === 'invested' ? inc.pctOfInvested : inc.pctOfTotal;
+            document.getElementById('style-income-sub').textContent =
+                fmtPct(pct) + (styleBasis === 'invested' ? ' of invested' : ' of total');
+
+            var y = inc.portfolioYield;
+            var line = '<b>Portfolio yield ' + fmtPct(y) + '</b>'
+                + ' · ' + fmtMoney(parseFloat(inc.annualIncomeGbp || 0)) + ' a year at current rates';
+            if (inc.fundsExcluded) {
+                line += '<br><span class="muted">Lower bound — funds pay distributions Yahoo '
+                    + 'does not publish, so they are in neither the income nor the yield base.</span>';
+            }
+            document.getElementById('style-income-split').innerHTML = line;
+        }
+
+        /**
+         * The 2x2 itself. Only the four scored equity cells appear: a grid that also had to hold
+         * cash, gilts and funds would stop being a 2x2, and those are in the table below.
+         */
+        function renderStyleQuadrant(d) {
+            var q = d.quadrant || {};
+            var scored = parseFloat(q.scoredTotalGbp || 0);
+            var cells = [
+                { b: 'VALUE_GROWTH', cls: 'style-both', label: 'Cheap + growing', v: q.valueGrowthGbp },
+                { b: 'GROWTH', cls: 'style-growth', label: 'Growing, not cheap', v: q.growthGbp },
+                { b: 'VALUE', cls: 'style-value', label: 'Cheap, not growing', v: q.valueGbp },
+                { b: 'NEITHER', cls: 'style-none', label: 'Neither', v: q.neitherGbp }
+            ];
+            document.getElementById('style-quadrant').innerHTML = cells.map(function (c) {
+                var v = parseFloat(c.v || 0);
+                var share = scored ? (v / scored * 100).toFixed(1) + '% of scored' : '—';
+                return '<div class="style-cell ' + c.cls + '" data-bucket="' + c.b + '"'
+                    + ' title="Click to see the holdings in this cell" style="cursor:pointer;">'
+                    + '<div class="style-cell-label">' + escapeHtml(c.label) + '</div>'
+                    + '<div class="style-cell-value">' + fmtMoney(v) + '</div>'
+                    + '<div class="style-cell-sub">' + share + '</div></div>';
+            }).join('');
+        }
+
+        function renderStyleDonut(rows) {
+            var ctx = document.getElementById('style-donut').getContext('2d');
+            if (styleDonut) styleDonut.destroy();
+            var total = rows.reduce(function (a, r) { return a + parseFloat(r.gbp); }, 0);
+            styleDonut = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: rows.map(function (r) { return r.label; }),
+                    datasets: [{
+                        data: rows.map(function (r) { return parseFloat(r.gbp); }),
+                        backgroundColor: rows.map(function (r) {
+                            return STYLE_COLORS[r.bucket] || '#999';
+                        }),
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    onClick: function (evt, elements) {
+                        if (elements && elements.length) {
+                            var r = rows[elements[0].index];
+                            if (r) openStyleDetail(r.bucket);
+                        }
+                    },
+                    plugins: {
+                        legend: { position: 'right', labels: { boxWidth: 12, font: { size: 10 } } },
+                        tooltip: {
+                            callbacks: {
+                                label: function (c) {
+                                    var v = c.parsed;
+                                    var share = total ? (v / total * 100).toFixed(1) : '0.0';
+                                    return c.label + ': ' + fmtMoney(v) + '  (' + share + '%)';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderStyleTable(d, rows) {
+            var basisLabel = styleBasis === 'invested' ? '% of invested' : '% of total';
+            var html = '<tr><th class="lbl">Style</th><th>Value</th><th>' + basisLabel + '</th>'
+                + '<th class="lbl">Basis</th></tr>';
+            rows.forEach(function (r) {
+                html += '<tr class="style-clickable' + (r.scored ? '' : ' style-structural') + '"'
+                    + ' data-bucket="' + escapeHtml(r.bucket) + '"'
+                    + ' title="Click to see the holdings in ' + escapeHtml(r.label) + '">'
+                    + '<td class="lbl"><span style="display:inline-block;width:9px;height:9px;'
+                    + 'border-radius:2px;margin-right:6px;background:'
+                    + (STYLE_COLORS[r.bucket] || '#999') + '"></span>' + escapeHtml(r.label) + '</td>'
+                    + '<td>' + fmtMoney(parseFloat(r.gbp)) + '</td>'
+                    + '<td>' + fmtPct(stylePct(r)) + '</td>'
+                    + '<td class="lbl muted">' + styleBasisLabel(r) + '</td></tr>';
+            });
+            html += '<tr style="font-weight:600;border-top:2px solid #ccc;">'
+                + '<td class="lbl">Total</td>'
+                + '<td>' + fmtMoney(parseFloat(d.totalGbp)) + '</td>'
+                + '<td>' + (styleBasis === 'invested' ? '—' : '100.0%') + '</td>'
+                + '<td class="muted" style="font-weight:400;">'
+                + 'of which invested ' + fmtMoney(parseFloat(d.investedGbp)) + '</td></tr>';
+            document.getElementById('style-table').innerHTML = html;
+        }
+
+        /**
+         * What the Basis column says. UNKNOWN is neither scored nor structural — calling it
+         * "structural" would imply it had been placed deliberately, when in fact it is the row
+         * asking to be looked at.
+         */
+        function styleBasisLabel(r) {
+            if (r.scored) return 'scored on both axes';
+            return r.bucket === 'UNKNOWN' ? 'not scored — see below' : 'structural';
+        }
+
+        function renderStyleIncomeContributors(d) {
+            var list = (d.income || {}).contributors || [];
+            var wrap = document.getElementById('style-income-detail');
+            if (!list.length) { wrap.style.display = 'none'; return; }
+            wrap.style.display = '';
+            document.getElementById('style-income-detail-head').innerHTML =
+                'Every holding yielding at or above the income threshold, largest annual income '
+                + 'first. These names already sit in their own style bucket in the table above — '
+                + 'income is an <b>overlay</b>, so this list is not a fifth bucket to add on.';
+            var html = '<tr><th class="lbl">Holding</th><th>Value</th><th>Yield</th>'
+                + '<th>Income/yr</th><th class="lbl">Style</th></tr>';
+            list.forEach(function (c) {
+                html += '<tr><td class="lbl">' + escapeHtml(c.symbol) + '</td>'
+                    + '<td>' + fmtMoney(parseFloat(c.gbp)) + '</td>'
+                    + '<td>' + fmtPct(c.dividendYield) + '</td>'
+                    + '<td>' + fmtMoney(parseFloat(c.annualIncomeGbp || 0)) + '</td>'
+                    + '<td class="lbl muted">' + escapeHtml(c.bucket || '') + '</td></tr>';
+            });
+            document.getElementById('style-income-table').innerHTML = html;
+        }
+
+        function renderStyleUnknown(d) {
+            var list = d.unknown || [];
+            document.getElementById('style-unknown').innerHTML = list.length
+                ? '<div class="mo-banner" style="margin-top:0.6rem;"><b>Not scored — '
+                + 'excluded from the value/growth split above:</b> '
+                + list.map(function (u) {
+                    return escapeHtml(u.symbol) + ' (' + fmtMoney(parseFloat(u.gbp)) + ')';
+                }).join(' · ') + '</div>'
+                : '';
+        }
+
+        /**
+         * Drill-down popup: every holding in one style bucket, with the scores and the individual
+         * tests it passed. The flags are the point — a placement you can argue with beats one you
+         * can only accept.
+         */
+        function openStyleDetail(bucket) {
+            if (!styleData) return;
+            var row = (styleData.rows || []).filter(function (r) { return r.bucket === bucket; })[0];
+            if (!row) return;
+
+            document.getElementById('style-detail-title').textContent = row.label;
+            document.getElementById('style-detail-sub').textContent =
+                fmtMoney(parseFloat(row.gbp)) + '  ·  ' + fmtPct(stylePct(row))
+                + (styleBasis === 'invested' ? ' of invested' : ' of total');
+
+            var list = row.constituents || [];
+            var scored = row.scored;
+            var html = '<tr><th class="lbl">Holding</th><th>Value</th><th>% of bucket</th>'
+                + (scored ? '<th>Value score</th><th>Growth score</th><th>Yield</th>' : '')
+                + '<th class="lbl">Why</th></tr>';
+            if (!list.length) {
+                html += '<tr><td colspan="' + (scored ? 7 : 4)
+                    + '" class="muted">No detail available.</td></tr>';
+            }
+            list.forEach(function (c) {
+                var why = (c.flags || []).map(function (f) {
+                    return f.replace(/^V:/, '').replace(/^G:/, '');
+                }).join(', ');
+                html += '<tr><td class="lbl">' + escapeHtml(c.label) + '</td>'
+                    + '<td>' + fmtMoney(parseFloat(c.gbp)) + '</td>'
+                    + '<td>' + fmtPct(c.pctOfBucket) + '</td>';
+                if (scored) {
+                    html += '<td>' + (c.valueScore == null ? '—' : fmtPct(c.valueScore)) + '</td>'
+                        + '<td>' + (c.growthScore == null ? '—' : fmtPct(c.growthScore)) + '</td>'
+                        + '<td>' + (c.dividendYield == null ? '—' : fmtPct(c.dividendYield)) + '</td>';
+                }
+                html += '<td class="lbl muted">' + escapeHtml(why || c.note || '—') + '</td></tr>';
+            });
+            document.getElementById('style-detail-table').innerHTML = html;
+            document.getElementById('style-detail-modal').classList.add('open');
+        }
+
+        function closeStyleDetail() {
+            var m = document.getElementById('style-detail-modal');
+            if (m) m.classList.remove('open');
+        }
 
         // ---- sector & AI/Tech block (top of the Breakdown sub-view) ---------------
         var sectorsLoaded = false;

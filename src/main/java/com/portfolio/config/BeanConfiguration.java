@@ -23,6 +23,7 @@ import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.domain.SectorClassifier;
+import com.portfolio.domain.StyleClassifier;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.FxRateRepository;
@@ -329,6 +330,18 @@ public class BeanConfiguration {
                                                         FundamentalsRepository fundamentalsRepository,
                                                         SectorClassifier sectorClassifier) {
         return new SectorBreakdownService(allocationService, fundamentalsRepository, sectorClassifier);
+    }
+
+    @Bean
+    public StyleClassifier styleClassifier() {
+        return new StyleClassifier();
+    }
+
+    @Bean
+    public StyleBreakdownService styleBreakdownService(AllocationService allocationService,
+                                                       FundamentalsRepository fundamentalsRepository,
+                                                       StyleClassifier styleClassifier) {
+        return new StyleBreakdownService(allocationService, fundamentalsRepository, styleClassifier);
     }
 
     @Bean

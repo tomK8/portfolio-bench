@@ -316,6 +316,8 @@ public class YahooQuoteSummaryFetcher {
         putIf(extra, "numberOfAnalystOpinions", num(fin, "numberOfAnalystOpinions"));
         putIf(extra, "sharesOutstanding", num(dks, "sharesOutstanding"));
 
+        putFundValuation(extra, th);
+
         Map<String, String> labels = new LinkedHashMap<>();
         labels.put("sector", text(prof, "sector"));
         labels.put("industry", text(prof, "industry"));
@@ -325,6 +327,38 @@ public class YahooQuoteSummaryFetcher {
         return new QuoteSummary(ticker, currency, currentPrice, marketCap, trailingPe, forwardPe,
                 pegRatio, beta, week52High, week52Low, targetMeanPrice, extra, labels,
                 parseSectorWeights(th), parseFundHoldings(th), false);
+    }
+
+    /**
+     * Aggregate valuation multiples for a fund, from {@code topHoldings.equityHoldings} — the
+     * only place a fund's P/E is available at all, since a fund has no earnings of its own. Rides
+     * the {@code topHoldings} module already requested for sector look-through, so this costs
+     * <b>zero extra HTTP calls</b>.
+     *
+     * <p><b>Yahoo ships these inverted.</b> The field named {@code priceToEarnings} arrives as
+     * {@code 0.03396} for a Nasdaq-100 tracker — that is the earnings <i>yield</i>, i.e. 1/29.4.
+     * Storing it verbatim would put every fund at a P/E under 1 and read as the cheapest thing in
+     * the portfolio, so each is reciprocated here, once, at the edge. A non-positive value is
+     * dropped rather than inverted: it cannot be a meaningful multiple and would explode.
+     *
+     * <p>Written into {@code extra} under {@code fund*} keys rather than new columns — the map is
+     * free-form JSON on the way to SQLite, so this needs no migration. Deliberately <b>not</b>
+     * stored: {@code threeYearEarningsGrowth}, which Yahoo returns null for on every fund held
+     * here, leaving its scale (fraction or percent, inverted or not) unverifiable. A growth axis
+     * fed by a number nobody has ever seen a value for is worse than an admitted gap.
+     */
+    private static void putFundValuation(Map<String, BigDecimal> extra, JsonNode th) {
+        JsonNode eh = th.path("equityHoldings");
+        if (eh.isMissingNode()) return;
+        putIf(extra, "fundPriceToEarnings", reciprocal(num(eh, "priceToEarnings")));
+        putIf(extra, "fundPriceToBook", reciprocal(num(eh, "priceToBook")));
+        putIf(extra, "fundPriceToSales", reciprocal(num(eh, "priceToSales")));
+        putIf(extra, "fundPriceToCashflow", reciprocal(num(eh, "priceToCashflow")));
+    }
+
+    private static BigDecimal reciprocal(BigDecimal v) {
+        if (v == null || v.signum() <= 0) return null;
+        return BigDecimal.ONE.divide(v, java.math.MathContext.DECIMAL64);
     }
 
     /**

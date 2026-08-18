@@ -1077,6 +1077,7 @@
             0% { background-color: rgba(207, 34, 46, 0.45); }
             100% { background-color: transparent; }
         }
+        #live-table tbody tr { cursor: pointer; }   /* row opens the price popup */
         .live-flash-up { animation: live-flash-up 1.2s ease-out; }
         .live-flash-down { animation: live-flash-down 1.2s ease-out; }
         .live-pos { color: #2ca02c; font-weight: 600; }
@@ -2257,39 +2258,6 @@
         </tr></thead>
         <tbody></tbody>
     </table>
-
-    <div id="wl-modal" class="modal-backdrop" role="dialog" aria-modal="true">
-        <div class="modal-box">
-            <h3 id="wl-modal-title" style="margin-bottom: 0.15rem;">—</h3>
-            <div id="wl-modal-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.5rem;"></div>
-            <div style="height: 360px;">
-                <canvas id="wl-chart"></canvas>
-            </div>
-            <div class="wl-window-toggle" id="wl-window-toggle">
-                <button type="button" data-window="1D">1D</button>
-                <button type="button" data-window="3D">3D</button>
-                <button type="button" data-window="5D" class="active">5D</button>
-                <button type="button" data-window="10D">10D</button>
-                <button type="button" data-window="15D">15D</button>
-                <button type="button" data-window="30D">30D</button>
-                <button type="button" data-window="2M">2M</button>
-                <button type="button" data-window="3M">3M</button>
-                <button type="button" data-window="6M">6M</button>
-                <button type="button" data-window="1Y">1Y</button>
-                <button type="button" data-window="2Y">2Y</button>
-                <button type="button" data-window="3Y">3Y</button>
-                <button type="button" data-window="5Y">5Y</button>
-                <button type="button" data-window="10Y">10Y</button>
-                <button type="button" data-window="MAX">MAX</button>
-            </div>
-            <div class="wl-stats" id="wl-modal-stats"></div>
-            <div class="wl-fund-toggle" id="wl-fund-toggle">Fundamentals</div>
-            <div id="wl-fund-body" style="display: none; margin-top: 0.5rem;"></div>
-            <div class="modal-actions">
-                <button id="wl-modal-close" type="button">Close</button>
-            </div>
-        </div>
-    </div>
 </section>
 
 <section class="tab-panel" id="panel-swing">
@@ -3313,7 +3281,8 @@
         stored daily close. Quote cadence depends on Yahoo (free 1-min intraday, refetched
         every minute) and market hours — <code>.L</code> names freeze at 16:30 BST close,
         US names tick through 21:00 BST. Outside hours the snapshot is static. Day Δ is
-        GBP-denominated (price move + FX move on the position).
+        GBP-denominated (price move + FX move on the position). Click a row for the price
+        chart, momentum, vol term structure and fundamentals.
         <span id="live-status" class="muted" style="margin-left: 0.5rem;"></span>
         <span id="live-age" class="muted" style="margin-left: 0.4rem;"></span>
     </p>
@@ -3365,6 +3334,42 @@
         live values here.
     </p>
 </section>
+
+<!-- Price popup. Lives at body level rather than inside a tab panel: it is opened from
+     both the Watchlist table and the Live positions table, and a modal nested in a
+     hidden .tab-panel is hidden along with it. -->
+<div id="wl-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal-box">
+        <h3 id="wl-modal-title" style="margin-bottom: 0.15rem;">—</h3>
+        <div id="wl-modal-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.5rem;"></div>
+        <div style="height: 360px;">
+            <canvas id="wl-chart"></canvas>
+        </div>
+        <div class="wl-window-toggle" id="wl-window-toggle">
+            <button type="button" data-window="1D">1D</button>
+            <button type="button" data-window="3D">3D</button>
+            <button type="button" data-window="5D" class="active">5D</button>
+            <button type="button" data-window="10D">10D</button>
+            <button type="button" data-window="15D">15D</button>
+            <button type="button" data-window="30D">30D</button>
+            <button type="button" data-window="2M">2M</button>
+            <button type="button" data-window="3M">3M</button>
+            <button type="button" data-window="6M">6M</button>
+            <button type="button" data-window="1Y">1Y</button>
+            <button type="button" data-window="2Y">2Y</button>
+            <button type="button" data-window="3Y">3Y</button>
+            <button type="button" data-window="5Y">5Y</button>
+            <button type="button" data-window="10Y">10Y</button>
+            <button type="button" data-window="MAX">MAX</button>
+        </div>
+        <div class="wl-stats" id="wl-modal-stats"></div>
+        <div class="wl-fund-toggle" id="wl-fund-toggle">Fundamentals</div>
+        <div id="wl-fund-body" style="display: none; margin-top: 0.5rem;"></div>
+        <div class="modal-actions">
+            <button id="wl-modal-close" type="button">Close</button>
+        </div>
+    </div>
+</div>
 
 <script src="/js/wl-edit-sync.js"></script>
 <script src="/js/wl-poll.js"></script>

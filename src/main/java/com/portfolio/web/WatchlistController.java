@@ -6,6 +6,7 @@ import com.portfolio.application.WatchlistAlertJob;
 import com.portfolio.application.WatchlistService;
 import com.portfolio.domain.Instruments;
 import com.portfolio.application.WatchlistService.QuoteView;
+import com.portfolio.application.WatchlistService.Row;
 import com.portfolio.application.WatchlistService.Series;
 import com.portfolio.application.WatchlistService.WatchlistView;
 import com.portfolio.persistence.WatchlistRepository;
@@ -72,6 +73,17 @@ public class WatchlistController {
     @ResponseBody
     public QuoteView quotes() {
         return watchlistService.quotes();
+    }
+
+    /**
+     * One row for a single symbol, so the price popup can be opened from tables outside this tab
+     * (the Live positions table) without the symbol having to be on the watchlist. Read-only —
+     * looking at a held name must never add it to the watchlist.
+     */
+    @GetMapping("/watchlist/row")
+    @ResponseBody
+    public Row row(@RequestParam("symbol") String symbol) {
+        return watchlistService.row(symbol);
     }
 
     @PostMapping("/watchlist/add")

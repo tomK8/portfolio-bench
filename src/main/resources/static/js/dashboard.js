@@ -5147,7 +5147,7 @@
         // pulse + age counter reflect actual data movement, not the SSE heartbeat.
         var liveState = {
             source: null, lastValues: {}, lastChangeAt: 0,
-            ageTimer: null, sortAttached: false
+            ageTimer: null, sortAttached: false, clickAttached: false
         };
 
         function setupLive() {
@@ -5155,6 +5155,16 @@
             if (!liveState.sortAttached) {
                 attachSort(document.getElementById('live-table'));
                 liveState.sortAttached = true;
+            }
+            if (!liveState.clickAttached) {
+                liveState.clickAttached = true;
+                // Delegated from the tbody: rows are created, patched and re-ordered on every SSE
+                // frame, so a per-row listener would be duplicated or lost. Opens the same price
+                // popup the Watchlist tab uses — the position need not be on the watchlist.
+                document.querySelector('#live-table tbody').addEventListener('click', function (e) {
+                    var tr = e.target.closest('tr');
+                    if (tr && tr.dataset.symbol) openSymbolModal(tr.dataset.symbol);
+                });
             }
             // Initial JSON fetch paints something before the first SSE frame arrives.
             fetch('/live')
@@ -5640,6 +5650,7 @@
         // ---- Watchlist (volatility-trading monitor) -------------------------
 
         var watchlistInited = false;
+        var wlModalInited = false;      // popup listeners — bound by the Watchlist tab or the Live table
         var wlChart = null;
         var wlFundamentals = null;      // symbol -> quoteSummary, cached from /portfolio-fundamentals
         var wlSortAttached = false;
@@ -5648,6 +5659,7 @@
         var wlCurrentView = 'stats';    // 'stats' or 'returns'
 
         function setupWatchlist() {
+            ensureWlModalInited();
             if (!watchlistInited) {
                 watchlistInited = true;
                 document.getElementById('wl-add-btn').addEventListener('click', addWatchlistSymbol);
@@ -5655,34 +5667,82 @@
                     if (e.key === 'Enter') addWatchlistSymbol();
                 });
                 document.getElementById('wl-refresh-btn').addEventListener('click', loadWatchlist);
-                document.getElementById('wl-modal-close').addEventListener('click', closeWlModal);
-                document.getElementById('wl-modal').addEventListener('click', function (e) {
-                    if (e.target.id === 'wl-modal') closeWlModal();
-                });
-                document.addEventListener('keydown', function (e) {
-                    if (e.key === 'Escape' && document.getElementById('wl-modal').classList.contains('open')) {
-                        closeWlModal();
-                    }
-                });
-                document.getElementById('wl-fund-toggle').addEventListener('click', function () {
-                    var body = document.getElementById('wl-fund-body');
-                    var open = body.style.display !== 'none';
-                    body.style.display = open ? 'none' : 'block';
-                    this.classList.toggle('open', !open);
-                });
-                document.getElementById('wl-window-toggle').addEventListener('click', function (e) {
-                    var btn = e.target.closest('button[data-window]');
-                    if (!btn || !wlCurrentSymbol) return;
-                    this.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
-                    btn.classList.add('active');
-                    loadWlSeries(wlCurrentSymbol, btn.dataset.window);
-                });
                 document.getElementById('wl-view-stats').addEventListener('click', function () { switchWlView('stats'); });
                 document.getElementById('wl-view-returns').addEventListener('click', function () { switchWlView('returns'); });
                 loadGiltHints();
             }
             loadWatchlist();
             wlStartPolling();
+        }
+
+        // The popup's own listeners, bound independently of the Watchlist tab's: the Live table
+        // opens the same modal, and a user who goes straight there would otherwise get a popup
+        // whose Close button, Escape key and window toggle are all dead.
+        function ensureWlModalInited() {
+            if (wlModalInited) return;
+            wlModalInited = true;
+            document.getElementById('wl-modal-close').addEventListener('click', closeWlModal);
+            document.getElementById('wl-modal').addEventListener('click', function (e) {
+                if (e.target.id === 'wl-modal') closeWlModal();
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape' && document.getElementById('wl-modal').classList.contains('open')) {
+                    closeWlModal();
+                }
+            });
+            document.getElementById('wl-fund-toggle').addEventListener('click', function () {
+                var body = document.getElementById('wl-fund-body');
+                var open = body.style.display !== 'none';
+                body.style.display = open ? 'none' : 'block';
+                this.classList.toggle('open', !open);
+            });
+            document.getElementById('wl-window-toggle').addEventListener('click', function (e) {
+                var btn = e.target.closest('button[data-window]');
+                if (!btn || !wlCurrentSymbol) return;
+                this.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
+                btn.classList.add('active');
+                loadWlSeries(wlCurrentSymbol, btn.dataset.window);
+            });
+        }
+
+        /**
+         * Open the price popup for a symbol from outside the Watchlist tab. The row is fetched on
+         * demand (GET /watchlist/row) because those tables carry none of the popup's data — no
+         * 52-week levels, vol term structure or fundamentals — and the symbol need not be on the
+         * watchlist at all. The modal opens immediately with a loading line so a slow fetch doesn't
+         * look like a dead click; wlCurrentSymbol doubles as the staleness latch, so a response
+         * that lands after the user closed the popup or clicked another row is dropped.
+         */
+        function openSymbolModal(symbol) {
+            ensureWlModalInited();
+            wlCurrentSymbol = symbol;
+            document.getElementById('wl-modal-title').textContent = symbol;
+            document.getElementById('wl-modal-sub').textContent = 'Loading…';
+            document.getElementById('wl-modal-stats').innerHTML = '';
+            document.getElementById('wl-fund-body').style.display = 'none';
+            document.getElementById('wl-fund-toggle').classList.remove('open');
+            if (wlChart) { wlChart.destroy(); wlChart = null; }
+            document.getElementById('wl-modal').classList.add('open');
+            fetch('/watchlist/row?symbol=' + encodeURIComponent(symbol))
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (row) {
+                    if (wlCurrentSymbol !== symbol) return;
+                    openWlModal(row);
+                    // A symbol with nothing cached renders as all dashes; say so rather than
+                    // leaving the subtitle blank, which reads as a half-finished load.
+                    if (row.missingData) {
+                        document.getElementById('wl-modal-sub').textContent =
+                            'No prices cached for ' + symbol + ' yet.';
+                    }
+                })
+                .catch(function (err) {
+                    if (wlCurrentSymbol !== symbol) return;
+                    document.getElementById('wl-modal-sub').textContent =
+                        'Could not load data for ' + symbol + ' (' + err.message + ').';
+                });
         }
 
         /**

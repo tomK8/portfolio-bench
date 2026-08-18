@@ -296,6 +296,7 @@ no `System.out` in production code.
 | Watchlist             | `GET /watchlist`           | `WatchlistService`        |
 | Watchlist mutate      | `POST /watchlist/{add,remove,threshold,move}` | `WatchlistRepository` |
 | Watchlist popup chart | `GET /watchlist/series`    | `WatchlistService`        |
+| Watchlist single row  | `GET /watchlist/row`       | `WatchlistService.row`    |
 | Watchlist vol horizons| `GET /watchlist/vol`       | `WatchlistService`        |
 | Fundamentals snapshot | `GET /portfolio-fundamentals` (+ `/add`, `/remove`, `/refresh`) | `PortfolioFundamentalsService` |
 | Swing stats           | `GET /swing`               | `SwingAnalysisService`    |
@@ -750,6 +751,21 @@ touches an order.
   `price_above`/`price_below`, NULL on rows predating them → read as 0 = disabled), so a symbol can
   be watched with no alerts at all. `both()` (the pulse) stays near-high + big-move only; the alert
   job dedups the price levels under `SYMBOL|ABOVE|date` / `SYMBOL|BELOW|date`.
+- **The popup is shared with the Live tab.** Its markup (`#wl-modal`) sits at **body level**, not
+  inside `panel-watchlist` — a modal nested in a hidden `.tab-panel` is hidden along with it, so
+  the Live row click opened a popup nobody could see. Its listeners (close/Escape/backdrop, the
+  window toggle, the Fundamentals disclosure) are bound by `ensureWlModalInited()`, separate from
+  `setupWatchlist()`'s tab-specific bindings, so a user who never opens the Watchlist tab doesn't
+  get a popup whose Close button is dead. Clicking a Live row calls `openSymbolModal(symbol)`,
+  which opens the modal immediately with a "Loading…" line and fills it from
+  `GET /watchlist/row?symbol=` — the Live table carries none of the popup's data (no 52-week
+  levels, vol term structure or fundamentals), and `wlCurrentSymbol` doubles as the staleness
+  latch so a response landing after a close/re-click is dropped. `WatchlistService.row` serves
+  **any** symbol, watched or not: a watched one is assembled from its stored `Entry` so popup and
+  watchlist row agree, an unwatched one gets a stand-in entry with every trigger **disabled** —
+  looking at a holding must never arm an alert. The click is delegated from the Live `<tbody>`
+  (rows are rebuilt and re-ordered on every SSE frame); the poll guard in `wlPollTick` already
+  requires `panel-watchlist` to be active, so a popup opened from Live doesn't suppress anything.
 - **Popup extras:** `GET /watchlist/vol` returns a realized-vol **term structure** (5D/10D from
   intraday 1-min returns via `PriceStats.annualizedVolIntraday`, 30D/1Y from daily closes) shown
   in the popup stats. `GET /watchlist/series` for `1D` returns only the latest session's bars

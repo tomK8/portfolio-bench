@@ -42,8 +42,16 @@ public final class PriceMomentum {
     public static BigDecimal change(PriceHistoryRepository history, String ticker,
                                     LocalDate today, int lookbackDays) {
         if (ticker == null) return null;
-        PriceBar current = history.getPriceOn(ticker, today);
-        PriceBar base = history.getPriceOn(ticker, today.minusDays(lookbackDays));
+        return changeBetween(history.getPriceOn(ticker, today),
+                history.getPriceOn(ticker, today.minusDays(lookbackDays)));
+    }
+
+    /**
+     * The same fraction computed from two already-loaded bars — for callers that bulk-load
+     * their boundaries (see {@link PriceHistoryRepository#loadPricesAsOf}) rather than issuing
+     * a query per ticker per lookback. Null-safe on either side.
+     */
+    public static BigDecimal changeBetween(PriceBar current, PriceBar base) {
         if (current == null || base == null) return null;
         double c = current.close(), b = base.close();
         if (b == 0.0) return null;

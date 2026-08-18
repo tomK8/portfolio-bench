@@ -5285,11 +5285,11 @@
                 if (isNew) {
                     tr = document.createElement('tr');
                     tr.dataset.symbol = row.symbol;
-                    for (var i = 0; i < 12; i++) tr.appendChild(document.createElement('td'));
+                    for (var i = 0; i < 14; i++) tr.appendChild(document.createElement('td'));
                     tr.cells[0].className = 'txt';
                     tr.cells[1].className = 'txt';
-                    tr.cells[10].className = 'txt';
-                    tr.cells[11].className = 'txt';
+                    tr.cells[12].className = 'txt';
+                    tr.cells[13].className = 'txt';
                     tbody.appendChild(tr);
                     existing[row.symbol] = tr;
                 }
@@ -5320,18 +5320,21 @@
             applyDeltaClass(tr.cells[4], nPct);
             if (setNumericCell(tr.cells[5], row.symbol + '|dayGbp', nDay, nDay == null ? '—' : (nDay >= 0 ? '+' : '−') + fmtLiveNum(Math.abs(nDay), 2), prevByKey, nextByKey)) changed = true;
             applyDeltaClass(tr.cells[5], nDay);
-            var n5 = numOrNull(row.change5dPct);
-            var n10 = numOrNull(row.change10dPct);
-            var n30 = numOrNull(row.monthChangePct);
-            if (setNumericCell(tr.cells[6], row.symbol + '|d5', n5, n5 == null ? '—' : fmtLivePct(n5), prevByKey, nextByKey)) changed = true;
-            applyDeltaClass(tr.cells[6], n5);
-            if (setNumericCell(tr.cells[7], row.symbol + '|d10', n10, n10 == null ? '—' : fmtLivePct(n10), prevByKey, nextByKey)) changed = true;
-            applyDeltaClass(tr.cells[7], n10);
-            if (setNumericCell(tr.cells[8], row.symbol + '|d30', n30, n30 == null ? '—' : fmtLivePct(n30), prevByKey, nextByKey)) changed = true;
-            applyDeltaClass(tr.cells[8], n30);
-            if (setNumericCell(tr.cells[9], row.symbol + '|pos', nPos, nPos == null ? '—' : fmtLiveNum(nPos, 2), prevByKey, nextByKey)) changed = true;
-            tr.cells[10].textContent = row.accounts || '';
-            renderQuoteTs(tr.cells[11], row.priceTs);
+            var trailing = [
+                [6, 'd5', numOrNull(row.change5dPct)],
+                [7, 'd10', numOrNull(row.change10dPct)],
+                [8, 'd30', numOrNull(row.monthChangePct)],
+                [9, 'm3', numOrNull(row.change3mPct)],
+                [10, 'm6', numOrNull(row.change6mPct)]
+            ];
+            trailing.forEach(function (t) {
+                var cell = tr.cells[t[0]], n = t[2];
+                if (setNumericCell(cell, row.symbol + '|' + t[1], n, n == null ? '—' : fmtLivePct(n), prevByKey, nextByKey)) changed = true;
+                applyDeltaClass(cell, n);
+            });
+            if (setNumericCell(tr.cells[11], row.symbol + '|pos', nPos, nPos == null ? '—' : fmtLiveNum(nPos, 2), prevByKey, nextByKey)) changed = true;
+            tr.cells[12].textContent = row.accounts || '';
+            renderQuoteTs(tr.cells[13], row.priceTs);
             return changed;
         }
 

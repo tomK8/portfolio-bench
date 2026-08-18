@@ -62,4 +62,30 @@ class IIOrdersParserTest {
 
         assertEquals("GBP", orders.get(1).currency());
     }
+
+    /**
+     * A value-based order ("buy £6,597.50 worth") exports {@code Quantity=n/a}. It is still a
+     * resting order and must appear on the panel — dropping it made a live XWIS buy invisible.
+     */
+    @Test
+    void parse_keepsValueBasedOrderWithNoQuantity(@TempDir Path dir) throws Exception {
+        Path f = dir.resolve(UUID);
+        Files.writeString(f, """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                18/08/2026 22:34,27726JDB55K,BUY/LIMIT,XWIS,Xtrackers MSCI World Indust ETF 1C GBP,n/a,n/a,"£6,597.50",PENDING
+                """);
+
+        List<OpenOrder> orders = parser.parse(f);
+        assertEquals(1, orders.size());
+
+        OpenOrder o = orders.get(0);
+        assertEquals("XWIS", o.symbol());
+        assertEquals("Buy", o.side());
+        assertNull(o.quantity());
+        assertNull(o.price());            // nothing to divide the amount by
+        assertFalse(o.priceEstimated());
+        assertEquals("GBP", o.currency());
+        assertEquals(0, new BigDecimal("6597.50").compareTo(o.amount()));
+        assertEquals(LocalDate.of(2026, 8, 18), o.dateEntered());
+    }
 }

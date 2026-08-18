@@ -31,6 +31,10 @@ class LivePricesServiceTest {
                 new YahooTickerMap());
     }
 
+    private static PriceBar bar(String symbol, LocalDate date, double close) {
+        return new PriceBar(symbol, date, null, null, null, close, close, 1.0, null, "GBP");
+    }
+
     private static CashTransaction buy(String date, String symbol, double qty) {
         return new CashTransaction(date, Account.AJBELL, TransactionType.TRANSACTION,
                 symbol, qty, -qty * 100, "GBP", 1.0, -qty * 100, null, null, "buy");
@@ -92,6 +96,65 @@ class LivePricesServiceTest {
         assertTrue(row.dayChangePct().compareTo(BigDecimal.ZERO) > 0, "positive day move");
         assertNotNull(row.dayChangeGbp());
         assertEquals(0, new BigDecimal("10.00").compareTo(row.dayChangeGbp().setScale(2, java.math.RoundingMode.HALF_UP)));
+    }
+
+    @Test
+    void trailingReturnsSpanFiveDaysToSixMonths() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2020-01-01", "AAPL", 1.0)));
+
+        // One close per boundary the snapshot reads, each a round step off today's 100.
+        var priceRepo = new PriceHistoryRepository(cf);
+        LocalDate today = LocalDate.now();
+        priceRepo.savePriceBars(List.of(
+                bar("AAPL", today, 100.0),
+                bar("AAPL", today.minusDays(5), 50.0),
+                bar("AAPL", today.minusDays(10), 40.0),
+                bar("AAPL", today.minusDays(30), 25.0),
+                bar("AAPL", today.minusMonths(3), 20.0),
+                bar("AAPL", today.minusMonths(6), 10.0)));
+
+        var intraRepo = new IntradayPriceRepository(cf);
+        intraRepo.saveIntradayBars(List.of(
+                new IntradayBar("AAPL", Instant.now(), 100.0, null, "GBP")));
+
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap());
+        LivePricesService.Row row = svc.snapshot().rows().get(0);
+
+        // Trailing changes come off the daily closes, not the intraday quote.
+        assertEquals(0, new BigDecimal("1.0").compareTo(row.change5dPct()));
+        assertEquals(0, new BigDecimal("1.5").compareTo(row.change10dPct()));
+        assertEquals(0, new BigDecimal("3.0").compareTo(row.monthChangePct()));
+        assertEquals(0, new BigDecimal("4.0").compareTo(row.change3mPct()));
+        assertEquals(0, new BigDecimal("9.0").compareTo(row.change6mPct()));
+    }
+
+    @Test
+    void trailingReturnIsNullWhenHistoryIsShorterThanTheWindow() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2020-01-01", "AAPL", 1.0)));
+
+        // Only a week of history: the 5d base exists, everything longer has no bar at all.
+        var priceRepo = new PriceHistoryRepository(cf);
+        LocalDate today = LocalDate.now();
+        priceRepo.savePriceBars(List.of(
+                bar("AAPL", today, 100.0),
+                bar("AAPL", today.minusDays(5), 50.0)));
+
+        var intraRepo = new IntradayPriceRepository(cf);
+        intraRepo.saveIntradayBars(List.of(
+                new IntradayBar("AAPL", Instant.now(), 100.0, null, "GBP")));
+
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap());
+        LivePricesService.Row row = svc.snapshot().rows().get(0);
+
+        assertNotNull(row.change5dPct());
+        assertNull(row.change3mPct(), "no bar 3 months back → blank, not a fabricated 0%");
+        assertNull(row.change6mPct());
     }
 
     @Test

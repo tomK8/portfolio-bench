@@ -132,6 +132,36 @@ public class WatchlistService {
         return new QuoteView(rows);
     }
 
+    /**
+     * One full {@link Row} for a single symbol, watched or not. Serves the price popup opened from
+     * a table outside the Watchlist tab (the Live positions table), so the same modal can be reused
+     * for a held name that was never added to the watchlist. A watched symbol is assembled from its
+     * stored {@link Entry}, so the popup shows exactly the thresholds and alert flags its watchlist
+     * row does; an unwatched one gets a stand-in entry with every trigger disabled and simply never
+     * fires. A symbol with no prices at all comes back {@code missingData} rather than throwing —
+     * the popup renders empty, same as a freshly-added watchlist row still backfilling.
+     */
+    public Row row(String symbolRaw) {
+        String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase();
+        if (symbol.isEmpty()) throw new IllegalArgumentException("Symbol is required.");
+        Entry e = watchlistEntry(symbol);
+
+        Map<String, Cached> fundamentals = fundamentalsRepo.loadAll();
+        Map<String, List<CashTransaction>> ledgerBySymbol = ledgerBySymbol();
+        Map<String, BigDecimal> rates = fetchRatesQuietly();
+        Map<String, IntradayPrice> latest = intradayRepo.loadLatestIntradayPrices(List.of(tickerFor(symbol)));
+
+        return buildRow(e, LocalDate.now(), Instant.now(), fundamentals, ledgerBySymbol, rates, latest);
+    }
+
+    /** The stored watchlist entry for {@code symbol}, or a stand-in with every trigger disabled. */
+    private Entry watchlistEntry(String symbol) {
+        for (Entry e : watchlistRepo.loadAll()) {
+            if (e.symbol().equalsIgnoreCase(symbol)) return e;
+        }
+        return new Entry(symbol, BigDecimal.ZERO, BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO);
+    }
+
     private Row buildRow(Entry e, LocalDate today, Instant now,
                          Map<String, Cached> fundamentals,
                          Map<String, List<CashTransaction>> ledgerBySymbol,

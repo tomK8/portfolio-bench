@@ -113,6 +113,54 @@ class YahooQuoteSummaryFetcherTest {
     }
 
     @Test
+    void storesForwardEstimatesFromEarningsTrend() throws Exception {
+        // Intel's real earningsTrend shape: positive EPS base, so both estimates are usable.
+        String json = """
+                {"quoteSummary":{"result":[{"earningsTrend":{"trend":[
+                  {"period":"0q","growth":{"raw":0.6907}},
+                  {"period":"0y","growth":{"raw":2.6021},
+                   "earningsEstimate":{"avg":{"raw":1.5129}},
+                   "revenueEstimate":{"growth":{"raw":0.1919}}},
+                  {"period":"+1y","growth":{"raw":0.34849998},
+                   "earningsEstimate":{"avg":{"raw":2.04013}},
+                   "revenueEstimate":{"growth":{"raw":0.1306}}}
+                ]}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("INTC", json);
+        // Next fiscal year only -- 0y largely restates the trailing figure it votes alongside.
+        assertEquals(0, q.extra().get("forwardRevenueGrowth").compareTo(new BigDecimal("0.1306")));
+        assertEquals(0, q.extra().get("forwardEarningsGrowth").compareTo(new BigDecimal("0.34849998")));
+    }
+
+    @Test
+    void withholdsForwardEarningsGrowthOffANegativeBase() throws Exception {
+        // Moderna's real shape. Yahoo reports +42.5% growth while estimated EPS runs -8.58 ->
+        // -4.91: the loss is shrinking, earnings are not growing. Publishing that number would
+        // score a loss-maker as a grower off a ratio of two negatives. Revenue growth has a
+        // positive base by definition and is still stored.
+        String json = """
+                {"quoteSummary":{"result":[{"earningsTrend":{"trend":[
+                  {"period":"0y","growth":{"raw":-0.1724},
+                   "earningsEstimate":{"avg":{"raw":-8.58108}},
+                   "revenueEstimate":{"growth":{"raw":0.083500005}}},
+                  {"period":"+1y","growth":{"raw":0.42490003},
+                   "earningsEstimate":{"avg":{"raw":-4.90677}},
+                   "revenueEstimate":{"growth":{"raw":0.1529}}}
+                ]}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("MRNA", json);
+        assertEquals(0, q.extra().get("forwardRevenueGrowth").compareTo(new BigDecimal("0.1529")));
+        assertNull(q.extra().get("forwardEarningsGrowth"),
+                "growth measured off a negative EPS base must not be published");
+    }
+
+    @Test
+    void missingEarningsTrendYieldsNoForwardKeys() throws Exception {
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());
+        // The committed fixture predates the module; absent estimates must abstain, not crash.
+        assertNull(q.extra().get("forwardRevenueGrowth"));
+        assertNull(q.extra().get("forwardEarningsGrowth"));
+    }
+
+    @Test
     void returnsEmptyOnUnknownTickerResponse() throws Exception {
         // Yahoo returns {"result":null,"error":{...}} for unknown tickers.
         String unknown = "{\"quoteSummary\":{\"result\":null,\"error\":{\"code\":\"Not Found\"}}}";

@@ -55,7 +55,7 @@ public class YahooQuoteSummaryFetcher {
                     "?modules=price,summaryDetail,defaultKeyStatistics,financialData,summaryProfile" +
                     ",topHoldings" +
                     ",cashflowStatementHistoryQuarterly,incomeStatementHistoryQuarterly" +
-                    ",balanceSheetHistoryQuarterly" +
+                    ",balanceSheetHistoryQuarterly,earningsTrend" +
                     "&crumb=%s";
     private static final String CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb";
     // Bootstrap host for the A1/A3 session cookies the crumb endpoint requires. fc.yahoo.com is
@@ -230,6 +230,7 @@ public class YahooQuoteSummaryFetcher {
         JsonNode cfsQ = r.path("cashflowStatementHistoryQuarterly").path("cashflowStatements");
         JsonNode issQ = r.path("incomeStatementHistoryQuarterly").path("incomeStatementHistory");
         JsonNode bsQ = r.path("balanceSheetHistoryQuarterly").path("balanceSheetStatements");
+        JsonNode et = r.path("earningsTrend").path("trend");
 
         // Core columns (visible in the table)
         BigDecimal currentPrice = firstNonNull(num(price, "regularMarketPrice"), num(fin, "currentPrice"));
@@ -301,6 +302,7 @@ public class YahooQuoteSummaryFetcher {
         putIf(extra, "ebitda", ebitdaTtm);
         putIf(extra, "revenueGrowth", num(fin, "revenueGrowth"));
         putIf(extra, "earningsGrowth", num(fin, "earningsGrowth"));
+        putForwardGrowth(extra, et);
         // Dividends
         putIf(extra, "dividendYield", num(sd, "dividendYield"));
         putIf(extra, "dividendRate", num(sd, "dividendRate"));
@@ -327,6 +329,48 @@ public class YahooQuoteSummaryFetcher {
         return new QuoteSummary(ticker, currency, currentPrice, marketCap, trailingPe, forwardPe,
                 pegRatio, beta, week52High, week52Low, targetMeanPrice, extra, labels,
                 parseSectorWeights(th), parseFundHoldings(th), false);
+    }
+
+    /**
+     * Forward growth estimates from the {@code earningsTrend} module, which is the only source
+     * that covers a company with negative trailing earnings. Yahoo omits both {@code trailingPE}
+     * and {@code financialData.earningsGrowth} for a loss-maker, which stripped two of the four
+     * growth inputs from the style classifier at once (the third, P/E compression, needs a
+     * positive trailing P/E it no longer has). Intel and Moderna were left with a single growth
+     * metric and fell out of the value/growth split entirely as UNKNOWN.
+     *
+     * <p>Only the <b>{@code +1y}</b> entry — next full fiscal year — is stored. {@code 0y} is the
+     * current year and largely reported already, so it mostly restates the trailing figure it
+     * would be voting alongside.
+     *
+     * <p><b>Revenue growth is stored unconditionally; earnings growth is gated on a positive
+     * earnings base.</b> That asymmetry is the point of this method. Revenue cannot be negative,
+     * so its growth rate always means what it says. Yahoo computes {@code trend.growth} off
+     * whatever the base year's EPS was, sign included: Moderna's {@code +1y} growth arrives as
+     * <b>+0.4249</b> while its estimated EPS goes from <b>−8.58</b> to <b>−4.91</b>. The loss is
+     * shrinking; earnings are not growing. Storing that verbatim would score a deeply loss-making
+     * name as a grower off a number that is positive only because it is a ratio of two negatives —
+     * the same negative-base trap the classifier's P/E-compression test already guards against by
+     * requiring both multiples to be positive. Both endpoints must be positive here for the same
+     * reason, so a loss-maker abstains rather than voting with a meaningless figure.
+     */
+    private static void putForwardGrowth(Map<String, BigDecimal> extra, JsonNode trend) {
+        if (!trend.isArray()) return;
+        JsonNode currentYear = null, nextYear = null;
+        for (JsonNode e : trend) {
+            String period = text(e, "period");
+            if ("0y".equals(period)) currentYear = e;
+            else if ("+1y".equals(period)) nextYear = e;
+        }
+        if (nextYear == null) return;
+        putIf(extra, "forwardRevenueGrowth", num(nextYear.path("revenueEstimate"), "growth"));
+
+        BigDecimal baseEps = currentYear == null
+                ? null : num(currentYear.path("earningsEstimate"), "avg");
+        BigDecimal nextEps = num(nextYear.path("earningsEstimate"), "avg");
+        if (baseEps != null && baseEps.signum() > 0 && nextEps != null && nextEps.signum() > 0) {
+            putIf(extra, "forwardEarningsGrowth", num(nextYear, "growth"));
+        }
     }
 
     /**

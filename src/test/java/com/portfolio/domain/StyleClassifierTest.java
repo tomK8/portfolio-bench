@@ -143,6 +143,77 @@ class StyleClassifierTest {
     }
 
     @Test
+    void lossMakerWithGrowingRevenueIsScoredNotUnknown() {
+        // Intel's real shape (2026-08): no trailing P/E and no earningsGrowth, because trailing
+        // earnings are negative. That also kills P/E compression, leaving trailing revenue growth
+        // alone -- one metric, below min.metrics, so it fell out as UNKNOWN. The two forward
+        // estimates restore a scorable axis.
+        Classification c = classify(m().pe(null, "47.02")
+                .evEbitda("33.16").ps("8.89")
+                .revGrowth("0.254").fwdRevGrowth("0.1306").fwdEpsGrowth("0.3485").build());
+        assertEquals(StyleBucket.GROWTH, c.bucket());
+        // Revenue 1.0 + fwd earnings 0.25 achieved, of 1.0 + 0.5 + 0.25 available.
+        assertEquals(0, c.growthScore().compareTo(d("0.7143")), "got " + c.growthScore());
+        assertEquals(0, c.valueScore().compareTo(d("0.0")), "expensive on every value test");
+    }
+
+    @Test
+    void shrinkingLossIsNotForwardGrowth() {
+        // Moderna's real shape: flat revenue (+2.1%) and a forward revenue estimate that scrapes
+        // over the bar (0.1529 vs 0.15). Yahoo also publishes +42.5% "earnings growth" for it,
+        // but that is EPS -8.58 -> -4.91: a shrinking loss off a negative base. The fetcher
+        // withholds it (see YahooQuoteSummaryFetcherTest), so it must not vote here -- and
+        // without it the name cannot reach the growth threshold on one marginal estimate.
+        Classification c = classify(m().pe(null, "-13.05")
+                .evEbitda("-9.97").ps("11.45")
+                .revGrowth("0.021").fwdRevGrowth("0.1529").build());
+        assertEquals(StyleBucket.NEITHER, c.bucket());
+        // 0.5 of 1.5 -- the forward estimate alone cannot outvote flat trailing revenue.
+        assertEquals(0, c.growthScore().compareTo(d("0.3333")), "got " + c.growthScore());
+    }
+
+    @Test
+    void forwardEarningsGrowthCannotCarryTheAxisAlone() {
+        // The weighting that makes the above hold: even with BOTH forward estimates passing, a
+        // name with flat trailing revenue stays under the threshold (0.75 of 2.25). Real top-line
+        // growth remains close to necessary, which is the same property
+        // cyclicalWithFlatRevenueIsNotGrowth protects on the trailing side.
+        Classification c = classify(m().pe("20.0", "18.0").divYield("0.01")
+                .evEbitda("14.0").ps("3.0")
+                .revGrowth("0.02").fwdRevGrowth("0.30").fwdEpsGrowth("0.40").build());
+        assertTrue(c.growthScore().compareTo(d("0.5")) < 0, "got " + c.growthScore());
+        assertEquals(StyleBucket.NEITHER, c.bucket());
+    }
+
+    @Test
+    void forwardEstimatesDoNotUnseatReportedGrowth() {
+        // Apple's real shape (2026-08): reported revenue +16.4% and EPS +28.7%, but FY+1 estimates
+        // of +9.7% / +8.1% -- analyst estimates for mature large-caps cluster under a bar set for
+        // trailing figures. At the first weights tried (0.8/0.4) the two failing estimates
+        // outvoted both reported metrics and dropped AAPL and AMZN out of Growth entirely. The
+        // estimates must only decide a position whose reported metrics are missing.
+        Classification c = classify(m().pe("35.64", "32.65").divYield("0.004")
+                .evEbitda("25.0").ps("9.0")
+                .revGrowth("0.164").epsGrowth("0.287")
+                .fwdRevGrowth("0.0973").fwdEpsGrowth("0.0807").build());
+        assertEquals(StyleBucket.GROWTH, c.bucket(),
+                "reported double-digit growth must survive two undershooting estimates");
+        assertTrue(c.growthScore().compareTo(d("0.5")) >= 0, "got " + c.growthScore());
+    }
+
+    @Test
+    void absentForwardEstimatesChangeNothing() {
+        // Regression guard for the whole book: a name Yahoo covers normally must score exactly
+        // as it did before earningsTrend was wired in, because absent metrics abstain rather
+        // than diluting the denominator.
+        Classification c = classify(m().pe("17.13", "23.17").divYield("0.0026")
+                .evEbitda("18.0").ps("6.0")
+                .revGrowth("0.16").epsGrowth("0.22").build());
+        assertEquals(0, c.growthScore().compareTo(d("0.7368")), "got " + c.growthScore());
+        assertEquals(StyleBucket.GROWTH, c.bucket());
+    }
+
+    @Test
     void tooFewMetricsIsUnknownWithAReason() {
         Classification c = classify(m().pe("20.0", null).build());
         assertEquals(StyleBucket.UNKNOWN, c.bucket());

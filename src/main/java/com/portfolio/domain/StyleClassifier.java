@@ -49,6 +49,29 @@ import java.util.Properties;
  * {@code growth.earnings.weight} (0.4) against revenue growth's 1.0, and P/E compression — which
  * fires for any cyclical whose earnings are recovering — at 0.5, so that flat revenue cannot be
  * outvoted by the two soft signals together.
+ *
+ * <h2>Forward estimates carry the loss-makers</h2>
+ * Three of the four inputs above need positive trailing earnings to exist at all: Yahoo publishes
+ * no {@code trailingPE} and no {@code earningsGrowth} for a loss-maker, which also removes the P/E
+ * compression test. That left Intel and Moderna with revenue growth alone — one metric, below
+ * {@code min.metrics} — so both dropped out of the split as UNKNOWN, exactly the population the
+ * growth axis most needs to judge. The two {@code earningsTrend} estimates fill the gap.
+ *
+ * <p>They are deliberately asymmetric. <b>Forward revenue growth always votes</b>, because revenue
+ * has a positive base by definition, and it is the heavier of the two ({@code 0.5} against
+ * {@code 0.25}).
+ * <b>Forward earnings growth votes only when both the base and the estimate are positive</b> — a
+ * gate applied upstream in {@code YahooQuoteSummaryFetcher}, so the field simply does not arrive
+ * for a loss-maker. Yahoo derives that growth rate off a signed base, so Moderna's shrinking loss
+ * (EPS −8.58 → −4.91) is published as <b>+42.5% growth</b>; taking it at face value would score a
+ * loss-making name as a grower off a ratio of two negatives. It is the same negative-base trap the
+ * P/E compression test guards against, and it gets the same treatment.
+ *
+ * <p>Both weights are deliberately small enough that the estimates <b>cannot unseat reported
+ * growth</b> — they decide a position only where the reported metrics are missing, which is the
+ * case they were added for. At a full-weight vote they instead redefined the bucket for the whole
+ * book, dropping Apple and Amazon out of Growth on FY+1 estimates that undershoot a threshold
+ * calibrated for trailing figures.
  */
 public class StyleClassifier {
 
@@ -145,6 +168,14 @@ public class StyleClassifier {
         }
         growth.vote("P/E compression", compression,
                 compression != null && gte(compression, t.compressionMin), t.compressionWeight);
+        // The two forward estimates. These are the only growth inputs that survive negative
+        // trailing earnings, which is the whole reason they exist — see the class javadoc.
+        growth.vote("Fwd revenue growth", m.forwardRevenueGrowth(),
+                m.forwardRevenueGrowth() != null && gte(m.forwardRevenueGrowth(), t.fwdRevMin),
+                t.fwdRevWeight);
+        growth.vote("Fwd earnings growth", m.forwardEarningsGrowth(),
+                m.forwardEarningsGrowth() != null && gte(m.forwardEarningsGrowth(), t.fwdEpsMin),
+                t.fwdEpsWeight);
 
         if (value.count() < t.minMetrics || growth.count() < t.minMetrics) {
             return new Classification(StyleBucket.UNKNOWN, scaled(gbp), null, null,
@@ -257,9 +288,10 @@ public class StyleClassifier {
     /** Every tunable, read once from {@code style.properties}. */
     private static final class Thresholds {
         final BigDecimal peMax, evMax, psMax, divYieldMin;
-        final BigDecimal revMin, fcfMin, epsMin, compressionMin;
+        final BigDecimal revMin, fcfMin, epsMin, compressionMin, fwdRevMin, fwdEpsMin;
         final BigDecimal peWeight, evWeight, psWeight, divWeight;
         final BigDecimal revWeight, fcfWeight, epsWeight, compressionWeight;
+        final BigDecimal fwdRevWeight, fwdEpsWeight;
         final BigDecimal scoreThreshold, incomeYieldMin, fundValueMax, fundGrowthMin;
         final int minMetrics;
 
@@ -272,6 +304,8 @@ public class StyleClassifier {
             fcfMin = dec(p, "growth.fcf.min", "0.15");
             epsMin = dec(p, "growth.earnings.min", "0.15");
             compressionMin = dec(p, "growth.pecompression.min", "0.15");
+            fwdRevMin = dec(p, "growth.fwdrevenue.min", "0.15");
+            fwdEpsMin = dec(p, "growth.fwdearnings.min", "0.15");
             peWeight = dec(p, "value.pe.weight", "1.0");
             evWeight = dec(p, "value.evebitda.weight", "0.8");
             psWeight = dec(p, "value.ps.weight", "0.8");
@@ -280,6 +314,8 @@ public class StyleClassifier {
             fcfWeight = dec(p, "growth.fcf.weight", "0.8");
             epsWeight = dec(p, "growth.earnings.weight", "0.4");
             compressionWeight = dec(p, "growth.pecompression.weight", "0.5");
+            fwdRevWeight = dec(p, "growth.fwdrevenue.weight", "0.5");
+            fwdEpsWeight = dec(p, "growth.fwdearnings.weight", "0.25");
             scoreThreshold = dec(p, "score.threshold", "0.5");
             incomeYieldMin = dec(p, "income.divyield.min", "0.025");
             fundValueMax = dec(p, "fund.pe.value.max", "18");
@@ -303,14 +339,20 @@ public class StyleClassifier {
      * The fundamentals a style score needs, already unpacked from the cache. Every field is
      * nullable; absent metrics abstain rather than counting against the position. Growth figures
      * and the dividend yield are <b>fractions</b> (0.15 = 15%), matching Yahoo's own scale.
+     *
+     * <p>{@code forwardRevenueGrowth} / {@code forwardEarningsGrowth} are next-fiscal-year analyst
+     * estimates. The latter is null for any company whose earnings base is negative — the
+     * fetcher withholds it rather than publish growth measured off a loss.
      */
     public record Metrics(BigDecimal trailingPe, BigDecimal forwardPe, BigDecimal dividendYield,
                           BigDecimal evToEbitda, BigDecimal priceToSales,
                           BigDecimal revenueGrowth, BigDecimal earningsGrowth, BigDecimal fcfGrowth,
+                          BigDecimal forwardRevenueGrowth, BigDecimal forwardEarningsGrowth,
                           BigDecimal fundPe, BigDecimal fundPb, BigDecimal fundPs) {
 
         public static Metrics empty() {
-            return new Metrics(null, null, null, null, null, null, null, null, null, null, null);
+            return new Metrics(null, null, null, null, null, null, null, null, null, null,
+                    null, null, null);
         }
 
         /**
@@ -320,6 +362,7 @@ public class StyleClassifier {
         public static final class Builder {
             private BigDecimal trailingPe, forwardPe, dividendYield, evToEbitda, priceToSales;
             private BigDecimal revenueGrowth, earningsGrowth, fcfGrowth;
+            private BigDecimal forwardRevenueGrowth, forwardEarningsGrowth;
             private BigDecimal fundPe, fundPb, fundPs;
 
             public Builder pe(String trailing, String forward) {
@@ -358,6 +401,16 @@ public class StyleClassifier {
                 return this;
             }
 
+            public Builder fwdRevGrowth(String v) {
+                this.forwardRevenueGrowth = dec(v);
+                return this;
+            }
+
+            public Builder fwdEpsGrowth(String v) {
+                this.forwardEarningsGrowth = dec(v);
+                return this;
+            }
+
             public Builder fund(String pe, String pb, String ps) {
                 this.fundPe = dec(pe);
                 this.fundPb = dec(pb);
@@ -367,7 +420,8 @@ public class StyleClassifier {
 
             public Metrics build() {
                 return new Metrics(trailingPe, forwardPe, dividendYield, evToEbitda, priceToSales,
-                        revenueGrowth, earningsGrowth, fcfGrowth, fundPe, fundPb, fundPs);
+                        revenueGrowth, earningsGrowth, fcfGrowth,
+                        forwardRevenueGrowth, forwardEarningsGrowth, fundPe, fundPb, fundPs);
             }
 
             private static BigDecimal dec(String v) {

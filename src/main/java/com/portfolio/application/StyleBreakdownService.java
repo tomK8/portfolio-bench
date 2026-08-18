@@ -183,6 +183,8 @@ public class StyleBreakdownService {
                 x.get("revenueGrowth"),
                 x.get("earningsGrowth"),
                 x.get("fcfGrowthYoy"),
+                x.get("forwardRevenueGrowth"),
+                x.get("forwardEarningsGrowth"),
                 x.get("fundPriceToEarnings"),
                 x.get("fundPriceToBook"),
                 x.get("fundPriceToSales"));

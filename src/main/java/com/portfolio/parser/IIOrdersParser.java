@@ -22,7 +22,8 @@ import java.util.regex.Pattern;
  *
  * <p>Header: {@code Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status}.
  * {@code Type} bundles side and order type ("SELL/LIMIT"); the currency comes from the {@code Amount}
- * prefix (£/$). II does not export a per-share limit price or an expiry, so those stay null.
+ * prefix (£/$). II does not export a per-share limit price or an expiry, so those stay null; a
+ * value-based order carries {@code Quantity=n/a}, which leaves the quantity null too.
  */
 public class IIOrdersParser implements OrderParser {
 
@@ -62,8 +63,13 @@ public class IIOrdersParser implements OrderParser {
         try (CSVParser csv = CSVParser.parse(content, format)) {
             for (CSVRecord r : csv) {
                 String symbol = get(r, "Symbol");
+                if (symbol == null || symbol.isBlank()) continue;
+
+                // A value-based order ("buy £6,597.50 worth") exports Quantity as "n/a" — the share
+                // count is only settled at execution. That is a real resting order, so it must not be
+                // dropped: quantity stays null and renders as "—", and the limit price can't be
+                // estimated (there's nothing to divide the amount by).
                 BigDecimal qty = decimal(get(r, "Quantity"));
-                if (symbol == null || symbol.isBlank() || qty == null) continue;
 
                 String[] type = splitType(get(r, "Type"));
                 String amountRaw = get(r, "Amount");
@@ -72,7 +78,7 @@ public class IIOrdersParser implements OrderParser {
                 // II never exports the resting limit price, so estimate it from the order value ÷
                 // quantity. It's inexact — the ~£2.99 dealing fee (and, on USD orders, an FX charge
                 // in GBP) is baked into the amount — hence the priceEstimated flag / "~" in the UI.
-                boolean priceEstimated = amount != null && qty.compareTo(BigDecimal.ZERO) != 0;
+                boolean priceEstimated = amount != null && qty != null && qty.signum() != 0;
                 BigDecimal price = priceEstimated
                         ? amount.divide(qty, 4, java.math.RoundingMode.HALF_UP) : null;
 

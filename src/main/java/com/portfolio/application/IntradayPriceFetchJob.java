@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
@@ -72,17 +73,7 @@ public class IntradayPriceFetchJob {
                 log.info("Intraday fetch interrupted — stopping early");
                 return;
             }
-            Instant latest = intradayRepo.getLatestIntradayTs(ticker);
-            Instant from = (latest == null) ? earliest : latest.plusSeconds(60);
-            if (from.isBefore(earliest)) from = earliest;   // catch-up after a long gap → clamp to window
-            if (!from.isBefore(now)) {
-                log.info("Intraday {} — up to date", ticker);
-                continue;
-            }
-
-            List<IntradayBar> bars = fetcher.fetchIntraday(ticker, from, now);
-            int saved = intradayRepo.saveIntradayBars(bars);
-            log.info("Intraday {} — {} bars ({} new)", ticker, bars.size(), saved);
+            if (fetchOne(ticker, now, earliest) < 0) continue;
             PriceFetchSupport.sleep(THROTTLE_MS);
         }
 
@@ -92,5 +83,48 @@ public class IntradayPriceFetchJob {
             lastPruneDate = today;
             if (pruned > 0) log.info("Intraday prune — removed {} rows older than {} days", pruned, RETENTION_DAYS);
         }
+    }
+
+    /**
+     * Fetch the gap for a handful of tickers now, off the polling cycle. The scheduled pass walks
+     * the whole universe at a 500ms throttle (~70s for ~106 tickers) and then waits 60s, so any one
+     * symbol refreshes about every two minutes — fine for a background feed, too slow for a tab you
+     * just opened. The Open orders panel calls this for the symbols whose quotes are visibly behind
+     * their peers, so a reload a few seconds later shows a live price instead of the last close.
+     *
+     * <p>Runs on the caller's thread (the callers hand it to a background executor) and never
+     * throws: a warm that fails leaves the scheduled pass to catch up as before.
+     */
+    public void fetchNow(Collection<String> tickerSet) {
+        Instant now = Instant.now();
+        Instant earliest = now.minus(LOOKBACK);
+        for (String ticker : tickerSet) {
+            if (Thread.currentThread().isInterrupted()) return;
+            try {
+                if (fetchOne(ticker, now, earliest) < 0) continue;
+            } catch (Exception e) {
+                log.warn("Intraday warm failed for {}", ticker, e);
+                continue;
+            }
+            PriceFetchSupport.sleep(THROTTLE_MS);
+        }
+    }
+
+    /**
+     * One ticker's gap fetch. Returns the rows written, or −1 when the ticker was already up to
+     * date (nothing fetched, so the caller can skip the politeness throttle).
+     */
+    private int fetchOne(String ticker, Instant now, Instant earliest) {
+        Instant latest = intradayRepo.getLatestIntradayTs(ticker);
+        Instant from = (latest == null) ? earliest : latest.plusSeconds(60);
+        if (from.isBefore(earliest)) from = earliest;   // catch-up after a long gap → clamp to window
+        if (!from.isBefore(now)) {
+            log.info("Intraday {} — up to date", ticker);
+            return -1;
+        }
+        List<IntradayBar> bars = fetcher.fetchIntraday(ticker, from, now);
+        int saved = intradayRepo.saveIntradayBars(bars);
+        log.info("Intraday {} — {} bars ({} new)", ticker, bars.size(), saved);
+        return saved;
     }
 }

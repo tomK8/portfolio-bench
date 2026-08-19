@@ -258,6 +258,7 @@ public class OpenOrdersService {
         for (String tk : tickers) {
             IntradayPrice ip = latest.get(tk);
             if (ip == null || !ip.ts().isAfter(quoteCutoff)) continue;
+            if (Instruments.isBond(tk)) continue;   // hourly gilt feed — not a peer for equity quotes
             newestByMarket.merge(market(ip.currency()), ip.ts(), (a, b) -> a.isAfter(b) ? a : b);
             if (newestOverall == null || ip.ts().isAfter(newestOverall)) newestOverall = ip.ts();
         }
@@ -273,18 +274,22 @@ public class OpenOrdersService {
             BigDecimal rawClose = null;
             String rawCcy = null;
             IntradayPrice ip = latest.get(tk);
+            // Gilts are on their own feed (the hourly HL scrape, not Yahoo), so they are neither
+            // compared against equity quotes — they would read as an hour behind all day — nor
+            // handed to the intraday warmer, which has nothing to fetch them from.
+            boolean yahooFed = !Instruments.isBond(o.symbol());
             if (ip != null && ip.ts().isAfter(quoteCutoff)) {
                 rawClose = BigDecimal.valueOf(ip.close());
                 rawCcy = ip.currency();
                 Instant peer = newestByMarket.get(market(ip.currency()));
-                if (peer != null && ip.ts().isBefore(peer.minus(QUOTE_LAG_TOLERANCE))) {
+                if (yahooFed && peer != null && ip.ts().isBefore(peer.minus(QUOTE_LAG_TOLERANCE))) {
                     notes.put(o.symbol(), asOfLabel(ip.ts()));
                     warm.add(tk);
                 }
             } else {
                 // No usable live quote: fall back to the daily close, say so on the row, and put the
                 // symbol at the front of the fetch queue rather than waiting for the polling pass.
-                warm.add(tk);
+                if (yahooFed) warm.add(tk);
                 PriceBar bar = latestDailyClose(tk);
                 if (bar != null) {
                     rawClose = BigDecimal.valueOf(bar.close());

@@ -2,6 +2,7 @@ package com.portfolio.application;
 
 import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooTickerMap;
+import com.portfolio.domain.Instruments;
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
@@ -100,6 +101,7 @@ public class IntradayPriceFetchJob {
         Instant earliest = now.minus(LOOKBACK);
         for (String ticker : tickerSet) {
             if (Thread.currentThread().isInterrupted()) return;
+            if (Instruments.isBond(ticker)) continue;   // gilts come from the HL scrape, not Yahoo
             try {
                 if (fetchOne(ticker, now, earliest) < 0) continue;
             } catch (Exception e) {

@@ -256,6 +256,30 @@ class OpenOrdersServiceTest {
     }
 
     @Test
+    void giltsAreNeitherComparedWithEquitiesNorWarmed(@TempDir Path dir) throws Exception {
+        // A gilt order alongside an equity one. Gilts are priced by the hourly HL scrape, so an
+        // hour-old quote is current for them — and Yahoo has nothing to warm them from.
+        Files.writeString(dir.resolve("activeorders.csv"), """
+                "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"
+                "TREASURY 4.75% 2038","44626CC3LTC","Buy","Limit","100000","95090","9509p","01/07/2026","22/09/2026","In progress"
+                """);
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        intraday.saveIntradayBars(List.of(new com.portfolio.domain.model.IntradayBar(
+                "GILT 4.75% 2038", java.time.Instant.now().minus(java.time.Duration.ofMinutes(90)),
+                95.09, null, "GBP")));
+
+        List<String> warmed = new java.util.ArrayList<>();
+        OrdersReport report = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new AJBellOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, new PriceHistoryRepository(connections), new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")), warmed::addAll).load();
+
+        assertTrue(report.priceNotes().isEmpty(), "a 90-minute-old gilt quote is not behind anything");
+        assertTrue(warmed.isEmpty(), "and Yahoo is not asked for a gilt");
+    }
+
+    @Test
     void exportWritesDatedXlsxToOutputDir(@TempDir Path dir) throws Exception {
         Files.writeString(dir.resolve("activeorders.csv"), """
                 "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"

@@ -40,6 +40,9 @@ import java.util.Set;
  * the figure represents "move since yesterday's close" regardless of whether the daily
  * Yahoo job has already written today's row. Prev-close currency matches the listing
  * currency in the intraday feed, so {@code GBp} pence prices cancel cleanly when divided.
+ * The trailing 5d…6M columns work the same way: each is the live quote against a stored
+ * close that many days/months back, so they all include today's move and can never
+ * disagree with the Day Δ column about how far the name has come.
  */
 public class LivePricesService {
 
@@ -94,9 +97,10 @@ public class LivePricesService {
         LocalDate yesterday = today.minusDays(1);
         // One bulk boundary query per date across every ticker, rather than a getPriceOn pair
         // per ticker per lookback: this runs on the 15s SSE tick, and the per-ticker form cost
-        // (1 + 2×lookbacks) connections each time.
+        // (1 + 2×lookbacks) connections each time. Only the *base* of each window is loaded —
+        // every window's near end is the live intraday quote, so today's move is inside all of
+        // them (see PriceMomentum.changeFromLive).
         Set<String> tickers = new HashSet<>(tickerBySymbol.values());
-        Map<String, PriceBar> currentByTicker = history.loadPricesAsOf(tickers, today);
         Map<String, PriceBar> prevByTicker = history.loadPricesAsOf(tickers, yesterday);
         Map<String, PriceBar> base5 = history.loadPricesAsOf(tickers, today.minusDays(5));
         Map<String, PriceBar> base10 = history.loadPricesAsOf(tickers, today.minusDays(10));
@@ -143,11 +147,11 @@ public class LivePricesService {
                     scaleOrNull(lastGbp, 2),
                     formatAccounts(p.accounts()),
                     ip.ts(),
-                    PriceMomentum.changeBetween(currentByTicker.get(ticker), base5.get(ticker)),
-                    PriceMomentum.changeBetween(currentByTicker.get(ticker), base10.get(ticker)),
-                    PriceMomentum.changeBetween(currentByTicker.get(ticker), base30.get(ticker)),
-                    PriceMomentum.changeBetween(currentByTicker.get(ticker), base3m.get(ticker)),
-                    PriceMomentum.changeBetween(currentByTicker.get(ticker), base6m.get(ticker))));
+                    PriceMomentum.changeFromLive(ip.close(), ip.currency(), base5.get(ticker)),
+                    PriceMomentum.changeFromLive(ip.close(), ip.currency(), base10.get(ticker)),
+                    PriceMomentum.changeFromLive(ip.close(), ip.currency(), base30.get(ticker)),
+                    PriceMomentum.changeFromLive(ip.close(), ip.currency(), base3m.get(ticker)),
+                    PriceMomentum.changeFromLive(ip.close(), ip.currency(), base6m.get(ticker))));
             if (lastGbp != null) totalPosGbp = totalPosGbp.add(lastGbp);
             if (prevGbp != null) prevPosTotalGbp = prevPosTotalGbp.add(prevGbp);
             if (dayChangeGbp != null) totalDayGbp = totalDayGbp.add(dayChangeGbp);
@@ -260,11 +264,11 @@ public class LivePricesService {
             BigDecimal positionGbp,
             String accounts,
             Instant priceTs,
-            BigDecimal change5dPct,        // trailing 5-calendar-day price change (fraction)
-            BigDecimal change10dPct,       // trailing 10-calendar-day price change (fraction)
-            BigDecimal monthChangePct,     // trailing ~30-day change; both tints the Last cell and fills the 30d column
-            BigDecimal change3mPct,        // trailing 3-calendar-month price change (fraction)
-            BigDecimal change6mPct) {      // trailing 6-calendar-month price change (fraction)
+            BigDecimal change5dPct,        // live quote vs the close 5 calendar days back (fraction)
+            BigDecimal change10dPct,       // live quote vs the close 10 calendar days back (fraction)
+            BigDecimal monthChangePct,     // live vs the close ~30 days back; tints the Last cell and fills the 30d column
+            BigDecimal change3mPct,        // live quote vs the close 3 calendar months back (fraction)
+            BigDecimal change6mPct) {      // live quote vs the close 6 calendar months back (fraction)
     }
 
     public record Totals(

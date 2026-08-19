@@ -42,19 +42,33 @@ public final class PriceMomentum {
     public static BigDecimal change(PriceHistoryRepository history, String ticker,
                                     LocalDate today, int lookbackDays) {
         if (ticker == null) return null;
-        return changeBetween(history.getPriceOn(ticker, today),
+        PriceBar current = history.getPriceOn(ticker, today);
+        return current == null ? null : changeFromLive(current.close(), current.currency(),
                 history.getPriceOn(ticker, today.minusDays(lookbackDays)));
     }
 
     /**
-     * The same fraction computed from two already-loaded bars — for callers that bulk-load
-     * their boundaries (see {@link PriceHistoryRepository#loadPricesAsOf}) rather than issuing
-     * a query per ticker per lookback. Null-safe on either side.
+     * The same fraction against a <em>live</em> price rather than a stored close — for the Live
+     * tab, whose base bars are bulk-loaded (see {@link PriceHistoryRepository#loadPricesAsOf})
+     * but whose current price is the latest intraday quote.
+     *
+     * <p>Anchoring the numerator on the newest stored daily close instead would silently drop
+     * today's move: the daily job doesn't write today's bar until 22:00, so every trailing
+     * window would end at yesterday's close while the Day Δ column beside it was already live.
+     * On 2026-08-19 MRNA was +144% intraday and its 5d column read −0.6% — the two columns
+     * disagreeing about what "now" means, on the one day it mattered most.
+     *
+     * <p>Both prices come from the same Yahoo feed and are stored verbatim, so units normally
+     * match (a {@code .L} listing is {@code GBp} on both sides and the pence cancel). A
+     * currency mismatch is treated as unpriceable — {@code null} rather than a ratio across
+     * two different units.
      */
-    public static BigDecimal changeBetween(PriceBar current, PriceBar base) {
+    public static BigDecimal changeFromLive(Double current, String currentCurrency, PriceBar base) {
         if (current == null || base == null) return null;
-        double c = current.close(), b = base.close();
+        if (currentCurrency != null && base.currency() != null
+                && !currentCurrency.equals(base.currency())) return null;
+        double b = base.close();
         if (b == 0.0) return null;
-        return BigDecimal.valueOf((c - b) / b).setScale(SCALE, RoundingMode.HALF_UP);
+        return BigDecimal.valueOf((current - b) / b).setScale(SCALE, RoundingMode.HALF_UP);
     }
 }

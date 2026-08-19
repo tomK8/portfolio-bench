@@ -154,6 +154,7 @@ public class BeanConfiguration {
                                                PriceHistoryRepository priceHistoryRepository,
                                                YahooTickerMap yahooTickerMap,
                                                InstrumentMappingRepository instrumentMappingRepository,
+                                               KeyValueStore keyValueStore,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -162,7 +163,7 @@ public class BeanConfiguration {
                 new AJBellOrdersParser(instrumentMappingRepository::loadAliases),
                 new IIOrdersParser(),
                 new RothOrdersParser()), fxRateProvider, excelReportWriter, dir,
-                intradayPriceRepository, priceHistoryRepository, yahooTickerMap);
+                intradayPriceRepository, priceHistoryRepository, yahooTickerMap, keyValueStore);
     }
 
     @Bean

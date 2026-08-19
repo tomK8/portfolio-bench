@@ -422,7 +422,8 @@ touchProb20d); absent fields are null → "—". Parsers build enrichment-free o
 columns via `withCurrentPrice`, and the four volatility columns via `withVolatility`.
 
 - **Live-price columns (`Current` + `vs limit`).** `enrichWithCurrentPrice` bulk-loads the latest
-  intraday quote for every order symbol (one query; daily-close fallback within `DAILY_FALLBACK_DAYS`),
+  intraday quote for every order symbol (one query; daily-close fallback, both age-bounded by
+  `MAX_PRICE_AGE_DAYS` = 6),
   resolves the symbol to its Yahoo ticker via `YahooTickerMap` (bonds map to themselves), and expresses
   the quote in the **order's own currency** through `priceInCurrency` — the same GBp-pence→GBP-pounds
   shift and cross-currency-via-GBP conversion the rest of the app uses (a listing quoted differently
@@ -446,6 +447,25 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   need only the daily series, so a name with no live quote still shows its RVs. Excel formats:
   RV10/RV30 `0.00%`, σ→lim `+0.00;-0.00`, both P(touch) `0.0%`.
 
+- **Stale prices, and the symbols nobody else fetches.** A resting order is routinely on something
+  neither held nor ever traded, so no other source (`held_symbols`, the ledger, the watchlist) named
+  it and *nothing kept its feed warm*: a WMT buy limit printed a two-week-old $111.79 against a $115
+  market, with `vs limit`, `σ→lim` and both touch probabilities derived from it (2026-08-19). Two
+  halves to the fix, both needed. (1) `load()` publishes the resolved order symbols to the
+  `order_symbols` KV set, which `PriceFetchSupport.tickersToFetch` unions in — so the intraday job
+  picks them up on the next tick. Skipped when no source parsed, or an unreadable export would read
+  as "no orders any more" and empty the set. (2) Both price sources are age-bounded by
+  `MAX_PRICE_AGE_DAYS` (6 — a long weekend plus holidays); past it the row shows "—" and the symbol
+  is named in a warning. The daily fallback's old `for`-loop bound was a no-op: `getPriceOn` is
+  on-or-before, so walking back a day at a time only re-asked the same question and returned the
+  newest bar however old — the bound has to be applied to the answer.
+- **Through-limit flag.** `OpenOrder.throughLimit()` (derived, no new field) marks a resting order
+  sitting on the wrong side of its own limit — a buy at or above the market, a sell at or below.
+  That state shouldn't persist: a buy limit fills at the limit *or better*, so it means the quote is
+  stale, the export pre-dates the fill, or the order is about to go. Rendered as an amber left-bar
+  row (`.order-through`, same idiom as the watchlist's price-target rows) plus a footnote. An
+  `priceEstimated` II limit needs 0.5% of margin first — the dealing fee inside `amount ÷ quantity`
+  inflates a buy's implied limit and deflates a sell's, biasing both toward a false flag.
 - `parser/OrderParser` — interface (`sourceName`, `supports`, `parse`). Parsers return **all** rows;
   the open/closed filter lives in `OpenOrdersService.isOpen` (a denylist of terminal statuses —
   dealt/executed/filled/cancelled/expired/…; anything else, incl. an unseen "still working" status,
@@ -563,7 +583,8 @@ range the user downloads — typically the source of truth when both are present
 `PriceFetchSupport.tickersToFetch` builds the universe: every symbol from
 `CashTransactionRepository.distinctTradedSymbols()` plus the `held_symbols` KV set persisted by
 the most recent `/sync` (covers freshly bought names whose cash statement isn't imported yet —
-otherwise their first intraday quote would wait until import). Minus bonds (`Instruments.isBond`),
+otherwise their first intraday quote would wait until import), plus each strategy tab's cohort and
+the `order_symbols` set published by the Open orders tab. Minus bonds (`Instruments.isBond`),
 mapped to Yahoo tickers via `YahooTickerMap`. 500ms throttle between requests
 (`PriceFetchSupport.sleep`).
 

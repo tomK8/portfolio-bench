@@ -321,6 +321,23 @@
             font-weight: 600;
         }
 
+        /* A resting order already through its own limit — same amber left-bar idiom as the
+           watchlist's price-target rows. It means "check this", not "this is wrong". */
+        #orders-table tbody tr.order-through {
+            background: rgba(224, 168, 0, 0.16);
+            box-shadow: inset 3px 0 0 #e0a800;
+        }
+
+        .through-key {
+            display: inline-block;
+            width: 0.7rem;
+            height: 0.7rem;
+            border-radius: 2px;
+            background: rgba(224, 168, 0, 0.55);
+            box-shadow: inset 2px 0 0 #e0a800;
+            vertical-align: baseline;
+        }
+
         .value-warnings {
             margin: 1rem 0;
             padding: 0.6rem 0.9rem;

@@ -10,6 +10,7 @@ import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.parser.OrderParser;
 import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.port.FxRateProvider;
 import org.slf4j.Logger;
@@ -20,7 +21,10 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -54,8 +58,17 @@ public class OpenOrdersService {
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
-    /** How many calendar days back to walk for a daily-close fallback when no intraday quote exists. */
-    private static final int DAILY_FALLBACK_DAYS = 6;
+    /**
+     * How old a stored price may be and still be printed as {@code Current}. Six calendar days
+     * covers a long weekend plus a holiday on either side; past it the quote is reported as stale
+     * rather than shown. Applies to the intraday quote <em>and</em> the daily-close fallback: an
+     * unbounded fallback is what let a resting WMT order print a two-week-old $111.79 beside a
+     * $115 market (2026-08-19), with the σ→limit and touch-probability columns computed off it.
+     */
+    private static final int MAX_PRICE_AGE_DAYS = 6;
+
+    /** Key under which the resolved order symbols are published to the price-fetch universe. */
+    public static final String ORDER_SYMBOLS_KEY = "order_symbols";
 
     /** Realized-daily-vol windows (in sessions): RV10 (short) + RV30 (long). */
     private static final int RV_SHORT = 10;
@@ -77,11 +90,13 @@ public class OpenOrdersService {
     private final IntradayPriceRepository intraday;
     private final PriceHistoryRepository history;
     private final YahooTickerMap tickerMap;
+    private final KeyValueStore kv;
 
     public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
                              FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
                              Path outputDir, IntradayPriceRepository intraday,
-                             PriceHistoryRepository history, YahooTickerMap tickerMap) {
+                             PriceHistoryRepository history, YahooTickerMap tickerMap,
+                             KeyValueStore kv) {
         this.fileLocator = fileLocator;
         this.parsers = parsers;
         this.fxRateProvider = fxRateProvider;
@@ -90,6 +105,7 @@ public class OpenOrdersService {
         this.intraday = intraday;
         this.history = history;
         this.tickerMap = tickerMap;
+        this.kv = kv;
     }
 
     /**
@@ -152,7 +168,8 @@ public class OpenOrdersService {
             }
         }
 
-        enrichWithCurrentPrice(orders, rates);
+        publishOrderSymbols(orders, sources);
+        warnings.addAll(enrichWithCurrentPrice(orders, rates));
         return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
                 unmappedInstruments(orders));
     }
@@ -163,22 +180,29 @@ public class OpenOrdersService {
      * from the bulk-loaded latest intraday quote (one query for all symbols), falling back to the most
      * recent stored daily close within {@link #DAILY_FALLBACK_DAYS}; a listing quoted in a different
      * currency (or {@code GBp} pence vs GBP pounds) is cross-converted through the FX snapshot.
+     * Both sources are age-bounded by {@link #MAX_PRICE_AGE_DAYS} — a resting order can name an
+     * instrument that is neither held nor traded, so nothing else in the app keeps its feed warm,
+     * and a stale quote printed as {@code Current} is worse than a blank: every column right of it
+     * (vs limit, σ→lim, both touch probabilities) is derived from it. Stale symbols come back as
+     * warnings for the caller to surface.
      * Volatility: realized daily σ over the {@link #RV_SHORT}/{@link #RV_LONG}-session windows (not
      * annualised) from the symbol's daily series, plus — when a limit and a live price both exist — the
      * signed {@link #TOUCH_HORIZON_SESSIONS}-session σ distance to the limit and the driftless
      * first-passage touch probability. σ figures are currency-free return ratios, so they need no FX.
      * Degrades silently — anything we can't compute stays null ("—").
      */
-    private void enrichWithCurrentPrice(List<OpenOrder> orders, Map<String, BigDecimal> rates) {
+    private List<String> enrichWithCurrentPrice(List<OpenOrder> orders, Map<String, BigDecimal> rates) {
         Set<String> tickers = new LinkedHashSet<>();
         for (OpenOrder o : orders) {
             String tk = tickerFor(o.symbol());
             if (tk != null) tickers.add(tk);
         }
-        if (tickers.isEmpty()) return;
+        if (tickers.isEmpty()) return List.of();
 
         Map<String, IntradayPrice> latest = intraday.loadLatestIntradayPrices(tickers);
         Map<String, BigDecimal[]> dailyVols = loadDailyVols(tickers);   // ticker → [RV10, RV30]
+        Instant quoteCutoff = Instant.now().minus(Duration.ofDays(MAX_PRICE_AGE_DAYS));
+        Map<String, String> stale = new LinkedHashMap<>();               // symbol → date last seen
 
         for (int i = 0; i < orders.size(); i++) {
             OpenOrder o = orders.get(i);
@@ -191,7 +215,7 @@ public class OpenOrdersService {
             BigDecimal rawClose = null;
             String rawCcy = null;
             IntradayPrice ip = latest.get(tk);
-            if (ip != null) {
+            if (ip != null && ip.ts().isAfter(quoteCutoff)) {
                 rawClose = BigDecimal.valueOf(ip.close());
                 rawCcy = ip.currency();
             } else {
@@ -199,6 +223,8 @@ public class OpenOrdersService {
                 if (bar != null) {
                     rawClose = BigDecimal.valueOf(bar.close());
                     rawCcy = bar.currency();
+                } else if (ip != null) {
+                    stale.put(o.symbol(), ip.ts().atZone(ZoneId.systemDefault()).toLocalDate().toString());
                 }
             }
 
@@ -220,6 +246,33 @@ public class OpenOrdersService {
                     PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS_LONG));
             orders.set(i, o.withVolatility(dv10, dv30, sigmaToLimit, touchProb, touchProb20));
         }
+        if (stale.isEmpty()) return List.of();
+        List<String> notes = new ArrayList<>();
+        for (Map.Entry<String, String> e : stale.entrySet()) {
+            notes.add(e.getKey() + " (last priced " + e.getValue() + ")");
+        }
+        log.warn("Open orders: price feed has gone quiet for {}", notes);
+        return List.of("No current price for " + String.join(", ", notes)
+                + " — nothing had been refreshing those feeds. They are in the fetch universe now; "
+                + "the price columns fill on the next tick.");
+    }
+
+    /**
+     * Publish the order symbols so the price jobs keep their feeds warm. A resting order is often
+     * on something neither held nor previously traded, so no other source ({@code held_symbols},
+     * the ledger, the watchlist) names it — a WMT buy limit sat two weeks stale for exactly that
+     * reason. Skipped when nothing parsed: an unreadable export must not read as "there are no
+     * orders any more" and silently drop every symbol from the fetch set.
+     */
+    private void publishOrderSymbols(List<OpenOrder> orders, List<String> sources) {
+        if (sources.isEmpty()) return;
+        Set<String> symbols = new LinkedHashSet<>();
+        for (OpenOrder o : orders) {
+            // An unmapped AJ Bell row falls through carrying its description as the symbol; those
+            // resolve to no ticker and would only pollute the fetch set.
+            if (o.symbol() != null && tickerFor(o.symbol()) != null) symbols.add(o.symbol().toUpperCase());
+        }
+        kv.putStringSet(ORDER_SYMBOLS_KEY, symbols);
     }
 
     /**
@@ -247,15 +300,15 @@ public class OpenOrdersService {
         return Instruments.isBond(symbol) ? symbol.toUpperCase() : tickerMap.tickerFor(symbol);
     }
 
-    /** Most recent stored daily close for {@code ticker} within the fallback window, or null. */
+    /** Most recent stored daily close for {@code ticker}, or null when there is none inside the age bound. */
     private PriceBar latestDailyClose(String ticker) {
-        LocalDate day = LocalDate.now();
-        for (int i = 0; i < DAILY_FALLBACK_DAYS; i++) {
-            PriceBar bar = history.getPriceOn(ticker, day);
-            if (bar != null) return bar;
-            day = day.minusDays(1);
-        }
-        return null;
+        // getPriceOn is on-or-before, so one call already returns the newest bar there is — walking
+        // back a day at a time only re-asked the same question, which is why the age bound has to be
+        // applied to the answer. As a loop guard it never rejected anything, however old.
+        LocalDate today = LocalDate.now();
+        PriceBar bar = history.getPriceOn(ticker, today);
+        if (bar == null || bar.date().isBefore(today.minusDays(MAX_PRICE_AGE_DAYS))) return null;
+        return bar;
     }
 
     /**

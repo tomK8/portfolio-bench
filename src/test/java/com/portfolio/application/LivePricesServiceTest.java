@@ -105,11 +105,11 @@ class LivePricesServiceTest {
         var cashRepo = new CashTransactionRepository(cf, kv);
         cashRepo.saveAjBell(List.of(buy("2020-01-01", "AAPL", 1.0)));
 
-        // One close per boundary the snapshot reads, each a round step off today's 100.
+        // One close per window base, each a round step off the live 100. No bar for today —
+        // the daily job doesn't write one until 22:00, which is the normal intraday state.
         var priceRepo = new PriceHistoryRepository(cf);
         LocalDate today = LocalDate.now();
         priceRepo.savePriceBars(List.of(
-                bar("AAPL", today, 100.0),
                 bar("AAPL", today.minusDays(5), 50.0),
                 bar("AAPL", today.minusDays(10), 40.0),
                 bar("AAPL", today.minusDays(30), 25.0),
@@ -123,7 +123,7 @@ class LivePricesServiceTest {
         var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap());
         LivePricesService.Row row = svc.snapshot().rows().get(0);
 
-        // Trailing changes come off the daily closes, not the intraday quote.
+        // Every window ends on the live quote, so today's move is inside all of them.
         assertEquals(0, new BigDecimal("1.0").compareTo(row.change5dPct()));
         assertEquals(0, new BigDecimal("1.5").compareTo(row.change10dPct()));
         assertEquals(0, new BigDecimal("3.0").compareTo(row.monthChangePct()));
@@ -141,9 +141,7 @@ class LivePricesServiceTest {
         // Only a week of history: the 5d base exists, everything longer has no bar at all.
         var priceRepo = new PriceHistoryRepository(cf);
         LocalDate today = LocalDate.now();
-        priceRepo.savePriceBars(List.of(
-                bar("AAPL", today, 100.0),
-                bar("AAPL", today.minusDays(5), 50.0)));
+        priceRepo.savePriceBars(List.of(bar("AAPL", today.minusDays(5), 50.0)));
 
         var intraRepo = new IntradayPriceRepository(cf);
         intraRepo.saveIntradayBars(List.of(
@@ -155,6 +153,36 @@ class LivePricesServiceTest {
         assertNotNull(row.change5dPct());
         assertNull(row.change3mPct(), "no bar 3 months back → blank, not a fabricated 0%");
         assertNull(row.change6mPct());
+    }
+
+    @Test
+    void trailingWindowsIncludeTodaysMoveBeforeTheDailyBarIsWritten() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2020-01-01", "AAPL", 1.0)));
+
+        // The MRNA shape (2026-08-19): flat for a week, then a huge intraday move on a day
+        // whose daily bar doesn't exist yet. A stored-close numerator read this as -0.6%
+        // while the Day Δ column beside it read +144%.
+        var priceRepo = new PriceHistoryRepository(cf);
+        LocalDate today = LocalDate.now();
+        priceRepo.savePriceBars(List.of(
+                bar("AAPL", today.minusDays(1), 63.0),
+                bar("AAPL", today.minusDays(5), 63.3),
+                bar("AAPL", today.minusDays(10), 59.2)));
+
+        var intraRepo = new IntradayPriceRepository(cf);
+        intraRepo.saveIntradayBars(List.of(
+                new IntradayBar("AAPL", Instant.now(), 153.4, null, "GBP")));
+
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap());
+        LivePricesService.Row row = svc.snapshot().rows().get(0);
+
+        assertTrue(row.dayChangePct().doubleValue() > 1.0, "day move is +144%");
+        assertTrue(row.change5dPct().doubleValue() > 1.0,
+                "5d must carry today's move, not end at yesterday's close");
+        assertTrue(row.change10dPct().doubleValue() > 1.0);
     }
 
     @Test

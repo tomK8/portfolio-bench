@@ -28,9 +28,10 @@ final class PriceFetchSupport {
      * in a stable sequence. Tickers that resolve to the same Yahoo symbol (e.g. multiple internal
      * share-class spellings) are deduplicated.
      *
-     * <p>Four sources: every symbol ever traded (from the cash ledger), the symbol set
-     * persisted by the most recent dashboard /sync, the watchlist symbol set, and the
-     * replacement targets used by the Scenario tab's substitute overrides. The second source
+     * <p>Sources: every symbol ever traded (from the cash ledger), the symbol set persisted by
+     * the most recent dashboard /sync, the watchlist symbol set, each strategy tab's cohort, the
+     * symbols named by resting orders, and the replacement targets used by the Scenario tab's
+     * substitute overrides. The second source
      * covers a freshly bought name
      * whose cash statement hasn't been imported yet. The third covers substitute targets
      * (e.g. {@code NVDA=QQQ}) — those tickers are never traded, so without this hook the
@@ -60,6 +61,10 @@ final class PriceFetchSupport {
         // Range-strategy cohort (information-infrastructure names, mostly not held) so the
         // nightly job keeps their daily history current for the Range floor tab.
         symbols.addAll(kv.getStringSet(RangeAnalysisService.RANGE_SYMBOLS_KEY));
+        // Symbols named by a resting order (published by the Open orders tab). A limit order is
+        // frequently on something not held and never traded, so no other source names it — and the
+        // whole point of the tab's price columns is how far the market sits from that limit.
+        symbols.addAll(kv.getStringSet(OpenOrdersService.ORDER_SYMBOLS_KEY));
         for (String line : kv.getStringSet(HistoricalScenarioService.SUBSTITUTES_KEY)) {
             int eq = line.indexOf('=');
             if (eq <= 0 || eq >= line.length() - 1) continue;

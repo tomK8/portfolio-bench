@@ -46,6 +46,33 @@ public record OpenOrder(
         BigDecimal touchProb20d // same touch probability over a 20-session horizon (σ scaled by √20
                                 // off the same daily vol); a fraction. null when unavailable.
 ) {
+    /**
+     * True when a resting order is already through its own limit — a buy whose limit sits at or
+     * above the market, or a sell whose limit sits at or below it.
+     *
+     * <p>That state should not persist: a buy limit executes at the limit *or better*, so once the
+     * market trades down to it the order fills and stops being open. Seeing it therefore means one
+     * of three things, and the row is flagged rather than interpreted: the quote is stale (nothing
+     * was keeping that symbol's feed warm), the export is older than the fill, or the order really
+     * is about to go. It reads off {@link #currentPrice}, so it is only meaningful after the
+     * service's enrichment.
+     *
+     * <p>An {@link #priceEstimated} limit (II, derived as {@code amount ÷ quantity}) needs a margin:
+     * the ~£2.99 dealing fee is inside the amount, which inflates a buy's implied limit and deflates
+     * a sell's — biasing both toward a false flag. {@link #ESTIMATE_TOLERANCE} (0.5%) sits well above
+     * that fee on any realistic order size.
+     */
+    public boolean throughLimit() {
+        if (price == null || currentPrice == null || side == null || price.signum() == 0) return false;
+        BigDecimal edge = priceEstimated ? price.multiply(ESTIMATE_TOLERANCE) : BigDecimal.ZERO;
+        if ("buy".equalsIgnoreCase(side)) return currentPrice.compareTo(price.subtract(edge)) <= 0;
+        if ("sell".equalsIgnoreCase(side)) return currentPrice.compareTo(price.add(edge)) >= 0;
+        return false;
+    }
+
+    /** Margin required before an estimated (fee-inflated) limit counts as through — see {@link #throughLimit()}. */
+    private static final BigDecimal ESTIMATE_TOLERANCE = new BigDecimal("0.005");
+
     /** Convenience for views — the leading symbol for {@link #currency} ($/£/€), or "" if unknown. */
     public String currencySymbol() {
         if (currency == null) return "";

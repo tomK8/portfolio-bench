@@ -18,7 +18,7 @@
            th:text="'Sources: ' + ${#strings.listJoin(orders.sources, ', ')}">Sources</p>
 
         <div th:if="${!orders.warnings.isEmpty()}" class="value-warnings">
-            <h4>Could not read some order files</h4>
+            <h4>Warnings</h4>
             <ul>
                 <li th:each="w : ${orders.warnings}" th:text="${w}">warning</li>
             </ul>
@@ -89,7 +89,8 @@
             </tr>
             </thead>
             <tbody>
-            <tr th:each="o : ${orders.orders}">
+            <tr th:each="o : ${orders.orders}" th:classappend="${o.throughLimit()} ? 'order-through' : ''"
+                th:attr="title=${o.throughLimit()} ? 'Already through its limit — a resting order at this price should have filled. Check the Current price is live, or the export may pre-date the fill.' : null">
                 <td class="txt" th:text="${o.broker}">Broker</td>
                 <td class="txt" th:text="${o.symbol != null ? o.symbol : '—'}">SYM</td>
                 <td class="txt"
@@ -114,6 +115,15 @@
             </tr>
             </tbody>
         </table>
+
+        <p class="muted" th:if="${!#lists.isEmpty(orders.orders.?[throughLimit()])}"
+           style="margin-top: 0.6rem; font-size: 0.85rem">
+            <span class="through-key"></span> Highlighted rows sit on the wrong side of their own
+            limit — a buy whose limit is at or above the market, or a sell at or below it. A resting
+            order in that state should already have executed, so either the Current price is stale
+            (nothing keeps an order-only symbol's feed warm between ticks) or the broker export
+            pre-dates the fill.
+        </p>
 
         <p class="muted" th:if="${!#lists.isEmpty(orders.orders.?[priceEstimated])}"
            style="margin-top: 0.6rem; font-size: 0.85rem">

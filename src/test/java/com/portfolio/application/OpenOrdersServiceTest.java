@@ -10,6 +10,7 @@ import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.port.FxRateProvider;
 import org.apache.poi.ss.usermodel.Row;
@@ -46,7 +47,7 @@ class OpenOrdersServiceTest {
                 List.of(new AJBellOrdersParser(), new IIOrdersParser(), new RothOrdersParser()),
                 FX, new ExcelReportWriter(), outDir,
                 new IntradayPriceRepository(connections), new PriceHistoryRepository(connections),
-                new YahooTickerMap());
+                new YahooTickerMap(), new KeyValueStore(inputDir.resolve("db")));
     }
 
     @Test
@@ -112,7 +113,7 @@ class OpenOrdersServiceTest {
         JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
         PriceHistoryRepository history = new PriceHistoryRepository(connections);
         List<com.portfolio.domain.model.PriceBar> bars = new java.util.ArrayList<>();
-        java.time.LocalDate d = java.time.LocalDate.now().minusDays(50);
+        java.time.LocalDate d = java.time.LocalDate.now().minusDays(39);   // 40 bars, ending today
         double px = 200.0;
         for (int i = 0; i < 40; i++) {
             // alternate ±2% so the daily σ is a clean, non-zero, known-ish magnitude
@@ -124,7 +125,8 @@ class OpenOrdersServiceTest {
 
         OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
                 List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
-                new IntradayPriceRepository(connections), history, new YahooTickerMap());
+                new IntradayPriceRepository(connections), history, new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")));
 
         OpenOrder nvda = find(service.load().orders(), "NVDA");
         assertNotNull(nvda.dailyVol10(), "RV10 computed from daily history");
@@ -139,6 +141,61 @@ class OpenOrdersServiceTest {
         // longer horizon can only raise the touch probability (same barrier, more time)
         assertTrue(nvda.touchProb20d().doubleValue() >= p - 1e-9,
                 "P(touch 20d) ≥ P(touch 5d) for the same limit");
+    }
+
+    @Test
+    void staleQuoteIsNotShownAsCurrentAndTheSymbolIsPublishedForFetching(@TempDir Path dir) throws Exception {
+        // The WMT shape (2026-08-19): a resting buy on a name that is neither held nor ever traded,
+        // so nothing kept its feed warm. Its last quote was two weeks old and printed as "Current"
+        // beside a market $3 higher, with vs-limit/σ/touch all derived from it.
+        Files.writeString(dir.resolve("2bc3405a-877c-4bf3-ac16-8dcb5303b89a.csv"), """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                19/08/2026 16:52,27726IDT248,BUY/LIMIT,WMT,Walmart Inc,50,n/a,"$5,743.50",PENDING
+                """);
+
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        java.time.LocalDate old = java.time.LocalDate.now().minusDays(14);
+        history.savePriceBars(List.of(new com.portfolio.domain.model.PriceBar(
+                "WMT", old, 111.0, 112.0, 110.0, 111.79, 111.79, 1.0, 1L, "USD")));
+        intraday.saveIntradayBars(List.of(new com.portfolio.domain.model.IntradayBar(
+                "WMT", old.atTime(18, 8).toInstant(java.time.ZoneOffset.UTC), 111.79, null, "USD")));
+
+        KeyValueStore kv = new KeyValueStore(dir.resolve("db"));
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, history, new YahooTickerMap(), kv);
+
+        OrdersReport report = service.load();
+        OpenOrder wmt = find(report.orders(), "WMT");
+        assertNull(wmt.currentPrice(), "a two-week-old quote is not a current price");
+        assertNull(wmt.distancePct(), "and nothing derived from it is shown either");
+        assertNull(wmt.sigmaToLimit());
+        assertTrue(report.warnings().stream().anyMatch(w -> w.contains("WMT")),
+                "the gap is surfaced, not silent");
+        assertTrue(kv.getStringSet(OpenOrdersService.ORDER_SYMBOLS_KEY).contains("WMT"),
+                "order symbols join the fetch universe so the feed stops going quiet");
+    }
+
+    @Test
+    void freshQuoteIsStillUsed(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("2bc3405a-877c-4bf3-ac16-8dcb5303b89a.csv"), """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                19/08/2026 16:52,27726IDT248,BUY/LIMIT,WMT,Walmart Inc,50,n/a,"$5,743.50",PENDING
+                """);
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        intraday.saveIntradayBars(List.of(new com.portfolio.domain.model.IntradayBar(
+                "WMT", java.time.Instant.now(), 115.40, null, "USD")));
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, new PriceHistoryRepository(connections), new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")));
+
+        OpenOrder wmt = find(service.load().orders(), "WMT");
+        assertEquals(0, new BigDecimal("115.40").compareTo(wmt.currentPrice()));
     }
 
     @Test

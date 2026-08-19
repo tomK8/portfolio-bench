@@ -25,8 +25,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -35,6 +37,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 /**
  * Read-only view of resting (open) orders across brokers. Locates the most recent order-status
@@ -58,6 +62,9 @@ public class OpenOrdersService {
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
+    /** Quote-age labels are wall-clock times for the user, not ISO instants. */
+    private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm");
+
     /**
      * How old a stored price may be and still be printed as {@code Current}. Six calendar days
      * covers a long weekend plus a holiday on either side; past it the quote is reported as stale
@@ -69,6 +76,24 @@ public class OpenOrdersService {
 
     /** Key under which the resolved order symbols are published to the price-fetch universe. */
     public static final String ORDER_SYMBOLS_KEY = "order_symbols";
+
+    /**
+     * How far a quote may sit behind the newest quote from the same market before the row is
+     * annotated and the symbol warmed on demand. Comparing against peers rather than against the
+     * clock is what keeps this quiet out of hours — at 22:00 every US quote is hours old and none
+     * of them is stale.
+     *
+     * <p>An hour, not the few minutes the polling cycle implies (~106 tickers at a 500ms throttle,
+     * then a 60s wait). Yahoo writes a 1-minute bar only when something trades, so a thin ETF is
+     * permanently "behind" its liquid peers — XWHS.L last printed at 16:13 against a 16:30 LSE
+     * close and tripped a 15-minute rule every time the tab was opened, for a quote that was
+     * perfectly current. The gap worth reporting is a feed that has stopped, not one nobody is
+     * trading into.
+     */
+    private static final Duration QUOTE_LAG_TOLERANCE = Duration.ofMinutes(60);
+
+    /** Don't re-warm the same symbol more often than this, however many times the tab is opened. */
+    private static final Duration WARM_COOLDOWN = Duration.ofMinutes(5);
 
     /** Realized-daily-vol windows (in sessions): RV10 (short) + RV30 (long). */
     private static final int RV_SHORT = 10;
@@ -91,12 +116,29 @@ public class OpenOrdersService {
     private final PriceHistoryRepository history;
     private final YahooTickerMap tickerMap;
     private final KeyValueStore kv;
+    private final Consumer<Collection<String>> quoteWarmer;
+    private final Map<String, Instant> lastWarmed = new ConcurrentHashMap<>();
 
     public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
                              FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
                              Path outputDir, IntradayPriceRepository intraday,
                              PriceHistoryRepository history, YahooTickerMap tickerMap,
                              KeyValueStore kv) {
+        this(fileLocator, parsers, fxRateProvider, excelReportWriter, outputDir, intraday, history,
+                tickerMap, kv, tickers -> { });
+    }
+
+    /**
+     * @param quoteWarmer handed the tickers whose quotes are visibly behind their market peers, to
+     *                    fetch off the polling cycle. Expected to return immediately (the wiring
+     *                    hands the work to a background executor) — the panel must render at disk
+     *                    speed, and the freshly fetched price shows up on the next reload.
+     */
+    public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
+                             FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
+                             Path outputDir, IntradayPriceRepository intraday,
+                             PriceHistoryRepository history, YahooTickerMap tickerMap,
+                             KeyValueStore kv, Consumer<Collection<String>> quoteWarmer) {
         this.fileLocator = fileLocator;
         this.parsers = parsers;
         this.fxRateProvider = fxRateProvider;
@@ -106,6 +148,7 @@ public class OpenOrdersService {
         this.history = history;
         this.tickerMap = tickerMap;
         this.kv = kv;
+        this.quoteWarmer = quoteWarmer;
     }
 
     /**
@@ -169,9 +212,11 @@ public class OpenOrdersService {
         }
 
         publishOrderSymbols(orders, sources);
-        warnings.addAll(enrichWithCurrentPrice(orders, rates));
+        Quotes quotes = enrichWithCurrentPrice(orders, rates);
+        warnings.addAll(quotes.warnings());
+        warmLaggingQuotes(quotes.warm());
         return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
-                unmappedInstruments(orders));
+                unmappedInstruments(orders), quotes.notes(), quotes.asOf());
     }
 
     /**
@@ -191,18 +236,31 @@ public class OpenOrdersService {
      * first-passage touch probability. σ figures are currency-free return ratios, so they need no FX.
      * Degrades silently — anything we can't compute stays null ("—").
      */
-    private List<String> enrichWithCurrentPrice(List<OpenOrder> orders, Map<String, BigDecimal> rates) {
+    private Quotes enrichWithCurrentPrice(List<OpenOrder> orders, Map<String, BigDecimal> rates) {
         Set<String> tickers = new LinkedHashSet<>();
         for (OpenOrder o : orders) {
             String tk = tickerFor(o.symbol());
             if (tk != null) tickers.add(tk);
         }
-        if (tickers.isEmpty()) return List.of();
+        if (tickers.isEmpty()) return Quotes.none();
 
         Map<String, IntradayPrice> latest = intraday.loadLatestIntradayPrices(tickers);
         Map<String, BigDecimal[]> dailyVols = loadDailyVols(tickers);   // ticker → [RV10, RV30]
         Instant quoteCutoff = Instant.now().minus(Duration.ofDays(MAX_PRICE_AGE_DAYS));
         Map<String, String> stale = new LinkedHashMap<>();               // symbol → date last seen
+        Map<String, String> notes = new LinkedHashMap<>();               // symbol → "as of …" label
+        Set<String> warm = new LinkedHashSet<>();                        // tickers to fetch now
+        // Newest quote per market, so "behind" is judged against the symbols trading alongside it
+        // rather than against the wall clock: after the LSE close every GBp quote is hours old and
+        // perfectly current, while a US name that stopped updating at lunchtime is not.
+        Map<String, Instant> newestByMarket = new HashMap<>();
+        Instant newestOverall = null;
+        for (String tk : tickers) {
+            IntradayPrice ip = latest.get(tk);
+            if (ip == null || !ip.ts().isAfter(quoteCutoff)) continue;
+            newestByMarket.merge(market(ip.currency()), ip.ts(), (a, b) -> a.isAfter(b) ? a : b);
+            if (newestOverall == null || ip.ts().isAfter(newestOverall)) newestOverall = ip.ts();
+        }
 
         for (int i = 0; i < orders.size(); i++) {
             OpenOrder o = orders.get(i);
@@ -218,11 +276,20 @@ public class OpenOrdersService {
             if (ip != null && ip.ts().isAfter(quoteCutoff)) {
                 rawClose = BigDecimal.valueOf(ip.close());
                 rawCcy = ip.currency();
+                Instant peer = newestByMarket.get(market(ip.currency()));
+                if (peer != null && ip.ts().isBefore(peer.minus(QUOTE_LAG_TOLERANCE))) {
+                    notes.put(o.symbol(), asOfLabel(ip.ts()));
+                    warm.add(tk);
+                }
             } else {
+                // No usable live quote: fall back to the daily close, say so on the row, and put the
+                // symbol at the front of the fetch queue rather than waiting for the polling pass.
+                warm.add(tk);
                 PriceBar bar = latestDailyClose(tk);
                 if (bar != null) {
                     rawClose = BigDecimal.valueOf(bar.close());
                     rawCcy = bar.currency();
+                    notes.put(o.symbol(), "close " + bar.date());
                 } else if (ip != null) {
                     stale.put(o.symbol(), ip.ts().atZone(ZoneId.systemDefault()).toLocalDate().toString());
                 }
@@ -246,15 +313,62 @@ public class OpenOrdersService {
                     PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS_LONG));
             orders.set(i, o.withVolatility(dv10, dv30, sigmaToLimit, touchProb, touchProb20));
         }
-        if (stale.isEmpty()) return List.of();
-        List<String> notes = new ArrayList<>();
+        String asOf = newestOverall == null ? null : TIME_FMT.format(
+                newestOverall.atZone(ZoneId.systemDefault()));
+        if (stale.isEmpty()) return new Quotes(List.of(), notes, asOf, warm);
+        List<String> lines = new ArrayList<>();
         for (Map.Entry<String, String> e : stale.entrySet()) {
-            notes.add(e.getKey() + " (last priced " + e.getValue() + ")");
+            lines.add(e.getKey() + " (last priced " + e.getValue() + ")");
         }
-        log.warn("Open orders: price feed has gone quiet for {}", notes);
-        return List.of("No current price for " + String.join(", ", notes)
+        log.warn("Open orders: price feed has gone quiet for {}", lines);
+        return new Quotes(List.of("No current price for " + String.join(", ", lines)
                 + " — nothing had been refreshing those feeds. They are in the fetch universe now; "
-                + "the price columns fill on the next tick.");
+                + "the price columns fill on the next tick."), notes, asOf, warm);
+    }
+
+    /** What a quote's age reads as on the row: a time for today, a date for anything older. */
+    private static String asOfLabel(Instant ts) {
+        ZonedDateTime z = ts.atZone(ZoneId.systemDefault());
+        return z.toLocalDate().equals(LocalDate.now())
+                ? "as of " + TIME_FMT.format(z)
+                : "as of " + z.toLocalDate();
+    }
+
+    /** Market grouping for the peer comparison — the quote's own currency, pence folded into pounds. */
+    private static String market(String quoteCurrency) {
+        return "GBp".equals(quoteCurrency) ? "GBP" : String.valueOf(quoteCurrency);
+    }
+
+    /**
+     * Hand the lagging tickers to the warmer, at most once per {@link #WARM_COOLDOWN} each. The
+     * panel is re-fetched on every tab click, and a symbol Yahoo simply has no intraday data for
+     * would otherwise queue a fetch on each one.
+     */
+    private void warmLaggingQuotes(Set<String> tickers) {
+        if (tickers.isEmpty()) return;
+        Instant now = Instant.now();
+        List<String> due = new ArrayList<>();
+        for (String tk : tickers) {
+            Instant last = lastWarmed.get(tk);
+            if (last == null || last.isBefore(now.minus(WARM_COOLDOWN))) {
+                lastWarmed.put(tk, now);
+                due.add(tk);
+            }
+        }
+        if (due.isEmpty()) return;
+        log.info("Open orders: warming lagging quotes for {}", due);
+        try {
+            quoteWarmer.accept(due);
+        } catch (Exception e) {
+            log.warn("Open orders: quote warm failed", e);
+        }
+    }
+
+    /** Enrichment by-products the view needs: warnings, per-row age notes, the newest quote, and what to warm. */
+    private record Quotes(List<String> warnings, Map<String, String> notes, String asOf, Set<String> warm) {
+        static Quotes none() {
+            return new Quotes(List.of(), Map.of(), null, Set.of());
+        }
     }
 
     /**
@@ -468,8 +582,14 @@ public class OpenOrdersService {
      * @param empty true when no order file was found for any broker (distinct from "files found,
      *              but nothing open") so the view can show the right message.
      */
+    /**
+     * @param priceNotes symbol → "as of …" label for rows whose price isn't a current quote (a
+     *                   daily close, or a quote well behind its market peers). Absent = current.
+     * @param quotesAsOf newest quote across the table, as a local time; null when none was used.
+     */
     public record OrdersReport(List<OpenOrder> orders, List<String> sources,
                                List<String> warnings, boolean empty,
-                               List<UnmappedInstrument> unmapped) {
+                               List<UnmappedInstrument> unmapped,
+                               Map<String, String> priceNotes, String quotesAsOf) {
     }
 }

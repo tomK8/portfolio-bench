@@ -199,6 +199,63 @@ class OpenOrdersServiceTest {
     }
 
     @Test
+    void aQuoteBehindItsMarketPeersIsLabelledAndWarmed(@TempDir Path dir) throws Exception {
+        // Two US orders. One quote is current, the other stopped updating hours ago — the row says
+        // so and the symbol is handed to the warmer instead of waiting ~2 min for the polling pass.
+        Files.writeString(dir.resolve("2bc3405a-877c-4bf3-ac16-8dcb5303b89a.csv"), """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                19/08/2026 16:52,27726IDT248,BUY/LIMIT,WMT,Walmart Inc,50,n/a,"$5,743.50",PENDING
+                19/08/2026 16:52,27726IDT249,BUY/LIMIT,PEP,PepsiCo Inc,50,n/a,"$7,043.50",PENDING
+                """);
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        java.time.Instant now = java.time.Instant.now();
+        intraday.saveIntradayBars(List.of(
+                new com.portfolio.domain.model.IntradayBar("PEP", now, 141.86, null, "USD"),
+                new com.portfolio.domain.model.IntradayBar(
+                        "WMT", now.minus(java.time.Duration.ofHours(4)), 111.79, null, "USD")));
+
+        List<String> warmed = new java.util.ArrayList<>();
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, new PriceHistoryRepository(connections), new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")), warmed::addAll);
+
+        OrdersReport report = service.load();
+        assertNotNull(report.priceNotes().get("WMT"), "the lagging row carries its quote time");
+        assertNull(report.priceNotes().get("PEP"), "the current one is unannotated");
+        assertTrue(warmed.contains("WMT"), "and is queued for an off-cycle fetch");
+        assertFalse(warmed.contains("PEP"));
+        assertNotNull(report.quotesAsOf());
+    }
+
+    @Test
+    void quotesEquallyOldAreNotCalledStale(@TempDir Path dir) throws Exception {
+        // Out of hours every quote is the close. Judging against the clock would annotate the whole
+        // table every evening; judging against market peers leaves it silent.
+        Files.writeString(dir.resolve("2bc3405a-877c-4bf3-ac16-8dcb5303b89a.csv"), """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                19/08/2026 16:52,27726IDT248,BUY/LIMIT,WMT,Walmart Inc,50,n/a,"$5,743.50",PENDING
+                19/08/2026 16:52,27726IDT249,BUY/LIMIT,PEP,PepsiCo Inc,50,n/a,"$7,043.50",PENDING
+                """);
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        java.time.Instant close = java.time.Instant.now().minus(java.time.Duration.ofHours(9));
+        intraday.saveIntradayBars(List.of(
+                new com.portfolio.domain.model.IntradayBar("PEP", close, 141.86, null, "USD"),
+                new com.portfolio.domain.model.IntradayBar("WMT", close, 111.79, null, "USD")));
+
+        List<String> warmed = new java.util.ArrayList<>();
+        OrdersReport report = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, new PriceHistoryRepository(connections), new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")), warmed::addAll).load();
+
+        assertTrue(report.priceNotes().isEmpty(), "nothing is behind anything");
+        assertTrue(warmed.isEmpty(), "and no needless fetch is queued");
+    }
+
+    @Test
     void exportWritesDatedXlsxToOutputDir(@TempDir Path dir) throws Exception {
         Files.writeString(dir.resolve("activeorders.csv"), """
                 "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"

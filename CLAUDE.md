@@ -459,6 +459,20 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   is named in a warning. The daily fallback's old `for`-loop bound was a no-op: `getPriceOn` is
   on-or-before, so walking back a day at a time only re-asked the same question and returned the
   newest bar however old — the bound has to be applied to the answer.
+- **Quote age is visible, and a lagging feed is refetched on load.** The panel reads stored prices
+  and never fetches inline, so the residual staleness is the polling cycle: the intraday pass walks
+  ~106 tickers at a 500ms throttle (~70s) and then waits 60s, i.e. any one symbol refreshes about
+  every two minutes — and on a cold start, or the first visit after an order appears on a new name,
+  it can be a whole pass behind. Two mitigations. A **"Live prices as of HH:mm"** line reports the
+  newest quote in the table, and any row priced off something older carries a muted `as of …` /
+  `close …` note (`OrdersReport.priceNotes`), so a close is never silently dressed as a quote.
+  Those same symbols are handed to `IntradayPriceFetchJob.fetchNow` on a background daemon thread
+  (`BeanConfiguration.warmOnBackgroundThread`, 5-min per-symbol cooldown since the tab re-fetches on
+  every click) — the render never waits, and a reload a few seconds later shows the live price.
+  **Lag is judged against the newest quote from the same market, not the clock**: out of hours every
+  US quote is hours old and none is stale. The tolerance is a generous 60 min because Yahoo writes a
+  1-minute bar only when something trades — XWHS.L last printed at 16:13 against a 16:30 LSE close
+  and tripped a 15-minute rule on a perfectly current price.
 - **Through-limit flag.** `OpenOrder.throughLimit()` (derived, no new field) marks a resting order
   sitting on the wrong side of its own limit — a buy at or above the market, a sell at or below.
   That state shouldn't persist: a buy limit fills at the limit *or better*, so it means the quote is

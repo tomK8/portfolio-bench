@@ -17,6 +17,10 @@
         <p class="muted" th:if="${!orders.sources.isEmpty()}"
            th:text="'Sources: ' + ${#strings.listJoin(orders.sources, ', ')}">Sources</p>
 
+        <p class="muted" th:if="${orders.quotesAsOf != null}"
+           th:title="'Prices are read from the stored feed, not fetched on load. A symbol whose quote lags its market is refetched in the background — reload to pick it up.'"
+           th:text="'Live prices as of ' + ${orders.quotesAsOf}">Live prices as of 00:00</p>
+
         <div th:if="${!orders.warnings.isEmpty()}" class="value-warnings">
             <h4>Warnings</h4>
             <ul>
@@ -99,7 +103,10 @@
                 <td class="txt" th:text="${o.orderType != null ? o.orderType : '—'}">Type</td>
                 <td th:text="${o.quantity != null ? #numbers.formatDecimal(o.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">0</td>
                 <td th:text="${o.price != null ? (o.priceEstimated ? '~' : '') + o.currencySymbol + #numbers.formatDecimal(o.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
-                <td th:text="${o.currentPrice != null ? o.currencySymbol + #numbers.formatDecimal(o.currentPrice, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td><span th:text="${o.currentPrice != null ? o.currencySymbol + #numbers.formatDecimal(o.currentPrice, 1, 'COMMA', 2, 'POINT') : '—'}">—</span><span
+                        class="price-note" th:if="${orders.priceNotes.get(o.symbol) != null}"
+                        th:text="${orders.priceNotes.get(o.symbol)}"
+                        th:title="'Not a current quote — this feed is behind the rest of its market. The symbol has been queued for a refetch; reload in a few seconds.'">as of</span></td>
                 <td th:classappend="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? 'val-pos' : (o.distancePct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
                     th:text="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>
                 <td th:text="${o.dailyVol10 != null ? #numbers.formatDecimal(o.dailyVol10.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>

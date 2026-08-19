@@ -45,7 +45,11 @@ import org.springframework.context.annotation.Configuration;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 /**
  * The only place outside the web layer that knows about Spring. Wires the
@@ -155,6 +159,7 @@ public class BeanConfiguration {
                                                YahooTickerMap yahooTickerMap,
                                                InstrumentMappingRepository instrumentMappingRepository,
                                                KeyValueStore keyValueStore,
+                                               IntradayPriceFetchJob intradayPriceFetchJob,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -163,7 +168,20 @@ public class BeanConfiguration {
                 new AJBellOrdersParser(instrumentMappingRepository::loadAliases),
                 new IIOrdersParser(),
                 new RothOrdersParser()), fxRateProvider, excelReportWriter, dir,
-                intradayPriceRepository, priceHistoryRepository, yahooTickerMap, keyValueStore);
+                intradayPriceRepository, priceHistoryRepository, yahooTickerMap, keyValueStore,
+                // Off-cycle quote warm for symbols whose feed is visibly behind. One daemon thread,
+                // so a burst of tab clicks queues instead of racing Yahoo — and the panel never
+                // waits on it: the fetched price appears on the next reload.
+                warmOnBackgroundThread(intradayPriceFetchJob));
+    }
+
+    private static Consumer<Collection<String>> warmOnBackgroundThread(IntradayPriceFetchJob job) {
+        ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "orders-quote-warm");
+            t.setDaemon(true);
+            return t;
+        });
+        return tickers -> exec.submit(() -> job.fetchNow(tickers));
     }
 
     @Bean

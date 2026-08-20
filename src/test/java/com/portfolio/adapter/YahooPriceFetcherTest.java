@@ -1,6 +1,9 @@
 package com.portfolio.adapter;
 
 import com.portfolio.domain.model.IntradayBar;
+import com.portfolio.domain.model.MarketHours;
+import com.portfolio.domain.model.MarketSession;
+import com.portfolio.domain.model.MarketState;
 import com.portfolio.domain.model.PriceBar;
 import org.junit.jupiter.api.Test;
 
@@ -113,6 +116,71 @@ class YahooPriceFetcherTest {
 
         assertEquals(190.50, bars.get(2).close());
         assertEquals(8800L, bars.get(2).volume());
+    }
+
+    @Test
+    void classifiesPreRegularAndPostBarsAgainstTheFeedsOwnTradingPeriods() throws Exception {
+        String json = Files.readString(Path.of(
+                getClass().getResource("/yahoo-mrna-prepost-sample.json").toURI()));
+
+        List<IntradayBar> bars = new YahooPriceFetcher().parseIntraday("TSTX", json);
+
+        assertEquals(5, bars.size());
+        // Day 1 (2026-08-19 New York): pre, regular, the closing auction, then after-hours.
+        assertEquals(MarketSession.PRE, bars.get(0).session());
+        assertEquals(LocalDate.of(2026, 8, 19), bars.get(0).sessionDate());
+        assertEquals(MarketSession.REGULAR, bars.get(1).session());
+        assertEquals(LocalDate.of(2026, 8, 19), bars.get(1).sessionDate());
+        assertEquals(MarketSession.POST, bars.get(3).session());
+        assertEquals(LocalDate.of(2026, 8, 19), bars.get(3).sessionDate());
+        // Day 2's pre-market belongs to the session it precedes, not to the one that just ended.
+        assertEquals(MarketSession.PRE, bars.get(4).session());
+        assertEquals(LocalDate.of(2026, 8, 20), bars.get(4).sessionDate());
+    }
+
+    @Test
+    void closingAuctionPrintStaysInTheRegularSession() throws Exception {
+        // The 16:00 print sits on the exact second the regular window ends and the post window
+        // begins. Labelling it POST would hide the official close from every regular-hours
+        // reader — portfolio valuation included — so the regular window wins the boundary.
+        String json = Files.readString(Path.of(
+                getClass().getResource("/yahoo-mrna-prepost-sample.json").toURI()));
+
+        IntradayBar close = new YahooPriceFetcher().parseIntraday("TSTX", json).get(2);
+
+        assertEquals(Instant.ofEpochSecond(1787169600), close.ts());
+        assertEquals(174.38, close.close());
+        assertEquals(MarketSession.REGULAR, close.session());
+        assertEquals(LocalDate.of(2026, 8, 19), close.sessionDate());
+    }
+
+    @Test
+    void barsWithoutTradingPeriodsReadAsRegularWithNoTradingDay() throws Exception {
+        // The pre-2026 fixture shape: no tradingPeriods block at all. Everything stored before
+        // includePrePost was switched on was regular-session, so that is the truthful reading.
+        String json = Files.readString(Path.of(
+                getClass().getResource("/yahoo-aapl-intraday-sample.json").toURI()));
+
+        IntradayBar first = new YahooPriceFetcher().parseIntraday("AAPL", json).get(0);
+
+        assertEquals(MarketSession.REGULAR, first.session());
+        assertNull(first.sessionDate());
+        assertEquals(LocalDate.of(2024, 5, 30), first.tradingDay(), "falls back to the UTC date");
+    }
+
+    @Test
+    void readsTheDaysTradingWindowsForMarketState() throws Exception {
+        String json = Files.readString(Path.of(
+                getClass().getResource("/yahoo-mrna-prepost-sample.json").toURI()));
+
+        MarketHours h = new YahooPriceFetcher().parseIntradaySnapshot("TSTX", json).hours();
+
+        assertNotNull(h);
+        assertTrue(h.hasPrePost());
+        assertEquals(MarketState.PRE, h.stateAt(Instant.ofEpochSecond(1787214000)));
+        assertEquals(MarketState.OPEN, h.stateAt(Instant.ofEpochSecond(1787240000)));
+        assertEquals(MarketState.POST, h.stateAt(Instant.ofEpochSecond(1787260000)));
+        assertEquals(MarketState.CLOSED, h.stateAt(Instant.ofEpochSecond(1787280000)));
     }
 
     @Test

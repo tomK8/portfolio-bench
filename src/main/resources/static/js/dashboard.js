@@ -1,5 +1,14 @@
     (function () {
         function parseVal(cell, type) {
+            // An explicit data-sort-value wins over the rendered text. Set it on cells whose
+            // text is not purely the value — the Live tab's Last column carries a PRE/AH session
+            // badge beside the price, and sorting must see the price alone.
+            var dv = cell.dataset ? cell.dataset.sortValue : null;
+            if (dv != null && dv !== '') {
+                if (type !== 'num') return dv;
+                var dn = parseFloat(dv);
+                return isFinite(dn) ? dn : null;
+            }
             var t = cell.textContent.trim();
             if (type === 'num') {
                 if (t === '—' || t === '') return null;
@@ -5324,8 +5333,9 @@
             var nPos = numOrNull(row.positionGbp);
             var changed = false;
             if (setNumericCell(tr.cells[2], row.symbol + '|qty', row.quantity, fmtLiveNum(row.quantity, 2), prevByKey, nextByKey)) changed = true;
-            if (setNumericCell(tr.cells[3], row.symbol + '|last', nLast, nLast == null ? '—' : fmtLiveNum(nLast, 4), prevByKey, nextByKey)) changed = true;
+            if (setPriceCell(tr.cells[3], row.symbol + '|last', nLast, nLast == null ? '—' : fmtLiveNum(nLast, 4), row.session, prevByKey, nextByKey)) changed = true;
             applyMomClass(tr.cells[3], numOrNull(row.monthChangePct));
+            applyMarketState(tr, row);
             if (setNumericCell(tr.cells[4], row.symbol + '|pct', nPct, nPct == null ? '—' : fmtLivePct(nPct), prevByKey, nextByKey)) changed = true;
             applyDeltaClass(tr.cells[4], nPct);
             if (setNumericCell(tr.cells[5], row.symbol + '|dayGbp', nDay, nDay == null ? '—' : (nDay >= 0 ? '+' : '−') + fmtLiveNum(Math.abs(nDay), 2), prevByKey, nextByKey)) changed = true;
@@ -5344,8 +5354,77 @@
             });
             if (setNumericCell(tr.cells[11], row.symbol + '|pos', nPos, nPos == null ? '—' : fmtLiveNum(nPos, 2), prevByKey, nextByKey)) changed = true;
             tr.cells[12].textContent = row.accounts || '';
-            renderQuoteTs(tr.cells[13], row.priceTs);
+            renderQuoteTs(tr.cells[13], row.priceTs, row.marketState);
             return changed;
+        }
+
+        // Session badges. A pre/post-market print is a real, tradeable price and far more use at
+        // 07:00 than last night's close — but it is thin, wide-spread and not the number any
+        // statement will agree with, so it is always shown labelled rather than blended in.
+        var LIVE_SESSION_BADGE = {
+            PRE: { label: 'PRE', cls: 'live-sess-pre',
+                   title: 'Pre-market price — the regular session has not opened yet. ' +
+                          'Day Δ is measured against the previous regular close.' },
+            POST: { label: 'AH', cls: 'live-sess-post',
+                    title: 'After-hours price — the regular session has closed. ' +
+                           'Day Δ is measured against the previous regular close.' }
+        };
+
+        var LIVE_STATE_TITLE = {
+            OPEN: 'Regular session in progress',
+            PRE: 'Pre-market session',
+            POST: 'After-hours session',
+            CLOSED: 'Market closed for this listing',
+            UNKNOWN: 'Trading hours not known for this listing'
+        };
+
+        // The Last cell holds a number *and* an optional session badge, so it can't be written
+        // with setNumericCell's textContent swap: the badge would be wiped on every frame and
+        // the change-detection would compare "174.38PRE" against "174.38". Number and badge get
+        // their own spans, the flash still plays on the cell, and data-sort-value keeps the
+        // column sorting on the price alone.
+        function setPriceCell(td, key, value, text, session, prevByKey, nextByKey) {
+            var valEl = td.querySelector('.live-px');
+            if (!valEl) {
+                td.textContent = '';
+                valEl = document.createElement('span');
+                valEl.className = 'live-px';
+                td.appendChild(valEl);
+                td.appendChild(document.createElement('span')).className = 'live-sess';
+            }
+            var badgeEl = td.querySelector('.live-sess');
+            if (valEl.textContent !== text) valEl.textContent = text;
+
+            var badge = LIVE_SESSION_BADGE[session];
+            badgeEl.className = 'live-sess' + (badge ? ' ' + badge.cls : '');
+            badgeEl.textContent = badge ? badge.label : '';
+            if (badge) badgeEl.title = badge.title; else badgeEl.removeAttribute('title');
+
+            var nv = numOrNull(value);
+            if (nv == null) td.removeAttribute('data-sort-value');
+            else td.dataset.sortValue = String(nv);
+            if (nextByKey) nextByKey[key] = nv;
+            if (prevByKey && nv != null) {
+                var pv = prevByKey[key];
+                if (pv != null && pv !== nv) {
+                    td.classList.remove('live-flash-up', 'live-flash-down');
+                    void td.offsetWidth;
+                    td.classList.add(nv > pv ? 'live-flash-up' : 'live-flash-down');
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Row tint by what the listing's market is doing. Closed rows are dimmed so a US name
+        // sitting on last night's close at 09:00 London reads as settled data rather than as a
+        // live quote that has simply stopped moving.
+        function applyMarketState(tr, row) {
+            var st = row.marketState || 'UNKNOWN';
+            tr.classList.remove('live-mkt-open', 'live-mkt-pre', 'live-mkt-post',
+                                'live-mkt-closed', 'live-mkt-unknown');
+            tr.classList.add('live-mkt-' + st.toLowerCase());
+            tr.title = LIVE_STATE_TITLE[st] || '';
         }
 
         function setNumericCell(td, key, value, text, prevByKey, nextByKey) {
@@ -5364,16 +5443,20 @@
             return false;
         }
 
-        function renderQuoteTs(td, iso) {
+        function renderQuoteTs(td, iso, marketState) {
             td.classList.remove('live-ts-fresh', 'live-ts-stale', 'live-ts-old');
             if (!iso) { td.textContent = '—'; td.removeAttribute('title'); return; }
             var ts = new Date(iso);
             td.textContent = ts.toLocaleTimeString();
-            td.title = ts.toISOString();
+            td.title = ts.toISOString() + (marketState ? ' · ' + (LIVE_STATE_TITLE[marketState] || '') : '');
+            // Age only means "stale" while the market can actually print. Out of hours every
+            // quote is hours old and none of them is a problem, so a closed listing gets the
+            // muted treatment rather than an amber/red warning it can never clear.
+            if (marketState === 'CLOSED') { td.classList.add('live-ts-old'); return; }
             var ageSec = (Date.now() - ts.getTime()) / 1000;
             if (ageSec < 300) td.classList.add('live-ts-fresh');         // < 5 min
             else if (ageSec < 1800) td.classList.add('live-ts-stale');   // < 30 min
-            else td.classList.add('live-ts-old');                        // older — market closed for this listing
+            else td.classList.add('live-ts-old');                        // older — feed lagging
         }
 
         function applyDeltaClass(td, val) {

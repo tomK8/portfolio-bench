@@ -25,6 +25,11 @@ import java.util.Set;
  * <p>Per-ticker fetch is incremental — starting from the latest stored timestamp (or
  * the retention horizon on first run) so we don't re-pull what we already have and
  * never insert rows the prune would immediately discard.
+ *
+ * <p>Bars are fetched <em>including</em> pre/post-market minutes and stored tagged with their
+ * session; each response's trading calendar is stashed in {@link MarketHoursCache} on the way
+ * past. Readers that want regular hours only get them by default — see
+ * {@link IntradayPriceRepository#loadLatestIntradayPrices}.
  */
 public class IntradayPriceFetchJob {
 
@@ -50,14 +55,17 @@ public class IntradayPriceFetchJob {
     private final YahooPriceFetcher fetcher;
     private final YahooTickerMap tickers;
     private final KeyValueStore kv;
+    private final MarketHoursCache marketHours;
 
     public IntradayPriceFetchJob(CashTransactionRepository cashRepo, IntradayPriceRepository intradayRepo,
-                                 YahooPriceFetcher fetcher, YahooTickerMap tickers, KeyValueStore kv) {
+                                 YahooPriceFetcher fetcher, YahooTickerMap tickers, KeyValueStore kv,
+                                 MarketHoursCache marketHours) {
         this.cashRepo = cashRepo;
         this.intradayRepo = intradayRepo;
         this.fetcher = fetcher;
         this.tickers = tickers;
         this.kv = kv;
+        this.marketHours = marketHours;
     }
 
     /** Day the retention prune last ran — rows only age out daily, so scanning every tick is waste. */
@@ -124,7 +132,12 @@ public class IntradayPriceFetchJob {
             log.info("Intraday {} — up to date", ticker);
             return -1;
         }
-        List<IntradayBar> bars = fetcher.fetchIntraday(ticker, from, now);
+        YahooPriceFetcher.IntradaySnapshot snap = fetcher.fetchIntraday(ticker, from, now);
+        // The trading calendar rides along on the response we already made, so keeping it costs
+        // nothing and is what lets the Live tab say "market closed" rather than infer it from a
+        // quiet quote (a thinly-traded listing can go 40 minutes without a print mid-session).
+        marketHours.put(snap.hours());
+        List<IntradayBar> bars = snap.bars();
         int saved = intradayRepo.saveIntradayBars(bars);
         log.info("Intraday {} — {} bars ({} new)", ticker, bars.size(), saved);
         return saved;

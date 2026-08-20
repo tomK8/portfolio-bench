@@ -2,6 +2,7 @@ package com.portfolio.persistence;
 
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.IntradayPrice;
+import com.portfolio.domain.model.MarketSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,6 +48,20 @@ public class IntradayPriceRepository {
         try (Connection conn = connections.open(); Statement ddl = conn.createStatement()) {
             ddl.execute(CREATE_TABLE);
             ddl.execute(CREATE_INDEX);
+            // Idempotent migration (see CashTransactionRepository's constructor for the pattern).
+            // Left NULL on existing rows deliberately: everything stored before these columns
+            // existed was fetched with includePrePost=false, so NULL *means* regular session and
+            // MarketSession.fromDb reads it as such. Backfilling a literal would claim knowledge
+            // of a trading day we never captured.
+            for (String alter : new String[]{
+                    "ALTER TABLE price_intraday ADD COLUMN session TEXT",
+                    "ALTER TABLE price_intraday ADD COLUMN session_date TEXT"}) {
+                try {
+                    ddl.execute(alter);
+                } catch (SQLException ignored) {
+                    // column already present
+                }
+            }
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise price_intraday table", e);
         }
@@ -68,8 +83,8 @@ public class IntradayPriceRepository {
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT OR IGNORE INTO price_intraday " +
-                             "(symbol, ts, close, volume, currency, fetched_at) " +
-                             "VALUES (?, ?, ?, ?, ?, ?)")) {
+                             "(symbol, ts, close, volume, currency, fetched_at, session, session_date) " +
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
             conn.setAutoCommit(false);
             int inBatch = 0;
             for (IntradayBar b : bars) {
@@ -80,6 +95,9 @@ public class IntradayPriceRepository {
                 else ps.setNull(4, Types.INTEGER);
                 ps.setString(5, b.currency());
                 ps.setString(6, fetchedAt);
+                ps.setString(7, b.session().name());
+                if (b.sessionDate() != null) ps.setString(8, b.sessionDate().toString());
+                else ps.setNull(8, Types.VARCHAR);
                 ps.addBatch();
                 if (++inBatch >= WRITE_CHUNK_ROWS) {
                     for (int n : ps.executeBatch()) if (n > 0) inserted += n;
@@ -114,12 +132,41 @@ public class IntradayPriceRepository {
         }
     }
 
-    /** Bulk lookup: latest stored bar per ticker. One DB hit, not N. */
+    /**
+     * Bulk lookup: latest stored <em>regular-session</em> bar per ticker. One DB hit, not N.
+     *
+     * <p>Extended-hours rows are excluded here rather than at each call site, so every existing
+     * reader — portfolio valuation, reconciliation, the sync views, open orders, watchlist
+     * alerts — keeps the semantics it was written against once the fetcher started storing
+     * pre/post minutes. A thin 200-share pre-market print is a fine thing to *look* at and a bad
+     * thing to value a portfolio or fire an alert on. The Live tab opts in explicitly via
+     * {@link #loadLatestQuotes}.
+     */
     public Map<String, IntradayPrice> loadLatestIntradayPrices(Collection<String> tickers) {
+        return loadLatest(tickers, true);
+    }
+
+    /**
+     * Latest stored bar per ticker of <em>any</em> session, each tagged with the session it came
+     * from. The Live tab's quote source: a US name at 08:00 London has no regular bar newer than
+     * last night's close, but may well have a pre-market one, and showing it (labelled) beats
+     * showing a stale close.
+     */
+    public Map<String, IntradayPrice> loadLatestQuotes(Collection<String> tickers) {
+        return loadLatest(tickers, false);
+    }
+
+    private Map<String, IntradayPrice> loadLatest(Collection<String> tickers, boolean regularOnly) {
         Map<String, IntradayPrice> out = new HashMap<>();
         if (tickers.isEmpty() || !connections.dbExists()) return out;
-        String sql = "SELECT p.symbol, p.ts, p.close, p.currency FROM price_intraday p " +
-                "JOIN (SELECT symbol, MAX(ts) AS max_ts FROM price_intraday GROUP BY symbol) m " +
+        // NULL session = a row written before the column existed, which was regular by
+        // construction (includePrePost was false), so it must survive the regular-only filter.
+        String sessionFilter = regularOnly
+                ? " WHERE session IS NULL OR session = 'REGULAR'" : "";
+        String sql = "SELECT p.symbol, p.ts, p.close, p.currency, p.session, p.session_date " +
+                "FROM price_intraday p " +
+                "JOIN (SELECT symbol, MAX(ts) AS max_ts FROM price_intraday" + sessionFilter +
+                "      GROUP BY symbol) m " +
                 "ON p.symbol = m.symbol AND p.ts = m.max_ts " +
                 "WHERE p.symbol IN (" + placeholders(tickers.size()) + ")";
         try (Connection conn = connections.open();
@@ -128,9 +175,12 @@ public class IntradayPriceRepository {
             for (String t : tickers) ps.setString(i++, t);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
+                    String day = rs.getString(6);
                     out.put(rs.getString(1),
                             new IntradayPrice(Instant.parse(rs.getString(2)),
-                                    rs.getDouble(3), rs.getString(4)));
+                                    rs.getDouble(3), rs.getString(4),
+                                    MarketSession.fromDb(rs.getString(5)),
+                                    day == null ? null : java.time.LocalDate.parse(day)));
                 }
             }
         } catch (Exception e) {
@@ -161,10 +211,15 @@ public class IntradayPriceRepository {
     }
 
     /**
-     * All stored 1-minute bars for one ticker at or after {@code from}, oldest first. Feeds the
-     * watchlist popup's fine-grained price chart for the sub-15-day windows. Retention (see
+     * All stored <em>regular-session</em> 1-minute bars for one ticker at or after {@code from},
+     * oldest first. Feeds the watchlist popup's fine-grained price chart for the sub-15-day
+     * windows and the intraday realized-vol term structure. Retention (see
      * {@link com.portfolio.application.IntradayPriceFetchJob#RETENTION_DAYS}) bounds how far
      * back this can reach.
+     *
+     * <p>Extended hours are excluded on purpose. Pre/post minutes are thin and wide-spread, so
+     * folding them in would inflate {@code PriceStats.annualizedVolIntraday} with spread noise
+     * and draw the overnight gap as a run of intraday moves on the popup chart.
      */
     public List<IntradayBar> loadIntradaySeries(String ticker, Instant from) {
         List<IntradayBar> out = new java.util.ArrayList<>();
@@ -172,7 +227,8 @@ public class IntradayPriceRepository {
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "SELECT symbol, ts, close, volume, currency FROM price_intraday " +
-                             "WHERE symbol = ? AND ts >= ? ORDER BY ts")) {
+                             "WHERE symbol = ? AND ts >= ? " +
+                             "AND (session IS NULL OR session = 'REGULAR') ORDER BY ts")) {
             ps.setString(1, ticker);
             ps.setString(2, from.toString());
             try (ResultSet rs = ps.executeQuery()) {

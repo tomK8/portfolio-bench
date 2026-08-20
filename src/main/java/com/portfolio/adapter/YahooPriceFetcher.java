@@ -3,6 +3,8 @@ package com.portfolio.adapter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.portfolio.domain.model.IntradayBar;
+import com.portfolio.domain.model.MarketHours;
+import com.portfolio.domain.model.MarketSession;
 import com.portfolio.domain.model.PriceBar;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,9 +32,14 @@ public class YahooPriceFetcher {
     private static final String CHART_URL =
             "https://query1.finance.yahoo.com/v8/finance/chart/%s" +
                     "?period1=%d&period2=%d&interval=1d&events=div,split";
+    // includePrePost=true is what makes a US name show a live pre-market quote at 07:00 London
+    // instead of freezing on last night's close. The extra minutes are *labelled*, not blended:
+    // parseIntraday tags each bar with its session so regular-hours-only readers (portfolio
+    // valuation, realized-vol, the popup charts) filter them out at the query, and only the
+    // callers that opt in ever see a thin pre-market print.
     private static final String INTRADAY_URL =
             "https://query1.finance.yahoo.com/v8/finance/chart/%s" +
-                    "?period1=%d&period2=%d&interval=1m&includePrePost=false";
+                    "?period1=%d&period2=%d&interval=1m&includePrePost=true";
     // Yahoo rejects requests without a browser-like User-Agent.
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
@@ -336,45 +343,160 @@ public class YahooPriceFetcher {
     }
 
     /**
-     * 1-minute closes for {@code yahooTicker} in {@code [from, to]}. Yahoo's chart endpoint
-     * caps the 1-minute interval at ~7 days per request; callers should clamp accordingly.
-     * Off-hours minutes (weekends, pre/post-market) simply aren't returned. Empty on persistent
+     * 1-minute closes for {@code yahooTicker} in {@code [from, to]}, plus the listing's trading
+     * calendar for the current day. Yahoo's chart endpoint caps the 1-minute interval at ~7 days
+     * per request; callers should clamp accordingly. Weekend/holiday minutes simply aren't
+     * returned; pre- and post-market ones are, tagged with their session. Empty on persistent
      * failure (logged).
      */
-    public List<IntradayBar> fetchIntraday(String yahooTicker, Instant from, Instant to) {
+    public IntradaySnapshot fetchIntraday(String yahooTicker, Instant from, Instant to) {
         String url = String.format(INTRADAY_URL, urlTicker(yahooTicker),
                 from.getEpochSecond(), to.getEpochSecond());
         String body = get(url);
         if (body == null) {
             log.warn("Yahoo intraday fetch failed for {}", yahooTicker);
-            return List.of();
+            return IntradaySnapshot.empty();
         }
         try {
-            return parseIntraday(yahooTicker, body);
+            return parseIntradaySnapshot(yahooTicker, body);
         } catch (Exception e) {
             log.warn("Yahoo intraday parse failed for {}", yahooTicker, e);
-            return List.of();
+            return IntradaySnapshot.empty();
+        }
+    }
+
+    /** The bars and the day's trading windows from one intraday response. */
+    public record IntradaySnapshot(List<IntradayBar> bars, MarketHours hours) {
+        static IntradaySnapshot empty() {
+            return new IntradaySnapshot(List.of(), null);
         }
     }
 
     List<IntradayBar> parseIntraday(String ticker, String json) throws Exception {   // package-private for tests
-        JsonNode result = mapper.readTree(json).path("chart").path("result");
-        if (!result.isArray() || result.isEmpty()) return List.of();
-        JsonNode r = result.get(0);
+        return parseIntradaySnapshot(ticker, json).bars();
+    }
 
-        String currency = r.path("meta").path("currency").asText(null);
+    IntradaySnapshot parseIntradaySnapshot(String ticker, String json) throws Exception {   // package-private for tests
+        JsonNode result = mapper.readTree(json).path("chart").path("result");
+        if (!result.isArray() || result.isEmpty()) return IntradaySnapshot.empty();
+        JsonNode r = result.get(0);
+        JsonNode meta = r.path("meta");
+
+        String currency = meta.path("currency").asText(null);
         JsonNode ts = r.path("timestamp");
         JsonNode q = r.path("indicators").path("quote").path(0);
         JsonNode close = q.path("close"), vol = q.path("volume");
+
+        SessionCalendar cal = SessionCalendar.parse(meta.path("tradingPeriods"));
 
         List<IntradayBar> bars = new ArrayList<>();
         for (int i = 0; i < ts.size(); i++) {
             Double c = num(close, i);
             if (c == null) continue;   // off-hours minute, no trade
-            Instant t = Instant.ofEpochSecond(ts.get(i).asLong());
+            long epoch = ts.get(i).asLong();
+            Instant t = Instant.ofEpochSecond(epoch);
             Long volume = vol.path(i).isNumber() ? vol.get(i).asLong() : null;
-            bars.add(new IntradayBar(ticker, t, c, volume, currency));
+            SessionCalendar.Slot slot = cal.classify(epoch);
+            bars.add(new IntradayBar(ticker, t, c, volume, currency, slot.session(), slot.day()));
         }
-        return bars;
+        return new IntradaySnapshot(bars, parseMarketHours(ticker, meta));
+    }
+
+    /**
+     * The current day's pre/regular/post windows from {@code meta.currentTradingPeriod}. Null
+     * when the shape is missing or the regular window is unusable — the caller then falls back
+     * to judging market state by quote age rather than asserting a closed market.
+     */
+    private static MarketHours parseMarketHours(String ticker, JsonNode meta) {
+        JsonNode ctp = meta.path("currentTradingPeriod");
+        if (!ctp.isObject()) return null;
+        long rs = ctp.path("regular").path("start").asLong(0);
+        long re = ctp.path("regular").path("end").asLong(0);
+        if (rs <= 0 || re <= rs) return null;
+        return new MarketHours(ticker,
+                ctp.path("pre").path("start").asLong(0), ctp.path("pre").path("end").asLong(0),
+                rs, re,
+                ctp.path("post").path("start").asLong(0), ctp.path("post").path("end").asLong(0),
+                meta.path("hasPrePostMarketData").asBoolean(false),
+                Instant.now());
+    }
+
+    /**
+     * The per-day pre/regular/post windows from {@code meta.tradingPeriods}, which Yahoo returns
+     * as three parallel arrays indexed by trading day. Zipping them by index is what gives a
+     * pre-market minute the trading day of the session it <em>precedes</em> and a post-market
+     * minute the one it <em>follows</em> — the pairing can't be recovered from the clock alone
+     * once a US after-hours session crosses midnight UTC.
+     *
+     * <p>The trading day itself is the local date of the regular open, derived from that
+     * window's own {@code gmtoffset}, so no timezone database is consulted and DST is already
+     * baked into the number the exchange reported.
+     */
+    private record SessionCalendar(List<Window> windows) {
+
+        private record Window(long start, long end, MarketSession session, LocalDate day) {
+        }
+
+        record Slot(MarketSession session, LocalDate day) {
+        }
+
+        private static final Slot UNKNOWN = new Slot(MarketSession.REGULAR, null);
+
+        static SessionCalendar parse(JsonNode tradingPeriods) {
+            if (!tradingPeriods.isObject()) return new SessionCalendar(List.of());
+            JsonNode regular = tradingPeriods.path("regular");
+            if (!regular.isArray()) return new SessionCalendar(List.of());
+            List<Window> out = new ArrayList<>();
+            for (int day = 0; day < regular.size(); day++) {
+                JsonNode reg = first(regular.get(day));
+                if (reg == null) continue;
+                long start = reg.path("start").asLong(0);
+                if (start <= 0) continue;
+                LocalDate d = Instant.ofEpochSecond(start)
+                        .atOffset(ZoneOffset.ofTotalSeconds(reg.path("gmtoffset").asInt(0)))
+                        .toLocalDate();
+                add(out, reg, MarketSession.REGULAR, d);
+                add(out, first(tradingPeriods.path("pre").path(day)), MarketSession.PRE, d);
+                add(out, first(tradingPeriods.path("post").path(day)), MarketSession.POST, d);
+            }
+            return new SessionCalendar(out);
+        }
+
+        private static JsonNode first(JsonNode dayNode) {
+            if (dayNode == null || !dayNode.isArray() || dayNode.isEmpty()) return null;
+            return dayNode.get(0);
+        }
+
+        private static void add(List<Window> out, JsonNode w, MarketSession session, LocalDate day) {
+            if (w == null) return;
+            long s = w.path("start").asLong(0), e = w.path("end").asLong(0);
+            if (s > 0 && e > s) out.add(new Window(s, e, session, day));
+        }
+
+        /**
+         * Regular windows are tested first and <em>inclusive of both ends</em>; pre/post are
+         * half-open. That ordering exists for one bar in particular: the closing auction prints
+         * at exactly the regular end second, which is also the post window's start. Classifying
+         * it as POST would drop the official close out of every regular-hours reader — the
+         * portfolio would stop being able to value the position from its own closing price. The
+         * opening auction sits on the same boundary at the other end and is handled by the same
+         * rule. An epoch inside no window at all falls back to REGULAR with no trading day, which
+         * is how a bar predating this classification reads too.
+         */
+        Slot classify(long epoch) {
+            for (Window w : windows) {
+                if (w.session() == MarketSession.REGULAR
+                        && epoch >= w.start() && epoch <= w.end()) {
+                    return new Slot(MarketSession.REGULAR, w.day());
+                }
+            }
+            for (Window w : windows) {
+                if (w.session() != MarketSession.REGULAR
+                        && epoch >= w.start() && epoch < w.end()) {
+                    return new Slot(w.session(), w.day());
+                }
+            }
+            return UNKNOWN;
+        }
     }
 }

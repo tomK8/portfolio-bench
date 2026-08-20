@@ -28,7 +28,8 @@ class LivePricesServiceTest {
                 new IntradayPriceRepository(cf),
                 new PriceHistoryRepository(cf),
                 () -> Map.of(),
-                new YahooTickerMap());
+                new YahooTickerMap(),
+                new MarketHoursCache());
     }
 
     private static PriceBar bar(String symbol, LocalDate date, double close) {
@@ -61,7 +62,8 @@ class LivePricesServiceTest {
                 new IntradayBar("AZN.L", Instant.now(), 11000.0, null, "GBp")));
 
         var svc = new LivePricesService(cashRepo, intraRepo,
-                new PriceHistoryRepository(cf), () -> Map.of(), new YahooTickerMap());
+                new PriceHistoryRepository(cf), () -> Map.of(), new YahooTickerMap(),
+                new MarketHoursCache());
         LivePricesService.Snapshot snap = svc.snapshot();
 
         assertFalse(snap.rows().isEmpty());
@@ -87,7 +89,7 @@ class LivePricesServiceTest {
         intraRepo.saveIntradayBars(List.of(
                 new IntradayBar("AAPL", Instant.now(), 110.0, null, "GBP")));
 
-        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap());
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
         LivePricesService.Snapshot snap = svc.snapshot();
         assertFalse(snap.rows().isEmpty());
         LivePricesService.Row row = snap.rows().get(0);
@@ -120,7 +122,7 @@ class LivePricesServiceTest {
         intraRepo.saveIntradayBars(List.of(
                 new IntradayBar("AAPL", Instant.now(), 100.0, null, "GBP")));
 
-        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap());
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
         LivePricesService.Row row = svc.snapshot().rows().get(0);
 
         // Every window ends on the live quote, so today's move is inside all of them.
@@ -147,7 +149,7 @@ class LivePricesServiceTest {
         intraRepo.saveIntradayBars(List.of(
                 new IntradayBar("AAPL", Instant.now(), 100.0, null, "GBP")));
 
-        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap());
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
         LivePricesService.Row row = svc.snapshot().rows().get(0);
 
         assertNotNull(row.change5dPct());
@@ -176,7 +178,7 @@ class LivePricesServiceTest {
         intraRepo.saveIntradayBars(List.of(
                 new IntradayBar("AAPL", Instant.now(), 153.4, null, "GBP")));
 
-        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap());
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
         LivePricesService.Row row = svc.snapshot().rows().get(0);
 
         assertTrue(row.dayChangePct().doubleValue() > 1.0, "day move is +144%");
@@ -193,9 +195,110 @@ class LivePricesServiceTest {
         cashRepo.saveAjBell(List.of(buy("2023-01-01", "AAPL", 5.0)));
         // No intraday bar saved
         var svc = new LivePricesService(cashRepo, new IntradayPriceRepository(cf),
-                new PriceHistoryRepository(cf), () -> Map.of(), new YahooTickerMap());
+                new PriceHistoryRepository(cf), () -> Map.of(), new YahooTickerMap(),
+                new MarketHoursCache());
 
         LivePricesService.Snapshot snap = svc.snapshot();
         assertTrue(snap.rows().isEmpty(), "position without intraday price is excluded");
+    }
+
+    /**
+     * The 2026-08-20 MRNA regression. Overnight in London, a US name's newest quote is the
+     * previous US session's close, and the daily table can also hold a *partial* bar for that
+     * same session (the price job's startup run snapshots an in-progress day). Anchoring the
+     * baseline on "the close before calendar yesterday" therefore compared the session's real
+     * close against a mid-session snapshot of itself: MRNA, up 177% that session, printed
+     * +12.13%.
+     */
+    @Test
+    void dayChangeIgnoresAPartialBarForTheQuotesOwnSession() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2023-01-01", "AAPL", 10.0)));
+
+        LocalDate session = LocalDate.now().minusDays(1);
+        var priceRepo = new PriceHistoryRepository(cf);
+        priceRepo.savePriceBars(List.of(
+                bar("AAPL", session.minusDays(1), 62.96),      // the real prior close
+                bar("AAPL", session, 155.51)));                // mid-session snapshot, not a close
+
+        var intraRepo = new IntradayPriceRepository(cf);
+        intraRepo.saveIntradayBars(List.of(new IntradayBar(
+                "AAPL", Instant.now().minusSeconds(3600), 174.38, null, "GBP",
+                MarketSession.REGULAR, session)));
+
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo,
+                () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+        LivePricesService.Row row = svc.snapshot().rows().get(0);
+
+        // 174.38 / 62.96 - 1 = +176.97%, not 174.38 / 155.51 - 1 = +12.13%.
+        assertEquals(1.769695, row.dayChangePct().doubleValue(), 1e-5);
+    }
+
+    @Test
+    void preMarketQuoteIsMeasuredAgainstThePreviousRegularClose() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2023-01-01", "AAPL", 10.0)));
+
+        LocalDate today = LocalDate.now();
+        var priceRepo = new PriceHistoryRepository(cf);
+        priceRepo.savePriceBars(List.of(bar("AAPL", today.minusDays(1), 200.0)));
+
+        var intraRepo = new IntradayPriceRepository(cf);
+        intraRepo.saveIntradayBars(List.of(new IntradayBar(
+                "AAPL", Instant.now(), 180.0, null, "GBP", MarketSession.PRE, today)));
+
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo,
+                () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+        LivePricesService.Row row = svc.snapshot().rows().get(0);
+
+        assertEquals("PRE", row.session(), "the UI has to be able to label the price");
+        assertEquals(-0.10, row.dayChangePct().doubleValue(), 1e-9);
+    }
+
+    @Test
+    void extendedHoursQuoteIsUsedForTheLivePriceButNotForRegularHoursReaders() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2023-01-01", "AAPL", 10.0)));
+
+        var intraRepo = new IntradayPriceRepository(cf);
+        Instant closeTs = Instant.now().minusSeconds(7200);
+        intraRepo.saveIntradayBars(List.of(
+                new IntradayBar("AAPL", closeTs, 174.38, null, "GBP",
+                        MarketSession.REGULAR, LocalDate.now().minusDays(1)),
+                new IntradayBar("AAPL", Instant.now(), 153.62, null, "GBP",
+                        MarketSession.PRE, LocalDate.now())));
+
+        // The Live tab takes the newest quote of any session…
+        assertEquals(153.62,
+                intraRepo.loadLatestQuotes(List.of("AAPL")).get("AAPL").close());
+        // …while every regular-hours reader (valuation, reconciliation, alerts) still sees the
+        // last regular close, so a thin pre-market print can never move the portfolio's value.
+        assertEquals(174.38,
+                intraRepo.loadLatestIntradayPrices(List.of("AAPL")).get("AAPL").close());
+    }
+
+    @Test
+    void marketStateFallsBackToQuoteAgeWhenNoCalendarIsHeld() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2023-01-01", "AAPL", 10.0)));
+
+        var intraRepo = new IntradayPriceRepository(cf);
+        intraRepo.saveIntradayBars(List.of(new IntradayBar(
+                "AAPL", Instant.now().minusSeconds(6 * 3600), 174.38, null, "GBP",
+                MarketSession.REGULAR, LocalDate.now().minusDays(1))));
+
+        var svc = new LivePricesService(cashRepo, intraRepo, new PriceHistoryRepository(cf),
+                () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+
+        assertEquals("CLOSED", svc.snapshot().rows().get(0).marketState(),
+                "a six-hour-old quote with no published calendar reads as a shut market");
     }
 }

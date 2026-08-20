@@ -1107,8 +1107,39 @@
         .live-flash-down { animation: live-flash-down 1.2s ease-out; }
         .live-pos { color: #2ca02c; font-weight: 600; }
         .live-neg { color: #c0392b; font-weight: 600; }
-        /* Quote-ts age: green when fresh (<5 min), amber when stale (5-30 min),
-           grey italic when old (>30 min, typically post-LSE-close). */
+        /* Session badge beside an extended-hours price. Deliberately loud enough to notice and
+           small enough not to compete with the number it qualifies. */
+        .live-sess {
+            font-size: 0.62rem; font-weight: 700; letter-spacing: 0.04em;
+            padding: 0.05rem 0.25rem; margin-left: 0.3rem; border-radius: 3px;
+            vertical-align: 1px; cursor: help;
+        }
+        .live-sess:empty { display: none; }
+        .live-sess-pre  { background: #dbeafe; color: #1d4ed8; }
+        .live-sess-post { background: #ede9fe; color: #6d28d9; }
+        html[data-theme="dark"] .live-sess-pre  { background: #1e3a5f; color: #93c5fd; }
+        html[data-theme="dark"] .live-sess-post { background: #3b2f5e; color: #c4b5fd; }
+        /* Row tint by market state. Closed = settled data, not a live quote. Background only:
+           dimming the text as well would grey out the green/red Day Δ, which is the one signal
+           still worth reading on a shut market. */
+        #live-table tbody tr.live-mkt-closed > td { background: #f2f3f5; }
+        #live-table tbody tr.live-mkt-pre > td,
+        #live-table tbody tr.live-mkt-post > td { background: #fbfaff; }
+        #live-table tbody tr.live-mkt-closed > td.txt { color: #5b6167; }
+        html[data-theme="dark"] #live-table tbody tr.live-mkt-closed > td { background: #191b1f; }
+        html[data-theme="dark"] #live-table tbody tr.live-mkt-pre > td,
+        html[data-theme="dark"] #live-table tbody tr.live-mkt-post > td { background: #1c1b26; }
+        html[data-theme="dark"] #live-table tbody tr.live-mkt-closed > td.txt { color: #9aa1a9; }
+        /* The 1-month momentum tint on the Last cell has to survive the row tint above, which
+           is more specific than the plain td.mom-* rules. Restated here at higher specificity
+           rather than by weakening the row rule, so both signals stay readable together. */
+        #live-table tbody tr > td.mom-pos { background: rgba(44, 160, 44, 0.14); }
+        #live-table tbody tr > td.mom-neg { background: rgba(192, 57, 43, 0.14); }
+        html[data-theme="dark"] #live-table tbody tr > td.mom-pos { background: rgba(74, 222, 128, 0.22); }
+        html[data-theme="dark"] #live-table tbody tr > td.mom-neg { background: rgba(248, 113, 113, 0.22); }
+        /* Quote-ts age: green when fresh (<5 min), amber when stale (5-30 min), grey italic
+           when old. A listing whose market is CLOSED goes straight to grey — out of hours every
+           quote is hours old and none of them is a problem worth flagging amber. */
         .live-ts-fresh { color: #2ca02c; }
         .live-ts-stale { color: #b8860b; }
         .live-ts-old { color: #999; font-style: italic; }
@@ -3302,12 +3333,14 @@
 
 <section class="tab-panel" id="panel-live">
     <p class="muted" style="margin-top: 0">
-        Live positions: latest cached intraday close × current FX, day change vs yesterday's
-        stored daily close. Quote cadence depends on Yahoo (free 1-min intraday, refetched
-        every minute) and market hours — <code>.L</code> names freeze at 16:30 BST close,
-        US names tick through 21:00 BST. Outside hours the snapshot is static. Day Δ is
-        GBP-denominated (price move + FX move on the position). Click a row for the price
-        chart, momentum, vol term structure and fundamentals.
+        Live positions: latest cached quote × current FX. <strong>Day Δ compares against the last
+        regular close before that quote's own trading session</strong> — so a US name still shows
+        yesterday's full session move at 09:00 London, and a pre-market quote is measured against
+        last night's close. Quote cadence depends on Yahoo (free 1-min intraday, refetched every
+        minute) and market hours: <code>.L</code> names freeze at the 16:30 BST close, US names
+        tick from 09:00 BST pre-market through 05:00 BST after-hours. Day Δ is GBP-denominated
+        (price move + FX move on the position). Click a row for the price chart, momentum, vol
+        term structure and fundamentals.
         <span id="live-status" class="muted" style="margin-left: 0.5rem;"></span>
         <span id="live-age" class="muted" style="margin-left: 0.4rem;"></span>
     </p>
@@ -3339,9 +3372,9 @@
             <th class="txt" data-sort="text">Symbol</th>
             <th class="txt" data-sort="text">Ccy</th>
             <th data-sort="num">Quantity</th>
-            <th data-sort="num">Last</th>
-            <th data-sort="num">Day Δ %</th>
-            <th data-sort="num">Day Δ £</th>
+            <th data-sort="num" title="Latest quote. A PRE / AH badge marks a pre-market or after-hours price.">Last</th>
+            <th data-sort="num" title="Move since the last regular close *before* this quote's own trading session — so a US name viewed from London before the open still shows yesterday's full session move, and a pre-market quote is measured against last night's close.">Day Δ %</th>
+            <th data-sort="num" title="The same move in GBP on the held quantity.">Day Δ £</th>
             <th data-sort="num" title="Live price vs the close 5 calendar days ago — includes today's move">5d %</th>
             <th data-sort="num" title="Live price vs the close 10 calendar days ago — includes today's move">10d %</th>
             <th data-sort="num" title="Live price vs the close ~30 calendar days ago — includes today's move">30d %</th>
@@ -3354,6 +3387,12 @@
         </thead>
         <tbody></tbody>
     </table>
+    <p class="muted" id="live-legend" style="margin-top: 0.5rem; font-size: 0.78rem;">
+        <span class="live-sess live-sess-pre">PRE</span> pre-market ·
+        <span class="live-sess live-sess-post">AH</span> after-hours ·
+        greyed rows are listings whose market is currently closed, priced off their last regular
+        close. Day Δ always compares against the previous <em>regular</em> close.
+    </p>
     <p class="muted" id="live-empty" style="display: none; margin-top: 1rem;">
         No priced positions yet. Import cash statements (and wait one intraday tick) to see
         live values here.

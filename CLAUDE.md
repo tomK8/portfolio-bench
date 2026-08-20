@@ -580,7 +580,24 @@ holdings; distinguished from II cash by header sniff), `cashstatements*.csv` (AJ
   from prior (date, balance)-keyed imports are collapsed on next load — highest-rowid wins.
 - RothIRA: `(date, symbol, quantity, type, amount)` — native USD amount, FX-stable across
   imports. Balance continues from latest stored `cash_balance`, or the
-  `roth_balance_brought_forward` KV seed (USD) on first import.
+  `roth_balance_brought_forward` KV seed (USD) on first import. **Plus a second, group-level
+  pass (`repartitionedFills`), because the broker re-partitions fills between exports.** On
+  2026-08-19 a 50-share MRNA sale exported as two partial fills (37 + 13); the next day's export
+  carried the same sale as one aggregated row with a different description ("Unsolicited Order
+  Allocated Order Your Broker Acted As Agent"). `-50/7350` matched neither `-37/5439` nor
+  `-13/1911`, so the row-level key read it as a *third* sale: 100 shares disposed of against a
+  122-share holding, the position zeroed and USD cash overstated by $7,350 (£5,394). The guard
+  reconciles per `(date, symbol, type)` group — if the unmatched rows leave the group's **net
+  quantity and net amount** unchanged (tolerances `FILL_QTY_EPSILON` 1e-6 / `FILL_AMOUNT_EPSILON`
+  0.005), it's the same economic event re-partitioned and nothing is inserted. Fires in both
+  directions (aggregate→split too). A group whose totals genuinely changed — a further trade in
+  the same name later the same day — is deliberately left alone and dedups row by row as before,
+  so real activity is never swallowed. **When repairing such a double-count by hand, keep the row
+  shape the broker will keep sending** (here the aggregate): then the plain row-level key matches
+  every future import on its own and the group guard is a second line of defence rather than the
+  only one. The holdings-vs-ledger reconciliation panel is what surfaced this, not the importer.
+  AJ Bell and II have the same shape of key and are theoretically vulnerable; neither has ever
+  shown the behaviour, so the guard is Roth-only.
 - II: `(date, type, symbol, amount, currency)` within `account='II'`. The currency component
   isolates the GBP and USD ledgers within the shared account so dividend FIFO still groups by
   `(account, symbol)` across currencies.

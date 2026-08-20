@@ -55,6 +55,10 @@ public class CashTransactionRepository {
                     " fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description) " +
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
+    /** Tolerances for matching a re-partitioned fill group: exact share count, half a cent. */
+    private static final double FILL_QTY_EPSILON = 1e-6;
+    private static final double FILL_AMOUNT_EPSILON = 0.005;
+
     /** KV key for the RothIRA brought-forward balance (single source of truth, file-backed). */
     public static final String ROTH_BROUGHT_FORWARD_KEY = "roth_balance_brought_forward";
 
@@ -140,15 +144,17 @@ public class CashTransactionRepository {
 
     /**
      * RothIRA flow. Rows arrive with {@code fxToGbp}/{@code amountGbp} resolved per-date,
-     * native balances null. Dedups by (date, symbol, qty, type, amount); derives the running
-     * balance from the latest stored row (or {@code seed} when the account is empty) and
-     * persists the seed for traceability on a first-run import.
+     * native balances null. Dedups by (date, symbol, qty, type, amount), then by
+     * {@link #repartitionedFills} for the fills the broker has re-aggregated between exports;
+     * derives the running balance from the latest stored row (or {@code seed} when the account
+     * is empty) and persists the seed for traceability on a first-run import.
      */
     public int saveRothIra(List<CashTransaction> rows, BigDecimal seed) {
         if (rows.isEmpty()) return 0;
         Account account = rows.get(0).account();
         try (Connection conn = connections.open()) {
             Set<String> existingKeys = new HashSet<>();
+            Map<String, double[]> storedGroups = new HashMap<>();
             Double lastBalance = null;
             try (PreparedStatement q = conn.prepareStatement(
                     "SELECT transaction_date, symbol, quantity, type, amount, cash_balance " +
@@ -156,8 +162,10 @@ public class CashTransactionRepository {
                 q.setString(1, account.dbValue());
                 try (ResultSet rs = q.executeQuery()) {
                     while (rs.next()) {
-                        existingKeys.add(rothKey(rs.getString(1), rs.getString(2),
-                                rs.getDouble(3), rs.getString(4), rs.getDouble(5)));
+                        String date = rs.getString(1), symbol = rs.getString(2), type = rs.getString(4);
+                        double qty = rs.getDouble(3), amount = rs.getDouble(5);
+                        existingKeys.add(rothKey(date, symbol, qty, type, amount));
+                        accumulateFills(storedGroups, fillGroupKey(date, symbol, type), qty, amount);
                         double bal = rs.getDouble(6);
                         if (!rs.wasNull()) lastBalance = bal;
                     }
@@ -171,6 +179,9 @@ public class CashTransactionRepository {
                     .filter(t -> !existingKeys.contains(rothKey(
                             t.transactionDate(), t.symbol(), t.quantity(), t.type().name(), t.amount())))
                     .toList());
+            Set<String> repartitioned = repartitionedFills(rows, newRows, storedGroups);
+            newRows.removeIf(t -> repartitioned.contains(
+                    fillGroupKey(t.transactionDate(), t.symbol(), t.type().name())));
             Collections.reverse(newRows);  // source is newest-first → make oldest-first
             newRows.sort(Comparator.comparing(CashTransaction::transactionDate));  // stable
 
@@ -522,6 +533,64 @@ public class CashTransactionRepository {
 
     private static String rothKey(String date, String symbol, double qty, String type, double amount) {
         return date + "|" + symbol + "|" + qty + "|" + type + "|" + amount;
+    }
+
+    /**
+     * The {@code (date, symbol, type)} groups in which this file merely re-partitions fills the
+     * ledger already holds: the broker collapsing two partial fills into one aggregated row, or
+     * splitting one back out. The signature is that the rows no longer match one-for-one but the
+     * group's net quantity and net amount are unchanged — nothing economic happened, so the
+     * unmatched rows must not be inserted.
+     *
+     * <p>RothIRA did exactly this on 2026-08-19, re-exporting a 37+13 MRNA sale as a single 50.
+     * The row-level dedup key (date, symbol, qty, type, amount) matched neither stored fill, so
+     * the aggregate went in as a *third* sale: 100 shares disposed of instead of 50, the position
+     * zeroed and USD cash overstated by the sale proceeds.
+     *
+     * <p>A group whose totals genuinely changed — a further trade in the same name later the same
+     * day — is deliberately left alone and dedups row by row as before.
+     */
+    private static Set<String> repartitionedFills(List<CashTransaction> fileRows,
+                                                  List<CashTransaction> unmatched,
+                                                  Map<String, double[]> storedGroups) {
+        Set<String> candidates = new HashSet<>();
+        for (CashTransaction t : unmatched) {
+            candidates.add(fillGroupKey(t.transactionDate(), t.symbol(), t.type().name()));
+        }
+        if (candidates.isEmpty()) return Set.of();
+
+        Map<String, double[]> fileGroups = new HashMap<>();
+        for (CashTransaction t : fileRows) {
+            String key = fillGroupKey(t.transactionDate(), t.symbol(), t.type().name());
+            if (candidates.contains(key)) accumulateFills(fileGroups, key, t.quantity(), t.amount());
+        }
+
+        Set<String> repartitioned = new HashSet<>();
+        for (String key : candidates) {
+            double[] stored = storedGroups.get(key);
+            if (stored == null) continue;   // nothing held for that day/name — an ordinary new row
+            double[] fromFile = fileGroups.get(key);
+            if (Math.abs(stored[0] - fromFile[0]) > FILL_QTY_EPSILON) continue;
+            if (Math.abs(stored[1] - fromFile[1]) > FILL_AMOUNT_EPSILON) continue;
+            repartitioned.add(key);
+            log.info("Cash transactions [RothIRA]: broker re-partitioned the fills on {} — {} row(s) "
+                            + "held, {} in file, net quantity {} / amount {} unchanged; already "
+                            + "recorded, not re-inserting",
+                    key, (int) stored[2], (int) fromFile[2], fromFile[0], fromFile[1]);
+        }
+        return repartitioned;
+    }
+
+    private static void accumulateFills(Map<String, double[]> groups, String key,
+                                        double qty, double amount) {
+        double[] acc = groups.computeIfAbsent(key, k -> new double[3]);
+        acc[0] += qty;
+        acc[1] += amount;
+        acc[2]++;
+    }
+
+    private static String fillGroupKey(String date, String symbol, String type) {
+        return date + "|" + symbol + "|" + type;
     }
 
     private static String iiKey(String date, String type, String symbol, double amount, String currency) {

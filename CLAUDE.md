@@ -589,15 +589,28 @@ holdings; distinguished from II cash by header sniff), `cashstatements*.csv` (AJ
   122-share holding, the position zeroed and USD cash overstated by $7,350 (£5,394). The guard
   reconciles per `(date, symbol, type)` group — if the unmatched rows leave the group's **net
   quantity and net amount** unchanged (tolerances `FILL_QTY_EPSILON` 1e-6 / `FILL_AMOUNT_EPSILON`
-  0.005), it's the same economic event re-partitioned and nothing is inserted. Fires in both
-  directions (aggregate→split too). A group whose totals genuinely changed — a further trade in
-  the same name later the same day — is deliberately left alone and dedups row by row as before,
-  so real activity is never swallowed. **When repairing such a double-count by hand, keep the row
-  shape the broker will keep sending** (here the aggregate): then the plain row-level key matches
-  every future import on its own and the group guard is a second line of defence rather than the
-  only one. The holdings-vs-ledger reconciliation panel is what surfaced this, not the importer.
-  AJ Bell and II have the same shape of key and are theoretically vulnerable; neither has ever
-  shown the behaviour, so the guard is Roth-only.
+  0.005), it's the same economic event re-partitioned. **The file's version then supersedes the
+  stored one**: the stored rows are deleted and the file's inserted, in either direction
+  (aggregate→split too). Adopting rather than merely skipping is what keeps the ledger converging
+  on the broker's own row shape — skipping would leave the partials stored forever against an
+  aggregate every later export repeats, so the plain row-level key would never match again and
+  the group guard would have to fire on every import from then on. Adopted, the row key matches
+  by itself and the guard is a second line of defence rather than the only one. A group whose
+  totals genuinely changed — a further trade in the same name later the same day — is deliberately
+  left alone and dedups row by row as before, so real activity is never swallowed.
+- **The adopt path rebuilds the derived balance chain.** Adopted rows are appended at the tail, so
+  they sort after anything else already stored on their date (19 Aug held MRNA fills *and* a WMT
+  buy) and every balance from there on is out of sequence. `rebuildBalanceChain` recomputes
+  `cash_balance`/`cash_balance_gbp` for the whole account as `anchor + running sum of amounts`;
+  the anchor is re-derived from the first stored row as `cash_balance − amount`, **not** from the
+  `seed` parameter, which `RothIraCashImporter` passes as zero on every import after the first.
+  Delete + insert + rebuild run in one transaction, and the rebuilt closing balance is asserted
+  against `lastBalance + Σ(genuinely new amounts)` — a re-partitioned group nets out unchanged by
+  definition, so any drift means the adoption was wrong and the whole thing rolls back. With no
+  usable anchor it degrades to skip-only and logs a WARN.
+- The holdings-vs-ledger reconciliation panel is what surfaced this, not the importer. AJ Bell and
+  II have the same shape of key and are theoretically vulnerable; neither has ever shown the
+  behaviour, so the guard is Roth-only.
 - II: `(date, type, symbol, amount, currency)` within `account='II'`. The currency component
   isolates the GBP and USD ledgers within the shared account so dividend FIFO still groups by
   `(account, symbol)` across currencies.

@@ -1918,15 +1918,51 @@
             document.getElementById('style-income-table').innerHTML = html;
         }
 
+        /**
+         * The amber half of an un-placed list: positions whose fundamentals row simply hasn't been
+         * fetched yet. A name bought since the four-hourly refresh has no row at all, so it is not
+         * unclassifiable — it is un-fetched, and the server has already queued the fetch. Showing
+         * it in the same red strip as a genuinely sector-less instrument read as a data problem
+         * every time a new holding was bought.
+         */
+        function pendingDataBanner(list) {
+            var pending = list.filter(function (u) {
+                return u.state === 'AWAITING_DATA' || u.state === 'FETCH_FAILED';
+            });
+            if (!pending.length) return '';
+            var failed = pending.some(function (u) { return u.state === 'FETCH_FAILED'; });
+            return '<div class="value-warnings pending" style="display:block; margin-top:0.6rem;">'
+                + '<h4>Waiting on fundamentals data</h4>'
+                + '<p style="margin:0.2rem 0 0;">'
+                + pending.map(function (u) {
+                    return '<b>' + escapeHtml(u.symbol) + '</b> ('
+                        + fmtMoney(parseFloat(u.gbp)) + ')';
+                }).join(' · ')
+                + '</p><p class="muted" style="margin:0.35rem 0 0; font-size:0.78rem;">'
+                + (failed
+                    ? 'Yahoo returned nothing on the last attempt. A retry is queued — '
+                    : 'Held, but not yet in the fundamentals cache. A fetch is queued — ')
+                + 'reload this tab in a few seconds. The scheduled refresh would pick these up '
+                + 'within four hours regardless.</p></div>';
+        }
+
+        /** Only the positions that really are unplaceable, i.e. the ones worth a red strip. */
+        function settledUnplaced(list) {
+            return list.filter(function (u) {
+                return u.state !== 'AWAITING_DATA' && u.state !== 'FETCH_FAILED';
+            });
+        }
+
         function renderStyleUnknown(d) {
             var list = d.unknown || [];
-            document.getElementById('style-unknown').innerHTML = list.length
+            var settled = settledUnplaced(list);
+            document.getElementById('style-unknown').innerHTML = (settled.length
                 ? '<div class="mo-banner" style="margin-top:0.6rem;"><b>Not scored — '
                 + 'excluded from the value/growth split above:</b> '
-                + list.map(function (u) {
+                + settled.map(function (u) {
                     return escapeHtml(u.symbol) + ' (' + fmtMoney(parseFloat(u.gbp)) + ')';
                 }).join(' · ') + '</div>'
-                : '';
+                : '') + pendingDataBanner(list);
         }
 
         /**
@@ -2266,13 +2302,14 @@
 
         function renderSectorUnclassified(d) {
             var list = d.unclassified || [];
-            document.getElementById('sector-unclassified').innerHTML = list.length
+            var settled = settledUnplaced(list);
+            document.getElementById('sector-unclassified').innerHTML = (settled.length
                 ? '<div class="mo-banner" style="margin-top:0.6rem;"><b>Unclassified — '
                 + 'excluded from every sector above:</b> '
-                + list.map(function (u) {
+                + settled.map(function (u) {
                     return escapeHtml(u.symbol) + ' (' + fmtMoney(parseFloat(u.gbp)) + ')';
                 }).join(' · ') + '</div>'
-                : '';
+                : '') + pendingDataBanner(list);
         }
 
         function renderSectorFundNotes(d) {

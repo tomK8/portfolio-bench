@@ -136,13 +136,30 @@ class CashTransactionRepositoryRothTest {
         }
     }
 
+    private List<double[]> rothFills(String symbol) throws Exception {
+        Path dbPath = dbDir.resolve("portfolio.db");
+        List<double[]> out = new java.util.ArrayList<>();
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             var st = conn.createStatement();
+             var rs = st.executeQuery(
+                     "SELECT quantity, amount, cash_balance FROM cash_transactions " +
+                             "WHERE account='RothIRA' AND symbol='" + symbol + "' " +
+                             "ORDER BY transaction_date, rowid")) {
+            while (rs.next()) out.add(new double[]{rs.getDouble(1), rs.getDouble(2), rs.getDouble(3)});
+        }
+        return out;
+    }
+
     /**
      * The MRNA case of 2026-08-19: two partial fills imported, then the broker re-exported the
      * same sale as one aggregated row. Row-level dedup matches neither fill, so without the group
      * guard the aggregate inserts as a third sale — 100 shares disposed of instead of 50.
+     *
+     * <p>The file's version wins, so the ledger ends up holding the row shape every later export
+     * will carry and the plain row key matches it from then on.
      */
     @Test
-    void aggregatedRefillOfAlreadyStoredPartialsIsNotReinserted() throws Exception {
+    void aggregatedRefillSupersedesTheStoredPartialFills() throws Exception {
         CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
         repo.saveRothIra(List.of(
                 row("2026-08-19", "MRNA", "TRANSACTION", -13, 1911, 1.36),
@@ -151,31 +168,80 @@ class CashTransactionRepositoryRothTest {
         assertEquals(2, rothRowCount());
         assertEquals(17350.0, finalBalance(), 1e-6);
 
+        repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -50, 7350, 1.36)),
+                new BigDecimal("10000"));
+
+        List<double[]> fills = rothFills("MRNA");
+        assertEquals(1, fills.size(), "the two partials are superseded by the aggregate");
+        assertEquals(-50.0, fills.get(0)[0], 1e-9);
+        assertEquals(7350.0, fills.get(0)[1], 1e-9);
+        assertEquals(17350.0, finalBalance(), 1e-6, "cash unchanged — no second sale happened");
+    }
+
+    /** A third import of the same aggregate is now an ordinary row-level match: a plain no-op. */
+    @Test
+    void reimportingTheAggregateAgainIsAPlainNoOp() throws Exception {
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+        repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -13, 1911, 1.36),
+                row("2026-08-19", "MRNA", "TRANSACTION", -37, 5439, 1.36)),
+                new BigDecimal("10000"));
+        repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -50, 7350, 1.36)),
+                new BigDecimal("10000"));
+
         int inserted = repo.saveRothIra(List.of(
                 row("2026-08-19", "MRNA", "TRANSACTION", -50, 7350, 1.36)),
                 new BigDecimal("10000"));
 
-        assertEquals(0, inserted, "the aggregate is the same sale, re-partitioned");
-        assertEquals(2, rothRowCount());
-        assertEquals(17350.0, finalBalance(), 1e-6, "cash unchanged — no second sale happened");
+        assertEquals(0, inserted);
+        assertEquals(1, rothFills("MRNA").size());
+        assertEquals(17350.0, finalBalance(), 1e-6);
     }
 
     /** The mirror case: the aggregate landed first and a later export splits it back out. */
     @Test
-    void splitOfAnAlreadyStoredAggregateIsNotReinserted() throws Exception {
+    void splitSupersedesTheStoredAggregate() throws Exception {
         CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
         repo.saveRothIra(List.of(
                 row("2026-08-19", "MRNA", "TRANSACTION", -50, 7350, 1.36)),
                 new BigDecimal("10000"));
 
-        int inserted = repo.saveRothIra(List.of(
+        repo.saveRothIra(List.of(
                 row("2026-08-19", "MRNA", "TRANSACTION", -13, 1911, 1.36),
                 row("2026-08-19", "MRNA", "TRANSACTION", -37, 5439, 1.36)),
                 new BigDecimal("10000"));
 
-        assertEquals(0, inserted);
-        assertEquals(1, rothRowCount());
+        assertEquals(2, rothFills("MRNA").size());
         assertEquals(17350.0, finalBalance(), 1e-6);
+    }
+
+    /**
+     * Adopted rows are appended at the tail, so they sort after anything else already stored on
+     * their date — every balance from there on has to be rebuilt, not just the group's own.
+     */
+    @Test
+    void balancesOfLaterRowsSurviveTheSupersede() throws Exception {
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+        repo.saveRothIra(List.of(
+                row("2026-08-19", "WMT", "TRANSACTION", 50, -5743.50, 1.36),
+                row("2026-08-19", "MRNA", "TRANSACTION", -13, 1911, 1.36),
+                row("2026-08-19", "MRNA", "TRANSACTION", -37, 5439, 1.36)),
+                new BigDecimal("10000"));
+        repo.saveRothIra(List.of(
+                row("2026-08-20", "ISRG", "TRANSACTION", 20, -7877.40, 1.36)),
+                new BigDecimal("10000"));
+        double before = finalBalance();
+
+        repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -50, 7350, 1.36)),
+                new BigDecimal("10000"));
+
+        assertEquals(before, finalBalance(), 1e-6, "the day's closing balance is unchanged");
+        assertEquals(10000.0 - 5743.50 + 7350 - 7877.40, finalBalance(), 1e-6);
+        // WMT keeps a balance consistent with its own place in the rebuilt chain.
+        assertEquals(10000.0 - 5743.50, rothFills("WMT").get(0)[2], 1e-6);
     }
 
     /**

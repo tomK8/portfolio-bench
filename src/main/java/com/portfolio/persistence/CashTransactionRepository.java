@@ -145,9 +145,11 @@ public class CashTransactionRepository {
     /**
      * RothIRA flow. Rows arrive with {@code fxToGbp}/{@code amountGbp} resolved per-date,
      * native balances null. Dedups by (date, symbol, qty, type, amount), then by
-     * {@link #repartitionedFills} for the fills the broker has re-aggregated between exports;
-     * derives the running balance from the latest stored row (or {@code seed} when the account
-     * is empty) and persists the seed for traceability on a first-run import.
+     * {@link #repartitionedFills} for the fills the broker has re-aggregated between exports —
+     * the file's version of such a group supersedes the stored one, so the ledger keeps the row
+     * shape the broker will keep sending. Derives the running balance from the latest stored row
+     * (or {@code seed} when the account is empty) and persists the seed for traceability on a
+     * first-run import.
      */
     public int saveRothIra(List<CashTransaction> rows, BigDecimal seed) {
         if (rows.isEmpty()) return 0;
@@ -156,6 +158,7 @@ public class CashTransactionRepository {
             Set<String> existingKeys = new HashSet<>();
             Map<String, double[]> storedGroups = new HashMap<>();
             Double lastBalance = null;
+            Double chainAnchor = null;   // the balance the ledger starts from, re-derived below
             try (PreparedStatement q = conn.prepareStatement(
                     "SELECT transaction_date, symbol, quantity, type, amount, cash_balance " +
                             "FROM cash_transactions WHERE account = ? ORDER BY transaction_date, rowid")) {
@@ -167,7 +170,13 @@ public class CashTransactionRepository {
                         existingKeys.add(rothKey(date, symbol, qty, type, amount));
                         accumulateFills(storedGroups, fillGroupKey(date, symbol, type), qty, amount);
                         double bal = rs.getDouble(6);
-                        if (!rs.wasNull()) lastBalance = bal;
+                        if (!rs.wasNull()) {
+                            // balance = anchor + running sum of amounts, so the first row's own
+                            // balance less its amount re-derives the anchor without the KV seed
+                            // (which callers pass as zero on every import after the first).
+                            if (chainAnchor == null) chainAnchor = bal - amount;
+                            lastBalance = bal;
+                        }
                     }
                 }
             }
@@ -180,33 +189,126 @@ public class CashTransactionRepository {
                             t.transactionDate(), t.symbol(), t.quantity(), t.type().name(), t.amount())))
                     .toList());
             Set<String> repartitioned = repartitionedFills(rows, newRows, storedGroups);
-            newRows.removeIf(t -> repartitioned.contains(
-                    fillGroupKey(t.transactionDate(), t.symbol(), t.type().name())));
+            // Adopting the file's version means deleting the stored fills, which needs a usable
+            // chain anchor to rebuild balances from. Without one, leave the stored fills alone and
+            // simply don't re-insert — same totals, just not the broker's row shape.
+            boolean adoptFileVersion = !repartitioned.isEmpty() && chainAnchor != null;
+            if (!repartitioned.isEmpty() && !adoptFileVersion) {
+                log.warn("Cash transactions [{}]: no usable balance chain to rebuild from; keeping the "
+                        + "stored fills for {} rather than adopting the file's", account.dbValue(), repartitioned);
+                newRows.removeIf(t -> repartitioned.contains(
+                        fillGroupKey(t.transactionDate(), t.symbol(), t.type().name())));
+            }
+
+            // A re-partitioned group nets out unchanged by definition, so the ledger must land
+            // exactly where it already was plus whatever genuinely new rows this file brought.
+            double expectedFinal = adoptFileVersion
+                    ? lastBalance + newRows.stream()
+                    .filter(t -> !repartitioned.contains(
+                            fillGroupKey(t.transactionDate(), t.symbol(), t.type().name())))
+                    .mapToDouble(CashTransaction::amount).sum()
+                    : 0.0;
+
             Collections.reverse(newRows);  // source is newest-first → make oldest-first
             newRows.sort(Comparator.comparing(CashTransaction::transactionDate));  // stable
 
+            conn.setAutoCommit(false);
             int inserted = 0;
-            try (PreparedStatement ps = conn.prepareStatement(INSERT_SQL)) {
-                for (CashTransaction t : newRows) {
-                    running += t.amount();
-                    double balGbp = t.fxToGbp() != 0 ? running / t.fxToGbp() : 0.0;
-                    bindCashRow(ps, new CashTransaction(
-                            t.transactionDate(), t.account(), t.type(), t.symbol(),
-                            t.quantity(), t.amount(), t.currency(), t.fxToGbp(),
-                            t.amountGbp(), running, balGbp, t.description()));
-                    ps.executeUpdate();
-                    inserted++;
+            int superseded = 0;
+            try {
+                if (adoptFileVersion) superseded = deleteFillGroups(conn, account, repartitioned);
+
+                try (PreparedStatement ps = conn.prepareStatement(INSERT_SQL)) {
+                    for (CashTransaction t : newRows) {
+                        running += t.amount();
+                        double balGbp = t.fxToGbp() != 0 ? running / t.fxToGbp() : 0.0;
+                        bindCashRow(ps, new CashTransaction(
+                                t.transactionDate(), t.account(), t.type(), t.symbol(),
+                                t.quantity(), t.amount(), t.currency(), t.fxToGbp(),
+                                t.amountGbp(), running, balGbp, t.description()));
+                        ps.executeUpdate();
+                        inserted++;
+                    }
                 }
+
+                if (adoptFileVersion) {
+                    // The adopted rows were appended at the tail, so they sort after anything else
+                    // already stored on their date: every balance from there on has to be redone.
+                    double actualFinal = rebuildBalanceChain(conn, account, chainAnchor);
+                    if (Math.abs(actualFinal - expectedFinal) > FILL_AMOUNT_EPSILON) {
+                        throw new IllegalStateException(String.format(
+                                "Rebuilt %s balance chain ends at %.2f, expected %.2f — refusing to "
+                                        + "adopt the re-partitioned fills",
+                                account.dbValue(), actualFinal, expectedFinal));
+                    }
+                }
+                conn.commit();
+            } catch (Exception e) {
+                conn.rollback();
+                throw e;
             }
 
             if (inserted > 0 && fromSeed) {
                 settings.putBigDecimal(ROTH_BROUGHT_FORWARD_KEY, seed);
             }
-            log.info("Cash transactions [{}]: {} inserted, {} already present (skipped)",
-                    account.dbValue(), inserted, rows.size() - inserted);
+            log.info("Cash transactions [{}]: {} inserted, {} already present (skipped){}",
+                    account.dbValue(), inserted, rows.size() - inserted,
+                    superseded > 0 ? ", " + superseded + " superseded by re-partitioned fills" : "");
             return inserted;
         } catch (Exception e) {
             throw new IllegalStateException("Could not save RothIRA cash transactions", e);
+        }
+    }
+
+    /** Drops every stored row in the given {@code date|symbol|type} groups. */
+    private static int deleteFillGroups(Connection conn, Account account, Set<String> groups)
+            throws SQLException {
+        int deleted = 0;
+        try (PreparedStatement ps = conn.prepareStatement(
+                "DELETE FROM cash_transactions WHERE account = ? AND transaction_date = ? " +
+                        "AND symbol = ? AND type = ?")) {
+            for (String group : groups) {
+                String[] parts = group.split("\\|", 3);
+                ps.setString(1, account.dbValue());
+                ps.setString(2, parts[0]);
+                ps.setString(3, parts[1]);
+                ps.setString(4, parts[2]);
+                deleted += ps.executeUpdate();
+            }
+        }
+        return deleted;
+    }
+
+    /**
+     * Recomputes the account's derived running balances as {@code anchor} plus the running sum of
+     * amounts in chain order, and returns the closing balance. Needed after adopting a
+     * re-partitioned fill group, whose rows are appended at the tail and so land out of sequence.
+     */
+    private static double rebuildBalanceChain(Connection conn, Account account, double anchor)
+            throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "WITH ordered AS (" +
+                        "  SELECT rowid AS rid, " +
+                        "         ? + SUM(amount) OVER (ORDER BY transaction_date, rowid) AS bal " +
+                        "    FROM cash_transactions WHERE account = ?) " +
+                        "UPDATE cash_transactions " +
+                        "   SET cash_balance = (SELECT bal FROM ordered WHERE rid = cash_transactions.rowid), " +
+                        "       cash_balance_gbp = CASE WHEN fx_to_gbp != 0 THEN " +
+                        "           (SELECT bal FROM ordered WHERE rid = cash_transactions.rowid) / fx_to_gbp " +
+                        "           ELSE 0 END " +
+                        " WHERE account = ?")) {
+            ps.setDouble(1, anchor);
+            ps.setString(2, account.dbValue());
+            ps.setString(3, account.dbValue());
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT cash_balance FROM cash_transactions WHERE account = ? " +
+                        "ORDER BY transaction_date DESC, rowid DESC LIMIT 1")) {
+            ps.setString(1, account.dbValue());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getDouble(1) : anchor;
+            }
         }
     }
 
@@ -574,8 +676,8 @@ public class CashTransactionRepository {
             if (Math.abs(stored[1] - fromFile[1]) > FILL_AMOUNT_EPSILON) continue;
             repartitioned.add(key);
             log.info("Cash transactions [RothIRA]: broker re-partitioned the fills on {} — {} row(s) "
-                            + "held, {} in file, net quantity {} / amount {} unchanged; already "
-                            + "recorded, not re-inserting",
+                            + "held, {} in file, net quantity {} / amount {} unchanged; adopting "
+                            + "the file's version",
                     key, (int) stored[2], (int) fromFile[2], fromFile[0], fromFile[1]);
         }
         return repartitioned;

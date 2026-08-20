@@ -94,13 +94,18 @@ public class OpenOrdersService {
     private static final Duration QUOTE_LAG_TOLERANCE = Duration.ofMinutes(60);
 
     /**
-     * The same rule, relaxed for pre/post-market quotes. Extended-hours volume is a fraction of
-     * regular-hours volume, so a sparse print is the norm rather than a symptom: at the 60-minute
-     * regular tolerance, MDLZ's perfectly ordinary 72-minute pre-market gap read as a stalled feed
-     * and queued a pointless refetch every time the tab was opened. Wide enough to stop that,
-     * still inside the ~5½h pre-market window, so a feed that has genuinely stopped is caught.
+     * How old an extended-hours quote may get before the symbol is queued for a warm re-fetch.
+     *
+     * <p>There is deliberately no <em>tolerance</em> for extended hours — no threshold above which
+     * the row is called stale — because the peer comparison that works in regular hours cannot
+     * work here. Pre/post volume is a fraction of regular volume, so sparse prints are the norm,
+     * and any threshold is wrong in one of two directions: at 60 minutes MDLZ's perfectly ordinary
+     * 72-minute pre-market gap read as a stalled feed, and at three hours the panel showed an
+     * 88-minute-old $63.74 against Yahoo's $64.15 and said nothing at all. Instead every
+     * extended-hours row states its quote time outright (see {@link #sessionNote}) and the reader
+     * judges; this constant only governs how eagerly we go and look for something newer.
      */
-    private static final Duration EXTENDED_HOURS_LAG_TOLERANCE = Duration.ofHours(3);
+    private static final Duration EXTENDED_HOURS_REFRESH_AFTER = Duration.ofMinutes(10);
 
     /** Don't re-warm the same symbol more often than this, however many times the tab is opened. */
     private static final Duration WARM_COOLDOWN = Duration.ofMinutes(5);
@@ -303,14 +308,19 @@ public class OpenOrdersService {
                 // than last night's close — but it is thin, wide-spread and not what a resting
                 // regular-hours order transacts against, so it is always labelled.
                 if (ip.session().isExtendedHours()) quoteSession = ip.session().name();
+                boolean extended = ip.session().isExtendedHours();
                 Instant peer = newestByMarket.get(peerKey(ip));
-                Duration tolerance = ip.session().isExtendedHours()
-                        ? EXTENDED_HOURS_LAG_TOLERANCE : QUOTE_LAG_TOLERANCE;
-                boolean lagging = yahooFed && peer != null
-                        && ip.ts().isBefore(peer.minus(tolerance));
-                String note = sessionNote(ip.session(), lagging ? asOfLabel(ip.ts()) : null);
+                boolean lagging = yahooFed && !extended && peer != null
+                        && ip.ts().isBefore(peer.minus(QUOTE_LAG_TOLERANCE));
+                String note = sessionNote(ip.session(), ip.ts(), lagging);
                 if (note != null) notes.put(o.symbol(), note);
-                if (lagging) warm.add(tk);
+                // Regular hours: only a feed behind its peers is worth re-fetching. Extended hours:
+                // go looking whenever the quote has some age on it, since there is no peer signal
+                // and Yahoo publishes extended-hours minutes with a lag of its own.
+                if (lagging || (extended && yahooFed
+                        && ip.ts().isBefore(Instant.now().minus(EXTENDED_HOURS_REFRESH_AFTER)))) {
+                    warm.add(tk);
+                }
             } else {
                 // No usable live quote: fall back to the daily close, say so on the row, and put the
                 // symbol at the front of the fetch queue rather than waiting for the polling pass.
@@ -375,18 +385,26 @@ public class OpenOrdersService {
     }
 
     /**
-     * The row's price note. An extended-hours quote is always labelled; a lagging one also carries
-     * its timestamp. Regular-hours quotes that are keeping up carry no note at all, which is what
-     * keeps the column readable — a note on every row would say nothing.
+     * The row's price note.
+     *
+     * <p>An extended-hours quote <b>always</b> states its own time — "pre-market 13:58" — because
+     * a sparse session is exactly where a price silently ages: MDLZ printed at 13:58 and then not
+     * again for a quarter of an hour, and a row reading only "pre-market" gives the reader no way
+     * to tell that from a live tick. Stating the time needs no threshold, is never a false alarm,
+     * and answers the only question the reader actually has.
+     *
+     * <p>Regular-hours quotes stay bare unless they are behind their peers, which is what keeps
+     * the column readable — a note on every row would say nothing. Those carry the existing
+     * "as of …" label.
      */
-    private static String sessionNote(MarketSession session, String lagLabel) {
+    private static String sessionNote(MarketSession session, Instant ts, boolean lagging) {
         String base = switch (session) {
             case PRE -> "pre-market";
             case POST -> "after-hours";
             case REGULAR -> null;
         };
-        if (base == null) return lagLabel;
-        return lagLabel == null ? base : base + ", " + lagLabel;
+        if (base == null) return lagging ? asOfLabel(ts) : null;
+        return base + " " + TIME_FMT.format(ts.atZone(ZoneId.systemDefault()));
     }
 
     /**

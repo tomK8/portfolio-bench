@@ -107,7 +107,7 @@
                         class="price-note" th:if="${orders.priceNotes.get(o.symbol) != null}"
                         th:text="${orders.priceNotes.get(o.symbol)}"
                         th:title="${o.extendedHoursQuote()
-                            ? 'Extended-hours price — the newest quote there is, but thinner and wider-spread than a regular-hours one, and not a price a resting regular-hours order transacts against.'
+                            ? 'Extended-hours price, and the time it printed. Pre/post sessions trade thinly, so a quote can be minutes or hours old and still be the latest there is — the time tells you which. Not a price a resting regular-hours order transacts against.'
                             : 'Not a current quote — this feed is behind the rest of its market. The symbol has been queued for a refetch; reload in a few seconds.'}">as of</span></td>
                 <td th:classappend="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? 'val-pos' : (o.distancePct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
                     th:text="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>
@@ -136,11 +136,14 @@
 
         <p class="muted" th:if="${!#lists.isEmpty(orders.orders.?[extendedHoursQuote()])}"
            style="margin-top: 0.6rem; font-size: 0.85rem">
-            Rows marked <span class="price-note">pre-market</span> / <span class="price-note">after-hours</span>
-            are priced off an extended-hours quote — used because it's the newest price available,
-            and the alternative is a close that's hours older. Those rows never raise the amber
-            through-limit flag: a resting regular-hours order doesn't fill outside regular hours,
-            so sitting through the limit on a thin pre-market print isn't the same signal.
+            Rows marked <span class="price-note">pre-market&nbsp;13:58</span> /
+            <span class="price-note">after-hours&nbsp;21:40</span> are priced off an extended-hours
+            quote — used because it's the newest price available, and the alternative is a close
+            that's hours older. <strong>The time is the print time, and it's always shown</strong>:
+            these sessions trade thinly, so a quote can sit unchanged for a quarter of an hour and
+            still be the latest one Yahoo has. Those rows never raise the amber through-limit flag
+            either — a resting regular-hours order doesn't fill outside regular hours, so sitting
+            through the limit on a thin pre-market print isn't the same signal.
         </p>
 
         <p class="muted" th:if="${!#lists.isEmpty(orders.orders.?[priceEstimated])}"

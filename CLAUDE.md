@@ -484,12 +484,20 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
     → `extendedHoursQuote()`). A resting regular-hours order doesn't fill outside regular hours, so
     "this should already have gone" isn't what a thin pre-market print through the limit means; the
     amber row would otherwise fire on every overnight gap.
-  - **The peer-lag buckets are keyed by `(market, session)`**, not market alone. Only the liquid US
-    names print pre-market, so a perfectly current regular close would read as fifteen hours behind
-    its pre-market peers and be flagged and re-fetched every morning. The tolerance is also
-    session-aware — `EXTENDED_HOURS_LAG_TOLERANCE` (3h) vs `QUOTE_LAG_TOLERANCE` (60 min) — because
-    sparse extended-hours prints are the norm, not a symptom: MDLZ's ordinary 72-minute pre-market
-    gap tripped the regular rule.
+  - **An extended-hours row always states its quote time** — "pre-market 13:58" — and there is
+    deliberately **no staleness threshold** for these sessions. The peer-lag rule that works in
+    regular hours cannot work here: pre/post volume is a fraction of regular volume, so sparse
+    prints are the norm and any threshold is wrong in one direction or the other. At 60 min, MDLZ's
+    perfectly ordinary 72-minute pre-market gap read as a stalled feed; at 3h the panel showed an
+    88-minute-old $63.74 against Yahoo's $64.15 and said nothing at all (2026-08-20). Stating the
+    time needs no tuning, never false-alarms, and answers the only question the reader has.
+    `EXTENDED_HOURS_REFRESH_AFTER` (10 min) governs only how eagerly the warmer goes looking for
+    something newer — Yahoo publishes extended-hours minutes with a lag of its own, so a quote can
+    be current *for us* and behind the site.
+  - **The peer-lag buckets are keyed by `(market, session)`**, not market alone, and the peer check
+    now applies to regular-hours quotes only. Only the liquid US names print pre-market, so a
+    perfectly current regular close would otherwise read as fifteen hours behind its pre-market
+    peers and be flagged and re-fetched every morning.
 - **Through-limit flag.** `OpenOrder.throughLimit()` (derived, no new field) marks a resting order
   sitting on the wrong side of its own limit — a buy at or above the market, a sell at or below.
   That state shouldn't persist: a buy limit fills at the limit *or better*, so it means the quote is

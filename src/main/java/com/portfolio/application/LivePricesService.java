@@ -6,6 +6,7 @@ import com.portfolio.domain.CashLedgerReconstructor.Position;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayPrice;
+import com.portfolio.domain.model.MarketState;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.CashTransactionRepository.CashBalance;
@@ -36,18 +37,33 @@ import java.util.Set;
  * — the SSE controller calls {@link #snapshot()} every {@code TICK_SECONDS}, and
  * the FX endpoint shouldn't be poked that often.
  *
- * <p>Day change uses {@code price_history.close} for the day strictly before today, so
- * the figure represents "move since yesterday's close" regardless of whether the daily
- * Yahoo job has already written today's row. Prev-close currency matches the listing
- * currency in the intraday feed, so {@code GBp} pence prices cancel cleanly when divided.
- * The trailing 5d…6M columns work the same way: each is the live quote against a stored
- * close that many days/months back, so they all include today's move and can never
- * disagree with the Day Δ column about how far the name has come.
+ * <p><b>Day change is measured against the last close before the quote's own trading day</b>,
+ * not before the calendar day. The distinction is the whole correctness of the column. A US
+ * listing viewed from London at 09:00 has a newest quote belonging to <em>yesterday's</em> US
+ * session, so "the close before calendar yesterday" is that very same session's close and the
+ * column silently compares a price against itself. On 2026-08-20 that read MRNA — up 177% the
+ * previous session — as +12.13%, because the stored 19 Aug "close" was a mid-session snapshot
+ * the 22:00 job had not yet overwritten and the quote was the real 19 Aug close. Anchoring on
+ * {@link IntradayPrice#tradingDay()} fixes both halves at once: a partial bar for the quote's
+ * own day can never be the baseline, and the baseline is always the prior session.
+ *
+ * <p>Prev-close currency matches the listing currency in the intraday feed, so {@code GBp}
+ * pence prices cancel cleanly when divided. The trailing 5d…6M columns are calendar-anchored
+ * against the live quote, so they all include the current move and can never disagree with the
+ * Day Δ column about how far the name has come.
+ *
+ * <p>Quotes come from {@link IntradayPriceRepository#loadLatestQuotes} — the newest bar of any
+ * session — so a US name shows its pre-market print at 07:00 London rather than freezing on
+ * last night's close. Each row reports which session its quote came from and what state the
+ * listing's market is in, so the UI can label an extended-hours price instead of passing it off
+ * as a regular one.
  */
 public class LivePricesService {
 
     private static final Logger log = LoggerFactory.getLogger(LivePricesService.class);
     private static final Duration FX_TTL = Duration.ofMinutes(5);
+    /** How recent a quote must be to imply a live market, when no published calendar is held. */
+    private static final Duration QUOTE_LIVE_WINDOW = Duration.ofMinutes(60);
 
     private static final Map<String, String> ACCOUNT_LABELS = Map.of(
             "AJBell", "AJ Bell SIPP",
@@ -59,6 +75,7 @@ public class LivePricesService {
     private final PriceHistoryRepository history;
     private final FxRateProvider fxRateProvider;
     private final YahooTickerMap tickerMap;
+    private final MarketHoursCache marketHours;
 
     private volatile Map<String, BigDecimal> cachedRates = Map.of();
     private volatile Instant cachedRatesAt = Instant.EPOCH;
@@ -67,12 +84,14 @@ public class LivePricesService {
                              IntradayPriceRepository intraday,
                              PriceHistoryRepository history,
                              FxRateProvider fxRateProvider,
-                             YahooTickerMap tickerMap) {
+                             YahooTickerMap tickerMap,
+                             MarketHoursCache marketHours) {
         this.repo = repo;
         this.intraday = intraday;
         this.history = history;
         this.fxRateProvider = fxRateProvider;
         this.tickerMap = tickerMap;
+        this.marketHours = marketHours;
     }
 
     public Snapshot snapshot() {
@@ -91,17 +110,16 @@ public class LivePricesService {
             tickerBySymbol.putIfAbsent(upper, ticker);
         }
         Map<String, IntradayPrice> latestByTicker =
-                intraday.loadLatestIntradayPrices(tickerBySymbol.values());
+                intraday.loadLatestQuotes(tickerBySymbol.values());
 
         LocalDate today = LocalDate.now();
-        LocalDate yesterday = today.minusDays(1);
         // One bulk boundary query per date across every ticker, rather than a getPriceOn pair
         // per ticker per lookback: this runs on the 15s SSE tick, and the per-ticker form cost
         // (1 + 2×lookbacks) connections each time. Only the *base* of each window is loaded —
         // every window's near end is the live intraday quote, so today's move is inside all of
         // them (see PriceMomentum.changeFromLive).
         Set<String> tickers = new HashSet<>(tickerBySymbol.values());
-        Map<String, PriceBar> prevByTicker = history.loadPricesAsOf(tickers, yesterday);
+        Map<String, PriceBar> prevByTicker = previousCloses(tickers, latestByTicker, today);
         Map<String, PriceBar> base5 = history.loadPricesAsOf(tickers, today.minusDays(5));
         Map<String, PriceBar> base10 = history.loadPricesAsOf(tickers, today.minusDays(10));
         Map<String, PriceBar> base30 = history.loadPricesAsOf(tickers, today.minusDays(30));
@@ -113,6 +131,7 @@ public class LivePricesService {
         BigDecimal prevPosTotalGbp = BigDecimal.ZERO;
         List<Row> outRows = new ArrayList<>();
         Instant latestTs = Instant.EPOCH;
+        Instant now = Instant.now();
 
         for (Position p : positions) {
             String upper = p.securityId().toUpperCase();
@@ -147,6 +166,8 @@ public class LivePricesService {
                     scaleOrNull(lastGbp, 2),
                     formatAccounts(p.accounts()),
                     ip.ts(),
+                    ip.session().name(),
+                    marketStateOf(ticker, ip, now).name(),
                     PriceMomentum.changeFromLive(ip.close(), ip.currency(), base5.get(ticker)),
                     PriceMomentum.changeFromLive(ip.close(), ip.currency(), base10.get(ticker)),
                     PriceMomentum.changeFromLive(ip.close(), ip.currency(), base30.get(ticker)),
@@ -178,6 +199,56 @@ public class LivePricesService {
 
         return new Snapshot(outRows, totals, Instant.now(),
                 latestTs == Instant.EPOCH ? null : latestTs);
+    }
+
+    /**
+     * The last daily close strictly before each quote's own trading day — the Day Δ baseline.
+     *
+     * <p>Grouped by trading day rather than queried per ticker: the whole book spans two or three
+     * distinct sessions at most (a London morning has US names on yesterday's session and LSE
+     * names on today's), so this is two or three bulk queries on the 15s SSE tick, not one per
+     * position. Tickers with no quote fall back to the calendar boundary so a position still
+     * gets a baseline.
+     */
+    private Map<String, PriceBar> previousCloses(Set<String> tickers,
+                                                 Map<String, IntradayPrice> quotes,
+                                                 LocalDate today) {
+        Map<LocalDate, Set<String>> byTradingDay = new LinkedHashMap<>();
+        for (String t : tickers) {
+            IntradayPrice ip = quotes.get(t);
+            LocalDate day = (ip != null) ? ip.tradingDay() : today;
+            byTradingDay.computeIfAbsent(day, d -> new HashSet<>()).add(t);
+        }
+        Map<String, PriceBar> out = new java.util.HashMap<>();
+        for (Map.Entry<LocalDate, Set<String>> e : byTradingDay.entrySet()) {
+            out.putAll(history.loadPricesAsOf(e.getValue(), e.getKey().minusDays(1)));
+        }
+        return out;
+    }
+
+    /**
+     * What the listing's market is doing right now. The published calendar is authoritative when
+     * we hold one; without it (cold start, or a gilt, which has no Yahoo calendar) fall back to
+     * quote age. The fallback is deliberately generous — Yahoo writes a 1-minute bar only when
+     * something trades, and a thin name can go the better part of an hour between prints
+     * mid-session, so a tight threshold would keep declaring open markets shut (the same trap
+     * the Open-orders staleness rule hit with XWHS.L).
+     */
+    private MarketState marketStateOf(String ticker, IntradayPrice ip, Instant now) {
+        // Gilts are scraped hourly from HL, not quoted by Yahoo, so they have neither a published
+        // calendar nor a quote cadence the age fallback can read: a bar 57 minutes old would say
+        // OPEN and the same bar three minutes later would say CLOSED, flickering the row tint on
+        // a price that never moved. Better to declare the state unknown and shade nothing.
+        if (Instruments.isBond(ticker)) return MarketState.UNKNOWN;
+        MarketState published = marketHours.stateAt(ticker, now);
+        if (published != MarketState.UNKNOWN) return published;
+        boolean recent = Duration.between(ip.ts(), now).compareTo(QUOTE_LIVE_WINDOW) < 0;
+        if (!recent) return MarketState.CLOSED;
+        return switch (ip.session()) {
+            case PRE -> MarketState.PRE;
+            case POST -> MarketState.POST;
+            case REGULAR -> MarketState.OPEN;
+        };
     }
 
     private synchronized Map<String, BigDecimal> rates() {
@@ -264,6 +335,8 @@ public class LivePricesService {
             BigDecimal positionGbp,
             String accounts,
             Instant priceTs,
+            String session,        // MarketSession of the quote: REGULAR / PRE / POST
+            String marketState,    // MarketState of the listing right now: OPEN / PRE / POST / CLOSED / UNKNOWN
             BigDecimal change5dPct,        // live quote vs the close 5 calendar days back (fraction)
             BigDecimal change10dPct,       // live quote vs the close 10 calendar days back (fraction)
             BigDecimal monthChangePct,     // live vs the close ~30 days back; tints the Last cell and fills the 30d column

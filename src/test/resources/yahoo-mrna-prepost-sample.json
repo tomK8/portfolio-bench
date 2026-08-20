@@ -1,0 +1,50 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "USD",
+          "symbol": "TSTX",
+          "gmtoffset": -14400,
+          "exchangeTimezoneName": "America/New_York",
+          "hasPrePostMarketData": true,
+          "currentTradingPeriod": {
+            "pre":     { "start": 1787212800, "end": 1787232600, "gmtoffset": -14400 },
+            "regular": { "start": 1787232600, "end": 1787256000, "gmtoffset": -14400 },
+            "post":    { "start": 1787256000, "end": 1787270400, "gmtoffset": -14400 }
+          },
+          "tradingPeriods": {
+            "pre": [
+              [ { "start": 1787126400, "end": 1787146200, "gmtoffset": -14400 } ],
+              [ { "start": 1787212800, "end": 1787232600, "gmtoffset": -14400 } ]
+            ],
+            "regular": [
+              [ { "start": 1787146200, "end": 1787169600, "gmtoffset": -14400 } ],
+              [ { "start": 1787232600, "end": 1787256000, "gmtoffset": -14400 } ]
+            ],
+            "post": [
+              [ { "start": 1787169600, "end": 1787184000, "gmtoffset": -14400 } ],
+              [ { "start": 1787256000, "end": 1787270400, "gmtoffset": -14400 } ]
+            ]
+          }
+        },
+        "timestamp": [
+          1787130000,
+          1787150000,
+          1787169600,
+          1787172000,
+          1787214000
+        ],
+        "indicators": {
+          "quote": [
+            {
+              "close": [ 100.0, 120.0, 174.38, 166.41, 153.62 ],
+              "volume": [ 1000, 50000, 900000, 4000, 2500 ]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

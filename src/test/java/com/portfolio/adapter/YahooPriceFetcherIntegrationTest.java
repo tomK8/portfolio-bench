@@ -34,7 +34,7 @@ class YahooPriceFetcherIntegrationTest {
     void fetchesRecentAaplIntradayBars() {
         java.time.Instant now = java.time.Instant.now();
         List<IntradayBar> bars = new YahooPriceFetcher()
-                .fetchIntraday("AAPL", now.minus(java.time.Duration.ofDays(2)), now);
+                .fetchIntraday("AAPL", now.minus(java.time.Duration.ofDays(2)), now).bars();
 
         assertFalse(bars.isEmpty(), "expected at least a few minute bars in the last 2 days");
         IntradayBar b = bars.get(0);

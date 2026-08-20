@@ -409,9 +409,19 @@ public class BeanConfiguration {
                                                IntradayPriceRepository intradayPriceRepository,
                                                PriceHistoryRepository priceHistoryRepository,
                                                FxRateProvider fxRateProvider,
-                                               YahooTickerMap yahooTickerMap) {
+                                               YahooTickerMap yahooTickerMap,
+                                               MarketHoursCache marketHoursCache) {
         return new LivePricesService(cashTransactionRepository, intradayPriceRepository,
-                priceHistoryRepository, fxRateProvider, yahooTickerMap);
+                priceHistoryRepository, fxRateProvider, yahooTickerMap, marketHoursCache);
+    }
+
+    /**
+     * Shared between the intraday fetch job (writer) and the Live tab (reader) — a singleton so
+     * the calendars the job collects on its pass are the ones the dashboard renders against.
+     */
+    @Bean
+    public MarketHoursCache marketHoursCache() {
+        return new MarketHoursCache();
     }
 
     @Bean
@@ -500,9 +510,10 @@ public class BeanConfiguration {
                                                        IntradayPriceRepository intradayPriceRepository,
                                                        YahooPriceFetcher yahooPriceFetcher,
                                                        YahooTickerMap yahooTickerMap,
-                                                       KeyValueStore keyValueStore) {
+                                                       KeyValueStore keyValueStore,
+                                                       MarketHoursCache marketHoursCache) {
         return new IntradayPriceFetchJob(cashTransactionRepository, intradayPriceRepository,
-                yahooPriceFetcher, yahooTickerMap, keyValueStore);
+                yahooPriceFetcher, yahooTickerMap, keyValueStore, marketHoursCache);
     }
 
     @Bean

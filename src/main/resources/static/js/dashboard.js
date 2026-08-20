@@ -150,6 +150,7 @@
                 var input = e.target.closest ? e.target.closest('#orders-table .ord-days') : null;
                 if (!input) return;
                 var cell = input.closest('td');
+                input.classList.remove('defaulted');   // the reader has chosen; it is no longer a default
                 clearTimeout(cell._ordTimer);
                 cell._ordTimer = setTimeout(function () { repriceTouch(cell, input); }, 250);
             });

@@ -65,12 +65,25 @@ class OpenOrdersServiceTest {
 
     @Test
     void noHorizonForAGtcOrAlreadyExpiredOrder() {
-        // GTC — no deadline to default to, so the column stays blank until the reader names one.
+        // GTC — the order itself names no deadline.
         assertNull(OpenOrdersService.daysToExpiry(null));
         // An expiry today or in the past (the export is a day behind the broker) has no forward
         // horizon left. Null, not zero: "0 days" would read as a computed answer.
         assertNull(OpenOrdersService.daysToExpiry(LocalDate.now()));
         assertNull(OpenOrdersService.daysToExpiry(LocalDate.now().minusDays(3)));
+    }
+
+    @Test
+    void anOrderWithNoExportedExpiryFallsBackToTheStandingDefault() {
+        // Roth is GTC throughout and II exports no expiry at all — those rows would otherwise carry
+        // a permanently blank column, so they price over a standing 90 days.
+        assertEquals(OpenOrdersService.DEFAULT_HORIZON_DAYS, OpenOrdersService.horizonDaysFor(null));
+        // A dated expiry still wins: the order's own deadline, not the default.
+        assertEquals(14, OpenOrdersService.horizonDaysFor(LocalDate.now().plusDays(14)));
+        // An expiry that has already passed gets no default. The order has no horizon left and the
+        // Expiry column beside it is showing a past date — substituting 90 days would contradict it.
+        assertNull(OpenOrdersService.horizonDaysFor(LocalDate.now().minusDays(1)));
+        assertNull(OpenOrdersService.horizonDaysFor(LocalDate.now()));
     }
 
     @Test

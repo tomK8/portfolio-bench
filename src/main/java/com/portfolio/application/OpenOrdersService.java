@@ -124,6 +124,13 @@ public class OpenOrdersService {
      * {@link #touchOverHorizon}).
      */
     static final int MAX_HORIZON_DAYS = 1825;
+    /**
+     * Horizon used for an order with no dated expiry (Roth is GTC throughout, II exports none).
+     * A quarter is long enough to be a real question about a resting order and short enough that
+     * the estimate still means something. It is a default, not a deadline — the row says so, and
+     * the box is editable.
+     */
+    static final int DEFAULT_HORIZON_DAYS = 90;
     /** Calendar-day lookback loaded per symbol to compute the daily-vol windows (≈ 60 sessions of margin). */
     private static final int VOL_LOOKBACK_DAYS = 90;
 
@@ -363,9 +370,9 @@ public class OpenOrdersService {
 
             // The order's own deadline. 5d and 20d compare every row on one yardstick; this one
             // answers the question the row actually poses — will it fill before it expires — so it
-            // defaults to the days left and is null for a GTC order, which has no deadline to
-            // default to. The reader can type a horizon into either kind of row.
-            Integer days = daysToExpiry(o.expiry());
+            // runs to the days left, or to a standing DEFAULT_HORIZON_DAYS when the broker exports
+            // no expiry at all. The reader can type a horizon into either kind of row.
+            Integer days = horizonDaysFor(o.expiry());
             orders.set(i, days == null ? o : o.withHorizonTouch(days,
                     horizonSessions(days), touchOverHorizon(current, o.price(), baseVol, days)));
         }
@@ -392,6 +399,24 @@ public class OpenOrdersService {
         if (expiry == null) return null;
         long days = ChronoUnit.DAYS.between(LocalDate.now(), expiry);
         return days > 0 ? (int) Math.min(days, MAX_HORIZON_DAYS) : null;
+    }
+
+    /**
+     * The horizon a row is priced over before the reader touches it: the days left to a dated
+     * expiry, or {@link #DEFAULT_HORIZON_DAYS} when the broker exports none (Roth is GTC
+     * throughout, II exports no expiry at all — those rows would otherwise carry a permanently
+     * blank column).
+     *
+     * <p>An expiry that has <em>already passed</em> deliberately gets no default. It is null for
+     * the same reason {@link #daysToExpiry} makes it null: the order has no forward horizon left,
+     * the Expiry column beside it is showing a past date, and quietly substituting 90 days there
+     * would contradict what the row is saying an inch to the right.
+     */
+    static Integer horizonDaysFor(LocalDate expiry) {
+        // Not a ternary: mixing the int constant with the Integer branch promotes both to int, so a
+        // past expiry's null would unbox and throw instead of coming back as "no horizon".
+        if (expiry == null) return DEFAULT_HORIZON_DAYS;
+        return daysToExpiry(expiry);
     }
 
     /** {@code days} calendar days from today expressed in trading sessions — what the σ scaling consumes. */

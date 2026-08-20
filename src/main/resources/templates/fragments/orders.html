@@ -124,13 +124,14 @@
                     th:attr="data-sort-value=${o.touchProbHorizon != null ? o.touchProbHorizon : ''},
                              data-current=${o.currentPrice}, data-limit=${o.price}, data-vol=${o.baseVol()}">
                     <input type="number" class="ord-days" min="1" max="1825" step="1"
-                           th:if="${live}" th:value="${o.horizonDays}"
-                           th:placeholder="${o.expiry != null ? 'days' : (o.duration != null ? o.duration : 'days')}"
+                           th:if="${live}" th:value="${o.horizonDays}" placeholder="days"
+                           th:classappend="${o.expiry == null} ? 'defaulted' : ''"
                            th:title="${o.expiry != null
                                 ? 'Days until this order expires (' + o.expiry + '). Edit to price the touch probability over a different horizon.'
-                                : 'This order has no dated expiry, so there is no horizon to default to — type the number of days you want the probability priced over.'}">
+                                : (o.duration != null ? o.duration : 'This order') + ' — the broker exports no expiry date, so this is a standing 90-day default, not a deadline. Edit it to price any horizon you like.'}">
                     <span class="ord-touch" th:classappend="${o.longHorizon()} ? 'long-horizon' : ''"
                           th:title="${o.horizonSessions == null ? null : (o.horizonDays + ' calendar days = ' + o.horizonSessions + ' trading sessions'
+                                + (o.expiry == null ? ' (default — this order has no exported expiry)' : '')
                                 + (o.longHorizon() ? '. Beyond about a quarter the driftless assumption behind this estimate stops being neutral — expected drift becomes the same order as the diffusion term — so read it as indicative, not calibrated.' : ''))}"
                           th:text="${o.touchProbHorizon != null
                                 ? #numbers.formatDecimal(o.touchProbHorizon.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
@@ -173,7 +174,10 @@
             three months are no longer read off the same column. The box is editable: type any
             number of calendar days and the row re-prices (days are converted to trading sessions,
             since σ scales by √sessions — 30 calendar days is about 21 sessions of diffusion, not
-            30). A GTC order has no deadline to default to, so its box starts empty. Past about a
+            30). An order whose broker exports no expiry — Roth is GTC throughout, II exports none —
+            falls back to a standing <strong>90-day</strong> default, shown greyed to mark it as a
+            default rather than a deadline. An expiry that has already passed stays blank instead:
+            that order has no horizon left, and the date beside it says so. Past about a
             quarter the figure is <span class="ord-touch long-horizon"
             style="display:inline">marked</span>: the model assumes no drift, which is a fair
             convention over a week and an assumption over a year.

@@ -460,9 +460,15 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   `GiltPriceFetchJob.isTradingDay`); 90 days = 64 sessions. Enriched into
   `OpenOrder.horizonDays/horizonSessions/touchProbHorizon` via `withHorizonTouch` — its own wither,
   not more parameters on `withVolatility`, because it is a different question. `daysToExpiry`
-  returns **null, not 0**, for a GTC order (no deadline to default to) and for an expiry today or
-  already past (the export is a day behind the broker) — "0 days" would read as a computed answer
-  rather than an absent one. The **days box is editable per row**: typing re-prices via
+  returns **null, not 0**, for an expiry today or already past (the export is a day behind the
+  broker) — "0 days" would read as a computed answer rather than an absent one. **An order whose
+  broker exports no expiry at all** (Roth is GTC throughout, II exports none) falls back via
+  `horizonDaysFor` to a standing `DEFAULT_HORIZON_DAYS` (90) — otherwise those rows carry a
+  permanently blank column. The box renders greyed + dashed (`.ord-days.defaulted`, class dropped
+  the moment it is edited) and its tooltip says *default, not deadline*. A **past** expiry
+  deliberately gets no default: the order has no horizon left and the Expiry column beside it is
+  saying exactly that. `horizonDaysFor` is an `if`, not a ternary — mixing the `int` constant with
+  the `Integer` branch promotes both to `int`, so a past expiry's null unboxes and throws. The **days box is editable per row**: typing re-prices via
   `GET /orders/touch?current=&limit=&vol=&days=` → `OpenOrdersService.touchEstimate`. It takes the
   row's own numbers rather than a symbol, which keeps it pure arithmetic — no re-parse, no FX call,
   no DB read — and keeps the first-passage maths in **one** implementation instead of mirroring

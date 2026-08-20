@@ -328,6 +328,43 @@
             box-shadow: inset 3px 0 0 #e0a800;
         }
 
+        /* Rows resolve to a ticker open the shared price popup on click (as the Live and Watchlist
+           tables do). An unmapped row carries no data-symbol and stays inert — there is nothing to
+           chart, and the mapping editor a few inches above is the actual fix. */
+        #orders-table tbody tr[data-symbol] {
+            cursor: pointer;
+        }
+
+        #orders-table tbody tr[data-symbol]:hover {
+            background: rgba(52, 152, 219, 0.10);
+        }
+
+        /* The editable horizon box in the P(exp) column, and its probability. */
+        .ord-days {
+            width: 3.6rem;
+            padding: 1px 3px;
+            font-size: 0.75rem;
+            text-align: right;
+        }
+
+        .ord-touch {
+            display: block;
+            font-size: 0.8rem;
+        }
+
+        .ord-touch.pending {
+            opacity: 0.45;
+        }
+
+        /* Past ~a quarter the driftless first-passage model is assuming, not merely conventional. */
+        .ord-touch.long-horizon {
+            color: #b8860b;
+        }
+
+        .ord-touch.long-horizon::after {
+            content: " ~";
+        }
+
         /* "as of 14:05" / "close 2026-08-18" beside a Current price that isn't a live quote. */
         .price-note {
             display: block;

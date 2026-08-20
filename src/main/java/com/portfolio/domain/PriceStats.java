@@ -192,6 +192,27 @@ public final class PriceStats {
     }
 
     /**
+     * Trading sessions in {@code (from, to]} — every weekday, exclusive of {@code from} and
+     * inclusive of {@code to}. Zero when {@code to} is not after {@code from}.
+     *
+     * <p>The touch model scales volatility by {@code √sessions}, but an order's expiry is a
+     * calendar date, and the two are not interchangeable: a limit expiring in 30 calendar days has
+     * about 21 sessions of diffusion behind it, so feeding the calendar count straight into
+     * {@link #sigmaDistance} would overstate the horizon by a third. Weekends only — exchange
+     * holidays are not modelled, which leaves the count a session or two long across a long
+     * horizon and is the same simplification {@code GiltPriceFetchJob.isTradingDay} makes.
+     */
+    public static int tradingSessionsBetween(LocalDate from, LocalDate to) {
+        if (from == null || to == null || !to.isAfter(from)) return 0;
+        int sessions = 0;
+        for (LocalDate d = from.plusDays(1); !d.isAfter(to); d = d.plusDays(1)) {
+            DayOfWeek dow = d.getDayOfWeek();
+            if (dow != DayOfWeek.SATURDAY && dow != DayOfWeek.SUNDAY) sessions++;
+        }
+        return sessions;
+    }
+
+    /**
      * Probability that a driftless geometric Brownian motion starting at the current price touches a
      * barrier {@code |sigmaDistance|} volatility-units away at least once within the horizon: the
      * first-passage reflection result {@code P = 2·Φ(−|d|)}, clamped to {@code [0, 1]}. At the barrier

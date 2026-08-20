@@ -714,9 +714,13 @@ public class ExcelReportWriter {
         // "Quote" sits beside Current rather than being folded into it: the price stays a real
         // number the sheet can sort and chart, while the caveat that it came from a thin
         // extended-hours session travels with the file instead of only living on screen.
+        // The horizon is carried in sessions, not days: √sessions is what the σ scaling actually
+        // consumed, so the sheet states the number the probability beside it was computed over. The
+        // calendar view of the same thing is the Expiry column two along.
         String[] headers = {"Broker", "Symbol", "Side", "Type", "Quantity",
                 "Price", "Current", "Quote", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
-                "P(touch 20d)", "Amount", "Amount GBP", "Date entered", "Expiry"};
+                "P(touch 20d)", "Horizon (sessions)", "P(touch expiry)",
+                "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
 
@@ -737,12 +741,14 @@ public class ExcelReportWriter {
             if (o.sigmaToLimit() != null) setStyled(row, 11, o.sigmaToLimit(), sigmaStyle);
             if (o.touchProb5d() != null) setStyled(row, 12, o.touchProb5d(), touchPctStyle);
             if (o.touchProb20d() != null) setStyled(row, 13, o.touchProb20d(), touchPctStyle);
-            if (o.amount() != null) setMoney(row, 14, o.amount(), o.currency(), false, wb, moneyStyles);
-            if (o.amountGbp() != null) setMoney(row, 15, o.amountGbp(), "GBP", false, wb, moneyStyles);
-            styledCell(row, 16, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            if (o.horizonSessions() != null) setNumeric(row, 14, BigDecimal.valueOf(o.horizonSessions()), qtyNum);
+            if (o.touchProbHorizon() != null) setStyled(row, 15, o.touchProbHorizon(), touchPctStyle);
+            if (o.amount() != null) setMoney(row, 16, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 17, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 18, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 17, expiry, text);
+            styledCell(row, 19, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);

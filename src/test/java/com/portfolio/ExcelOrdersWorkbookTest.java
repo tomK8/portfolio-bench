@@ -24,11 +24,12 @@ class ExcelOrdersWorkbookTest {
                 LocalDate.of(2026, 7, 29), null, "In progress", "ref1", new BigDecimal("26901.41"),
                 new BigDecimal("540.00"), new BigDecimal("0.0037"),
                 new BigDecimal("0.0200"), new BigDecimal("0.0250"), new BigDecimal("0.50"),
-                new BigDecimal("0.6170"), new BigDecimal("0.8000"), null);
+                new BigDecimal("0.6170"), new BigDecimal("0.8000"), null,
+                15, 11, new BigDecimal("0.7400"));
         OpenOrder ii = new OpenOrder("II SIPP", "NVDA", "NVIDIA Corp", "Sell", "Limit",
                 new BigDecimal("51"), new BigDecimal("224.8596"), true, new BigDecimal("11467.84"),
                 "USD", LocalDate.of(2026, 7, 14), null, null, "PENDING", "ref2", new BigDecimal("9174.27"),
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null);
 
         byte[] bytes = new ExcelReportWriter().ordersWorkbook(List.of(ajb, ii));
         assertTrue(bytes.length > 0);
@@ -50,9 +51,11 @@ class ExcelOrdersWorkbookTest {
             assertEquals("σ→lim (5d)", hdr.getCell(11).getStringCellValue());
             assertEquals("P(touch 5d)", hdr.getCell(12).getStringCellValue());
             assertEquals("P(touch 20d)", hdr.getCell(13).getStringCellValue());
-            assertEquals("Amount", hdr.getCell(14).getStringCellValue());
-            assertEquals("Amount GBP", hdr.getCell(15).getStringCellValue());
-            assertEquals("Expiry", hdr.getCell(17).getStringCellValue());
+            assertEquals("Horizon (sessions)", hdr.getCell(14).getStringCellValue());
+            assertEquals("P(touch expiry)", hdr.getCell(15).getStringCellValue());
+            assertEquals("Amount", hdr.getCell(16).getStringCellValue());
+            assertEquals("Amount GBP", hdr.getCell(17).getStringCellValue());
+            assertEquals("Expiry", hdr.getCell(19).getStringCellValue());
 
             Row ajbRow = sheet.getRow(1);
             assertEquals("EQQQ", ajbRow.getCell(1).getStringCellValue());
@@ -73,8 +76,13 @@ class ExcelOrdersWorkbookTest {
             assertTrue(ajbRow.getCell(12).getCellStyle().getDataFormatString().contains("%"));
             assertEquals(0.8000, ajbRow.getCell(13).getNumericCellValue(), 1e-9);
             assertTrue(ajbRow.getCell(13).getCellStyle().getDataFormatString().contains("%"));
-            assertEquals(26901.41, ajbRow.getCell(15).getNumericCellValue(), 1e-6);
-            assertEquals("2026-07-29", ajbRow.getCell(17).getStringCellValue());
+            // The expiry horizon travels in sessions — the number the √-scaling actually consumed —
+            // beside the probability computed over it.
+            assertEquals(11, ajbRow.getCell(14).getNumericCellValue(), 1e-9);
+            assertEquals(0.7400, ajbRow.getCell(15).getNumericCellValue(), 1e-9);
+            assertTrue(ajbRow.getCell(15).getCellStyle().getDataFormatString().contains("%"));
+            assertEquals(26901.41, ajbRow.getCell(17).getNumericCellValue(), 1e-6);
+            assertEquals("2026-07-29", ajbRow.getCell(19).getStringCellValue());
 
             Row iiRow = sheet.getRow(2);
             // value stays numeric; the "~" lives only in the display number format
@@ -87,6 +95,8 @@ class ExcelOrdersWorkbookTest {
             assertNull(iiRow.getCell(9));
             assertNull(iiRow.getCell(12));
             assertNull(iiRow.getCell(13));
+            assertNull(iiRow.getCell(14), "no dated expiry → no horizon to price over");
+            assertNull(iiRow.getCell(15));
         }
     }
 
@@ -98,7 +108,7 @@ class ExcelOrdersWorkbookTest {
                 new BigDecimal("50"), new BigDecimal("150.00"), false, new BigDecimal("7500.00"),
                 "USD", LocalDate.of(2026, 8, 19), null, "GTC", "Open", "ref3",
                 new BigDecimal("5500.00"), new BigDecimal("160.90"), new BigDecimal("0.0727"),
-                null, null, null, null, null, "PRE");
+                null, null, null, null, null, "PRE", null, null, null);
 
         try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(
                 new ExcelReportWriter().ordersWorkbook(List.of(pre))))) {

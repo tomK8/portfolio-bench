@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -116,6 +117,13 @@ public class OpenOrdersService {
     /** Horizons (sessions) for the touch-probability columns; the σ-distance column uses the short one. */
     private static final int TOUCH_HORIZON_SESSIONS = 5;
     private static final int TOUCH_HORIZON_SESSIONS_LONG = 20;
+    /**
+     * Upper bound on the user-supplied horizon for the P(horizon) column. Five years is well past
+     * any resting order's life; the cap exists so a stray keystroke can't ask for a hundred-thousand
+     * session walk, not because 1,825 days is a defensible modelling horizon — it isn't (see
+     * {@link #touchOverHorizon}).
+     */
+    static final int MAX_HORIZON_DAYS = 1825;
     /** Calendar-day lookback loaded per symbol to compute the daily-vol windows (≈ 60 sessions of margin). */
     private static final int VOL_LOOKBACK_DAYS = 90;
 
@@ -231,7 +239,7 @@ public class OpenOrdersService {
         warnings.addAll(quotes.warnings());
         warmLaggingQuotes(quotes.warm());
         return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
-                unmappedInstruments(orders), quotes.notes(), quotes.asOf());
+                unmappedInstruments(orders), quotes.notes(), quotes.asOf(), chartableSymbols(orders));
     }
 
     /**
@@ -351,7 +359,15 @@ public class OpenOrdersService {
             BigDecimal touchProb = PriceStats.touchProbability(sigmaToLimit);
             BigDecimal touchProb20 = PriceStats.touchProbability(
                     PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS_LONG));
-            orders.set(i, o.withVolatility(dv10, dv30, sigmaToLimit, touchProb, touchProb20));
+            o = o.withVolatility(dv10, dv30, sigmaToLimit, touchProb, touchProb20);
+
+            // The order's own deadline. 5d and 20d compare every row on one yardstick; this one
+            // answers the question the row actually poses — will it fill before it expires — so it
+            // defaults to the days left and is null for a GTC order, which has no deadline to
+            // default to. The reader can type a horizon into either kind of row.
+            Integer days = daysToExpiry(o.expiry());
+            orders.set(i, days == null ? o : o.withHorizonTouch(days,
+                    horizonSessions(days), touchOverHorizon(current, o.price(), baseVol, days)));
         }
         String asOf = newestOverall == null ? null : TIME_FMT.format(
                 newestOverall.atZone(ZoneId.systemDefault()));
@@ -364,6 +380,70 @@ public class OpenOrdersService {
         return new Quotes(List.of("No current price for " + String.join(", ", lines)
                 + " — nothing had been refreshing those feeds. They are in the fetch universe now; "
                 + "the price columns fill on the next tick."), notes, asOf, warm);
+    }
+
+    /**
+     * Calendar days from today to {@code expiry}, or null when the order is GTC / carries no dated
+     * expiry. Zero or negative (an expiry today or already past — the export is a day behind the
+     * broker) comes back null too: there is no forward horizon left to price, and a "0 days" row
+     * would read as a computed answer rather than as an absent one.
+     */
+    static Integer daysToExpiry(LocalDate expiry) {
+        if (expiry == null) return null;
+        long days = ChronoUnit.DAYS.between(LocalDate.now(), expiry);
+        return days > 0 ? (int) Math.min(days, MAX_HORIZON_DAYS) : null;
+    }
+
+    /** {@code days} calendar days from today expressed in trading sessions — what the σ scaling consumes. */
+    static Integer horizonSessions(Integer days) {
+        if (days == null) return null;
+        LocalDate today = LocalDate.now();
+        return PriceStats.tradingSessionsBetween(today, today.plusDays(days));
+    }
+
+    /**
+     * Probability the market touches {@code limit} within {@code days} calendar days — the same
+     * driftless first-passage estimate as the fixed 5- and 20-session columns, over the horizon the
+     * caller names. The calendar→session conversion is the load-bearing part: σ scales by
+     * {@code √sessions}, so passing 30 calendar days through as 30 sessions would price a third
+     * more diffusion than the market gets.
+     *
+     * <p>Null whenever any input is missing, which is the honest answer for an order with no limit
+     * price, no live quote, or a symbol whose daily series is too short to yield a vol.
+     */
+    static BigDecimal touchOverHorizon(BigDecimal current, BigDecimal limit, BigDecimal vol, Integer days) {
+        Integer sessions = horizonSessions(days);
+        if (sessions == null || sessions < 1) return null;
+        return PriceStats.touchProbability(PriceStats.sigmaDistance(current, limit, vol, sessions));
+    }
+
+    /**
+     * Re-price the touch probability over an arbitrary horizon, for the editable days box on the
+     * P(exp) column. Pure arithmetic on numbers the view already has on the row — no re-parse, no
+     * FX call, no database read — so typing into the box costs a loopback round trip rather than a
+     * disk scan. The maths stays here rather than being reimplemented in the browser so the column
+     * and the panel's other two touch columns can never disagree.
+     *
+     * @param days calendar days; clamped to {@code [1, MAX_HORIZON_DAYS]}.
+     */
+    public TouchEstimate touchEstimate(BigDecimal current, BigDecimal limit, BigDecimal vol, int days) {
+        int clamped = Math.max(1, Math.min(days, MAX_HORIZON_DAYS));
+        Integer sessions = horizonSessions(clamped);
+        BigDecimal sigma = sessions == null || sessions < 1
+                ? null : PriceStats.sigmaDistance(current, limit, vol, sessions);
+        return new TouchEstimate(clamped, sessions == null ? 0 : sessions, sigma,
+                PriceStats.touchProbability(sigma),
+                sessions != null && sessions > OpenOrder.LONG_HORIZON_SESSIONS);
+    }
+
+    /**
+     * One re-priced horizon for the P(exp) column.
+     *
+     * @param longHorizon true when the horizon is long enough that the driftless assumption is
+     *                    doing real work — surfaced on screen rather than silently tolerated.
+     */
+    public record TouchEstimate(int days, int sessions, BigDecimal sigma, BigDecimal probability,
+                                boolean longHorizon) {
     }
 
     /** What a quote's age reads as on the row: a time for today, a date for anything older. */
@@ -526,6 +606,19 @@ public class OpenOrdersService {
     }
 
     /**
+     * Symbols whose row opens the shared price popup on click — those that resolve to a ticker (or
+     * are gilts, which map to themselves and are priced by the HL scrape). See
+     * {@link OrdersReport#chartable(OpenOrder)} for why the unresolvable ones stay inert.
+     */
+    private Set<String> chartableSymbols(List<OpenOrder> orders) {
+        Set<String> out = new LinkedHashSet<>();
+        for (OpenOrder o : orders) {
+            if (o.symbol() != null && tickerFor(o.symbol()) != null) out.add(o.symbol());
+        }
+        return out;
+    }
+
+    /**
      * The instruments this view could not price for want of a mapping.
      *
      * <p>Runs after enrichment, so "could not price" is the same fact the user is looking at: the
@@ -658,6 +751,18 @@ public class OpenOrdersService {
     public record OrdersReport(List<OpenOrder> orders, List<String> sources,
                                List<String> warnings, boolean empty,
                                List<UnmappedInstrument> unmapped,
-                               Map<String, String> priceNotes, String quotesAsOf) {
+                               Map<String, String> priceNotes, String quotesAsOf,
+                               Set<String> chartableSymbols) {
+
+        /**
+         * Whether clicking this row can open the price popup. Only a symbol that resolves to a
+         * ticker qualifies: an AJ Bell row whose description matched no keyword carries the whole
+         * description as its symbol, and opening a chart for "XTRACKERS MSCI WORLD HEALTH CARE"
+         * would fetch nothing and look like a broken feature rather than a missing mapping — which
+         * the panel already offers to fix a few inches above.
+         */
+        public boolean chartable(OpenOrder o) {
+            return o != null && o.symbol() != null && chartableSymbols.contains(o.symbol());
+        }
     }
 }

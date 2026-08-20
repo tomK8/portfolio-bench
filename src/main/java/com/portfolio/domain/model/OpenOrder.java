@@ -45,8 +45,15 @@ public record OpenOrder(
                                 // sigmaToLimit is unavailable.
         BigDecimal touchProb20d,// same touch probability over a 20-session horizon (σ scaled by √20
                                 // off the same daily vol); a fraction. null when unavailable.
-        String quoteSession     // trading session currentPrice came from: "PRE" / "POST", or null
+        String quoteSession,    // trading session currentPrice came from: "PRE" / "POST", or null
                                 // for a regular-hours quote, a daily close, or no quote at all.
+        Integer horizonDays,    // calendar days the P(horizon) column is priced over — days remaining
+                                // to `expiry` by default, null when the order carries no dated expiry
+                                // (GTC) and the user has therefore chosen nothing yet.
+        Integer horizonSessions,// `horizonDays` expressed in trading sessions (weekdays), which is
+                                // what the σ scaling actually consumes. null when horizonDays is.
+        BigDecimal touchProbHorizon // probability the market touches the limit within horizonSessions
+                                // (same first-passage estimate as touchProb5d). null when unavailable.
 ) {
     /**
      * True when a resting order is already through its own limit — a buy whose limit sits at or
@@ -92,6 +99,20 @@ public record OpenOrder(
     /** Margin required before an estimated (fee-inflated) limit counts as through — see {@link #throughLimit()}. */
     private static final BigDecimal ESTIMATE_TOLERANCE = new BigDecimal("0.005");
 
+    /**
+     * Past this many sessions the driftless first-passage estimate behind every touch column stops
+     * being a neutral convention and starts being an assumption: over a quarter or more, expected
+     * drift is the same order as the diffusion term. The view flags such horizons rather than
+     * refusing them — a year-out GTC order is a legitimate thing to ask about, just not a number to
+     * read to the decimal.
+     */
+    public static final int LONG_HORIZON_SESSIONS = 60;
+
+    /** True when {@link #horizonSessions} is long enough that the driftless assumption is doing real work. */
+    public boolean longHorizon() {
+        return horizonSessions != null && horizonSessions > LONG_HORIZON_SESSIONS;
+    }
+
     /** Convenience for views — the leading symbol for {@link #currency} ($/£/€), or "" if unknown. */
     public String currencySymbol() {
         if (currency == null) return "";
@@ -108,7 +129,7 @@ public record OpenOrder(
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, gbp,
                 currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
-                touchProb20d, quoteSession);
+                touchProb20d, quoteSession, horizonDays, horizonSessions, touchProbHorizon);
     }
 
     /**
@@ -120,7 +141,7 @@ public record OpenOrder(
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
                 current, distance, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d, touchProb20d,
-                session);
+                session, horizonDays, horizonSessions, touchProbHorizon);
     }
 
     /**
@@ -133,6 +154,31 @@ public record OpenOrder(
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
                 currentPrice, distancePct, dv10, dv30, sigmaToLimit, touchProb5d, touchProb20d,
-                quoteSession);
+                quoteSession, horizonDays, horizonSessions, touchProbHorizon);
+    }
+
+    /**
+     * Copy with the expiry-horizon touch columns set — the horizon in calendar days, the same
+     * horizon in trading sessions, and the probability the market touches the limit inside it.
+     *
+     * <p>Its own wither rather than more parameters on {@link #withVolatility} because it answers a
+     * different question: the fixed 5- and 20-session columns compare every order on one yardstick,
+     * while this one is the order's <em>own</em> deadline — the days left before it expires — and is
+     * re-priced on demand when the reader types a different number of days into the row.
+     */
+    public OpenOrder withHorizonTouch(Integer days, Integer sessions, BigDecimal prob) {
+        return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
+                amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
+                currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
+                touchProb20d, quoteSession, days, sessions, prob);
+    }
+
+    /**
+     * The realized daily σ the touch columns are scaled by: the 10-session window when it exists,
+     * else the 30-session one. Exposed so the view can hand the number back for an on-demand
+     * re-price over a different horizon without the row having to be re-parsed server-side.
+     */
+    public BigDecimal baseVol() {
+        return dailyVol10 != null ? dailyVol10 : dailyVol30;
     }
 }

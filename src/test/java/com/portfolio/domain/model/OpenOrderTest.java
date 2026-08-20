@@ -19,7 +19,7 @@ class OpenOrderTest {
                 new BigDecimal("50"), limit == null ? null : new BigDecimal(limit), estimated,
                 null, "GBP", null, null, "GTC", "In progress", null, null,
                 current == null ? null : new BigDecimal(current),
-                null, null, null, null, null, null, quoteSession);
+                null, null, null, null, null, null, quoteSession, null, null, null);
     }
 
     @Test

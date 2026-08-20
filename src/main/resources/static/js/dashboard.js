@@ -129,6 +129,91 @@
             }
         }
 
+        // The orders table is htmx-swapped on every tab click, so both of its interactions are
+        // delegated from the body — anything bound inside the fragment would die on the next swap.
+        (function ordersInteractions() {
+            // Row click → the shared price popup, the same one the Live and Watchlist tables open.
+            // A row the server could not resolve to a ticker carries no data-symbol and stays inert:
+            // an unmapped AJ Bell row's "symbol" is its whole description, and charting it would
+            // fetch nothing and read as a broken feature rather than as the missing mapping the
+            // panel already offers to add.
+            document.body.addEventListener('click', function (e) {
+                if (!e.target.closest('#orders-table')) return;
+                if (e.target.closest('input, button, a, select, label')) return;  // the days box lives in a cell
+                var tr = e.target.closest('tr[data-symbol]');
+                if (tr) openSymbolModal(tr.dataset.symbol);
+            });
+
+            // Editable horizon box → re-price P(exp) on the server (see GET /orders/touch: the
+            // first-passage maths stays in one place rather than being mirrored here).
+            document.body.addEventListener('input', function (e) {
+                var input = e.target.closest ? e.target.closest('#orders-table .ord-days') : null;
+                if (!input) return;
+                var cell = input.closest('td');
+                clearTimeout(cell._ordTimer);
+                cell._ordTimer = setTimeout(function () { repriceTouch(cell, input); }, 250);
+            });
+        }());
+
+        /**
+         * Re-price one row's P(exp) cell over the horizon in its days box. Everything the estimate
+         * needs — current price, limit, base vol — was rendered onto the cell, so this is a pure
+         * loopback calculation: no re-parse of the broker exports, no FX call.
+         *
+         * A per-cell sequence number latches the response: typing "1", "1 2", "1 2 0" fires three
+         * debounced requests and a slow early one landing last would otherwise repaint the cell for
+         * a horizon the box no longer shows — the same guard the Attribution presets use.
+         */
+        function repriceTouch(cell, input) {
+            var out = cell.querySelector('.ord-touch');
+            if (!out) return;
+            var days = parseInt(input.value, 10);
+            var seq = cell._ordSeq = (cell._ordSeq || 0) + 1;
+            if (!isFinite(days) || days < 1) {          // box cleared — say nothing rather than guess
+                out.textContent = '—';
+                out.title = '';
+                out.className = 'ord-touch';
+                cell.dataset.sortValue = '';
+                return;
+            }
+            out.classList.add('pending');
+            var q = 'current=' + encodeURIComponent(cell.dataset.current) +
+                '&limit=' + encodeURIComponent(cell.dataset.limit) +
+                '&vol=' + encodeURIComponent(cell.dataset.vol) +
+                '&days=' + days;
+            fetch('/orders/touch?' + q)
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (t) {
+                    if (seq !== cell._ordSeq) return;
+                    out.classList.remove('pending');
+                    if (t.probability == null) {
+                        out.textContent = '—';
+                        out.title = 'No probability for this horizon.';
+                        cell.dataset.sortValue = '';
+                        return;
+                    }
+                    out.textContent = (t.probability * 100).toFixed(1) + '%';
+                    cell.dataset.sortValue = t.probability;
+                    out.classList.toggle('long-horizon', !!t.longHorizon);
+                    out.title = t.days + ' calendar days = ' + t.sessions + ' trading sessions' +
+                        (t.longHorizon
+                            ? '. Beyond about a quarter the driftless assumption behind this estimate ' +
+                              'stops being neutral — expected drift becomes the same order as the ' +
+                              'diffusion term — so read it as indicative, not calibrated.'
+                            : '');
+                })
+                .catch(function () {
+                    if (seq !== cell._ordSeq) return;
+                    out.classList.remove('pending');
+                    out.textContent = '—';
+                    out.title = 'Could not re-price this horizon.';
+                    cell.dataset.sortValue = '';
+                });
+        }
+
         // ── Instrument mappings ─────────────────────────────────────────────────────
         // A new instrument needs a name mapping (broker description → symbol) and/or a ticker
         // mapping (symbol → Yahoo ticker) before anything can price it. Both are offered inline

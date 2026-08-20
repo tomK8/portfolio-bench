@@ -208,6 +208,45 @@ class PriceStatsTest {
     }
 
     @Test
+    void tradingSessionsBetween_countsWeekdaysExclusiveOfStart() {
+        // Mon 2026-07-06 → Fri 2026-07-10: Tue/Wed/Thu/Fri = 4 sessions ahead, not 4 calendar days
+        // by coincidence — the start day is excluded because a horizon starts from today's close.
+        assertEquals(4, PriceStats.tradingSessionsBetween(
+                LocalDate.parse("2026-07-06"), LocalDate.parse("2026-07-10")));
+        // Fri → the following Mon is one session, though it is three calendar days.
+        assertEquals(1, PriceStats.tradingSessionsBetween(
+                LocalDate.parse("2026-07-10"), LocalDate.parse("2026-07-13")));
+        // The conversion that matters for an order's expiry: 30 calendar days ≈ 21 sessions, so
+        // feeding the calendar count into the σ√horizon scaling would overstate the diffusion.
+        assertEquals(22, PriceStats.tradingSessionsBetween(
+                LocalDate.parse("2026-07-06"), LocalDate.parse("2026-08-05")));
+    }
+
+    @Test
+    void tradingSessionsBetween_guards() {
+        LocalDate d = LocalDate.parse("2026-07-06");
+        assertEquals(0, PriceStats.tradingSessionsBetween(d, d));               // same day
+        assertEquals(0, PriceStats.tradingSessionsBetween(d, d.minusDays(5)));  // backwards
+        assertEquals(0, PriceStats.tradingSessionsBetween(null, d));
+        assertEquals(0, PriceStats.tradingSessionsBetween(d, null));
+        // A weekend-only span has no sessions at all — Sat → Sun.
+        assertEquals(0, PriceStats.tradingSessionsBetween(
+                LocalDate.parse("2026-07-11"), LocalDate.parse("2026-07-12")));
+    }
+
+    @Test
+    void touchProbability_growsWithTheHorizon() {
+        // Same barrier, more time: 20 sessions must never price below 5. The two share one daily
+        // vol and differ only by the √horizon scaling, which is what the orders panel relies on.
+        BigDecimal cur = new BigDecimal("100"), lim = new BigDecimal("95"), vol = new BigDecimal("0.02");
+        double p5 = PriceStats.touchProbability(PriceStats.sigmaDistance(cur, lim, vol, 5)).doubleValue();
+        double p20 = PriceStats.touchProbability(PriceStats.sigmaDistance(cur, lim, vol, 20)).doubleValue();
+        double p60 = PriceStats.touchProbability(PriceStats.sigmaDistance(cur, lim, vol, 60)).doubleValue();
+        assertTrue(p5 < p20 && p20 < p60, "touch probability must be monotonic in the horizon");
+        assertTrue(p60 <= 1.0);
+    }
+
+    @Test
     void pctChange_basics() {
         assertEquals(0.10, PriceStats.pctChange(110.0, 100.0).doubleValue(), 1e-9);
         assertEquals(-0.20, PriceStats.pctChange(80.0, 100.0).doubleValue(), 1e-9);

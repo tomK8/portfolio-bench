@@ -24,6 +24,7 @@ import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -48,6 +49,55 @@ class OpenOrdersServiceTest {
                 FX, new ExcelReportWriter(), outDir,
                 new IntradayPriceRepository(connections), new PriceHistoryRepository(connections),
                 new YahooTickerMap(), new KeyValueStore(inputDir.resolve("db")));
+    }
+
+    @Test
+    void expiryHorizonIsTheDaysLeft_convertedToSessions() {
+        // 30 calendar days is about 21 trading sessions, and σ scales by √sessions — passing the
+        // calendar count through would price a third more diffusion than the market actually gets.
+        LocalDate expiry = LocalDate.now().plusDays(30);
+        Integer days = OpenOrdersService.daysToExpiry(expiry);
+        assertEquals(30, days);
+        int sessions = OpenOrdersService.horizonSessions(days);
+        assertTrue(sessions >= 20 && sessions <= 23, "30 days ≈ 21 sessions, got " + sessions);
+        assertTrue(sessions < days, "sessions must be fewer than calendar days over a month");
+    }
+
+    @Test
+    void noHorizonForAGtcOrAlreadyExpiredOrder() {
+        // GTC — no deadline to default to, so the column stays blank until the reader names one.
+        assertNull(OpenOrdersService.daysToExpiry(null));
+        // An expiry today or in the past (the export is a day behind the broker) has no forward
+        // horizon left. Null, not zero: "0 days" would read as a computed answer.
+        assertNull(OpenOrdersService.daysToExpiry(LocalDate.now()));
+        assertNull(OpenOrdersService.daysToExpiry(LocalDate.now().minusDays(3)));
+    }
+
+    @Test
+    void touchEstimateRePricesOverAnArbitraryHorizon() {
+        OpenOrdersService svc = new OpenOrdersService(new HoldingFileLocator(outDir), List.of(),
+                FX, new ExcelReportWriter(), outDir, null, null, new YahooTickerMap(), null);
+        BigDecimal cur = new BigDecimal("100"), lim = new BigDecimal("95"), vol = new BigDecimal("0.02");
+
+        OpenOrdersService.TouchEstimate near = svc.touchEstimate(cur, lim, vol, 7);
+        OpenOrdersService.TouchEstimate far = svc.touchEstimate(cur, lim, vol, 120);
+        assertTrue(near.probability().compareTo(far.probability()) < 0,
+                "same barrier, more time — the probability can only grow");
+        assertTrue(near.sessions() < far.sessions());
+        assertTrue(near.sigma().compareTo(far.sigma()) < 0, "σ distance shrinks as the horizon grows");
+
+        // The driftless assumption is flagged past a quarter rather than silently tolerated.
+        assertFalse(near.longHorizon());
+        assertTrue(far.longHorizon());
+
+        // Days are clamped, not rejected — a stray keystroke can't ask for a 100k-session walk.
+        assertEquals(OpenOrdersService.MAX_HORIZON_DAYS, svc.touchEstimate(cur, lim, vol, 999999).days());
+        assertEquals(1, svc.touchEstimate(cur, lim, vol, 0).days());
+
+        // Missing inputs (no limit, no quote, no vol) give null rather than a fabricated number.
+        assertNull(svc.touchEstimate(cur, null, vol, 7).probability());
+        assertNull(svc.touchEstimate(null, lim, vol, 7).probability());
+        assertNull(svc.touchEstimate(cur, lim, null, 7).probability());
     }
 
     @Test

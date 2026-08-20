@@ -83,7 +83,8 @@ public class RothOrdersParser implements OrderParser {
                         str(row, col, "Duration"),
                         str(row, col, "Status"),
                         null,
-                        null, null, null, null, null, null, null, null, null));
+                        // enrichment (FX, live price, vol, touch horizons) — filled by the service
+                        null, null, null, null, null, null, null, null, null, null, null, null));
             }
         }
         return orders;

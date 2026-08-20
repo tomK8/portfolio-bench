@@ -1349,6 +1349,27 @@ invested.
   `Instruments.isBond` → `override.<SYMBOL>` → **fund look-through** → Yahoo sector →
   `UNCLASSIFIED`. Anything unclassifiable is surfaced by name in an amber strip, never absorbed
   into a neighbouring bucket (same discipline as Attribution's `excluded`).
+- **"Unclassified" is three states, not one** — and only the last is a finding. A held name has no
+  sector until `fundamentals_snapshot` has a row for it, and that cache is filled by
+  `FundamentalsFetchJob` on a **4-hour** `fixedDelay` over the `held_symbols` set, so anything
+  bought since the last tick is un-*fetched*, not un-classifiable. XWIS (Xtrackers MSCI World
+  Industrials, bought 2026-08-20) sat in a red "excluded from every sector" strip for four hours
+  though Yahoo had it all along at 94.8% Industrials; ISRG was in the same state at the same time.
+  So both breakdown services now report a `state` on each un-placed contributor —
+  `AWAITING_DATA` (no row at all), `FETCH_FAILED` (row written `missing=true`, so Yahoo may just
+  have been unreachable), `NO_SECTOR` / `NOT_SCOREABLE` (fetched fine, genuinely unplaceable — the
+  bullion-ETC case that wants an `override.*` entry). **Only the last raises a warning or the red
+  strip**; the first two render as an amber `.value-warnings.pending` panel saying a fetch is
+  queued.
+- **`FundamentalsWarmer` closes the gap.** The two services hand their `AWAITING_DATA` /
+  `FETCH_FAILED` symbols to it and it fetches them on a background daemon thread
+  (`BeanConfiguration.fundamentalsWarmer` → `PortfolioFundamentalsService.refreshSymbols`, 500ms
+  throttle). **The render never waits** — the sector appears on the next load, the same bargain
+  the Open-orders panel strikes when warming a lagging quote feed. **One warmer serves both
+  blocks on purpose**: they load together in Allocation → Breakdown and are un-placed by the same
+  missing row, so a per-service cooldown would fetch each new symbol twice, concurrently, on the
+  first paint. 5-minute per-symbol cooldown, because both panels re-fetch on every tab click and
+  a `missing=true` row keeps asking to be retried.
 - **Fund look-through is fetched, never maintained.** Yahoo's `topHoldings` module (added to the
   existing `YahooQuoteSummaryFetcher` module list — **zero extra HTTP calls**, those ETFs were
   already being fetched) returns `sectorWeightings` + top-10 `holdings`; both persist as JSON

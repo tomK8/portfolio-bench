@@ -91,6 +91,13 @@ public record StyleBreakdown(
                            BigDecimal scoredTotalGbp) {
     }
 
-    public record Contributor(String symbol, BigDecimal gbp, String note) {
+    /**
+     * A position the two-axis score could not place. {@code state} carries the same three causes
+     * {@link SectorBreakdown.Contributor} documents — {@code AWAITING_DATA} and
+     * {@code FETCH_FAILED} are both "no metrics have arrived yet" and self-heal, while
+     * {@code NOT_SCOREABLE} means the metrics are present but too few of them to score an axis,
+     * which is what {@code note} explains.
+     */
+    public record Contributor(String symbol, BigDecimal gbp, String note, String state) {
     }
 }

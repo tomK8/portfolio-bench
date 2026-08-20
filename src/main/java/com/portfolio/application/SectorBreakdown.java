@@ -97,7 +97,22 @@ public record SectorBreakdown(
                                 BigDecimal crossSectorGbp) {
     }
 
-    public record Contributor(String symbol, BigDecimal gbp) {
+    /**
+     * A position no bucket could take. {@code state} separates three causes a single red strip
+     * used to conflate — the distinction matters because only the last one is a finding:
+     *
+     * <ul>
+     *   <li>{@code AWAITING_DATA} — held, but nothing in the fundamentals cache yet, because the
+     *       four-hourly job has not reached a name bought since its last tick. A warm-up is
+     *       already queued; the sector appears on the next load.</li>
+     *   <li>{@code FETCH_FAILED} — a row exists but Yahoo answered with nothing, so the listing
+     *       may simply have been unreachable. Retried on the same warm-up.</li>
+     *   <li>{@code NO_SECTOR} — Yahoo has the listing and files no sector for it, and it is no
+     *       fund either, so no look-through is possible. This one needs an {@code override.*}
+     *       entry in {@code sectors.properties}; bullion ETCs are the standing example.</li>
+     * </ul>
+     */
+    public record Contributor(String symbol, BigDecimal gbp, String state) {
     }
 
     /**

@@ -12,8 +12,10 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Builds the investment-style breakdown of the current portfolio — how much is value, how much is
@@ -41,13 +43,16 @@ public class StyleBreakdownService {
     private final AllocationService allocationService;
     private final FundamentalsRepository fundamentalsRepo;
     private final StyleClassifier classifier;
+    private final FundamentalsWarmer warmer;
 
     public StyleBreakdownService(AllocationService allocationService,
                                  FundamentalsRepository fundamentalsRepo,
-                                 StyleClassifier classifier) {
+                                 StyleClassifier classifier,
+                                 FundamentalsWarmer warmer) {
         this.allocationService = allocationService;
         this.fundamentalsRepo = fundamentalsRepo;
         this.classifier = classifier;
+        this.warmer = warmer;
     }
 
     public StyleBreakdown breakdown() {
@@ -69,6 +74,8 @@ public class StyleBreakdownService {
         Map<StyleBucket, BigDecimal> total = new EnumMap<>(StyleBucket.class);
         Map<StyleBucket, List<StyleBreakdown.Constituent>> members = new EnumMap<>(StyleBucket.class);
         List<StyleBreakdown.Contributor> unknown = new ArrayList<>();
+        // Unscored only because no metrics have been fetched yet — warmed at the end of the pass.
+        Set<String> awaitingData = new LinkedHashSet<>();
         List<StyleBreakdown.IncomeContributor> incomeRows = new ArrayList<>();
 
         BigDecimal incomeGbp = BigDecimal.ZERO;
@@ -92,7 +99,13 @@ public class StyleBreakdownService {
                             c.valueScore(), c.growthScore(), c.dividendYield(),
                             flagsOf(c), c.note()));
             if (c.bucket() == StyleBucket.UNKNOWN) {
-                unknown.add(new StyleBreakdown.Contributor(symbol, c.gbp(), c.note()));
+                // A missing cache row means no metric ever reached the classifier, so its "too few
+                // metrics" note describes the fetch, not the instrument. Same three-way split the
+                // sector block makes, and the same warmer clears the first two states.
+                String state = quote == null ? "AWAITING_DATA"
+                        : quote.missing() ? "FETCH_FAILED" : "NOT_SCOREABLE";
+                if (!"NOT_SCOREABLE".equals(state)) awaitingData.add(symbol);
+                unknown.add(new StyleBreakdown.Contributor(symbol, c.gbp(), c.note(), state));
             }
 
             // Income overlay. A fund's distribution yield is not published by Yahoo for anything
@@ -142,9 +155,15 @@ public class StyleBreakdownService {
 
         if (!unknown.isEmpty()) {
             unknown.sort(Comparator.comparing(StyleBreakdown.Contributor::gbp).reversed());
-            warnings.add(unknown.size() + " position(s) had too few fundamentals to score and are "
-                    + "excluded from the value/growth split — see the list below.");
+            long settled = unknown.stream()
+                    .filter(c -> "NOT_SCOREABLE".equals(c.state())).count();
+            if (settled > 0) {
+                warnings.add(settled + " position(s) had too few fundamentals to score and are "
+                        + "excluded from the value/growth split — see the list below.");
+            }
         }
+        // Fire-and-forget, shared with the sector block so a newly bought name is fetched once.
+        warmer.warm(awaitingData);
         if (fundsExcludedFromYield) {
             warnings.add("Funds are excluded from the income figures: Yahoo publishes no "
                     + "distribution yield for them. The portfolio yield shown is a lower bound.");

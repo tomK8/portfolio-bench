@@ -369,6 +369,11 @@
             padding-left: 1.1rem;
         }
 
+        /* A pending-data notice is benign — it says a fetch is already queued. The stock red
+           heading made it read like the failure it is replacing, which was the whole complaint.
+           `inherit` keeps it themed in both light and dark without a second rule. */
+        .value-warnings.pending h4 { color: inherit; opacity: 0.75; }
+
         .value-warnings code {
             background: rgba(0, 0, 0, 0.04);
             padding: 0 3px;

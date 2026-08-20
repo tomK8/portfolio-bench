@@ -12,8 +12,10 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Builds the sector + AI/Tech breakdown of the current portfolio.
@@ -39,13 +41,16 @@ public class SectorBreakdownService {
     private final AllocationService allocationService;
     private final FundamentalsRepository fundamentalsRepo;
     private final SectorClassifier classifier;
+    private final FundamentalsWarmer warmer;
 
     public SectorBreakdownService(AllocationService allocationService,
                                   FundamentalsRepository fundamentalsRepo,
-                                  SectorClassifier classifier) {
+                                  SectorClassifier classifier,
+                                  FundamentalsWarmer warmer) {
         this.allocationService = allocationService;
         this.fundamentalsRepo = fundamentalsRepo;
         this.classifier = classifier;
+        this.warmer = warmer;
     }
 
     public SectorBreakdown breakdown() {
@@ -71,6 +76,9 @@ public class SectorBreakdownService {
         // this split per position; previously only the totals were kept.
         Map<SectorBucket, List<SectorBreakdown.Constituent>> members = new EnumMap<>(SectorBucket.class);
         List<SectorBreakdown.Contributor> unclassified = new ArrayList<>();
+        // Un-placed only because their fundamentals row hasn't been fetched yet — handed to the
+        // warmer at the end of the pass rather than one at a time, so the throttle applies once.
+        Set<String> awaitingData = new LinkedHashSet<>();
         List<SectorBreakdown.AiContributor> aiContributors = new ArrayList<>();
         List<SectorBreakdown.FundNote> fundNotes = new ArrayList<>();
 
@@ -101,7 +109,9 @@ public class SectorBreakdownService {
                         .add(new SectorBreakdown.Constituent(symbol, b.getValue(), null, c.fund(),
                                 c.fund() ? fraction(b.getValue(), gbp) : null));
                 if (b.getKey() == SectorBucket.UNCLASSIFIED) {
-                    unclassified.add(new SectorBreakdown.Contributor(symbol, b.getValue()));
+                    String state = dataState(cache.get(symbol));
+                    if (!"NO_SECTOR".equals(state)) awaitingData.add(symbol);
+                    unclassified.add(new SectorBreakdown.Contributor(symbol, b.getValue(), state));
                 }
             }
             if (c.aiTechGbp().signum() > 0) {
@@ -164,9 +174,16 @@ public class SectorBreakdownService {
 
         if (!unclassified.isEmpty()) {
             unclassified.sort(Comparator.comparing(SectorBreakdown.Contributor::gbp).reversed());
-            warnings.add(unclassified.size() + " position(s) could not be classified and are "
-                    + "excluded from every sector — see the list below.");
+            long settled = unclassified.stream()
+                    .filter(c -> "NO_SECTOR".equals(c.state())).count();
+            if (settled > 0) {
+                warnings.add(settled + " position(s) could not be classified and are "
+                        + "excluded from every sector — see the list below.");
+            }
         }
+        // Fire-and-forget: the fetch lands in the cache for the next load rather than making this
+        // request wait on Yahoo. Same bargain as the Open-orders quote warm.
+        warmer.warm(awaitingData);
         aiContributors.sort(Comparator.comparing(SectorBreakdown.AiContributor::gbp).reversed());
         fundNotes.sort(Comparator.comparing(SectorBreakdown.FundNote::gbp).reversed());
 
@@ -199,6 +216,18 @@ public class SectorBreakdownService {
      * The fundamentals row for a symbol. Bonds and anything never fetched simply have none, which
      * the classifier reads as "no sector known" — not an error.
      */
+    /**
+     * Why a position could not be placed. Distinguishing "not fetched yet" from "Yahoo files no
+     * sector for this" is the whole difference between a red strip that is noise and one that is
+     * a finding — a name bought since the four-hourly fundamentals tick has no row at all, and
+     * says nothing about whether it is classifiable.
+     */
+    static String dataState(FundamentalsRepository.Cached cached) {
+        if (cached == null) return "AWAITING_DATA";
+        if (cached.quote() == null || cached.quote().missing()) return "FETCH_FAILED";
+        return "NO_SECTOR";
+    }
+
     private static QuoteSummary quoteFor(Map<String, FundamentalsRepository.Cached> cache, String symbol) {
         FundamentalsRepository.Cached c = cache.get(symbol);
         return c == null ? null : c.quote();

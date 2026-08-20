@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -115,6 +116,35 @@ public class PortfolioFundamentalsService {
         String yahooTicker = tickerMap.tickerFor(internal);
         QuoteSummary q = fetcher.fetch(yahooTicker);
         repo.save(internal, q, Instant.now());
+    }
+
+    /**
+     * Fetch and cache several symbols now, throttled like {@link #refresh()}. This is the
+     * off-cycle path {@link FundamentalsWarmer} drives on behalf of the sector and style blocks,
+     * so it must not abandon the rest of the batch when one name fails — a symbol Yahoo cannot
+     * answer for still gets its {@code missing=true} row, which is what stops the panel asking
+     * again on the next paint.
+     *
+     * @return how many symbols were fetched
+     */
+    public int refreshSymbols(Collection<String> internals) {
+        if (internals == null || internals.isEmpty()) return 0;
+        int fetched = 0;
+        for (String internal : internals) {
+            if (internal == null || internal.isBlank()) continue;
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("Fundamentals warm interrupted — stopping early");
+                break;
+            }
+            if (fetched > 0) PriceFetchSupport.sleep(THROTTLE_MS);
+            try {
+                refreshSymbol(internal);
+                fetched++;
+            } catch (RuntimeException e) {
+                log.warn("Fundamentals warm failed for {}", internal, e);
+            }
+        }
+        return fetched;
     }
 
     /** The extra set minus anything that's also held — i.e. the rows the UI may offer to remove. */

@@ -349,8 +349,10 @@ public class BeanConfiguration {
     @Bean
     public SectorBreakdownService sectorBreakdownService(AllocationService allocationService,
                                                         FundamentalsRepository fundamentalsRepository,
-                                                        SectorClassifier sectorClassifier) {
-        return new SectorBreakdownService(allocationService, fundamentalsRepository, sectorClassifier);
+                                                        SectorClassifier sectorClassifier,
+                                                        FundamentalsWarmer fundamentalsWarmer) {
+        return new SectorBreakdownService(allocationService, fundamentalsRepository, sectorClassifier,
+                fundamentalsWarmer);
     }
 
     @Bean
@@ -361,8 +363,10 @@ public class BeanConfiguration {
     @Bean
     public StyleBreakdownService styleBreakdownService(AllocationService allocationService,
                                                        FundamentalsRepository fundamentalsRepository,
-                                                       StyleClassifier styleClassifier) {
-        return new StyleBreakdownService(allocationService, fundamentalsRepository, styleClassifier);
+                                                       StyleClassifier styleClassifier,
+                                                       FundamentalsWarmer fundamentalsWarmer) {
+        return new StyleBreakdownService(allocationService, fundamentalsRepository, styleClassifier,
+                fundamentalsWarmer);
     }
 
     @Bean
@@ -550,6 +554,22 @@ public class BeanConfiguration {
     @Bean
     public FundamentalsFetchJob fundamentalsFetchJob(PortfolioFundamentalsService portfolioFundamentalsService) {
         return new FundamentalsFetchJob(portfolioFundamentalsService);
+    }
+
+    /**
+     * Off-cycle fundamentals fetch for the sector and style blocks. One daemon thread, so a burst
+     * of tab clicks queues instead of racing Yahoo, and neither panel ever waits on it — the
+     * sector appears on the next load. Same idiom as the Open-orders quote warm above.
+     */
+    @Bean
+    public FundamentalsWarmer fundamentalsWarmer(PortfolioFundamentalsService portfolioFundamentalsService) {
+        ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "fundamentals-warm");
+            t.setDaemon(true);
+            return t;
+        });
+        return new FundamentalsWarmer(
+                symbols -> exec.submit(() -> portfolioFundamentalsService.refreshSymbols(symbols)));
     }
 
     @Bean

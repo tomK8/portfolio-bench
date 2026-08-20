@@ -124,4 +124,94 @@ class CashTransactionRepositoryRothTest {
             assertEquals(105.0, rs.getDouble(1), 1e-6, "existing GBP row backfilled from cash_balance_gbp");
         }
     }
+
+    private int rothRowCount() throws Exception {
+        Path dbPath = dbDir.resolve("portfolio.db");
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             var st = conn.createStatement();
+             var rs = st.executeQuery(
+                     "SELECT COUNT(*) FROM cash_transactions WHERE account='RothIRA'")) {
+            assertTrue(rs.next());
+            return rs.getInt(1);
+        }
+    }
+
+    /**
+     * The MRNA case of 2026-08-19: two partial fills imported, then the broker re-exported the
+     * same sale as one aggregated row. Row-level dedup matches neither fill, so without the group
+     * guard the aggregate inserts as a third sale — 100 shares disposed of instead of 50.
+     */
+    @Test
+    void aggregatedRefillOfAlreadyStoredPartialsIsNotReinserted() throws Exception {
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+        repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -13, 1911, 1.36),
+                row("2026-08-19", "MRNA", "TRANSACTION", -37, 5439, 1.36)),
+                new BigDecimal("10000"));
+        assertEquals(2, rothRowCount());
+        assertEquals(17350.0, finalBalance(), 1e-6);
+
+        int inserted = repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -50, 7350, 1.36)),
+                new BigDecimal("10000"));
+
+        assertEquals(0, inserted, "the aggregate is the same sale, re-partitioned");
+        assertEquals(2, rothRowCount());
+        assertEquals(17350.0, finalBalance(), 1e-6, "cash unchanged — no second sale happened");
+    }
+
+    /** The mirror case: the aggregate landed first and a later export splits it back out. */
+    @Test
+    void splitOfAnAlreadyStoredAggregateIsNotReinserted() throws Exception {
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+        repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -50, 7350, 1.36)),
+                new BigDecimal("10000"));
+
+        int inserted = repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -13, 1911, 1.36),
+                row("2026-08-19", "MRNA", "TRANSACTION", -37, 5439, 1.36)),
+                new BigDecimal("10000"));
+
+        assertEquals(0, inserted);
+        assertEquals(1, rothRowCount());
+        assertEquals(17350.0, finalBalance(), 1e-6);
+    }
+
+    /**
+     * The guard must not swallow real activity: a genuine further trade in the same name on the
+     * same day changes the group's net totals, so it still dedups row by row and inserts.
+     */
+    @Test
+    void furtherTradeInTheSameNameOnTheSameDayStillInserts() throws Exception {
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+        repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -13, 1911, 1.36),
+                row("2026-08-19", "MRNA", "TRANSACTION", -37, 5439, 1.36)),
+                new BigDecimal("10000"));
+
+        // Same two fills re-exported unchanged, plus a real third sale later that day.
+        int inserted = repo.saveRothIra(List.of(
+                row("2026-08-19", "MRNA", "TRANSACTION", -20, 3000, 1.36),
+                row("2026-08-19", "MRNA", "TRANSACTION", -13, 1911, 1.36),
+                row("2026-08-19", "MRNA", "TRANSACTION", -37, 5439, 1.36)),
+                new BigDecimal("10000"));
+
+        assertEquals(1, inserted);
+        assertEquals(3, rothRowCount());
+        assertEquals(20350.0, finalBalance(), 1e-6);
+    }
+
+    /** Two genuine same-day buys arriving in one file are both kept — no stored group to match. */
+    @Test
+    void twoGenuineSameDayFillsInOneFileAreBothKept() throws Exception {
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+        int inserted = repo.saveRothIra(List.of(
+                row("2025-10-03", "NVDA", "TRANSACTION", 43, -8084, 1.34),
+                row("2025-10-03", "NVDA", "TRANSACTION", 106, -19928, 1.34)),
+                new BigDecimal("50000"));
+
+        assertEquals(2, inserted);
+        assertEquals(50000.0 - 8084 - 19928, finalBalance(), 1e-6);
+    }
 }

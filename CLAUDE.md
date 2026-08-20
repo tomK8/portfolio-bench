@@ -605,7 +605,22 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
   zero-padded coupons "4.750" are trimmed to the broker form "4.75"). Currency `"GBP"`.
   Rides the intraday job's prune for retention. `GiltPriceFetcher` sends a browser UA.
   Each tick also **upserts** today's row into `price_history` so the daily series
-  self-accumulates even when the app isn't running all day — last-write-wins.
+  self-accumulates even when the app isn't running all day — last-write-wins. **That rollup is
+  weekday-only** (`GiltPriceFetchJob.isTradingDay`, keyed off each bar's own timestamp so a tick
+  either side of midnight lands on the right day). The job runs hourly seven days a week and HL
+  serves Friday's prices all weekend, so without the guard every weekend the app happened to be
+  up minted a full set of gilt rows carrying a stale close — a price that doesn't exist, the LSE
+  being shut. 717 such rows over 15 weekend dates had accumulated by 2026-08-20, and because the
+  Watchlist **Returns** grid draws its date axis from the union of every symbol's stored dates,
+  three held gilts were enough to put weekend columns across the whole panel with every equity
+  showing "—" in them. Gilts are the only symbols that could do this: Yahoo never returns a
+  weekend bar. The `price_intraday` write is deliberately **not** guarded — the RT lookup wants
+  the newest gilt price whatever day it is, and those rows are pruned after 15 days. UK bank
+  holidays are a known remaining gap (~8 rows/yr): neither HL's table nor our parse of it carries
+  a price date, and a hand-maintained holiday calendar would go stale unnoticed. A Tradeweb
+  import overwrites any of them authoritatively. Cleanup of the historical rows was scoped
+  `weekend AND date >= 2026-06-06`, which spares the 16 pre-2026-06 weekend rows — Tradeweb
+  month/quarter-end valuations, 1–3 symbols each, irreplaceable.
 - `ImportGiltPricesService` → bulk historical import for gilts from manually downloaded
   `~/Downloads/Tradeweb_FTSE_ClosePrices*.csv`. Runs on startup (daemon) and on demand via
   `POST /import-gilt-prices`. Upserts into `price_history`, archives consumed files to the

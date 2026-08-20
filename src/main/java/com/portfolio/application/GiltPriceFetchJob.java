@@ -9,6 +9,7 @@ import com.portfolio.persistence.PriceHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
@@ -30,7 +31,9 @@ import java.util.Map;
  * <p>Each tick also <em>upserts</em> today's row in {@code price_history} (one row per gilt) so
  * the daily series accumulates from intraday data even when the app isn't running all day —
  * last-write-wins, and the manual Tradeweb batch import can overwrite either with authoritative
- * close prices later.
+ * close prices later. That rollup is skipped at weekends ({@link #toDailyBars}); the
+ * {@code price_intraday} write is not, because the RT lookup legitimately wants the newest gilt
+ * price whatever day it is, and those rows are pruned after 15 days anyway.
  */
 public class GiltPriceFetchJob {
 
@@ -76,11 +79,38 @@ public class GiltPriceFetchJob {
         }).toList();
     }
 
+    /**
+     * Today's scrape as a daily bar — <b>trading days only</b>.
+     *
+     * <p>The job runs hourly, seven days a week, and HL's page still serves Friday's prices all
+     * weekend. Without this filter each Saturday and Sunday the app happened to be running minted
+     * a full set of gilt rows in {@code price_history} carrying a stale close, which is not a
+     * price that exists: the LSE is shut and a gilt has no Saturday close. 717 such rows across
+     * 15 weekend dates had accumulated by 2026-08-20, and because the Returns grid draws its date
+     * axis from the union of every symbol's stored dates, three held gilts were enough to put
+     * weekend columns across the whole panel — every equity showing "—" in them.
+     *
+     * <p>The date comes from each bar's own timestamp rather than the clock, so a tick either
+     * side of midnight is judged on the day it actually belongs to.
+     *
+     * <p>Known gap: UK bank holidays are still written, since neither HL's table nor our parse of
+     * it carries a price date to key off, and a hand-maintained holiday calendar is exactly the
+     * kind of file that goes stale unnoticed. That is ~8 duplicate rows a year against ~104, and
+     * a Tradeweb import overwrites any of them authoritatively.
+     */
     private static List<PriceBar> toDailyBars(List<IntradayBar> bars) {
-        return bars.stream().map(b -> {
-            LocalDate today = b.ts().atZone(LONDON).toLocalDate();
-            return new PriceBar(b.symbol(), today, null, null, null,
-                    b.close(), b.close(), 1.0, null, b.currency());
-        }).toList();
+        return bars.stream()
+                .filter(b -> isTradingDay(b.ts().atZone(LONDON).toLocalDate()))
+                .map(b -> {
+                    LocalDate day = b.ts().atZone(LONDON).toLocalDate();
+                    return new PriceBar(b.symbol(), day, null, null, null,
+                            b.close(), b.close(), 1.0, null, b.currency());
+                }).toList();
+    }
+
+    /** Gilts trade Monday–Friday on the LSE. See the caveat on {@link #toDailyBars}. */
+    static boolean isTradingDay(LocalDate date) {
+        DayOfWeek d = date.getDayOfWeek();
+        return d != DayOfWeek.SATURDAY && d != DayOfWeek.SUNDAY;
     }
 }

@@ -144,20 +144,19 @@
                 if (tr) openSymbolModal(tr.dataset.symbol);
             });
 
-            // Editable horizon box → re-price P(exp) on the server (see GET /orders/touch: the
+            // Editable horizon box → re-price P(N) on the server (see GET /orders/touch: the
             // first-passage maths stays in one place rather than being mirrored here).
             document.body.addEventListener('input', function (e) {
                 var input = e.target.closest ? e.target.closest('#orders-table .ord-days') : null;
                 if (!input) return;
                 var cell = input.closest('td');
-                input.classList.remove('defaulted');   // the reader has chosen; it is no longer a default
                 clearTimeout(cell._ordTimer);
                 cell._ordTimer = setTimeout(function () { repriceTouch(cell, input); }, 250);
             });
         }());
 
         /**
-         * Re-price one row's P(exp) cell over the horizon in its days box. Everything the estimate
+         * Re-price one row's P(N) cell over the horizon in its days box. Everything the estimate
          * needs — current price, limit, base vol — was rendered onto the cell, so this is a pure
          * loopback calculation: no re-parse of the broker exports, no FX call.
          *
@@ -201,9 +200,9 @@
                     out.classList.toggle('long-horizon', !!t.longHorizon);
                     out.title = t.days + ' calendar days = ' + t.sessions + ' trading sessions' +
                         (t.longHorizon
-                            ? '. Beyond about a quarter the driftless assumption behind this estimate ' +
-                              'stops being neutral — expected drift becomes the same order as the ' +
-                              'diffusion term — so read it as indicative, not calibrated.'
+                            ? '. This horizon runs well past the column default, where the driftless ' +
+                              'assumption stops being a convention and becomes the dominant one. ' +
+                              'Directional, not a number to read to the decimal.'
                             : '');
                 })
                 .catch(function () {

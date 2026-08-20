@@ -93,10 +93,9 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   a "Download Excel" button (`POST /orders/export`). Resting orders across brokers parsed on demand
   from the newest order-status export per broker in the input dir; a current FX snapshot fills the
   Amount GBP column, and a live intraday/daily quote fills the **Current** price + **vs limit** %
-  columns (how far the market sits from each resting limit). A **P(exp)** column prices the touch
-  probability over the days each order actually has left, with an editable per-row horizon, and
-  clicking a row opens the same price popup the Live and Watchlist tables use. See the Open-orders
-  section below.
+  columns (how far the market sits from each resting limit). A **P(N)** column prices the touch
+  probability over a 90-day default horizon, editable per row, and clicking a row opens the same
+  price popup the Live and Watchlist tables use. See the Open-orders section below.
 - **Contributions** — `GET /contributions` → JSON, rendered by Chart.js. Cumulative
   per-account + Total.
 - **Value over time** — `GET /portfolio-value` → JSON, Chart.js. Monthly portfolio GBP
@@ -451,42 +450,40 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   need only the daily series, so a name with no live quote still shows its RVs. Excel formats:
   RV10/RV30 `0.00%`, σ→lim `+0.00;-0.00`, both P(touch) `0.0%`.
 
-- **`P(exp)` — the order's own deadline, with an editable horizon.** P(5d)/P(20d) compare every row
-  on one yardstick; this column answers the question the row actually poses — *will it fill before it
-  expires* — so it defaults to the days the order has left. **The days↔sessions conversion is the
-  load-bearing part**: σ scales by √sessions, so feeding 30 calendar days through as 30 sessions
-  would price a third more diffusion than the market gets. `PriceStats.tradingSessionsBetween`
-  counts weekdays in `(from, to]` (exchange holidays not modelled, same simplification as
-  `GiltPriceFetchJob.isTradingDay`); 90 days = 64 sessions. Enriched into
-  `OpenOrder.horizonDays/horizonSessions/touchProbHorizon` via `withHorizonTouch` — its own wither,
-  not more parameters on `withVolatility`, because it is a different question. `daysToExpiry`
-  returns **null, not 0**, for an expiry today or already past (the export is a day behind the
-  broker) — "0 days" would read as a computed answer rather than an absent one. **An order whose
-  broker exports no expiry at all** (Roth is GTC throughout, II exports none) falls back via
-  `horizonDaysFor` to a standing `DEFAULT_HORIZON_DAYS` (90) — otherwise those rows carry a
-  permanently blank column. The box renders greyed + dashed (`.ord-days.defaulted`, class dropped
-  the moment it is edited) and its tooltip says *default, not deadline*. A **past** expiry
-  deliberately gets no default: the order has no horizon left and the Expiry column beside it is
-  saying exactly that. `horizonDaysFor` is an `if`, not a ternary — mixing the `int` constant with
-  the `Integer` branch promotes both to `int`, so a past expiry's null unboxes and throws. The **days box is editable per row**: typing re-prices via
+- **`P(N)` — a third touch column over an editable horizon.** P(5d)/P(20d) are fixed; this one runs
+  over a horizon the reader picks, starting at `DEFAULT_HORIZON_DAYS` (90) on **every row**. The
+  uniform default is the point: the column exists to compare orders, and a per-row horizon compares
+  nothing — an 8-day limit reading 7% beside a 71-day one reading 64% says more about the two
+  deadlines than about the two markets. (It *was* each order's own days-to-expiry, briefly; the
+  expiry is still one keystroke away in any row's box, and the box's tooltip names the date.) **The
+  days↔sessions conversion is the load-bearing part**: σ scales by √sessions, so feeding 90 calendar
+  days through as 90 sessions would price ~19% more diffusion than the market gets.
+  `PriceStats.tradingSessionsBetween` counts weekdays in `(from, to]` (exchange holidays not
+  modelled, same simplification as `GiltPriceFetchJob.isTradingDay`); 90 days = 64 sessions.
+  Enriched into `OpenOrder.horizonDays/horizonSessions/touchProbHorizon` via `withHorizonTouch` —
+  its own wither, not more parameters on `withVolatility`, because it is a different question. The
+  **days box is editable per row**: typing re-prices via
   `GET /orders/touch?current=&limit=&vol=&days=` → `OpenOrdersService.touchEstimate`. It takes the
   row's own numbers rather than a symbol, which keeps it pure arithmetic — no re-parse, no FX call,
   no DB read — and keeps the first-passage maths in **one** implementation instead of mirroring
   `erfc` into `dashboard.js`. Debounced 250ms with a per-cell `_ordSeq` latch (typing "1", "12",
   "120" fires three requests; a slow early one landing last would otherwise repaint a horizon the
   box no longer shows — the same guard Attribution's presets use). Days are clamped to
-  `[1, MAX_HORIZON_DAYS]` (1825). **Past `OpenOrder.LONG_HORIZON_SESSIONS` (60) the figure is
-  marked amber with a `~`** and says so in its tooltip: driftless first-passage is a fair convention
-  over a week and an assumption over a year, where expected drift is the same order as the diffusion
-  term. The flag lives on `OpenOrder.longHorizon()` so the server-rendered cell and the JS re-price
-  can't disagree about where the line is. Excel gains `Horizon (sessions)` + `P(touch expiry)` —
-  **sessions, not days**, since that is the number the √-scaling consumed, and the export always
-  reflects the order's real expiry (it re-parses; an on-screen edit is a what-if, not state).
+  `[1, MAX_HORIZON_DAYS]` (1825). **Past `OpenOrder.LONG_HORIZON_SESSIONS` (130, ≈6 months) the
+  figure is marked amber with a `~`.** The honest boundary is lower — driftless first-passage is a
+  fair convention over a week and an assumption past a quarter — but the *default horizon is a
+  quarter*, so a mark at the honest boundary fired on every row on every load, and a flag that never
+  varies tells the reader nothing. That caveat is stated **once, in the panel footnote**, where it
+  applies to the whole column; the per-row mark is reserved for a horizon the reader has pushed
+  materially past the default. The threshold lives on `OpenOrder.longHorizon()` so the
+  server-rendered cell and the JS re-price can't disagree about where the line is. Excel gains
+  `Horizon (sessions)` + `P(touch horizon)` — **sessions, not days**, since that is the number the
+  √-scaling consumed; the export re-parses, so an on-screen edit stays a what-if rather than state.
 - **Row click → the shared price popup.** Same `openSymbolModal` the Live and Watchlist tables use
   (chart + momentum + vol term structure + fundamentals, served by `GET /watchlist/row` for any
   symbol, watched or not — looking at an order never arms an alert). Delegated from `document.body`,
   since the fragment is htmx-swapped on every tab click; clicks on `input, button, a, select, label`
-  are excluded so the P(exp) days box doesn't open a popup. **Only rows the service could resolve to
+  are excluded so the P(N) days box doesn't open a popup. **Only rows the service could resolve to
   a ticker are clickable** — `OrdersReport.chartableSymbols` / `chartable(o)`. An unmapped AJ Bell
   row's "symbol" is its entire description, so charting it would fetch nothing and read as a broken
   feature rather than as the missing mapping the panel already offers to add a few inches above.

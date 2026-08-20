@@ -52,38 +52,25 @@ class OpenOrdersServiceTest {
     }
 
     @Test
-    void expiryHorizonIsTheDaysLeft_convertedToSessions() {
-        // 30 calendar days is about 21 trading sessions, and σ scales by √sessions — passing the
-        // calendar count through would price a third more diffusion than the market actually gets.
-        LocalDate expiry = LocalDate.now().plusDays(30);
-        Integer days = OpenOrdersService.daysToExpiry(expiry);
-        assertEquals(30, days);
-        int sessions = OpenOrdersService.horizonSessions(days);
-        assertTrue(sessions >= 20 && sessions <= 23, "30 days ≈ 21 sessions, got " + sessions);
-        assertTrue(sessions < days, "sessions must be fewer than calendar days over a month");
+    void theDefaultHorizonIsCommonToEveryRow_andConvertsToSessions() {
+        // The P(N) column compares orders, so its horizon has to be the same on every row — an
+        // order's own expiry is a keystroke away in the view when that is the question instead.
+        assertEquals(90, OpenOrdersService.DEFAULT_HORIZON_DAYS);
+        int sessions = OpenOrdersService.horizonSessions(OpenOrdersService.DEFAULT_HORIZON_DAYS);
+        // σ scales by √sessions, so the calendar→session conversion is load-bearing: passing 90
+        // days through as 90 sessions would price ~19% more diffusion than the market gets.
+        assertTrue(sessions >= 62 && sessions <= 66, "90 days ≈ 64 sessions, got " + sessions);
+        assertTrue(sessions < OpenOrdersService.DEFAULT_HORIZON_DAYS);
     }
 
     @Test
-    void noHorizonForAGtcOrAlreadyExpiredOrder() {
-        // GTC — the order itself names no deadline.
-        assertNull(OpenOrdersService.daysToExpiry(null));
-        // An expiry today or in the past (the export is a day behind the broker) has no forward
-        // horizon left. Null, not zero: "0 days" would read as a computed answer.
-        assertNull(OpenOrdersService.daysToExpiry(LocalDate.now()));
-        assertNull(OpenOrdersService.daysToExpiry(LocalDate.now().minusDays(3)));
-    }
-
-    @Test
-    void anOrderWithNoExportedExpiryFallsBackToTheStandingDefault() {
-        // Roth is GTC throughout and II exports no expiry at all — those rows would otherwise carry
-        // a permanently blank column, so they price over a standing 90 days.
-        assertEquals(OpenOrdersService.DEFAULT_HORIZON_DAYS, OpenOrdersService.horizonDaysFor(null));
-        // A dated expiry still wins: the order's own deadline, not the default.
-        assertEquals(14, OpenOrdersService.horizonDaysFor(LocalDate.now().plusDays(14)));
-        // An expiry that has already passed gets no default. The order has no horizon left and the
-        // Expiry column beside it is showing a past date — substituting 90 days would contradict it.
-        assertNull(OpenOrdersService.horizonDaysFor(LocalDate.now().minusDays(1)));
-        assertNull(OpenOrdersService.horizonDaysFor(LocalDate.now()));
+    void theDefaultHorizonDoesNotTripTheOverExtendedMark() {
+        // A mark that fires on every row on every load tells the reader nothing. The driftless
+        // caveat that genuinely applies at a quarter is stated once in the panel footnote; the
+        // per-row mark is reserved for a horizon pushed materially past the default.
+        int sessions = OpenOrdersService.horizonSessions(OpenOrdersService.DEFAULT_HORIZON_DAYS);
+        assertTrue(sessions <= OpenOrder.LONG_HORIZON_SESSIONS,
+                "the standing default must not mark itself as over-extended");
     }
 
     @Test
@@ -93,14 +80,16 @@ class OpenOrdersServiceTest {
         BigDecimal cur = new BigDecimal("100"), lim = new BigDecimal("95"), vol = new BigDecimal("0.02");
 
         OpenOrdersService.TouchEstimate near = svc.touchEstimate(cur, lim, vol, 7);
-        OpenOrdersService.TouchEstimate far = svc.touchEstimate(cur, lim, vol, 120);
+        OpenOrdersService.TouchEstimate far = svc.touchEstimate(cur, lim, vol, 400);
         assertTrue(near.probability().compareTo(far.probability()) < 0,
                 "same barrier, more time — the probability can only grow");
         assertTrue(near.sessions() < far.sessions());
         assertTrue(near.sigma().compareTo(far.sigma()) < 0, "σ distance shrinks as the horizon grows");
 
-        // The driftless assumption is flagged past a quarter rather than silently tolerated.
+        // A horizon pushed well past the column's default is flagged rather than silently served;
+        // the default itself is not (see theDefaultHorizonDoesNotTripTheOverExtendedMark).
         assertFalse(near.longHorizon());
+        assertFalse(svc.touchEstimate(cur, lim, vol, OpenOrdersService.DEFAULT_HORIZON_DAYS).longHorizon());
         assertTrue(far.longHorizon());
 
         // Days are clamped, not rejected — a stray keystroke can't ask for a 100k-session walk.

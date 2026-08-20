@@ -719,7 +719,7 @@ public class ExcelReportWriter {
         // calendar view of the same thing is the Expiry column two along.
         String[] headers = {"Broker", "Symbol", "Side", "Type", "Quantity",
                 "Price", "Current", "Quote", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
-                "P(touch 20d)", "Horizon (sessions)", "P(touch expiry)",
+                "P(touch 20d)", "Horizon (sessions)", "P(touch horizon)",
                 "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);

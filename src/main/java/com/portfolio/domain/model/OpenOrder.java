@@ -47,9 +47,9 @@ public record OpenOrder(
                                 // off the same daily vol); a fraction. null when unavailable.
         String quoteSession,    // trading session currentPrice came from: "PRE" / "POST", or null
                                 // for a regular-hours quote, a daily close, or no quote at all.
-        Integer horizonDays,    // calendar days the P(horizon) column is priced over — days remaining
-                                // to `expiry` by default, null when the order carries no dated expiry
-                                // (GTC) and the user has therefore chosen nothing yet.
+        Integer horizonDays,    // calendar days the P(N) column is priced over — one standing default
+                                // for every row (the column compares orders, so the horizon has to be
+                                // common), retunable per row from the view. null when unpriceable.
         Integer horizonSessions,// `horizonDays` expressed in trading sessions (weekdays), which is
                                 // what the σ scaling actually consumes. null when horizonDays is.
         BigDecimal touchProbHorizon // probability the market touches the limit within horizonSessions
@@ -100,13 +100,19 @@ public record OpenOrder(
     private static final BigDecimal ESTIMATE_TOLERANCE = new BigDecimal("0.005");
 
     /**
-     * Past this many sessions the driftless first-passage estimate behind every touch column stops
-     * being a neutral convention and starts being an assumption: over a quarter or more, expected
-     * drift is the same order as the diffusion term. The view flags such horizons rather than
-     * refusing them — a year-out GTC order is a legitimate thing to ask about, just not a number to
-     * read to the decimal.
+     * Where the {@code P(N)} column starts marking its own horizon as over-extended: roughly six
+     * months of sessions.
+     *
+     * <p>The honest boundary is lower — past about a quarter the driftless first-passage estimate
+     * stops being a neutral convention and starts being an assumption, since expected drift becomes
+     * the same order as the diffusion term. But the column's default horizon <em>is</em> a quarter,
+     * so a mark at that boundary would fire on every row on every load, and a flag that never
+     * varies tells the reader nothing. That caveat is stated once, in the panel's footnote, where
+     * it applies to the whole column; this mark is reserved for a horizon the reader has pushed
+     * materially past the default, which is where the estimate really does stop being readable to
+     * the decimal.
      */
-    public static final int LONG_HORIZON_SESSIONS = 60;
+    public static final int LONG_HORIZON_SESSIONS = 130;
 
     /** True when {@link #horizonSessions} is long enough that the driftless assumption is doing real work. */
     public boolean longHorizon() {

@@ -32,7 +32,7 @@ public class OrdersController {
     }
 
     /**
-     * Re-prices the P(exp) column's touch probability over a caller-supplied horizon, for the
+     * Re-prices the P(N) column's touch probability over a caller-supplied horizon, for the
      * editable days box on each row.
      *
      * <p>Takes the row's own numbers rather than a symbol because that keeps it a pure calculation:

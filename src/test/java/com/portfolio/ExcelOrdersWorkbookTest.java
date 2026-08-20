@@ -52,7 +52,7 @@ class ExcelOrdersWorkbookTest {
             assertEquals("P(touch 5d)", hdr.getCell(12).getStringCellValue());
             assertEquals("P(touch 20d)", hdr.getCell(13).getStringCellValue());
             assertEquals("Horizon (sessions)", hdr.getCell(14).getStringCellValue());
-            assertEquals("P(touch expiry)", hdr.getCell(15).getStringCellValue());
+            assertEquals("P(touch horizon)", hdr.getCell(15).getStringCellValue());
             assertEquals("Amount", hdr.getCell(16).getStringCellValue());
             assertEquals("Amount GBP", hdr.getCell(17).getStringCellValue());
             assertEquals("Expiry", hdr.getCell(19).getStringCellValue());
@@ -76,7 +76,7 @@ class ExcelOrdersWorkbookTest {
             assertTrue(ajbRow.getCell(12).getCellStyle().getDataFormatString().contains("%"));
             assertEquals(0.8000, ajbRow.getCell(13).getNumericCellValue(), 1e-9);
             assertTrue(ajbRow.getCell(13).getCellStyle().getDataFormatString().contains("%"));
-            // The expiry horizon travels in sessions — the number the √-scaling actually consumed —
+            // The horizon travels in sessions — the number the √-scaling actually consumed —
             // beside the probability computed over it.
             assertEquals(11, ajbRow.getCell(14).getNumericCellValue(), 1e-9);
             assertEquals(0.7400, ajbRow.getCell(15).getNumericCellValue(), 1e-9);

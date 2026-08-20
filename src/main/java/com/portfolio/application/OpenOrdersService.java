@@ -27,7 +27,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.time.temporal.ChronoUnit;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -125,10 +124,16 @@ public class OpenOrdersService {
      */
     static final int MAX_HORIZON_DAYS = 1825;
     /**
-     * Horizon used for an order with no dated expiry (Roth is GTC throughout, II exports none).
-     * A quarter is long enough to be a real question about a resting order and short enough that
-     * the estimate still means something. It is a default, not a deadline — the row says so, and
-     * the box is editable.
+     * Horizon the {@code P(N)} column starts on, for every row.
+     *
+     * <p>Deliberately uniform rather than each order's own days-to-expiry. The column's job is to
+     * compare orders, and a horizon that varies per row compares nothing — an 8-day limit reading
+     * 7% beside a 71-day one reading 64% says more about the two deadlines than about the two
+     * markets. One horizon across the table makes the numbers commensurable, the way the fixed
+     * P(5d)/P(20d) columns already are; the difference is that this one is editable, so a specific
+     * order's own deadline is a keystroke away when that is the question. A quarter is long enough
+     * to be a real question about a resting order and short enough that the estimate still means
+     * something.
      */
     static final int DEFAULT_HORIZON_DAYS = 90;
     /** Calendar-day lookback loaded per symbol to compute the daily-vol windows (≈ 60 sessions of margin). */
@@ -368,13 +373,13 @@ public class OpenOrdersService {
                     PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS_LONG));
             o = o.withVolatility(dv10, dv30, sigmaToLimit, touchProb, touchProb20);
 
-            // The order's own deadline. 5d and 20d compare every row on one yardstick; this one
-            // answers the question the row actually poses — will it fill before it expires — so it
-            // runs to the days left, or to a standing DEFAULT_HORIZON_DAYS when the broker exports
-            // no expiry at all. The reader can type a horizon into either kind of row.
-            Integer days = horizonDaysFor(o.expiry());
-            orders.set(i, days == null ? o : o.withHorizonTouch(days,
-                    horizonSessions(days), touchOverHorizon(current, o.price(), baseVol, days)));
+            // The third touch column: same estimate as 5d/20d over a longer, *editable* horizon.
+            // Every row starts on DEFAULT_HORIZON_DAYS so the column is comparable across orders;
+            // the reader retunes any row — to its own days-to-expiry, or to anything else — from
+            // the box in the cell.
+            int days = DEFAULT_HORIZON_DAYS;
+            orders.set(i, o.withHorizonTouch(days, horizonSessions(days),
+                    touchOverHorizon(current, o.price(), baseVol, days)));
         }
         String asOf = newestOverall == null ? null : TIME_FMT.format(
                 newestOverall.atZone(ZoneId.systemDefault()));
@@ -387,36 +392,6 @@ public class OpenOrdersService {
         return new Quotes(List.of("No current price for " + String.join(", ", lines)
                 + " — nothing had been refreshing those feeds. They are in the fetch universe now; "
                 + "the price columns fill on the next tick."), notes, asOf, warm);
-    }
-
-    /**
-     * Calendar days from today to {@code expiry}, or null when the order is GTC / carries no dated
-     * expiry. Zero or negative (an expiry today or already past — the export is a day behind the
-     * broker) comes back null too: there is no forward horizon left to price, and a "0 days" row
-     * would read as a computed answer rather than as an absent one.
-     */
-    static Integer daysToExpiry(LocalDate expiry) {
-        if (expiry == null) return null;
-        long days = ChronoUnit.DAYS.between(LocalDate.now(), expiry);
-        return days > 0 ? (int) Math.min(days, MAX_HORIZON_DAYS) : null;
-    }
-
-    /**
-     * The horizon a row is priced over before the reader touches it: the days left to a dated
-     * expiry, or {@link #DEFAULT_HORIZON_DAYS} when the broker exports none (Roth is GTC
-     * throughout, II exports no expiry at all — those rows would otherwise carry a permanently
-     * blank column).
-     *
-     * <p>An expiry that has <em>already passed</em> deliberately gets no default. It is null for
-     * the same reason {@link #daysToExpiry} makes it null: the order has no forward horizon left,
-     * the Expiry column beside it is showing a past date, and quietly substituting 90 days there
-     * would contradict what the row is saying an inch to the right.
-     */
-    static Integer horizonDaysFor(LocalDate expiry) {
-        // Not a ternary: mixing the int constant with the Integer branch promotes both to int, so a
-        // past expiry's null would unbox and throw instead of coming back as "no horizon".
-        if (expiry == null) return DEFAULT_HORIZON_DAYS;
-        return daysToExpiry(expiry);
     }
 
     /** {@code days} calendar days from today expressed in trading sessions — what the σ scaling consumes. */
@@ -444,7 +419,7 @@ public class OpenOrdersService {
 
     /**
      * Re-price the touch probability over an arbitrary horizon, for the editable days box on the
-     * P(exp) column. Pure arithmetic on numbers the view already has on the row — no re-parse, no
+     * P(N) column. Pure arithmetic on numbers the view already has on the row — no re-parse, no
      * FX call, no database read — so typing into the box costs a loopback round trip rather than a
      * disk scan. The maths stays here rather than being reimplemented in the browser so the column
      * and the panel's other two touch columns can never disagree.
@@ -462,7 +437,7 @@ public class OpenOrdersService {
     }
 
     /**
-     * One re-priced horizon for the P(exp) column.
+     * One re-priced horizon for the P(N) column.
      *
      * @param longHorizon true when the horizon is long enough that the driftless assumption is
      *                    doing real work — surfaced on screen rather than silently tolerated.

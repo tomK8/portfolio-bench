@@ -422,8 +422,8 @@ touchProb20d); absent fields are null → "—". Parsers build enrichment-free o
 columns via `withCurrentPrice`, and the four volatility columns via `withVolatility`.
 
 - **Live-price columns (`Current` + `vs limit`).** `enrichWithCurrentPrice` bulk-loads the latest
-  intraday quote for every order symbol (one query; daily-close fallback, both age-bounded by
-  `MAX_PRICE_AGE_DAYS` = 6),
+  intraday quote of **any session** (`loadLatestQuotes`) for every order symbol (one query;
+  daily-close fallback, both age-bounded by `MAX_PRICE_AGE_DAYS` = 6),
   resolves the symbol to its Yahoo ticker via `YahooTickerMap` (bonds map to themselves), and expresses
   the quote in the **order's own currency** through `priceInCurrency` — the same GBp-pence→GBP-pounds
   shift and cross-currency-via-GBP conversion the rest of the app uses (a listing quoted differently
@@ -473,6 +473,23 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   US quote is hours old and none is stale. The tolerance is a generous 60 min because Yahoo writes a
   1-minute bar only when something trades — XWHS.L last printed at 16:13 against a 16:30 LSE close
   and tripped a 15-minute rule on a perfectly current price.
+- **Pre/post-market quotes.** A resting order is priced off an extended-hours print when that's the
+  newest price there is — at 08:00 London a US limit is far better served by a live pre-market bid
+  than by last night's close — but never silently. Three consequences, all load-bearing:
+  - The row carries a `pre-market` / `after-hours` note (`OrdersReport.priceNotes`, same span the
+    lag note uses; `sessionNote` composes the two when both apply), and the Excel sheet gains a
+    **`Quote`** column beside `Current` rather than folding the caveat into the price — the price
+    stays a real number the sheet can sort and chart.
+  - **The through-limit flag is suppressed** for an extended-hours quote (`OpenOrder.quoteSession`
+    → `extendedHoursQuote()`). A resting regular-hours order doesn't fill outside regular hours, so
+    "this should already have gone" isn't what a thin pre-market print through the limit means; the
+    amber row would otherwise fire on every overnight gap.
+  - **The peer-lag buckets are keyed by `(market, session)`**, not market alone. Only the liquid US
+    names print pre-market, so a perfectly current regular close would read as fifteen hours behind
+    its pre-market peers and be flagged and re-fetched every morning. The tolerance is also
+    session-aware — `EXTENDED_HOURS_LAG_TOLERANCE` (3h) vs `QUOTE_LAG_TOLERANCE` (60 min) — because
+    sparse extended-hours prints are the norm, not a symptom: MDLZ's ordinary 72-minute pre-market
+    gap tripped the regular rule.
 - **Through-limit flag.** `OpenOrder.throughLimit()` (derived, no new field) marks a resting order
   sitting on the wrong side of its own limit — a buy at or above the market, a sell at or below.
   That state shouldn't persist: a buy limit fills at the limit *or better*, so it means the quote is

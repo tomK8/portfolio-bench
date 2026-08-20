@@ -711,8 +711,11 @@ public class ExcelReportWriter {
         CellStyle sigmaStyle = wb.createCellStyle();         // signed σ distance to limit
         sigmaStyle.setDataFormat(wb.createDataFormat().getFormat("+0.00;-0.00"));
 
+        // "Quote" sits beside Current rather than being folded into it: the price stays a real
+        // number the sheet can sort and chart, while the caveat that it came from a thin
+        // extended-hours session travels with the file instead of only living on screen.
         String[] headers = {"Broker", "Symbol", "Side", "Type", "Quantity",
-                "Price", "Current", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
+                "Price", "Current", "Quote", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
                 "P(touch 20d)", "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
@@ -727,18 +730,19 @@ public class ExcelReportWriter {
             if (o.quantity() != null) setNumeric(row, 4, o.quantity(), qtyNum);
             if (o.price() != null) setMoney(row, 5, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
             if (o.currentPrice() != null) setMoney(row, 6, o.currentPrice(), o.currency(), false, wb, moneyStyles);
-            if (o.distancePct() != null) setStyled(row, 7, o.distancePct(), pctStyle);
-            if (o.dailyVol10() != null) setStyled(row, 8, o.dailyVol10(), volPctStyle);
-            if (o.dailyVol30() != null) setStyled(row, 9, o.dailyVol30(), volPctStyle);
-            if (o.sigmaToLimit() != null) setStyled(row, 10, o.sigmaToLimit(), sigmaStyle);
-            if (o.touchProb5d() != null) setStyled(row, 11, o.touchProb5d(), touchPctStyle);
-            if (o.touchProb20d() != null) setStyled(row, 12, o.touchProb20d(), touchPctStyle);
-            if (o.amount() != null) setMoney(row, 13, o.amount(), o.currency(), false, wb, moneyStyles);
-            if (o.amountGbp() != null) setMoney(row, 14, o.amountGbp(), "GBP", false, wb, moneyStyles);
-            styledCell(row, 15, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            styledCell(row, 7, quoteSessionCell(o), text);
+            if (o.distancePct() != null) setStyled(row, 8, o.distancePct(), pctStyle);
+            if (o.dailyVol10() != null) setStyled(row, 9, o.dailyVol10(), volPctStyle);
+            if (o.dailyVol30() != null) setStyled(row, 10, o.dailyVol30(), volPctStyle);
+            if (o.sigmaToLimit() != null) setStyled(row, 11, o.sigmaToLimit(), sigmaStyle);
+            if (o.touchProb5d() != null) setStyled(row, 12, o.touchProb5d(), touchPctStyle);
+            if (o.touchProb20d() != null) setStyled(row, 13, o.touchProb20d(), touchPctStyle);
+            if (o.amount() != null) setMoney(row, 14, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 15, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 16, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 16, expiry, text);
+            styledCell(row, 17, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);
@@ -746,6 +750,15 @@ public class ExcelReportWriter {
 
     private static String dashIfNull(String s) {
         return s != null ? s : "—";
+    }
+
+    /** Session label for the Current price — blank for an ordinary regular-hours quote or close. */
+    private static String quoteSessionCell(OpenOrder o) {
+        return switch (o.quoteSessionLabel()) {
+            case "PRE" -> "pre-market";
+            case "AH" -> "after-hours";
+            default -> "";
+        };
     }
 
     /** Numeric cell carrying a raw fraction/number, formatted by a caller-supplied style. */

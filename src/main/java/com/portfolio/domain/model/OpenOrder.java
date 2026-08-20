@@ -43,8 +43,10 @@ public record OpenOrder(
         BigDecimal touchProb5d, // probability the market touches the limit within 5 sessions
                                 // (driftless first-passage, 2·Φ(−|sigmaToLimit|)); a fraction. null when
                                 // sigmaToLimit is unavailable.
-        BigDecimal touchProb20d // same touch probability over a 20-session horizon (σ scaled by √20
+        BigDecimal touchProb20d,// same touch probability over a 20-session horizon (σ scaled by √20
                                 // off the same daily vol); a fraction. null when unavailable.
+        String quoteSession     // trading session currentPrice came from: "PRE" / "POST", or null
+                                // for a regular-hours quote, a daily close, or no quote at all.
 ) {
     /**
      * True when a resting order is already through its own limit — a buy whose limit sits at or
@@ -64,10 +66,27 @@ public record OpenOrder(
      */
     public boolean throughLimit() {
         if (price == null || currentPrice == null || side == null || price.signum() == 0) return false;
+        // An extended-hours quote can sit through the limit all morning without the order being
+        // wrong: a resting regular-hours order does not fill pre- or post-market, so the "this
+        // should already have gone" reading does not apply and the amber row would be noise every
+        // day a US name gapped overnight.
+        if (extendedHoursQuote()) return false;
         BigDecimal edge = priceEstimated ? price.multiply(ESTIMATE_TOLERANCE) : BigDecimal.ZERO;
         if ("buy".equalsIgnoreCase(side)) return currentPrice.compareTo(price.subtract(edge)) <= 0;
         if ("sell".equalsIgnoreCase(side)) return currentPrice.compareTo(price.add(edge)) >= 0;
         return false;
+    }
+
+    /** True when {@link #currentPrice} came from a pre- or post-market session rather than regular hours. */
+    public boolean extendedHoursQuote() {
+        return "PRE".equals(quoteSession) || "POST".equals(quoteSession);
+    }
+
+    /** Short badge for an extended-hours quote ("PRE" / "AH"), or "" for a regular-hours price. */
+    public String quoteSessionLabel() {
+        if ("PRE".equals(quoteSession)) return "PRE";
+        if ("POST".equals(quoteSession)) return "AH";
+        return "";
     }
 
     /** Margin required before an estimated (fee-inflated) limit counts as through — see {@link #throughLimit()}. */
@@ -89,7 +108,7 @@ public record OpenOrder(
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, gbp,
                 currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
-                touchProb20d);
+                touchProb20d, quoteSession);
     }
 
     /**
@@ -97,10 +116,11 @@ public record OpenOrder(
      * {@link #distancePct} = signed {@code (current − price) / price}. Enriched by the service after
      * parsing, mirroring {@link #withAmountGbp}.
      */
-    public OpenOrder withCurrentPrice(BigDecimal current, BigDecimal distance) {
+    public OpenOrder withCurrentPrice(BigDecimal current, BigDecimal distance, String session) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
-                current, distance, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d, touchProb20d);
+                current, distance, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d, touchProb20d,
+                session);
     }
 
     /**
@@ -112,6 +132,7 @@ public record OpenOrder(
                                     BigDecimal touchProb5d, BigDecimal touchProb20d) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
-                currentPrice, distancePct, dv10, dv30, sigmaToLimit, touchProb5d, touchProb20d);
+                currentPrice, distancePct, dv10, dv30, sigmaToLimit, touchProb5d, touchProb20d,
+                quoteSession);
     }
 }

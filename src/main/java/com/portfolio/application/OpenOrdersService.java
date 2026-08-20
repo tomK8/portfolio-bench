@@ -6,6 +6,7 @@ import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PriceStats;
 import com.portfolio.domain.model.IntradayPrice;
+import com.portfolio.domain.model.MarketSession;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.parser.OrderParser;
@@ -91,6 +92,15 @@ public class OpenOrdersService {
      * trading into.
      */
     private static final Duration QUOTE_LAG_TOLERANCE = Duration.ofMinutes(60);
+
+    /**
+     * The same rule, relaxed for pre/post-market quotes. Extended-hours volume is a fraction of
+     * regular-hours volume, so a sparse print is the norm rather than a symptom: at the 60-minute
+     * regular tolerance, MDLZ's perfectly ordinary 72-minute pre-market gap read as a stalled feed
+     * and queued a pointless refetch every time the tab was opened. Wide enough to stop that,
+     * still inside the ~5½h pre-market window, so a feed that has genuinely stopped is caught.
+     */
+    private static final Duration EXTENDED_HOURS_LAG_TOLERANCE = Duration.ofHours(3);
 
     /** Don't re-warm the same symbol more often than this, however many times the tab is opened. */
     private static final Duration WARM_COOLDOWN = Duration.ofMinutes(5);
@@ -222,9 +232,13 @@ public class OpenOrdersService {
     /**
      * Fill each order's live-price and volatility columns. Live price: {@link OpenOrder#currentPrice()}
      * (in the order's own currency) and the signed {@link OpenOrder#distancePct()} from the limit,
-     * from the bulk-loaded latest intraday quote (one query for all symbols), falling back to the most
-     * recent stored daily close within {@link #DAILY_FALLBACK_DAYS}; a listing quoted in a different
-     * currency (or {@code GBp} pence vs GBP pounds) is cross-converted through the FX snapshot.
+     * from the bulk-loaded latest intraday quote of <em>any</em> session (one query for all symbols),
+     * falling back to the most recent stored daily close within {@link #DAILY_FALLBACK_DAYS}; a
+     * listing quoted in a different currency (or {@code GBp} pence vs GBP pounds) is cross-converted
+     * through the FX snapshot. Pre/post-market prints are used when they are the newest thing there
+     * is — at 08:00 London a US limit is far better served by a live pre-market bid than by last
+     * night's close — but they are always labelled on the row, and they never raise the
+     * through-limit flag, since a resting regular-hours order does not fill in extended hours.
      * Both sources are age-bounded by {@link #MAX_PRICE_AGE_DAYS} — a resting order can name an
      * instrument that is neither held nor traded, so nothing else in the app keeps its feed warm,
      * and a stale quote printed as {@code Current} is worse than a blank: every column right of it
@@ -244,22 +258,25 @@ public class OpenOrdersService {
         }
         if (tickers.isEmpty()) return Quotes.none();
 
-        Map<String, IntradayPrice> latest = intraday.loadLatestIntradayPrices(tickers);
+        Map<String, IntradayPrice> latest = intraday.loadLatestQuotes(tickers);
         Map<String, BigDecimal[]> dailyVols = loadDailyVols(tickers);   // ticker → [RV10, RV30]
         Instant quoteCutoff = Instant.now().minus(Duration.ofDays(MAX_PRICE_AGE_DAYS));
         Map<String, String> stale = new LinkedHashMap<>();               // symbol → date last seen
         Map<String, String> notes = new LinkedHashMap<>();               // symbol → "as of …" label
         Set<String> warm = new LinkedHashSet<>();                        // tickers to fetch now
-        // Newest quote per market, so "behind" is judged against the symbols trading alongside it
-        // rather than against the wall clock: after the LSE close every GBp quote is hours old and
-        // perfectly current, while a US name that stopped updating at lunchtime is not.
+        // Newest quote per market *and session*, so "behind" is judged against the symbols trading
+        // alongside it rather than against the wall clock: after the LSE close every GBp quote is
+        // hours old and perfectly current, while a US name that stopped updating at lunchtime is
+        // not. The session half of the key matters as soon as pre/post quotes are in play — only
+        // the liquid US names print pre-market, so a perfectly current regular close would read as
+        // fifteen hours behind its pre-market peers and be flagged and re-fetched every morning.
         Map<String, Instant> newestByMarket = new HashMap<>();
         Instant newestOverall = null;
         for (String tk : tickers) {
             IntradayPrice ip = latest.get(tk);
             if (ip == null || !ip.ts().isAfter(quoteCutoff)) continue;
             if (Instruments.isBond(tk)) continue;   // hourly gilt feed — not a peer for equity quotes
-            newestByMarket.merge(market(ip.currency()), ip.ts(), (a, b) -> a.isAfter(b) ? a : b);
+            newestByMarket.merge(peerKey(ip), ip.ts(), (a, b) -> a.isAfter(b) ? a : b);
             if (newestOverall == null || ip.ts().isAfter(newestOverall)) newestOverall = ip.ts();
         }
 
@@ -273,6 +290,7 @@ public class OpenOrdersService {
 
             BigDecimal rawClose = null;
             String rawCcy = null;
+            String quoteSession = null;
             IntradayPrice ip = latest.get(tk);
             // Gilts are on their own feed (the hourly HL scrape, not Yahoo), so they are neither
             // compared against equity quotes — they would read as an hour behind all day — nor
@@ -281,11 +299,18 @@ public class OpenOrdersService {
             if (ip != null && ip.ts().isAfter(quoteCutoff)) {
                 rawClose = BigDecimal.valueOf(ip.close());
                 rawCcy = ip.currency();
-                Instant peer = newestByMarket.get(market(ip.currency()));
-                if (yahooFed && peer != null && ip.ts().isBefore(peer.minus(QUOTE_LAG_TOLERANCE))) {
-                    notes.put(o.symbol(), asOfLabel(ip.ts()));
-                    warm.add(tk);
-                }
+                // A pre/post-market print is a real, tradeable price and far more current at 08:00
+                // than last night's close — but it is thin, wide-spread and not what a resting
+                // regular-hours order transacts against, so it is always labelled.
+                if (ip.session().isExtendedHours()) quoteSession = ip.session().name();
+                Instant peer = newestByMarket.get(peerKey(ip));
+                Duration tolerance = ip.session().isExtendedHours()
+                        ? EXTENDED_HOURS_LAG_TOLERANCE : QUOTE_LAG_TOLERANCE;
+                boolean lagging = yahooFed && peer != null
+                        && ip.ts().isBefore(peer.minus(tolerance));
+                String note = sessionNote(ip.session(), lagging ? asOfLabel(ip.ts()) : null);
+                if (note != null) notes.put(o.symbol(), note);
+                if (lagging) warm.add(tk);
             } else {
                 // No usable live quote: fall back to the daily close, say so on the row, and put the
                 // symbol at the front of the fetch queue rather than waiting for the polling pass.
@@ -305,7 +330,7 @@ public class OpenOrdersService {
                 BigDecimal distance = (o.price() != null && o.price().signum() != 0)
                         ? current.subtract(o.price()).divide(o.price(), 6, RoundingMode.HALF_UP)
                         : null;
-                o = o.withCurrentPrice(current.setScale(4, RoundingMode.HALF_UP), distance);
+                o = o.withCurrentPrice(current.setScale(4, RoundingMode.HALF_UP), distance, quoteSession);
             }
 
             // σ distance / touch prob need a limit and a live price; the short window is the near-term
@@ -342,6 +367,26 @@ public class OpenOrdersService {
     /** Market grouping for the peer comparison — the quote's own currency, pence folded into pounds. */
     private static String market(String quoteCurrency) {
         return "GBp".equals(quoteCurrency) ? "GBP" : String.valueOf(quoteCurrency);
+    }
+
+    /** Peer bucket for the lag check: same market <em>and</em> same trading session. */
+    private static String peerKey(IntradayPrice ip) {
+        return market(ip.currency()) + "|" + ip.session().name();
+    }
+
+    /**
+     * The row's price note. An extended-hours quote is always labelled; a lagging one also carries
+     * its timestamp. Regular-hours quotes that are keeping up carry no note at all, which is what
+     * keeps the column readable — a note on every row would say nothing.
+     */
+    private static String sessionNote(MarketSession session, String lagLabel) {
+        String base = switch (session) {
+            case PRE -> "pre-market";
+            case POST -> "after-hours";
+            case REGULAR -> null;
+        };
+        if (base == null) return lagLabel;
+        return lagLabel == null ? base : base + ", " + lagLabel;
     }
 
     /**

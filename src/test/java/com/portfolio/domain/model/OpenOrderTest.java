@@ -10,11 +10,16 @@ class OpenOrderTest {
 
     /** A limit order with everything the flag reads and nothing it doesn't. */
     private static OpenOrder order(String side, String limit, String current, boolean estimated) {
+        return order(side, limit, current, estimated, null);
+    }
+
+    private static OpenOrder order(String side, String limit, String current, boolean estimated,
+                                   String quoteSession) {
         return new OpenOrder("AJ Bell SIPP", "SGLN", "iShares Physical Gold", side, "Limit",
                 new BigDecimal("50"), limit == null ? null : new BigDecimal(limit), estimated,
                 null, "GBP", null, null, "GTC", "In progress", null, null,
                 current == null ? null : new BigDecimal(current),
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, quoteSession);
     }
 
     @Test
@@ -58,5 +63,26 @@ class OpenOrderTest {
         assertFalse(order("Buy", "63.21", null, false).throughLimit());
         assertFalse(order(null, "63.21", "62.44", false).throughLimit());
         assertFalse(order("Buy", "0", "62.44", false).throughLimit());
+    }
+
+    @Test
+    void extendedHoursQuoteNeverRaisesTheThroughLimitFlag() {
+        // A buy limit at 150 with the market at 145 is through — but if that 145 is a thin
+        // pre-market print, the order has not missed a fill: a resting regular-hours order does
+        // not transact outside regular hours, so the amber "this should already have gone" row
+        // would fire on every overnight gap and mean nothing.
+        assertTrue(order("Buy", "150.00", "145.00", false).throughLimit());
+        assertFalse(order("Buy", "150.00", "145.00", false, "PRE").throughLimit());
+        assertFalse(order("Buy", "150.00", "145.00", false, "POST").throughLimit());
+        // A sell is suppressed on the same rule, and regular-hours quotes are unaffected.
+        assertFalse(order("Sell", "150.00", "155.00", false, "PRE").throughLimit());
+        assertTrue(order("Sell", "150.00", "155.00", false, null).throughLimit());
+    }
+
+    @Test
+    void quoteSessionLabelIsBlankForARegularHoursPrice() {
+        assertEquals("", order("Buy", "150.00", "145.00", false).quoteSessionLabel());
+        assertEquals("PRE", order("Buy", "150.00", "145.00", false, "PRE").quoteSessionLabel());
+        assertEquals("AH", order("Buy", "150.00", "145.00", false, "POST").quoteSessionLabel());
     }
 }

@@ -123,17 +123,17 @@
                     th:with="live=${o.baseVol() != null and o.currentPrice != null and o.price != null and o.price.signum() != 0}"
                     th:attr="data-sort-value=${o.touchProbHorizon != null ? o.touchProbHorizon : ''},
                              data-current=${o.currentPrice}, data-limit=${o.price}, data-vol=${o.baseVol()}">
-                    <input type="number" class="ord-days" min="1" max="1825" step="1"
-                           th:if="${live}" th:value="${o.horizonDays}" placeholder="days"
-                           th:title="${o.expiry != null
-                                ? 'Calendar days this probability is priced over. This order expires ' + o.expiry.toString() + ' — set the box to that many days to ask whether it fills before it lapses.'
-                                : 'Calendar days this probability is priced over. This order carries no dated expiry, so nothing but your own horizon bounds it.'}">
                     <span class="ord-touch" th:classappend="${o.longHorizon()} ? 'long-horizon' : ''"
                           th:title="${o.horizonSessions == null ? null : (o.horizonDays + ' calendar days = ' + o.horizonSessions + ' trading sessions'
                                 + (o.longHorizon() ? '. This horizon runs well past the column default, where the driftless assumption stops being a convention and becomes the dominant one — expected drift is by then far larger than the diffusion term. Directional, not a number to read to the decimal.' : ''))}"
                           th:text="${o.touchProbHorizon != null
                                 ? #numbers.formatDecimal(o.touchProbHorizon.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
                                 : '—'}">—</span>
+                    <input type="number" class="ord-days" min="1" max="1825" step="1"
+                           th:if="${live}" th:value="${o.horizonDays}" placeholder="days"
+                           th:title="${o.expiry != null
+                                ? 'Calendar days this probability is priced over. This order expires ' + o.expiry.toString() + ' — set the box to that many days to ask whether it fills before it lapses.'
+                                : 'Calendar days this probability is priced over. This order carries no dated expiry, so nothing but your own horizon bounds it.'}">
                 </td>
                 <td th:text="${o.amount != null ? o.currencySymbol + #numbers.formatDecimal(o.amount, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td th:text="${o.amountGbp != null ? '£' + #numbers.formatDecimal(o.amountGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>

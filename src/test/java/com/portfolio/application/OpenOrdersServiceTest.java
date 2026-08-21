@@ -403,6 +403,180 @@ class OpenOrdersServiceTest {
         assertNull(OpenOrdersService.toGbp(null, "USD", rates));
     }
 
+    // ── Pre-trade limit probe ──────────────────────────────────────────────────────────────
+
+    /** A daily series with a clean non-zero σ, plus a live quote, stored under {@code ticker}. */
+    private static void seedPrices(PriceHistoryRepository history, IntradayPriceRepository intraday,
+                                   String ticker, String currency, double startPx, double quote) {
+        List<com.portfolio.domain.model.PriceBar> bars = new java.util.ArrayList<>();
+        java.time.LocalDate d = LocalDate.now().minusDays(39);
+        double px = startPx;
+        for (int i = 0; i < 40; i++) {
+            px *= (i % 2 == 0) ? 1.02 : (1 / 1.02);
+            bars.add(new com.portfolio.domain.model.PriceBar(ticker, d, px, px, px, px, px, 1.0, 1L, currency));
+            d = d.plusDays(1);
+        }
+        history.savePriceBars(bars);
+        intraday.saveIntradayBars(List.of(new com.portfolio.domain.model.IntradayBar(
+                ticker, java.time.Instant.now(), quote, null, currency)));
+    }
+
+    @Test
+    void probeReportsExactlyWhatTheTableWouldForTheSameLimit(@TempDir Path dir) throws Exception {
+        // The whole design claim: a hypothetical order is the same object as a real one, built
+        // synthetically and pushed through the same enrichment. So probing the limit of an order
+        // that *is* on the table has to reproduce that row's columns to the last digit — if it ever
+        // stops doing so, the two panels have grown a second implementation between them.
+        Files.writeString(dir.resolve("2bc3405a-877c-4bf3-ac16-8dcb5303b89a.csv"), """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                19/08/2026 16:52,27726IDT248,BUY/LIMIT,WMT,Walmart Inc,50,n/a,"$5,743.50",PENDING
+                """);
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, history, new YahooTickerMap(), new KeyValueStore(dir.resolve("db")));
+
+        OpenOrder resting = find(service.load().orders(), "WMT");
+        OpenOrder hypothetical = service.probe("WMT", resting.price(), "Buy", null).hypothetical();
+
+        assertEquals(resting.currentPrice(), hypothetical.currentPrice(), "Current");
+        assertEquals(resting.distancePct(), hypothetical.distancePct(), "vs limit");
+        assertEquals(resting.dailyVol10(), hypothetical.dailyVol10(), "RV10");
+        assertEquals(resting.dailyVol30(), hypothetical.dailyVol30(), "RV30");
+        assertEquals(resting.sigmaToLimit(), hypothetical.sigmaToLimit(), "σ→lim");
+        assertEquals(resting.touchProb5d(), hypothetical.touchProb5d(), "P(5d)");
+        assertEquals(resting.touchProb20d(), hypothetical.touchProb20d(), "P(20d)");
+        assertEquals(resting.touchProbHorizon(), hypothetical.touchProbHorizon(), "P(N) at the default horizon");
+        assertEquals(OpenOrdersService.DEFAULT_HORIZON_SESSIONS, hypothetical.horizonSessions());
+    }
+
+    @Test
+    void probeHorizonIsInSessionsSoFiveReproducesPFiveDay(@TempDir Path dir) {
+        // The same on-screen check the table offers, and for the same reason: one first-passage
+        // implementation, one unit. A probe whose N meant calendar days would quietly disagree with
+        // the two fixed columns printed inches to its left.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                FX, new ExcelReportWriter(), outDir, intraday, history, new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")));
+
+        BigDecimal limit = new BigDecimal("108.00");
+        OpenOrder five = service.probe("WMT", limit, "Buy", 5).hypothetical();
+        assertEquals(five.touchProb5d(), five.touchProbHorizon(), "N = 5 sessions is P(5d)");
+        OpenOrder twenty = service.probe("WMT", limit, "Buy", 20).hypothetical();
+        assertEquals(twenty.touchProb20d(), twenty.touchProbHorizon(), "N = 20 sessions is P(20d)");
+        // Clamped, not rejected — a stray keystroke can't ask for an absurd horizon.
+        assertEquals(1, service.probe("WMT", limit, "Buy", 0).hypothetical().horizonSessions());
+        assertEquals(OpenOrdersService.MAX_HORIZON_SESSIONS,
+                service.probe("WMT", limit, "Buy", 99_999).hypothetical().horizonSessions());
+    }
+
+    @Test
+    void probeNeedsNoFxBecauseItValuesTheQuoteInItsOwnCurrency(@TempDir Path dir) {
+        // A London listing quotes in GBp (pence); the limit is read in pounds, the way the AJ Bell
+        // rows print it. Because the target currency *is* the quote's own, no rate is ever consulted
+        // — asserted with an FX provider that throws, so the probe stays a pure disk read that can
+        // be re-run on every keystroke of the limit box.
+        FxRateProvider explodes = () -> {
+            throw new IllegalStateException("FX must not be called by the probe");
+        };
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "XWHS.L", "GBp", 500.0, 538.00);
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                explodes, new ExcelReportWriter(), outDir, intraday, history, new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")));
+
+        OpenOrdersService.LimitProbe probe = service.probe("XWHS.L", new BigDecimal("5.60"), "Buy", null);
+        assertEquals("GBP", probe.hypothetical().currency(), "pence folded into pounds");
+        assertEquals(0, new BigDecimal("5.38").compareTo(probe.hypothetical().currentPrice()),
+                "538p reads as £5.38, matching what the table prints for a London order");
+        assertNotNull(probe.hypothetical().touchProb5d());
+    }
+
+    @Test
+    void probeOnAColdSymbolWarmsBothFeedsAndNamesTheTickerItTried(@TempDir Path dir) {
+        // The state a pre-trade probe finds most symbols in: nothing holds, orders or watches the
+        // name, so load()'s order_symbols publication never covered it and both feeds are empty.
+        // A typo looks identical from here, so the message has to serve both readings.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        List<String> backfilled = new java.util.ArrayList<>();
+        List<String> quoted = new java.util.ArrayList<>();
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                FX, new ExcelReportWriter(), outDir, new IntradayPriceRepository(connections),
+                new PriceHistoryRepository(connections), new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")), quoted::addAll, backfilled::add);
+
+        OpenOrdersService.LimitProbe probe = service.probe("NOSUCH", new BigDecimal("10"), "Buy", null);
+        assertNull(probe.hypothetical(), "no currency to read the limit in, so nothing is computed");
+        assertFalse(probe.priced());
+        assertTrue(probe.warnings().stream().anyMatch(w -> w.contains("NOSUCH")),
+                "the ticker actually tried is named — that is what has to change if it's wrong");
+        assertEquals(List.of("NOSUCH"), backfilled, "daily history queued");
+        assertEquals(List.of("NOSUCH"), quoted, "and the quote too");
+
+        // One fetch per symbol per cooldown, not one per keystroke of the limit box.
+        service.probe("NOSUCH", new BigDecimal("11"), "Buy", null);
+        assertEquals(List.of("NOSUCH"), backfilled, "the warm is cooled down across repeat probes");
+    }
+
+    @Test
+    void probeSaysWhenTheLimitWouldFillOnPlacement(@TempDir Path dir) {
+        // A limit on the fill side of the market isn't a resting order at all — it executes on
+        // placement, so its execution probability is ~100% while the touch columns go on printing a
+        // modest figure for the market travelling *to* that price. First passage is symmetric in
+        // |σ|, so nothing in those numbers distinguishes the two cases; this flag is what does, and
+        // it is what the panel hangs its warning on. Symmetric in side: the same price flips it.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                FX, new ExcelReportWriter(), outDir, intraday, history, new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")));
+
+        assertTrue(service.probe("WMT", new BigDecimal("116.00"), "Buy", null).immediateFill(),
+                "a buy limit above the market executes on placement");
+        assertFalse(service.probe("WMT", new BigDecimal("110.00"), "Buy", null).immediateFill(),
+                "a buy limit below the market rests");
+        assertFalse(service.probe("WMT", new BigDecimal("116.00"), "Sell", null).immediateFill());
+        assertTrue(service.probe("WMT", new BigDecimal("110.00"), "Sell", null).immediateFill(),
+                "a sell limit below the market executes on placement");
+    }
+
+    @Test
+    void probeWithoutALimitStillReportsTheVolatilityColumns(@TempDir Path dir) {
+        // Half-entered input is the normal state while typing — the form re-fires on every
+        // keystroke. RV10/RV30 need only the daily series, so they must still render; the columns
+        // that genuinely need a limit blank out and the panel says which.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                FX, new ExcelReportWriter(), outDir, intraday, history, new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")));
+
+        OpenOrdersService.LimitProbe probe = service.probe("WMT", null, "Buy", null);
+        assertTrue(probe.priced(), "the current price needs no limit");
+        assertNotNull(probe.hypothetical().dailyVol10());
+        assertNotNull(probe.hypothetical().dailyVol30());
+        assertNull(probe.hypothetical().sigmaToLimit());
+        assertNull(probe.hypothetical().touchProb5d());
+        assertNull(probe.hypothetical().touchProbHorizon());
+        assertFalse(probe.immediateFill(), "no limit is not a fill");
+        assertTrue(probe.warnings().stream().anyMatch(w -> w.contains("limit price")));
+    }
+
     private static OpenOrder find(List<OpenOrder> orders, String symbol) {
         return orders.stream().filter(o -> symbol.equals(o.symbol())).findFirst().orElseThrow();
     }

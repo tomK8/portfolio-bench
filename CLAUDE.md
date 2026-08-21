@@ -283,6 +283,7 @@ no `System.out` in production code.
 | Sync from cash ledger | `POST /sync-from-cash`     | `SyncFromCashService`     |
 | Open orders           | `GET /orders`              | `OpenOrdersService`       |
 | Order touch re-price  | `GET /orders/touch`        | `OpenOrdersService.touchEstimate` |
+| Pre-trade limit probe | `GET /orders/probe`        | `OpenOrdersService.probe` |
 | Open orders → Excel   | `POST /orders/export`      | `OpenOrdersService.export` (→ ~/Documents) |
 | Export Excel          | `POST /export`             | `ExportExcelService`      |
 | Import cash statement | `POST /import-cash`        | `ImportCashService`       |
@@ -491,6 +492,37 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   reads top-down — probability (the value, and what the column sorts on), then the box that
   produced it. Excel gains `Horizon (sessions)` + `P(touch horizon)`; the export re-parses, so an
   on-screen edit stays a what-if rather than state.
+- **Pre-trade limit probe (`Test a limit before you place it`).** The touch probability is the
+  number that says whether a limit is ambitious or lazy, and until now it was only readable *after*
+  the order existed at a broker — the wrong way round for calibrating one. A card at the top of the
+  panel takes a symbol + limit (+ side + horizon) and reports the **same seven statistics** the
+  table's columns do — Current, vs limit, RV10, RV30, σ→lim, P(5d), P(20d) — plus P(N).
+  `GET /orders/probe` → `OpenOrdersService.probe` → `fragments/orders :: probe`.
+  - **It is the same object, not a parallel calculation.** A hypothetical order is built as an
+    `OpenOrder` (broker "What-if", no qty/date/status) and pushed through the *same*
+    `enrichWithCurrentPrice` pass the parsed rows take, so the quote-age bound, the pre/post
+    labelling, the RV10→RV30 vol fallback and the first-passage maths are one implementation.
+    `probeReportsExactlyWhatTheTableWouldForTheSameLimit` asserts a probe of a resting order's own
+    limit reproduces that row's eight columns exactly — if it ever stops, a second implementation
+    has grown between the two panels.
+  - **No FX, ever.** The limit is read in the instrument's **own quote currency** (`GBp` folded to
+    pounds, as an AJ Bell row already prints), detected from the stored quote rather than asked
+    for. Target currency = the quote's currency ⇒ `priceInCurrency` never needs a rate, so the
+    probe is a pure disk read and the form can safely re-fire as the limit box is typed into
+    (asserted with an FX provider that throws).
+  - **A marketable limit is flagged, loudly, above the numbers.** First passage is symmetric in
+    |σ|, so a buy limit 1.26σ *above* the market prints the same modest 20.6% as one 1.26σ below —
+    but that figure measures the market travelling *up* to a price the order would already have
+    filled at. Unlabelled it reads as a one-in-five chance, the exact inverse of the truth.
+    `LimitProbe.immediateFill()` (deliberately **not** `OpenOrder.throughLimit()`, which allows an
+    extended-hours and fee-estimate margin for a different question) drives an amber banner stating
+    execution is ~100% and that the columns below are not execution odds.
+  - **Cold feeds are warmed, both of them.** A symbol nobody holds, orders or watches is exactly
+    what a pre-trade probe reaches for, and `load()`'s `order_symbols` publication never covered
+    it. Quotes go to the existing intraday warmer; the **daily** series — which every probability
+    is scaled by — goes to a new `historyWarmer` (`PriceFetchJob.fetchSingleIfStale`, so a covered
+    name costs no HTTP). Both share `lastWarmed`'s 5-minute cooldown under distinct key prefixes,
+    so typing into the limit box is one fetch and not one per keystroke. The render never waits.
 - **Row click → the shared price popup.** Same `openSymbolModal` the Live and Watchlist tables use
   (chart + momentum + vol term structure + fundamentals, served by `GET /watchlist/row` for any
   symbol, watched or not — looking at an order never arms an alert). Delegated from `document.body`,

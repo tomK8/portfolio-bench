@@ -339,6 +339,52 @@
             background: rgba(52, 152, 219, 0.10);
         }
 
+        /* Pre-trade limit probe. Its result reuses the .returns-stat tiles (and so their dark
+           theme) — the numbers are the table's own columns, just laid out for one instrument. */
+        .probe-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            background: #fafafa;
+            padding: 0.7rem 0.9rem;
+            margin: 0.6rem 0 0.9rem;
+        }
+
+        .probe-form { display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: flex-end; }
+
+        .probe-form label {
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+            font-size: 0.72rem;
+            color: #777;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .probe-form input, .probe-form select {
+            padding: 0.28rem 0.4rem;
+            font-size: 0.9rem;
+            text-transform: none;
+            letter-spacing: normal;
+        }
+
+        .probe-symbol { cursor: pointer; text-decoration: underline dotted; }
+
+        /* Same amber "check this" idiom as an order already through its own limit. */
+        .probe-fill {
+            background: rgba(224, 168, 0, 0.16);
+            box-shadow: inset 3px 0 0 #e0a800;
+            padding: 0.45rem 0.7rem;
+            margin: 0.2rem 0 0.5rem;
+            font-size: 0.85rem;
+        }
+
+        .returns-stat .value.probe-long { color: #b8860b; }
+
+        html[data-theme="dark"] .probe-card { background: #1c1f24; border-color: #2e3137; }
+        html[data-theme="dark"] .probe-form label { color: #9aa0a6; }
+        html[data-theme="dark"] .returns-stat .value.probe-long { color: #e0a800; }
+
         /* The P(N) cell reads top-down: the probability is the value (and what the column sorts
            on), the horizon box below it is the control that produced it. */
         .ord-touch {
@@ -1500,6 +1546,44 @@
         (UUID <code>.csv</code>), Citi Roth <code>Order+Status*.xlsx</code>. Read-only; filled,
         cancelled and expired orders are excluded.
     </p>
+    <section class="probe-card">
+        <h3 style="margin: 0 0 0.2rem; font-size: 0.95rem">Test a limit before you place it</h3>
+        <p class="muted" style="margin: 0 0 0.6rem">
+            The same seven statistics the table below reports for a resting order — current price,
+            distance to the limit, RV10/RV30, &sigma;&rarr;lim, P(5d), P(20d) — plus the P(N)
+            horizon, for an order that doesn't exist yet. Enter the limit in the instrument's own
+            quote currency (London listings in <strong>pounds</strong>, as the table prints them —
+            not pence). Reads stored prices only, so it re-runs as you type: nudge the limit until
+            the probability is the one you want.
+        </p>
+        <form id="probe-form" class="probe-form"
+              hx-get="/orders/probe" hx-target="#probe-result" hx-swap="innerHTML"
+              hx-trigger="submit, change from:#probe-symbol, change from:#probe-side, input changed delay:400ms from:#probe-limit, input changed delay:400ms from:#probe-sessions">
+            <label>Symbol
+                <input id="probe-symbol" name="symbol" type="text" size="10" spellcheck="false"
+                       autocomplete="off" placeholder="WMT"
+                       title="Your internal symbol or the Yahoo ticker — an unmapped symbol falls back to itself. The resolved ticker is shown in the result.">
+            </label>
+            <label>Side
+                <select id="probe-side" name="side">
+                    <option value="Buy">Buy</option>
+                    <option value="Sell">Sell</option>
+                </select>
+            </label>
+            <label>Limit
+                <input id="probe-limit" name="limit" type="number" step="any" min="0" size="10"
+                       placeholder="112.50"
+                       title="Per-share limit price, in the instrument's own quote currency.">
+            </label>
+            <label>Horizon
+                <input id="probe-sessions" name="sessions" type="number" min="1" max="1250" step="1"
+                       value="60" size="6"
+                       title="Trading sessions the P(N) figure is priced over — the same unit as P(5d) and P(20d). Set it to 5 and P(N) reproduces P(5d) exactly.">
+            </label>
+            <button type="submit">Test</button>
+        </form>
+        <div id="probe-result"></div>
+    </section>
     <div class="actions">
         <button hx-post="/orders/export" hx-target="#orders-export-result" type="button">Download Excel</button>
     </div>

@@ -159,6 +159,7 @@ public class OpenOrdersService {
     private final YahooTickerMap tickerMap;
     private final KeyValueStore kv;
     private final Consumer<Collection<String>> quoteWarmer;
+    private final Consumer<String> historyWarmer;
     private final Map<String, Instant> lastWarmed = new ConcurrentHashMap<>();
 
     public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
@@ -181,6 +182,27 @@ public class OpenOrdersService {
                              Path outputDir, IntradayPriceRepository intraday,
                              PriceHistoryRepository history, YahooTickerMap tickerMap,
                              KeyValueStore kv, Consumer<Collection<String>> quoteWarmer) {
+        this(fileLocator, parsers, fxRateProvider, excelReportWriter, outputDir, intraday, history,
+                tickerMap, kv, quoteWarmer, symbol -> { });
+    }
+
+    /**
+     * @param historyWarmer handed a symbol whose <em>daily</em> series is missing or stale, to
+     *                      backfill off the nightly cycle. Separate from {@code quoteWarmer}
+     *                      because it answers a different gap: a quote refresh is a one-minute bar,
+     *                      while the volatility every probability is scaled by needs weeks of daily
+     *                      closes. Only {@link #probe} uses it — a resting order's symbol is
+     *                      published to the fetch universe and so is already covered, but an order
+     *                      the user is only <em>considering</em> has told nothing about itself yet.
+     *                      Expected to return immediately (the wiring hands it to a background
+     *                      executor); the caller is told to reload rather than made to wait.
+     */
+    public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
+                             FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
+                             Path outputDir, IntradayPriceRepository intraday,
+                             PriceHistoryRepository history, YahooTickerMap tickerMap,
+                             KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
+                             Consumer<String> historyWarmer) {
         this.fileLocator = fileLocator;
         this.parsers = parsers;
         this.fxRateProvider = fxRateProvider;
@@ -191,6 +213,7 @@ public class OpenOrdersService {
         this.tickerMap = tickerMap;
         this.kv = kv;
         this.quoteWarmer = quoteWarmer;
+        this.historyWarmer = historyWarmer;
     }
 
     /**
@@ -443,6 +466,200 @@ public class OpenOrdersService {
      */
     public record TouchEstimate(int sessions, BigDecimal sigma, BigDecimal probability,
                                 boolean longHorizon) {
+    }
+
+    /**
+     * Price a limit order that has not been placed yet: given a symbol and a limit price, return the
+     * same live-price and volatility statistics the table reports for a resting order — current
+     * price, distance to the limit, RV10/RV30, σ→limit, P(5d), P(20d) and the P(N) horizon column.
+     *
+     * <p>The touch probability is the number that says whether a limit is ambitious or lazy, and it
+     * was only readable <em>after</em> the order existed at a broker — which is the wrong way round
+     * for calibrating one. This answers the same question before the order is placed.
+     *
+     * <p>A hypothetical order is the same object as a real one, so it is built as an
+     * {@link OpenOrder} and run through the <em>same</em> {@link #enrichWithCurrentPrice} pass the
+     * parsed rows take, rather than through a parallel calculation. That is what makes "the same
+     * seven statistics" true by construction instead of by inspection: the quote-age bound, the
+     * pre/post-market labelling, the RV10→RV30 vol fallback and the first-passage maths are one
+     * implementation, and {@code sessions=5} still reproduces P(5d) here exactly as it does there.
+     *
+     * <p>The limit is read in the instrument's <b>own quote currency</b>, with London pence folded
+     * into pounds ({@code GBp} → GBP) — the same currency an AJ Bell row already prints, since that
+     * parser normalises "53800p" to £538.00. Detecting it from the stored quote rather than asking
+     * for it has a second effect worth having: the probe values a quote in its own currency, so no
+     * FX rate enters the calculation at all and the whole thing is a pure disk read that can be
+     * re-run on every keystroke of the limit box.
+     *
+     * <p>A symbol nobody holds, has ordered or watches has a cold feed — which is exactly the state
+     * a pre-trade probe finds it in, and the reason it needs its own warming: {@link #load} publishes
+     * a resting order's symbol to the fetch universe, but an order merely being considered has told
+     * the app nothing. Both feeds are warmed in the background (quotes via the intraday job, daily
+     * closes via {@link #historyWarmer}) and the caller is told to reload — the render never waits.
+     *
+     * @param side     "Buy" or "Sell"; anything else reads as Buy. It changes no statistic — the
+     *                 touch probability is symmetric — only whether the limit is on the fill side of
+     *                 the market right now (see {@link LimitProbe#immediateFill()}).
+     * @param sessions horizon for the P(N) column in trading sessions; null takes the table's
+     *                 standing default, and it is clamped to {@code [1, MAX_HORIZON_SESSIONS]}.
+     */
+    public LimitProbe probe(String symbol, BigDecimal limit, String side, Integer sessions) {
+        String sym = symbol == null ? "" : symbol.trim().toUpperCase();
+        int horizon = Math.max(1, Math.min(
+                sessions == null ? DEFAULT_HORIZON_SESSIONS : sessions, MAX_HORIZON_SESSIONS));
+        if (sym.isEmpty()) {
+            return LimitProbe.unpriceable(sym, null, List.of("Enter a symbol to test a limit against."));
+        }
+
+        String ticker = tickerFor(sym);
+        String ccy = quoteCurrency(ticker);
+        if (ccy == null) {
+            // Nothing has ever priced this ticker, so there is not even a currency to read the limit
+            // in. A typo and a genuinely new instrument are indistinguishable from here, and both are
+            // answered the same way: warm the feeds, name the ticker actually tried, and let the
+            // reader either wait a few seconds or correct the mapping the panel already offers below.
+            warmHistory(sym);
+            warmQuote(sym, ticker);
+            return LimitProbe.unpriceable(sym, ticker, List.of(
+                    "Nothing has ever priced under " + ticker + ". If that is the right Yahoo ticker, "
+                            + "a price fetch is queued now — reload in a few seconds. If it is not, "
+                            + "map the symbol in the list below."));
+        }
+
+        List<OpenOrder> hypothetical = new ArrayList<>();
+        hypothetical.add(new OpenOrder("What-if", sym, null,
+                "sell".equalsIgnoreCase(side) ? "Sell" : "Buy", "Limit",
+                null, limit, false, null, ccy, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null));
+
+        // Map.of() rather than a live FX snapshot: the order's currency *is* the quote's currency,
+        // so priceInCurrency never needs a rate. Keeping the network out of this path is what makes
+        // re-running the probe as the limit is typed cost nothing.
+        Quotes quotes = enrichWithCurrentPrice(hypothetical, Map.of());
+        warmLaggingQuotes(quotes.warm());
+
+        OpenOrder o = hypothetical.get(0);
+        o = o.withHorizonTouch(horizon, PriceStats.touchProbability(
+                PriceStats.sigmaDistance(o.currentPrice(), o.price(), o.baseVol(), horizon)), null);
+
+        List<String> warnings = new ArrayList<>(quotes.warnings());
+        if (o.currentPrice() == null && quotes.warnings().isEmpty()) {
+            warmQuote(sym, ticker);
+            warnings.add("No current price for " + ticker + " — the last stored quote is older than "
+                    + MAX_PRICE_AGE_DAYS + " days. A fetch is queued; reload in a few seconds.");
+        }
+        if (o.baseVol() == null) {
+            warmHistory(sym);
+            warnings.add("No usable daily history for " + ticker + " over the last " + VOL_LOOKBACK_DAYS
+                    + " days, so there is no volatility to scale a probability by. A backfill is "
+                    + "queued; reload in a few seconds.");
+        }
+        if (limit == null || limit.signum() <= 0) {
+            warnings.add("Enter a limit price above zero for the distance and touch probabilities.");
+        }
+        return new LimitProbe(sym, ticker, o, quotes.notes().get(sym), quotes.asOf(), warnings);
+    }
+
+    /**
+     * The currency a limit on this instrument is naturally quoted in — the stored quote's own
+     * currency, with London pence folded into pounds so the probe reads the way an AJ Bell order row
+     * already does. Null when nothing has ever priced the ticker, which is the one state the probe
+     * cannot compute anything from.
+     *
+     * <p>The daily fallback is deliberately <em>not</em> bounded by {@link #MAX_PRICE_AGE_DAYS}: a
+     * bar too old to print as a price still says perfectly well what currency the listing trades in,
+     * and using it here only means the probe knows how to read the user's limit. Whether there is a
+     * <em>usable</em> price is decided downstream, by the shared enrichment, under the normal bound.
+     */
+    private String quoteCurrency(String ticker) {
+        if (ticker == null) return null;
+        String ccy = null;
+        IntradayPrice ip = intraday.loadLatestQuotes(Set.of(ticker)).get(ticker);
+        if (ip != null) ccy = ip.currency();
+        if (ccy == null) {
+            PriceBar bar = history.getPriceOn(ticker, LocalDate.now());
+            if (bar != null) ccy = bar.currency();
+        }
+        if (ccy == null) return null;
+        return "GBp".equals(ccy) ? "GBP" : ccy;
+    }
+
+    /** Queue an intraday quote fetch for a probed symbol, unless it is a gilt (not on Yahoo). */
+    private void warmQuote(String symbol, String ticker) {
+        if (ticker == null || Instruments.isBond(symbol)) return;
+        warmLaggingQuotes(Set.of(ticker));
+    }
+
+    /**
+     * Queue a daily-history backfill for a symbol whose volatility could not be computed. Shares
+     * {@link #lastWarmed} with the quote warmer under a distinct key prefix, so a burst of probes on
+     * one symbol — the limit box re-runs the calculation as it is typed into — costs one fetch
+     * rather than one per keystroke.
+     */
+    private void warmHistory(String symbol) {
+        if (symbol == null || symbol.isBlank() || Instruments.isBond(symbol)) return;
+        String key = "history:" + symbol.toUpperCase();
+        Instant now = Instant.now();
+        Instant last = lastWarmed.get(key);
+        if (last != null && last.isAfter(now.minus(WARM_COOLDOWN))) return;
+        lastWarmed.put(key, now);
+        log.info("Limit probe: backfilling daily history for {}", symbol);
+        try {
+            historyWarmer.accept(symbol);
+        } catch (Exception e) {
+            log.warn("Limit probe: daily-history warm failed for {}", symbol, e);
+        }
+    }
+
+    /**
+     * A limit order priced before it exists.
+     *
+     * @param hypothetical the synthetic order after the standard enrichment — null only when the
+     *                     ticker has never been priced, so there is no currency to read the limit
+     *                     in. Its broker reads "What-if" and it carries no quantity, date or status:
+     *                     no statistic depends on those, and reusing the record rather than
+     *                     inventing a parallel one is what keeps this panel and the orders table
+     *                     from ever disagreeing about the same instrument.
+     * @param priceNote    the "as of …" / "close …" / "pre-market …" label the table would print
+     *                     beside the price, or null when it is a current regular-hours quote.
+     */
+    public record LimitProbe(String symbol, String ticker, OpenOrder hypothetical,
+                             String priceNote, String quotesAsOf, List<String> warnings) {
+
+        static LimitProbe unpriceable(String symbol, String ticker, List<String> warnings) {
+            return new LimitProbe(symbol, ticker, null, null, null, warnings);
+        }
+
+        /** Whether a live price was found — without one, every column right of it is blank. */
+        public boolean priced() {
+            return hypothetical != null && hypothetical.currentPrice() != null;
+        }
+
+        /**
+         * True when the limit already sits on the fill side of the market — a buy at or above it, a
+         * sell at or below. That order is a market order in all but name: it executes on placement
+         * at the market price or better, so its probability of <em>execution</em> is ~100%.
+         *
+         * <p>Worth surfacing loudly because the touch columns do not say that, and quietly read as
+         * if they did. First passage is symmetric in |σ|, so a buy limit 1.26σ <em>above</em> the
+         * market prints the same modest 20.6% a buy limit 1.26σ below it does — but the figure is
+         * measuring the market travelling <em>up</em> to that price, which is not what has to happen
+         * for this order to fill. Left unlabelled, a limit that fills instantly reads as a one-in-
+         * five chance, which is the exact inverse of the truth.
+         *
+         * <p>Deliberately not {@link OpenOrder#throughLimit()}. That flag answers a different
+         * question — "why is this resting order still open" — so it stands down outside regular
+         * hours and allows a margin for II's fee-inflated estimated limit. Neither qualification
+         * applies to a price the reader has just typed against the newest quote there is.
+         */
+        public boolean immediateFill() {
+            if (!priced() || hypothetical.price() == null || hypothetical.price().signum() <= 0) {
+                return false;
+            }
+            return "Buy".equalsIgnoreCase(hypothetical.side())
+                    ? hypothetical.currentPrice().compareTo(hypothetical.price()) <= 0
+                    : hypothetical.currentPrice().compareTo(hypothetical.price()) >= 0;
+        }
     }
 
     /** What a quote's age reads as on the row: a time for today, a date for anything older. */

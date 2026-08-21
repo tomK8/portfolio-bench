@@ -144,6 +144,13 @@
                 if (tr) openSymbolModal(tr.dataset.symbol);
             });
 
+            // The probe's symbol opens the same price popup the table rows do. Its result is
+            // htmx-swapped on every re-run, so this is delegated too.
+            document.body.addEventListener('click', function (e) {
+                var el = e.target.closest ? e.target.closest('#probe-result [data-symbol]') : null;
+                if (el) openSymbolModal(el.dataset.symbol);
+            });
+
             // Editable horizon box → re-price P(N) on the server (see GET /orders/touch: the
             // first-passage maths stays in one place rather than being mirrored here). The box is
             // in trading sessions, the same unit as P(5d)/P(20d) — type 5 and the cell matches.

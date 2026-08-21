@@ -2,6 +2,122 @@
 <html lang="en" xmlns:th="http://www.thymeleaf.org">
 <body>
 
+<!--
+  The pre-trade limit probe: the same seven live-price/volatility statistics the orders table
+  reports for a resting order, computed for an order that doesn't exist yet. It renders the
+  *same* OpenOrder record the table rows do (built synthetically and run through the same
+  enrichment), so the two panels use identical formats and can't drift apart.
+-->
+<div th:fragment="probe">
+
+    <div th:if="${probe.hypothetical == null}">
+        <div class="value-warnings" th:if="${!probe.warnings.isEmpty()}">
+            <ul>
+                <li th:each="w : ${probe.warnings}" th:text="${w}">warning</li>
+            </ul>
+        </div>
+    </div>
+
+    <div th:if="${probe.hypothetical != null}" th:with="o=${probe.hypothetical}">
+
+        <p class="muted" style="margin: 0.5rem 0 0.2rem">
+            <strong class="probe-symbol" th:attr="data-symbol=${probe.symbol}"
+                    th:text="${probe.symbol}"
+                    title="Click for the price popup — chart, momentum, vol term structure and fundamentals. The chart beside the probability is most of what calibrating a limit needs.">SYM</strong>
+            <span th:if="${probe.ticker != null and !probe.ticker.equals(probe.symbol)}"
+                  th:text="'→ ' + ${probe.ticker}">→ TICKER</span>
+            <span th:if="${o.price != null and o.price.signum() &gt; 0}"
+                  th:text="' · ' + ${o.side} + ' limit ' + ${o.currencySymbol} + ${#numbers.formatDecimal(o.price, 1, 'COMMA', 2, 'POINT')} + ' (' + ${o.currency} + ')'"> · Buy limit</span>
+            <span th:if="${probe.quotesAsOf != null}" th:text="' · quote ' + ${probe.quotesAsOf}"> · quote</span>
+        </p>
+
+        <p class="probe-fill" th:if="${probe.immediateFill()}">
+            <strong>This limit is marketable — it would execute on placement, not rest.</strong>
+            A <span th:text="${#strings.toLowerCase(o.side)}">buy</span> at
+            <span th:text="${o.currencySymbol} + ${#numbers.formatDecimal(o.price, 1, 'COMMA', 2, 'POINT')}">£0</span>
+            against a market of
+            <span th:text="${o.currencySymbol} + ${#numbers.formatDecimal(o.currentPrice, 1, 'COMMA', 2, 'POINT')}">£0</span>
+            fills at the market price or better, so its probability of execution is <strong>~100%</strong>.
+            <br>The touch figures below do <em>not</em> say that, and must not be read as execution
+            odds here: they measure the market <em>travelling to</em>
+            <span th:text="${o.currencySymbol} + ${#numbers.formatDecimal(o.price, 1, 'COMMA', 2, 'POINT')}">£0</span>,
+            which is not what has to happen for this order to fill. Move the limit to the resting
+            side of the market — below it for a buy, above it for a sell — and the columns become
+            execution probabilities again.
+        </p>
+
+        <div class="returns-stats" style="gap: 0.9rem; margin: 0.4rem 0 0.5rem">
+            <div class="returns-stat">
+                <span class="label">Current</span>
+                <span class="value" th:classappend="${o.currentPrice == null ? 'na' : ''}"
+                      th:text="${o.currentPrice != null
+                            ? o.currencySymbol + #numbers.formatDecimal(o.currentPrice, 1, 'COMMA', 2, 'POINT')
+                            : '—'}">—</span>
+                <span class="sub" th:text="${probe.priceNote != null ? probe.priceNote
+                        : (o.currentPrice != null ? 'live quote' : 'no usable quote')}">live quote</span>
+            </div>
+            <div class="returns-stat">
+                <span class="label">vs limit</span>
+                <span class="value"
+                      th:classappend="${o.distancePct == null ? 'na' : (o.distancePct.signum() &gt; 0 ? 'pos' : (o.distancePct.signum() &lt; 0 ? 'neg' : ''))}"
+                      th:text="${o.distancePct != null
+                            ? (o.distancePct.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'
+                            : '—'}">—</span>
+                <span class="sub">market vs your limit</span>
+            </div>
+            <div class="returns-stat">
+                <span class="label">RV10</span>
+                <span class="value" th:classappend="${o.dailyVol10 == null ? 'na' : ''}"
+                      th:text="${o.dailyVol10 != null ? #numbers.formatDecimal(o.dailyVol10.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</span>
+                <span class="sub">daily σ, 10 sessions</span>
+            </div>
+            <div class="returns-stat">
+                <span class="label">RV30</span>
+                <span class="value" th:classappend="${o.dailyVol30 == null ? 'na' : ''}"
+                      th:text="${o.dailyVol30 != null ? #numbers.formatDecimal(o.dailyVol30.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</span>
+                <span class="sub">daily σ, 30 sessions</span>
+            </div>
+            <div class="returns-stat">
+                <span class="label">σ→lim</span>
+                <span class="value" th:classappend="${o.sigmaToLimit == null ? 'na' : ''}"
+                      th:text="${o.sigmaToLimit != null
+                            ? (o.sigmaToLimit.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.sigmaToLimit, 1, 'COMMA', 2, 'POINT') + 'σ'
+                            : '—'}">—</span>
+                <span class="sub">5-session σ to the limit</span>
+            </div>
+            <div class="returns-stat">
+                <span class="label">P(5d)</span>
+                <span class="value" th:classappend="${o.touchProb5d == null ? 'na' : ''}"
+                      th:text="${o.touchProb5d != null ? #numbers.formatDecimal(o.touchProb5d.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '—'}">—</span>
+                <span class="sub">touched within 5</span>
+            </div>
+            <div class="returns-stat">
+                <span class="label">P(20d)</span>
+                <span class="value" th:classappend="${o.touchProb20d == null ? 'na' : ''}"
+                      th:text="${o.touchProb20d != null ? #numbers.formatDecimal(o.touchProb20d.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '—'}">—</span>
+                <span class="sub">touched within 20</span>
+            </div>
+            <div class="returns-stat">
+                <span class="label" th:text="'P(' + ${o.horizonSessions} + ')'">P(N)</span>
+                <span class="value" th:classappend="${o.touchProbHorizon == null ? 'na' : (o.longHorizon() ? 'probe-long' : '')}"
+                      th:title="${o.longHorizon()
+                            ? 'This horizon runs well past the column default, where the driftless assumption stops being a convention and becomes the dominant one — expected drift is by then far larger than the diffusion term. Directional, not a number to read to the decimal.'
+                            : null}"
+                      th:text="${o.touchProbHorizon != null
+                            ? (o.longHorizon() ? '~' : '') + #numbers.formatDecimal(o.touchProbHorizon.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
+                            : '—'}">—</span>
+                <span class="sub" th:text="'touched within ' + ${o.horizonSessions} + ' sessions'">touched within N</span>
+            </div>
+        </div>
+
+        <div th:if="${!probe.warnings.isEmpty()}" class="value-warnings">
+            <ul>
+                <li th:each="w : ${probe.warnings}" th:text="${w}">warning</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
 <div th:fragment="result">
 
     <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>

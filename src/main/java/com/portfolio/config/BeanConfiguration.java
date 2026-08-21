@@ -160,6 +160,7 @@ public class BeanConfiguration {
                                                InstrumentMappingRepository instrumentMappingRepository,
                                                KeyValueStore keyValueStore,
                                                IntradayPriceFetchJob intradayPriceFetchJob,
+                                               PriceFetchJob priceFetchJob,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -172,7 +173,12 @@ public class BeanConfiguration {
                 // Off-cycle quote warm for symbols whose feed is visibly behind. One daemon thread,
                 // so a burst of tab clicks queues instead of racing Yahoo — and the panel never
                 // waits on it: the fetched price appears on the next reload.
-                warmOnBackgroundThread(intradayPriceFetchJob));
+                warmOnBackgroundThread(intradayPriceFetchJob),
+                // The pre-trade limit probe reaches for symbols nothing else in the app has ever
+                // named, so their daily series — the volatility every probability is scaled by — can
+                // be missing entirely. fetchSingleIfStale is the right depth: it skips a name whose
+                // history is already current, so re-probing a held position costs no HTTP at all.
+                backfillOnBackgroundThread(priceFetchJob));
     }
 
     private static Consumer<Collection<String>> warmOnBackgroundThread(IntradayPriceFetchJob job) {
@@ -182,6 +188,15 @@ public class BeanConfiguration {
             return t;
         });
         return tickers -> exec.submit(() -> job.fetchNow(tickers));
+    }
+
+    private static Consumer<String> backfillOnBackgroundThread(PriceFetchJob job) {
+        ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "orders-history-warm");
+            t.setDaemon(true);
+            return t;
+        });
+        return symbol -> exec.submit(() -> job.fetchSingleIfStale(symbol));
     }
 
     @Bean

@@ -53,6 +53,43 @@ public class OrdersController {
     }
 
     /**
+     * Prices a limit order that hasn't been placed yet — the pre-trade half of the touch-probability
+     * columns. Renders the same statistics the table shows for a resting order, for a symbol and a
+     * limit the reader is still deciding on.
+     *
+     * <p>Every parameter is taken as text and parsed leniently rather than bound to a
+     * {@code BigDecimal} / {@code int}: the form re-fires as the limit box is typed into, and a
+     * half-entered value must render a panel saying what's missing, not a 400 that leaves the last
+     * result on screen looking current.
+     */
+    @GetMapping("/orders/probe")
+    public String probe(@RequestParam(required = false) String symbol,
+                        @RequestParam(required = false) String limit,
+                        @RequestParam(required = false) String side,
+                        @RequestParam(required = false) String sessions,
+                        Model model) {
+        model.addAttribute("probe", openOrdersService.probe(
+                symbol, decimalOrNull(limit), side, intOrNull(sessions)));
+        return "fragments/orders :: probe";
+    }
+
+    private static BigDecimal decimalOrNull(String s) {
+        try {
+            return (s == null || s.isBlank()) ? null : new BigDecimal(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static Integer intOrNull(String s) {
+        try {
+            return (s == null || s.isBlank()) ? null : Integer.valueOf(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
      * Writes the current open orders to a date-stamped .xlsx in the output directory (~/Documents),
      * alongside the portfolio exports — not the browser's download folder. Reuses the shared export
      * result fragment to report the written path.

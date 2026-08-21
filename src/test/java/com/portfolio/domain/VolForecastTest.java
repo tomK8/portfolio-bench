@@ -104,14 +104,98 @@ class VolForecastTest {
     }
 
     @Test
-    void theReservedFlagsAreNoOpsAndChangeNothingYet() {
+    void theStillReservedFlagsAreNoOpsAndChangeNothingYet() {
+        // useEventVar / useImpliedVol are declared seams, not behaviour. (useDrift is wired — see
+        // the drift tests below.)
         Inputs in = inputs("0.03", "0.028", "0.026", "0.02");
         var plain = VolForecast.touch(in, dec("100"), dec("110"), 60, Config.DEFAULT);
         var flagged = VolForecast.touch(in, dec("100"), dec("110"), 60,
-                new Config(20, 90, true, true, true));
+                new Config(20, 90, false, true, true));
         assertEquals(plain.sigmaEff(), flagged.sigmaEff());
         assertEquals(plain.probability(), flagged.probability());
         assertEquals(plain.source(), flagged.source());
+    }
+
+    // ---- the drift branch --------------------------------------------------
+
+    private static final Config DRIFT_ON = new Config(20, 90, true, false, false);
+
+    @Test
+    void driftIsOffByDefaultSoNothingIsDriftedUnlessAskedFor() {
+        assertFalse(Config.DEFAULT.useDrift());
+        assertFalse(Config.of(null, null).useDrift());
+        assertTrue(Config.of(null, null, true).useDrift());
+
+        Inputs in = inputs("0.02", "0.02", "0.02", "0.02");
+        Touch equityOff = VolForecast.touch(in, dec("100"), dec("90"), 250, Config.DEFAULT, AssetClass.EQUITY);
+        assertEquals(0, equityOff.drift().signum());
+        assertFalse(equityOff.drifted());
+        assertEquals(PriceStats.touchProbability(PriceStats.sigmaDistance(
+                        dec("100"), dec("90"), equityOff.sigmaEff(), 250)),
+                equityOff.probability(),
+                "flag off: the driftless formula, whatever the asset class");
+    }
+
+    @Test
+    void withTheFlagOnAZeroDriftAssetIsBitForBitTheDriftlessResult() {
+        // THE wiring test. A gilt and a bullion ETC carry μ = 0, so with drift *switched on* the
+        // branch must still produce the driftless number — identical, not merely close. Anything
+        // else means the wiring changed the maths rather than routing it.
+        Inputs in = inputs("0.012", "0.010", "0.011", "0.009");
+        for (AssetClass zero : new AssetClass[]{AssetClass.GILT, AssetClass.COMMODITY, AssetClass.UNKNOWN}) {
+            for (String limit : new String[]{"92", "100", "108"}) {
+                for (int n : new int[]{1, 5, 90, 250}) {
+                    Touch off = VolForecast.touch(in, dec("100"), dec(limit), n, Config.DEFAULT, zero);
+                    Touch on = VolForecast.touch(in, dec("100"), dec(limit), n, DRIFT_ON, zero);
+                    assertEquals(off.probability(), on.probability(),
+                            zero + " has no drift, so the flag must change nothing (limit " + limit
+                                    + ", N=" + n + ")");
+                    assertEquals(off.probabilityLow(), on.probabilityLow());
+                    assertEquals(off.probabilityHigh(), on.probabilityHigh());
+                    assertEquals(off.sigmaEff(), on.sigmaEff(), "σ_eff is not a function of drift");
+                    assertFalse(on.drifted());
+                }
+            }
+        }
+    }
+
+    @Test
+    void withTheFlagOnAnEquityDriftsAwayFromABuyLimitAndTowardASellLimit() {
+        Inputs in = inputs("0.015", "0.015", "0.015", "0.015");
+        Touch buyOff = VolForecast.touch(in, dec("100"), dec("90"), 250, Config.DEFAULT, AssetClass.EQUITY);
+        Touch buyOn = VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON, AssetClass.EQUITY);
+        assertTrue(buyOn.drifted());
+        assertEquals(AssetClass.EQUITY.dailyDrift(), buyOn.drift());
+        assertTrue(buyOn.probability().compareTo(buyOff.probability()) < 0,
+                "6%/yr of drift walks an equity away from a limit below it");
+
+        Touch sellOn = VolForecast.touch(in, dec("100"), dec("110"), 250, DRIFT_ON, AssetClass.EQUITY);
+        Touch sellOff = VolForecast.touch(in, dec("100"), dec("110"), 250, Config.DEFAULT, AssetClass.EQUITY);
+        assertTrue(sellOn.probability().compareTo(sellOff.probability()) > 0, "and toward one above it");
+
+        // An ETF carries the equity drift by construction — the two are the same number today.
+        assertEquals(AssetClass.EQUITY.dailyDrift(), AssetClass.ETF.dailyDrift());
+        assertEquals(buyOn.probability(),
+                VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON, AssetClass.ETF).probability());
+
+        // The range takes the same branch as the headline: a drifted headline inside driftless
+        // bounds would be a range around a different question.
+        Touch spread = VolForecast.touch(inputs("0.010", "0.015", "0.020", "0.015"),
+                dec("100"), dec("90"), 250, DRIFT_ON, AssetClass.EQUITY);
+        assertTrue(spread.probabilityLow().compareTo(
+                        PriceStats.touchProbability(PriceStats.sigmaDistance(dec("100"), dec("90"), dec("0.010"), 250))) < 0,
+                "the low end must be drifted too");
+    }
+
+    @Test
+    void aStatedAssetClassIsRequiredBeforeAnyDriftCanBeApplied() {
+        // The 5-argument form says nothing about what it is pricing, so it can never inject drift
+        // — an unclassified instrument defaults to the neutral model, not to an equity's.
+        Inputs in = inputs("0.02", "0.02", "0.02", "0.02");
+        assertEquals(VolForecast.touch(in, dec("100"), dec("90"), 250, Config.DEFAULT).probability(),
+                VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON).probability());
+        assertEquals(0, VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON, null)
+                .drift().signum());
     }
 
     // ---- the probability ---------------------------------------------------

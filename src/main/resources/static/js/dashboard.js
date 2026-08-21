@@ -196,6 +196,12 @@
             ['rv10', 'rv20', 'rv30', 'rv250'].forEach(function (k) {
                 if (cell.dataset[k]) q += '&' + k + '=' + encodeURIComponent(cell.dataset[k]);
             });
+            // The symbol only resolves the asset class (a pure string predicate server-side, no
+            // lookup), which is what the drift term keys off when drift is switched on. Without it
+            // a re-priced cell would silently fall back to the driftless branch while the rest of
+            // the column stayed drifted.
+            var sym = cell.parentElement && cell.parentElement.dataset.symbol;
+            if (sym) q += '&symbol=' + encodeURIComponent(sym);
             fetch('/orders/touch?' + q)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);

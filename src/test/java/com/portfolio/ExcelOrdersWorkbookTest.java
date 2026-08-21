@@ -31,7 +31,8 @@ class ExcelOrdersWorkbookTest {
                 // Priced to its own expiry: 11 sessions away, which is what the sheet must say.
                 .withHorizonTouch(new VolForecast.Touch(11, new BigDecimal("0.0210"),
                         new BigDecimal("0.8200"), VolForecast.Source.BLEND, new BigDecimal("0.33"),
-                        new BigDecimal("0.7400"), new BigDecimal("0.7100"), new BigDecimal("0.7700")), 11);
+                        new BigDecimal("0.7400"), new BigDecimal("0.7100"), new BigDecimal("0.7700"),
+                        BigDecimal.ZERO), 11);
         OpenOrder ii = OpenOrder.parsed("II SIPP", "NVDA", "NVIDIA Corp", "Sell", "Limit",
                         new BigDecimal("51"), new BigDecimal("224.8596"), true, new BigDecimal("11467.84"),
                         "USD", LocalDate.of(2026, 7, 14), null, null, "PENDING", "ref2")

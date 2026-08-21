@@ -42,7 +42,8 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `DividendAttributor` (FIFO), `CashLedgerReconstructor` (FIFO position-from-ledger
   reconstruction for the cash-ledger view), `Instruments.isBond` (single home of the
   bond/gilt predicate), `VolForecast` (the horizon-matched volatility forecast behind the
-  open-orders touch probabilities — see "Open orders"). `domain.model`: `Holding` (Builder; many nullable fields),
+  open-orders touch probabilities — see "Open orders"), `AssetClass` (the per-class expected
+  drift that forecast's drifted branch uses). `domain.model`: `Holding` (Builder; many nullable fields),
   `AggHolding`, `CashTransaction`, `Account` + `TransactionType` enums, `PriceBar`,
   `IntradayBar`, `IntradayPrice`.
 - `port` — `FxRateProvider`, `HistoricalFxRateProvider` (interfaces, faked in tests).
@@ -523,21 +524,54 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   offers rather than returning null, so a name listed four months ago would hand back a 60-session
   "RV250" that is really current state under another name, and the blend would revert toward the
   very thing it exists to correct.
-  **`Config` carries three reserved flags — `useDrift`, `useEventVar`, `useImpliedVol` — all default
-  false and all no-ops.** They are the declared seams for later stages (a drifted first passage,
-  scheduled-earnings variance inside the horizon, an implied-vol term structure), and they live on
-  the config precisely so those arrive *in `VolForecast`* and nowhere else; the P(N) call site takes
-  whatever σ_eff comes back and asks no questions. `halfLifeDays` and `gtcHorizonSessions` are
-  parameters, not constants, and are query params on `GET /orders?halfLife=&gtcSessions=` (and
-  `halfLife` on `/orders/touch`), the same "every knob is a query param" convention the strategy
-  tabs use.
+  **`Config` carries `useEventVar` and `useImpliedVol` as reserved flags** — declared seams for
+  scheduled-earnings variance inside the horizon and an implied-vol term structure, both default
+  false and no-ops. They live on the config precisely so those arrive *in `VolForecast`* and nowhere
+  else; the P(N) call site takes whatever σ_eff comes back and asks no questions. `halfLifeDays`,
+  `gtcHorizonSessions` and `useDrift` are parameters, not constants, and are query params on
+  `GET /orders?halfLife=&gtcSessions=&useDrift=` (and on `/orders/touch`), the same "every knob is a
+  query param" convention the strategy tabs use.
+- **The drift branch (`useDrift`, default false).** `VolForecast.touch` picks between two models and
+  is the only place that does:
+  `useDrift && μ ≠ 0` → `PriceStats.touchProbabilityDrifted`, else the driftless
+  `2·Φ(−|b|/(σ_eff·√N))`. **The two are mathematically identical at μ = 0**, so the short-circuit is
+  a numerical safeguard, not a behaviour switch: the drifted form carries an `exp(2νb/σ²)` term that
+  is `0/0` when σ is degenerate, and the driftless branch never evaluates it. Both formulas stay
+  callable and both stay under test — `PriceStatsTest` asserts the reduction on the formulas
+  themselves (to the known rounding bound of 1.4e-4, since the driftless path goes through
+  `sigmaDistance`'s 4-dp intermediate), and `VolForecastTest` asserts it *through the branch with
+  the flag on* against a zero-drift class, which is what shows the wiring didn't change the maths.
+  **The drift term is signed by which side of the market the barrier is on** — a rising asset is
+  less likely to come back to a limit below it and more likely to reach one above. The textbook
+  upper-barrier statement fed `|b|` raises both, which for a buy limit (the common case here) is
+  backwards. The RV10/RV30 range takes the same branch as the headline; a drifted headline inside
+  driftless bounds would be a range around a different question. With drift on, `P(5d)` no longer
+  equals `2·Φ(−|σ→lim|)` by construction — σ→lim is a distance, not a probability — which is one
+  more reason the default is off.
+- **`domain/AssetClass` — drift is per class, never per ticker.** `EQUITY` 6%/yr, `ETF` 6%/yr,
+  `GILT` 0, `COMMODITY` 0, `UNKNOWN` 0; `dailyDrift()` divides by 252, the same clock the vol
+  scaling assumes (σ√N), so drift and diffusion are measured against one calendar. A per-name
+  expected return would be a forecast of that name wearing a parameter's clothing; a class figure is
+  a modelling convention. The drift is consumed as a **log** drift — a caller meaning 6% as an
+  arithmetic total return would want `μ − σ²/2` (≈1.3%/yr at a 1%/day σ, not nothing) — stated in
+  the javadoc rather than silently applied, since the correction is only right if the input was
+  arithmetic and this input is a convention.
+  `Instruments.assetClassOf` resolves it: `isBond` → `GILT`, bond funds (VGOV/IGLT/GLTY) → `GILT`
+  (a gilt in an ETF wrapper is still a gilt), bullion ETCs → `COMMODITY`, everything else →
+  `EQUITY`. **`ETF` is declared but never produced**: it carries the same 6% as `EQUITY`, so
+  detecting it would need a maintained fund-ticker list whose only possible effect is the label on a
+  calibration line — a list that can only ever be wrong and never right. Bond and bullion wrappers
+  *are* detected, because for those the underlying changes the number.
+  `InstrumentsTest.everyZeroSectorOverrideInSectorsPropertiesIsAlsoZeroDrift` reads
+  `sectors.properties` and fails if a symbol overridden there to `COMMODITIES`/`FIXED_INCOME` would
+  carry an equity's drift — two lists of the same judgement is how they drift apart.
 - **Calibration record.** Every priced order writes one line per snapshot to a dedicated logger
   (`com.portfolio.calibration.touch` → `~/log/portfolio-bench-touch-calibration.log`, monthly
   rolling, 36 kept, `additivity=false` so it stays out of the app log). The question it exists to
   answer — did orders shown at P=60% fill about 60% of the time? — can only be asked months later,
   and only against the model that produced the number, so each line carries the inputs as well as
   the output: `broker symbol ref side limit current entered expiry sessions fromExpiry sigmaEff
-  decay volSource rv10 rv20 rv30 rv250 p pLow pHigh`, as `key=value` pairs (a later analysis is a
+  decay volSource assetClass drifted mu rv10 rv20 rv30 rv250 p pLow pHigh`, as `key=value` pairs (a later analysis is a
   grep and a split, not a parser). The **probe path deliberately writes nothing** — a hypothetical
   in the record is indistinguishable from a real order that never filled. `src/test/resources/
   logback-test.xml` sets that logger to OFF for the same reason: a suite pricing fabricated orders

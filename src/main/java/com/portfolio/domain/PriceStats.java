@@ -229,6 +229,57 @@ public final class PriceStats {
         return BigDecimal.valueOf(p).setScale(4, RoundingMode.HALF_UP);
     }
 
+    /**
+     * Probability that a geometric Brownian motion <b>with drift</b> touches the barrier at least
+     * once within {@code sessions} — the drifted counterpart of {@link #touchProbability}, and the
+     * branch {@code VolForecast} takes when drift is switched on and the asset class has one.
+     *
+     * <p>With {@code b = ln(limit/current)}, {@code ν} the log drift per session and
+     * {@code σ_h = σ√N}:
+     * <pre>
+     *   P = Φ((−|b| + sgn(b)·νN)/σ_h) + exp(2νb/σ²)·Φ((−|b| − sgn(b)·νN)/σ_h)
+     * </pre>
+     * <b>The drift term is signed by which side of the market the barrier is on</b>, which the
+     * textbook statement of the upper-barrier case hides. A rising asset is <em>less</em> likely to
+     * reach a limit below it and <em>more</em> likely to reach one above; writing the upper-barrier
+     * form and feeding it {@code |b|} would raise both, which for a buy limit — the common case in
+     * this panel — is backwards.
+     *
+     * <p>At {@code ν = 0} this reduces exactly to {@code 2·Φ(−|b|/σ_h)}: both Φ terms collapse to
+     * the same argument and {@code exp(0) = 1}. That identity is asserted directly in
+     * {@code PriceStatsTest}, and it is why the caller's short-circuit at {@code ν = 0} is a
+     * numerical safeguard rather than a second model — {@code 2νb/σ²} is {@code 0/0} when σ is
+     * degenerate, and this form would return NaN where the driftless one is well defined.
+     *
+     * <p>The second term is computed in log space so a large {@code exp} against an underflowed Φ
+     * gives 0 rather than {@code ∞ × 0 = NaN}; anything still non-finite falls back to the
+     * driftless value rather than propagating. Clamped to {@code [0,1]}; at the barrier ({@code b =
+     * 0}) it is 1 whatever the drift, as it must be.
+     *
+     * @param driftPerSession log drift per trading session — see {@link AssetClass#dailyDrift()}.
+     */
+    public static BigDecimal touchProbabilityDrifted(BigDecimal current, BigDecimal limit,
+                                                     BigDecimal sigmaPerSession, int sessions,
+                                                     BigDecimal driftPerSession) {
+        if (current == null || limit == null || sigmaPerSession == null || sessions < 1) return null;
+        double s = current.doubleValue(), k = limit.doubleValue(), sigma = sigmaPerSession.doubleValue();
+        if (s <= 0 || k <= 0 || sigma <= 0) return null;
+        double nu = driftPerSession == null ? 0.0 : driftPerSession.doubleValue();
+
+        double b = Math.log(k / s);
+        double absB = Math.abs(b);
+        double sign = b >= 0 ? 1.0 : -1.0;
+        double sigmaH = sigma * Math.sqrt(sessions);
+        double z1 = (-absB + sign * nu * sessions) / sigmaH;
+        double z2 = (-absB - sign * nu * sessions) / sigmaH;
+        double p = normalCdf(z1) + Math.exp(2.0 * nu * b / (sigma * sigma) + Math.log(normalCdf(z2)));
+        if (!Double.isFinite(p)) {
+            return touchProbability(sigmaDistance(current, limit, sigmaPerSession, sessions));
+        }
+        p = Math.max(0.0, Math.min(1.0, p));
+        return BigDecimal.valueOf(p).setScale(4, RoundingMode.HALF_UP);
+    }
+
     /** Standard normal CDF {@code Φ(x)} via the {@link #erfc} approximation. */
     static double normalCdf(double x) {
         return 0.5 * erfc(-x / Math.sqrt(2.0));

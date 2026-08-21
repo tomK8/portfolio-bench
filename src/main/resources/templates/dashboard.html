@@ -3452,8 +3452,10 @@
 <section class="tab-panel" id="panel-cash">
     <form class="actions" hx-indicator="#spinner">
         <button hx-post="/sync-from-cash" hx-target="#portfolio-cash-result" type="submit">Aggregated Portfolio (from cash ledger)</button>
+        <button hx-post="/sync-from-cash/export" hx-target="#cash-export-result" type="submit">Download Excel</button>
         <span class="muted">positions reconstructed FIFO from <code>cash_transactions</code>, priced by latest intraday quote</span>
     </form>
+    <div id="cash-export-result"></div>
     <section class="result-panel">
         <h2>Aggregated portfolio (from cash ledger)</h2>
         <div id="portfolio-cash-result"></div>
@@ -3473,6 +3475,12 @@
         <span id="live-status" class="muted" style="margin-left: 0.5rem;"></span>
         <span id="live-age" class="muted" style="margin-left: 0.4rem;"></span>
     </p>
+
+    <div class="actions">
+        <button hx-post="/live/export" hx-target="#live-export-result" type="button">Download Excel</button>
+        <span class="muted">writes the table below to <code>~/Documents</code>, priced at the moment you press it</span>
+    </div>
+    <div id="live-export-result"></div>
 
     <div class="returns-stats" id="live-totals">
         <div class="returns-stat">

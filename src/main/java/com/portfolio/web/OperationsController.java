@@ -76,6 +76,18 @@ public class OperationsController {
         return "fragments/portfolio-ledger :: result";
     }
 
+    /**
+     * Writes the cash-ledger view to Excel. Re-runs the sync rather than exporting whatever the
+     * panel last rendered, so the file is current — the same bargain the Open-orders export makes
+     * by re-parsing.
+     */
+    @PostMapping("/sync-from-cash/export")
+    public String exportFromCash(Model model) {
+        model.addAttribute("export", exportService.exportLedger(syncFromCashService.sync()));
+        model.addAttribute("completedAt", WebSupport.now());
+        return "fragments/export :: result";
+    }
+
     @PostMapping("/export")
     public String export(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
                          @RequestParam(name = "iiSippCashUsd", required = false, defaultValue = "0") String iiSippCashUsd,

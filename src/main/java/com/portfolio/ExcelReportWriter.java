@@ -1,7 +1,9 @@
 package com.portfolio;
 
+import com.portfolio.application.LivePricesService;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PortfolioAggregator;
+import com.portfolio.domain.PortfolioMetrics;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.Holding;
 import com.portfolio.domain.model.OpenOrder;
@@ -24,6 +26,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -683,7 +687,7 @@ public class ExcelReportWriter {
     }
 
     // -------------------------------------------------------------------------
-    // Open orders workbook (streamed straight to the browser, not written to disk)
+    // Open orders workbook (bytes; the caller writes them to the output dir)
     // -------------------------------------------------------------------------
 
     /** Single-sheet workbook of the given open orders, returned as bytes for a direct download. */
@@ -800,6 +804,291 @@ public class ExcelReportWriter {
             case "GBP", "GBp" -> "£";
             case "USD" -> "$";
             case "EUR" -> "€";
+            default -> "";
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // Cash-ledger workbook (Holdings → From cash ledger tab)
+    // -------------------------------------------------------------------------
+
+    private static final int LED_ID = 0;          // A
+    private static final int LED_CCY = 1;         // B
+    private static final int LED_QTY = 2;         // C
+    private static final int LED_PRICE = 3;       // D  latest quote, native currency
+    private static final int LED_VALUE = 4;       // E  Market Value £ (the single combined value column)
+    private static final int LED_PCT = 5;         // F  Portfolio %
+    private static final int LED_GAIN = 6;        // G
+    private static final int LED_GAINPCT = 7;     // H
+    private static final int LED_DIV = 8;         // I
+    private static final int LED_TOTAL_GAIN = 9;  // J
+    private static final int LED_TOTAL_GAINPCT = 10; // K
+    private static final int LED_SOURCES = 11;    // L
+    private static final int LED_COLS = 12;
+
+    /**
+     * Single-sheet workbook of the cash-ledger-derived portfolio, as bytes for the caller to write.
+     *
+     * <p>Mirrors the on-screen table rather than reusing the aggregated Portfolio sheet, for the
+     * same reason the two views differ on screen: this one has a single combined value column and
+     * — the load-bearing part — <b>no II SIPP cash input cell</b>. Ledger cash comes from the
+     * stored per-{@code (account, currency)} balances, so the yellow editable cell the holdings
+     * workbook carries would be added on top of cash that is already in the rows.
+     *
+     * <p>Totals are live formulas over the rows (the cash line is a {@code SUMIF} on the CASH
+     * symbol, since ledger cash rows are interleaved by currency section rather than contiguous),
+     * so a reader who filters or deletes rows still gets a total that adds up — the same bargain
+     * the Portfolio sheet strikes.
+     */
+    public byte[] ledgerWorkbook(List<AggHolding> rows, PortfolioMetrics.Totals totals)
+            throws IOException {
+        try (Workbook wb = new XSSFWorkbook();
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            writeLedgerSheet(wb.createSheet("Portfolio (ledger)"), rows, totals, wb);
+            wb.setForceFormulaRecalculation(true);   // else every formula cell opens blank
+            wb.write(bos);
+            return bos.toByteArray();
+        }
+    }
+
+    private static void writeLedgerSheet(Sheet sheet, List<AggHolding> rows,
+                                         PortfolioMetrics.Totals totals, Workbook wb) {
+        CellStyle text = wb.createCellStyle();
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle num = numericStyle(wb, false);
+        CellStyle boldNum = numericStyle(wb, true);
+        CellStyle pct = pctStyle(wb, false);
+        CellStyle boldPct = pctStyle(wb, true);
+        CellStyle priceNum = wb.createCellStyle();
+        priceNum.setDataFormat(wb.createDataFormat().getFormat("#,##0.0000"));
+        // One style per sign, created up front: gainLossNumStyle mints a new CellStyle per call,
+        // and a hundred-row book would otherwise carry four hundred near-identical styles.
+        CellStyle gainNum = gainLossNumStyle(wb, true);
+        CellStyle lossNum = gainLossNumStyle(wb, false);
+        CellStyle gainPct = gainLossPctStyle(wb, true);
+        CellStyle lossPct = gainLossPctStyle(wb, false);
+
+        String[] headers = {"Security", "Ccy", "Quantity", "Price", "Market Value £", "Portfolio %",
+                "Gain (£)", "Gain %", "Dividends (£)", "Total Gain (£)", "Total Gain %", "Sources"};
+        Row hdr = sheet.createRow(0);
+        for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
+        sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, rows.size()), 0, LED_COLS - 1));
+
+        int firstExcel = 2;
+        int lastExcel = rows.size() + 1;
+        int totalPoi = rows.size() + 2;
+        String totalRef = "$E$" + (totalPoi + 1);
+
+        int rowNum = 1;
+        for (AggHolding h : rows) {
+            Row row = sheet.createRow(rowNum++);
+            int excel = row.getRowNum() + 1;
+            styledCell(row, LED_ID, h.securityId(), text);
+            styledCell(row, LED_CCY, h.currencyCode(), text);
+            setNumeric(row, LED_QTY, h.quantity(), num);
+            if (h.latestPrice() != null) setStyled(row, LED_PRICE, h.latestPrice(), priceNum);
+            setNumeric(row, LED_VALUE, h.marketValueGbp(), num);
+            formulaCell(row, LED_PCT, "IFERROR(E" + excel + "/" + totalRef + ",\"\")", pct);
+            if (h.gainGbp() != null) {
+                setNumeric(row, LED_GAIN, h.gainGbp(), h.gainGbp().signum() >= 0 ? gainNum : lossNum);
+            }
+            if (h.gainPct() != null) {
+                setPercent(row, LED_GAINPCT, h.gainPct(), h.gainPct().signum() >= 0 ? gainPct : lossPct);
+            }
+            setNumeric(row, LED_DIV, h.dividendGbp(), num);
+            if (h.totalGainGbp() != null) {
+                setNumeric(row, LED_TOTAL_GAIN, h.totalGainGbp(),
+                        h.totalGainGbp().signum() >= 0 ? gainNum : lossNum);
+            }
+            if (h.totalGainPct() != null) {
+                setPercent(row, LED_TOTAL_GAINPCT, h.totalGainPct(),
+                        h.totalGainPct().signum() >= 0 ? gainPct : lossPct);
+            }
+            styledCell(row, LED_SOURCES, h.sources(), text);
+        }
+
+        // Totals block — the same five figures the on-screen tiles show, in the same order.
+        Row total = sheet.createRow(totalPoi);
+        styledCell(total, LED_ID, "TOTAL", boldText);
+        Row cash = sheet.createRow(totalPoi + 1);
+        styledCell(cash, LED_ID, "Total Cash", boldText);
+        Row investedReturn = sheet.createRow(totalPoi + 2);
+        styledCell(investedReturn, LED_ID, "Return on invested", boldText);
+        Row totalReturn = sheet.createRow(totalPoi + 3);
+        styledCell(totalReturn, LED_ID, "Return on total", boldText);
+
+        if (rows.isEmpty()) {
+            // No rows to sum: a SUM over an empty range is a #REF!, so state the figures we hold.
+            if (totals != null) {
+                setNumeric(total, LED_VALUE, totals.totalGbp(), boldNum);
+                setNumeric(total, LED_GAIN, totals.totalGainGbp(), boldNum);
+                setNumeric(cash, LED_VALUE, totals.totalCashGbp(), boldNum);
+                setPercent(investedReturn, LED_GAINPCT, totals.returnPct(), boldPct);
+                setPercent(totalReturn, LED_GAINPCT, totals.totalReturn(), boldPct);
+            }
+            autoSizeColumns(sheet, LED_COLS);
+            return;
+        }
+
+        int t = totalPoi + 1;
+        int c = totalPoi + 2;
+        formulaCell(total, LED_VALUE, "SUM(E" + firstExcel + ":E" + lastExcel + ")", boldNum);
+        formulaCell(total, LED_GAIN, "SUM(G" + firstExcel + ":G" + lastExcel + ")", boldNum);
+        formulaCell(total, LED_DIV, "SUM(I" + firstExcel + ":I" + lastExcel + ")", boldNum);
+        formulaCell(total, LED_TOTAL_GAIN, "SUM(J" + firstExcel + ":J" + lastExcel + ")", boldNum);
+        formulaCell(cash, LED_VALUE,
+                "SUMIF(A" + firstExcel + ":A" + lastExcel + ",\"CASH\",E" + firstExcel + ":E" + lastExcel + ")",
+                boldNum);
+        formulaCell(investedReturn, LED_GAINPCT,
+                "IFERROR(G" + t + "/(E" + t + "-E" + c + "),\"\")", boldPct);
+        formulaCell(totalReturn, LED_GAINPCT, "IFERROR(G" + t + "/E" + t + ",\"\")", boldPct);
+
+        autoSizeColumns(sheet, LED_COLS);
+    }
+
+    // -------------------------------------------------------------------------
+    // Live positions workbook (Holdings → Live tab)
+    // -------------------------------------------------------------------------
+
+    private static final int LIVE_SYMBOL = 0;    // A
+    private static final int LIVE_CCY = 1;       // B
+    private static final int LIVE_QTY = 2;       // C
+    private static final int LIVE_LAST = 3;      // D
+    private static final int LIVE_QUOTE = 4;     // E  session the quote came from
+    private static final int LIVE_MARKET = 5;    // F  what that listing's market is doing now
+    private static final int LIVE_DAY_PCT = 6;   // G
+    private static final int LIVE_DAY_GBP = 7;   // H
+    private static final int LIVE_5D = 8;        // I
+    private static final int LIVE_10D = 9;       // J
+    private static final int LIVE_30D = 10;      // K
+    private static final int LIVE_3M = 11;       // L
+    private static final int LIVE_6M = 12;       // M
+    private static final int LIVE_POSITION = 13; // N
+    private static final int LIVE_ACCOUNTS = 14; // O
+    private static final int LIVE_TS = 15;       // P
+    private static final int LIVE_COLS = 16;
+
+    private static final DateTimeFormatter QUOTE_TS_FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.of("Europe/London"));
+
+    /**
+     * Single-sheet workbook of the Live tab's positions, as bytes for the caller to write.
+     *
+     * <p>Two things the screen says with colour become their own columns, because a spreadsheet
+     * has nowhere else to put them: <b>Quote</b> carries the PRE / AH badge (an extended-hours
+     * print is a thin one, and a sheet that folded the caveat into the price would lose it), and
+     * <b>Market</b> carries the state that greys a closed listing's row. Both stay beside the
+     * price rather than inside it, so Last remains a real number the sheet can sort and chart.
+     */
+    public byte[] liveWorkbook(LivePricesService.Snapshot snapshot) throws IOException {
+        try (Workbook wb = new XSSFWorkbook();
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            writeLiveSheet(wb.createSheet("Live Positions"), snapshot, wb);
+            wb.setForceFormulaRecalculation(true);   // else the totals block opens blank
+            wb.write(bos);
+            return bos.toByteArray();
+        }
+    }
+
+    private static void writeLiveSheet(Sheet sheet, LivePricesService.Snapshot snapshot, Workbook wb) {
+        CellStyle text = wb.createCellStyle();
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle num = numericStyle(wb, false);
+        CellStyle boldNum = numericStyle(wb, true);
+        CellStyle priceNum = wb.createCellStyle();
+        priceNum.setDataFormat(wb.createDataFormat().getFormat("#,##0.0000"));
+        CellStyle signedPct = wb.createCellStyle();
+        signedPct.setDataFormat(wb.createDataFormat().getFormat("+0.00%;-0.00%"));
+        CellStyle boldSignedPct = wb.createCellStyle();
+        boldSignedPct.setDataFormat(wb.createDataFormat().getFormat("+0.00%;-0.00%"));
+        Font bold = wb.createFont();
+        bold.setBold(true);
+        boldSignedPct.setFont(bold);
+
+        String[] headers = {"Symbol", "Ccy", "Quantity", "Last", "Quote", "Market",
+                "Day Δ %", "Day Δ £", "5d %", "10d %", "30d %", "3M %", "6M %",
+                "Position £", "Accounts", "Quote ts"};
+        Row hdr = sheet.createRow(0);
+        for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
+
+        List<LivePricesService.Row> rows = snapshot.rows();
+        sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, rows.size()), 0, LIVE_COLS - 1));
+
+        int rowNum = 1;
+        for (LivePricesService.Row r : rows) {
+            Row row = sheet.createRow(rowNum++);
+            styledCell(row, LIVE_SYMBOL, r.symbol(), text);
+            styledCell(row, LIVE_CCY, dashIfNull(r.currency()), text);
+            setNumeric(row, LIVE_QTY, r.quantity(), num);
+            if (r.lastPrice() != null) setStyled(row, LIVE_LAST, r.lastPrice(), priceNum);
+            styledCell(row, LIVE_QUOTE, sessionCell(r.session()), text);
+            styledCell(row, LIVE_MARKET, marketStateCell(r.marketState()), text);
+            if (r.dayChangePct() != null) setStyled(row, LIVE_DAY_PCT, r.dayChangePct(), signedPct);
+            setNumeric(row, LIVE_DAY_GBP, r.dayChangeGbp(), num);
+            if (r.change5dPct() != null) setStyled(row, LIVE_5D, r.change5dPct(), signedPct);
+            if (r.change10dPct() != null) setStyled(row, LIVE_10D, r.change10dPct(), signedPct);
+            if (r.monthChangePct() != null) setStyled(row, LIVE_30D, r.monthChangePct(), signedPct);
+            if (r.change3mPct() != null) setStyled(row, LIVE_3M, r.change3mPct(), signedPct);
+            if (r.change6mPct() != null) setStyled(row, LIVE_6M, r.change6mPct(), signedPct);
+            setNumeric(row, LIVE_POSITION, r.positionGbp(), num);
+            styledCell(row, LIVE_ACCOUNTS, dashIfNull(r.accounts()), text);
+            styledCell(row, LIVE_TS, r.priceTs() != null ? QUOTE_TS_FMT.format(r.priceTs()) : "", text);
+        }
+
+        LivePricesService.Totals totals = snapshot.totals();
+        int positionsPoi = rows.size() + 2;
+        Row positions = sheet.createRow(positionsPoi);
+        styledCell(positions, LIVE_SYMBOL, "Positions", boldText);
+        Row cash = sheet.createRow(positionsPoi + 1);
+        styledCell(cash, LIVE_SYMBOL, "Cash", boldText);
+        Row total = sheet.createRow(positionsPoi + 2);
+        styledCell(total, LIVE_SYMBOL, "TOTAL", boldText);
+        Row day = sheet.createRow(positionsPoi + 3);
+        styledCell(day, LIVE_SYMBOL, "Day change", boldText);
+
+        if (totals != null) {
+            setNumeric(cash, LIVE_POSITION, totals.cashGbp(), boldNum);
+            if (totals.dayChangePct() != null) {
+                setStyled(day, LIVE_DAY_PCT, totals.dayChangePct(), boldSignedPct);
+            }
+        }
+        if (rows.isEmpty()) {
+            // SUM over an empty range is a #REF! — state what the snapshot holds instead.
+            if (totals != null) {
+                setNumeric(positions, LIVE_POSITION, totals.positionsGbp(), boldNum);
+                setNumeric(total, LIVE_POSITION, totals.totalGbp(), boldNum);
+                setNumeric(day, LIVE_DAY_GBP, totals.dayChangeGbp(), boldNum);
+            }
+        } else {
+            int first = 2;
+            int last = rows.size() + 1;
+            formulaCell(positions, LIVE_POSITION, "SUM(N" + first + ":N" + last + ")", boldNum);
+            formulaCell(total, LIVE_POSITION,
+                    "N" + (positionsPoi + 1) + "+N" + (positionsPoi + 2), boldNum);
+            formulaCell(day, LIVE_DAY_GBP, "SUM(H" + first + ":H" + last + ")", boldNum);
+        }
+
+        autoSizeColumns(sheet, LIVE_COLS);
+    }
+
+    /** PRE / POST → the words the panel's legend uses; a regular quote needs no label. */
+    private static String sessionCell(String session) {
+        if (session == null) return "";
+        return switch (session) {
+            case "PRE" -> "pre-market";
+            case "POST" -> "after-hours";
+            default -> "";
+        };
+    }
+
+    /** The state that greys a row on screen, spelled out for a sheet that has no row tint. */
+    private static String marketStateCell(String state) {
+        if (state == null) return "";
+        return switch (state) {
+            case "OPEN" -> "open";
+            case "PRE" -> "pre-market";
+            case "POST" -> "after-hours";
+            case "CLOSED" -> "closed";
             default -> "";
         };
     }

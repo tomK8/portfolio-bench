@@ -1,12 +1,15 @@
 package com.portfolio.web;
 
+import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.LivePricesService;
 import com.portfolio.application.LivePricesService.Snapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -35,10 +38,12 @@ public class LiveDashboardController {
     private static final int TICK_SECONDS = 15;
 
     private final LivePricesService service;
+    private final ExportExcelService exportService;
     private final List<SseEmitter> emitters = new CopyOnWriteArrayList<>();
 
-    public LiveDashboardController(LivePricesService service) {
+    public LiveDashboardController(LivePricesService service, ExportExcelService exportService) {
         this.service = service;
+        this.exportService = exportService;
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "live-prices-sse");
             t.setDaemon(true);
@@ -51,6 +56,18 @@ public class LiveDashboardController {
     @ResponseBody
     public Snapshot live() {
         return service.snapshot();
+    }
+
+    /**
+     * Writes the current live positions to Excel in the output directory (~/Documents), alongside
+     * the other exports. Takes a fresh snapshot rather than the last broadcast one: the SSE tick
+     * is 15s and the file should be the prices at the moment the button was pressed.
+     */
+    @PostMapping("/live/export")
+    public String export(Model model) {
+        model.addAttribute("export", exportService.exportLive(service.snapshot()));
+        model.addAttribute("completedAt", WebSupport.now());
+        return "fragments/export :: result";
     }
 
     @GetMapping(path = "/live/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

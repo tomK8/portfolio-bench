@@ -13,6 +13,7 @@ import java.sql.DriverManager;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CashTransactionRepositoryRothTest {
@@ -266,6 +267,131 @@ class CashTransactionRepositoryRothTest {
         assertEquals(1, inserted);
         assertEquals(3, rothRowCount());
         assertEquals(20350.0, finalBalance(), 1e-6);
+    }
+
+    // ── Primary-key migration (databases created before cash_balance_gbp joined the key) ──────
+
+    /** The pre-June-2026 shape: five-column key, and cash_balance appended after description. */
+    private void createLegacyTable() throws Exception {
+        Path dbPath = dbDir.resolve("portfolio.db");
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             var st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS cash_transactions");
+            st.execute("""
+                    CREATE TABLE cash_transactions (
+                        transaction_date TEXT NOT NULL,
+                        account          TEXT NOT NULL CHECK (account IN ('RothIRA', 'AJBell', 'II')),
+                        type             TEXT NOT NULL CHECK (type IN ('TRANSACTION', 'DIVIDEND', 'INTEREST', 'CHARGE', 'CONTRIBUTION')),
+                        symbol           TEXT NOT NULL,
+                        quantity         REAL NOT NULL,
+                        amount           REAL NOT NULL,
+                        currency         TEXT NOT NULL,
+                        fx_to_gbp        REAL NOT NULL,
+                        amount_gbp       REAL NOT NULL,
+                        cash_balance_gbp REAL,
+                        description      TEXT, cash_balance REAL,
+                        PRIMARY KEY (transaction_date, account, type, symbol, amount_gbp)
+                    )""");
+            st.execute("INSERT INTO cash_transactions (transaction_date, account, type, symbol, "
+                    + "quantity, amount, currency, fx_to_gbp, amount_gbp, cash_balance_gbp, "
+                    + "description, cash_balance) VALUES "
+                    + "('2026-08-19','RothIRA','TRANSACTION','WMT',50,-5743.5,'USD',1.36,-4223.16,"
+                    + "44505.26,'Buy 50 Wmt',60527.15)");
+        }
+    }
+
+    private int pkPositionOf(String column) throws Exception {
+        Path dbPath = dbDir.resolve("portfolio.db");
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             var st = conn.createStatement();
+             var rs = st.executeQuery("PRAGMA table_info(cash_transactions)")) {
+            while (rs.next()) {
+                if (column.equals(rs.getString("name"))) return rs.getInt("pk");
+            }
+        }
+        return -1;
+    }
+
+    @Test
+    void migratesALegacyFiveColumnPrimaryKeyWithoutTransposingColumns() throws Exception {
+        // The live database was created before cash_balance_gbp joined the key, and CREATE TABLE
+        // IF NOT EXISTS never migrates. Every other test builds its table from CREATE_TABLE, so
+        // this is the only one that exercises the schema production actually ran on.
+        createLegacyTable();
+        assertEquals(0, pkPositionOf("cash_balance_gbp"), "precondition: legacy five-column key");
+
+        newRepo(new KeyValueStore(dbDir));   // constructor migrates
+
+        assertTrue(pkPositionOf("cash_balance_gbp") > 0, "cash_balance_gbp is now part of the key");
+        assertEquals(1, rothRowCount(), "the existing row survived");
+
+        // Copying by name rather than position is the whole point: the legacy table carries
+        // cash_balance appended after description, so SELECT * would have written the balance into
+        // the description column and the description into cash_balance.
+        Path dbPath = dbDir.resolve("portfolio.db");
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             var st = conn.createStatement();
+             var rs = st.executeQuery("SELECT cash_balance, cash_balance_gbp, description, amount "
+                     + "FROM cash_transactions")) {
+            assertTrue(rs.next());
+            assertEquals(60527.15, rs.getDouble("cash_balance"), 1e-6);
+            assertEquals(44505.26, rs.getDouble("cash_balance_gbp"), 1e-6);
+            assertEquals("Buy 50 Wmt", rs.getString("description"));
+            assertEquals(-5743.5, rs.getDouble("amount"), 1e-6);
+        }
+    }
+
+    @Test
+    void thePrimaryKeyMigrationIsIdempotent() throws Exception {
+        createLegacyTable();
+        Path dbPath = dbDir.resolve("portfolio.db");
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            assertFalse(CashTransactionRepository.primaryKeyIncludesBalance(conn),
+                    "precondition: the legacy key is detected as needing migration");
+        }
+
+        newRepo(new KeyValueStore(dbDir));
+        int pk = pkPositionOf("cash_balance_gbp");
+
+        // Asserting the *guard*, not just a stable result — a rebuild that ran on every restart
+        // would leave the schema looking identical while rewriting the ledger each time.
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            assertTrue(CashTransactionRepository.primaryKeyIncludesBalance(conn),
+                    "a second construction must short-circuit on the pragma read");
+        }
+        newRepo(new KeyValueStore(dbDir));
+        assertEquals(pk, pkPositionOf("cash_balance_gbp"));
+        assertEquals(1, rothRowCount(), "and it must not duplicate or drop rows");
+    }
+
+    @Test
+    void twoByteIdenticalPartialFillsAreBothStored() throws Exception {
+        // Citi, 2026-08-21: one MRNA order worked as six partial fills, two of them identical —
+        // 3 shares at 148.23 for $444.69, twice. Two distinct economic events that agree on every
+        // key column except the running balance, which is exactly why that balance is in the key.
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+        int inserted = repo.saveRothIra(List.of(
+                row("2026-08-21", "MRNA", "TRANSACTION", -3, 444.69, 1.36),
+                row("2026-08-21", "MRNA", "TRANSACTION", -3, 444.69, 1.36)),
+                new BigDecimal("50000"));
+
+        assertEquals(2, inserted);
+        assertEquals(2, rothRowCount());
+        assertEquals(50000 + 444.69 + 444.69, finalBalance(), 1e-6);
+    }
+
+    @Test
+    void identicalFillsStillDedupOnReimport() throws Exception {
+        // Both stored, both re-exported: the file is the same two events, so nothing is new.
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+        List<CashTransaction> file = List.of(
+                row("2026-08-21", "MRNA", "TRANSACTION", -3, 444.69, 1.36),
+                row("2026-08-21", "MRNA", "TRANSACTION", -3, 444.69, 1.36));
+        repo.saveRothIra(file, new BigDecimal("50000"));
+
+        assertEquals(0, repo.saveRothIra(file, new BigDecimal("50000")), "re-import inserts nothing");
+        assertEquals(2, rothRowCount());
+        assertEquals(50000 + 444.69 + 444.69, finalBalance(), 1e-6);
     }
 
     /** Two genuine same-day buys arriving in one file are both kept — no stored group to match. */

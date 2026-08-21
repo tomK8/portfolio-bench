@@ -695,6 +695,23 @@ holdings; distinguished from II cash by header sniff), `cashstatements*.csv` (AJ
 - The holdings-vs-ledger reconciliation panel is what surfaced this, not the importer. AJ Bell and
   II have the same shape of key and are theoretically vulnerable; neither has ever shown the
   behaviour, so the guard is Roth-only.
+- **The table's own primary key is `(transaction_date, account, type, symbol, amount_gbp,
+  cash_balance_gbp)`, and `cash_balance_gbp` is in it on purpose.** A broker can work one order as
+  two partial fills of the same size at the same price, producing rows identical in every other key
+  column — Citi did exactly that with MRNA on 2026-08-21 (two sales of 3 shares at 148.23, $444.69
+  each, inside a six-fill order). Both are real events and both must be storable; the running
+  balance is what separates them, because the second fill lands on top of the first.
+  The column joined the key in `67b1544` (2026-06-04) but no migration came with it, and the create
+  is `CREATE TABLE IF NOT EXISTS` — so a database made before then kept the old five-column key
+  while every test and every fresh install ran on the six-column one. Invisible until two identical
+  fills arrive, at which point the import dies on a PK violation with the dedup logic having done
+  nothing wrong. `migratePrimaryKey` (constructor, after the `cash_balance` ALTER so the rebuild can
+  copy that column by name) detects the gap with one `PRAGMA table_info` read and rebuilds the table
+  transactionally, asserting the row count across the copy. **The copy names all twelve columns on
+  both sides**: a legacy table carries `cash_balance` appended after `description` rather than in
+  its declared position, so `SELECT *` would transpose the two balances into the description column.
+  `TABLE_BODY` is shared by the create and the rebuild so the schema has one definition — two copies
+  is how it drifted in the first place.
 - II: `(date, type, symbol, amount, currency)` within `account='II'`. The currency component
   isolates the GBP and USD ledgers within the shared account so dividend FIFO still groups by
   `(account, symbol)` across currencies.

@@ -195,10 +195,11 @@ public final class PriceStats {
      * Trading sessions in {@code (from, to]} — every weekday, exclusive of {@code from} and
      * inclusive of {@code to}. Zero when {@code to} is not after {@code from}.
      *
-     * <p>The touch model scales volatility by {@code √sessions}, but an order's expiry is a
-     * calendar date, and the two are not interchangeable: a limit expiring in 30 calendar days has
-     * about 21 sessions of diffusion behind it, so feeding the calendar count straight into
-     * {@link #sigmaDistance} would overstate the horizon by a third. Weekends only — exchange
+     * <p>Everything the touch model consumes is measured in sessions — {@link #sigmaDistance}
+     * scales σ by {@code √sessions}, and the daily vol it uses comes from bars that exist only on
+     * trading days. An order's expiry, though, is a calendar date, so translating one into the
+     * other is what lets a view say "this order expires 2026-08-28, about 41 sessions away". The
+     * two are not interchangeable: 30 calendar days is about 21 sessions. Weekends only — exchange
      * holidays are not modelled, which leaves the count a session or two long across a long
      * horizon and is the same simplification {@code GiltPriceFetchJob.isTradingDay} makes.
      */

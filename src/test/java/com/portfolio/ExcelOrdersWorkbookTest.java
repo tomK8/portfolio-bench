@@ -25,7 +25,7 @@ class ExcelOrdersWorkbookTest {
                 new BigDecimal("540.00"), new BigDecimal("0.0037"),
                 new BigDecimal("0.0200"), new BigDecimal("0.0250"), new BigDecimal("0.50"),
                 new BigDecimal("0.6170"), new BigDecimal("0.8000"), null,
-                15, 11, new BigDecimal("0.7400"));
+                11, new BigDecimal("0.7400"), 15);
         OpenOrder ii = new OpenOrder("II SIPP", "NVDA", "NVIDIA Corp", "Sell", "Limit",
                 new BigDecimal("51"), new BigDecimal("224.8596"), true, new BigDecimal("11467.84"),
                 "USD", LocalDate.of(2026, 7, 14), null, null, "PENDING", "ref2", new BigDecimal("9174.27"),

@@ -117,25 +117,32 @@ public class OpenOrdersService {
     private static final int TOUCH_HORIZON_SESSIONS = 5;
     private static final int TOUCH_HORIZON_SESSIONS_LONG = 20;
     /**
-     * Upper bound on the user-supplied horizon for the P(horizon) column. Five years is well past
-     * any resting order's life; the cap exists so a stray keystroke can't ask for a hundred-thousand
-     * session walk, not because 1,825 days is a defensible modelling horizon — it isn't (see
-     * {@link #touchOverHorizon}).
+     * Upper bound on the user-supplied horizon for the {@code P(N)} column: about five years of
+     * sessions, well past any resting order's life. The cap exists so a stray keystroke can't ask
+     * for an absurd horizon, not because 1,250 sessions is a defensible modelling window — it
+     * isn't (see {@link OpenOrder#LONG_HORIZON_SESSIONS}).
      */
-    static final int MAX_HORIZON_DAYS = 1825;
+    static final int MAX_HORIZON_SESSIONS = 1250;
     /**
-     * Horizon the {@code P(N)} column starts on, for every row.
+     * Horizon the {@code P(N)} column starts on, for every row — <b>trading sessions</b>, the same
+     * unit as {@link #TOUCH_HORIZON_SESSIONS} and as the σ scaling itself.
      *
-     * <p>Deliberately uniform rather than each order's own days-to-expiry. The column's job is to
-     * compare orders, and a horizon that varies per row compares nothing — an 8-day limit reading
-     * 7% beside a 71-day one reading 64% says more about the two deadlines than about the two
-     * markets. One horizon across the table makes the numbers commensurable, the way the fixed
-     * P(5d)/P(20d) columns already are; the difference is that this one is editable, so a specific
-     * order's own deadline is a keystroke away when that is the question. A quarter is long enough
-     * to be a real question about a resting order and short enough that the estimate still means
-     * something.
+     * <p>Sessions rather than calendar days because that is what the whole app counts: the
+     * watchlist's momentum windows are {@code closeNSessionsBefore}, its vol horizons are session
+     * windows, and every strategy tab counts sessions. A calendar horizon here made {@code P(N)}
+     * the one place in the codebase where a "day" meant something different from the two columns
+     * beside it.
+     *
+     * <p>Deliberately uniform rather than each order's own time-to-expiry. The column's job is to
+     * compare orders, and a horizon that varies per row compares nothing — a nearly-expired limit
+     * reading 7% beside a long-dated one reading 64% says more about the two deadlines than about
+     * the two markets. One horizon across the table makes the numbers commensurable, the way the
+     * fixed P(5d)/P(20d) columns already are; the difference is that this one is editable, so a
+     * specific order's own deadline is a keystroke away when that is the question (the view offers
+     * it via {@link #sessionsToExpiry}). Sixty sessions — about a quarter — is long enough to be a
+     * real question about a resting order and short enough that the estimate still means something.
      */
-    static final int DEFAULT_HORIZON_DAYS = 90;
+    static final int DEFAULT_HORIZON_SESSIONS = 60;
     /** Calendar-day lookback loaded per symbol to compute the daily-vol windows (≈ 60 sessions of margin). */
     private static final int VOL_LOOKBACK_DAYS = 90;
 
@@ -373,13 +380,15 @@ public class OpenOrdersService {
                     PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS_LONG));
             o = o.withVolatility(dv10, dv30, sigmaToLimit, touchProb, touchProb20);
 
-            // The third touch column: same estimate as 5d/20d over a longer, *editable* horizon.
-            // Every row starts on DEFAULT_HORIZON_DAYS so the column is comparable across orders;
-            // the reader retunes any row — to its own days-to-expiry, or to anything else — from
-            // the box in the cell.
-            int days = DEFAULT_HORIZON_DAYS;
-            orders.set(i, o.withHorizonTouch(days, horizonSessions(days),
-                    touchOverHorizon(current, o.price(), baseVol, days)));
+            // The third touch column: the same estimate as 5d/20d over a longer, *editable* horizon,
+            // on the same session scale. Every row starts on DEFAULT_HORIZON_SESSIONS so the column
+            // is comparable across orders; the reader retunes any row — to the order's own
+            // sessions-to-expiry, or to anything else — from the box in the cell.
+            int horizon = DEFAULT_HORIZON_SESSIONS;
+            orders.set(i, o.withHorizonTouch(horizon,
+                    PriceStats.touchProbability(
+                            PriceStats.sigmaDistance(current, o.price(), baseVol, horizon)),
+                    sessionsToExpiry(o.expiry())));
         }
         String asOf = newestOverall == null ? null : TIME_FMT.format(
                 newestOverall.atZone(ZoneId.systemDefault()));
@@ -394,46 +403,36 @@ public class OpenOrdersService {
                 + "the price columns fill on the next tick."), notes, asOf, warm);
     }
 
-    /** {@code days} calendar days from today expressed in trading sessions — what the σ scaling consumes. */
-    static Integer horizonSessions(Integer days) {
-        if (days == null) return null;
-        LocalDate today = LocalDate.now();
-        return PriceStats.tradingSessionsBetween(today, today.plusDays(days));
+    /**
+     * Trading sessions from today to {@code expiry} — display only, so the view can offer the
+     * order's own deadline as a horizon worth typing into the box ("expires 2026-08-28, about 41
+     * sessions away"). Null for a GTC order and for an expiry today or already past: there is no
+     * forward horizon left to name, and the Expiry column beside it is saying exactly that.
+     *
+     * <p>This is the only remaining caller of {@link PriceStats#tradingSessionsBetween} — the
+     * probability itself never converts, because the box is already in sessions.
+     */
+    static Integer sessionsToExpiry(LocalDate expiry) {
+        if (expiry == null) return null;
+        int sessions = PriceStats.tradingSessionsBetween(LocalDate.now(), expiry);
+        return sessions > 0 ? Math.min(sessions, MAX_HORIZON_SESSIONS) : null;
     }
 
     /**
-     * Probability the market touches {@code limit} within {@code days} calendar days — the same
-     * driftless first-passage estimate as the fixed 5- and 20-session columns, over the horizon the
-     * caller names. The calendar→session conversion is the load-bearing part: σ scales by
-     * {@code √sessions}, so passing 30 calendar days through as 30 sessions would price a third
-     * more diffusion than the market gets.
+     * Re-price the touch probability over an arbitrary horizon, for the editable sessions box on
+     * the {@code P(N)} column. Pure arithmetic on numbers the view already has on the row — no
+     * re-parse, no FX call, no database read — so typing into the box costs a loopback round trip
+     * rather than a disk scan. The maths stays here rather than being reimplemented in the browser
+     * so this column and the panel's other two touch columns can never disagree; now that the
+     * horizon is in sessions, {@code sessions=5} reproduces the row's P(5d) exactly.
      *
-     * <p>Null whenever any input is missing, which is the honest answer for an order with no limit
-     * price, no live quote, or a symbol whose daily series is too short to yield a vol.
+     * @param sessions trading sessions; clamped to {@code [1, MAX_HORIZON_SESSIONS]}.
      */
-    static BigDecimal touchOverHorizon(BigDecimal current, BigDecimal limit, BigDecimal vol, Integer days) {
-        Integer sessions = horizonSessions(days);
-        if (sessions == null || sessions < 1) return null;
-        return PriceStats.touchProbability(PriceStats.sigmaDistance(current, limit, vol, sessions));
-    }
-
-    /**
-     * Re-price the touch probability over an arbitrary horizon, for the editable days box on the
-     * P(N) column. Pure arithmetic on numbers the view already has on the row — no re-parse, no
-     * FX call, no database read — so typing into the box costs a loopback round trip rather than a
-     * disk scan. The maths stays here rather than being reimplemented in the browser so the column
-     * and the panel's other two touch columns can never disagree.
-     *
-     * @param days calendar days; clamped to {@code [1, MAX_HORIZON_DAYS]}.
-     */
-    public TouchEstimate touchEstimate(BigDecimal current, BigDecimal limit, BigDecimal vol, int days) {
-        int clamped = Math.max(1, Math.min(days, MAX_HORIZON_DAYS));
-        Integer sessions = horizonSessions(clamped);
-        BigDecimal sigma = sessions == null || sessions < 1
-                ? null : PriceStats.sigmaDistance(current, limit, vol, sessions);
-        return new TouchEstimate(clamped, sessions == null ? 0 : sessions, sigma,
-                PriceStats.touchProbability(sigma),
-                sessions != null && sessions > OpenOrder.LONG_HORIZON_SESSIONS);
+    public TouchEstimate touchEstimate(BigDecimal current, BigDecimal limit, BigDecimal vol, int sessions) {
+        int clamped = Math.max(1, Math.min(sessions, MAX_HORIZON_SESSIONS));
+        BigDecimal sigma = PriceStats.sigmaDistance(current, limit, vol, clamped);
+        return new TouchEstimate(clamped, sigma, PriceStats.touchProbability(sigma),
+                clamped > OpenOrder.LONG_HORIZON_SESSIONS);
     }
 
     /**
@@ -442,7 +441,7 @@ public class OpenOrdersService {
      * @param longHorizon true when the horizon is long enough that the driftless assumption is
      *                    doing real work — surfaced on screen rather than silently tolerated.
      */
-    public record TouchEstimate(int days, int sessions, BigDecimal sigma, BigDecimal probability,
+    public record TouchEstimate(int sessions, BigDecimal sigma, BigDecimal probability,
                                 boolean longHorizon) {
     }
 

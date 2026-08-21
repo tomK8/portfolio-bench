@@ -4,6 +4,7 @@ import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.OpenOrdersService.OrdersReport;
+import com.portfolio.domain.PriceStats;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
@@ -52,25 +53,43 @@ class OpenOrdersServiceTest {
     }
 
     @Test
-    void theDefaultHorizonIsCommonToEveryRow_andConvertsToSessions() {
-        // The P(N) column compares orders, so its horizon has to be the same on every row — an
-        // order's own expiry is a keystroke away in the view when that is the question instead.
-        assertEquals(90, OpenOrdersService.DEFAULT_HORIZON_DAYS);
-        int sessions = OpenOrdersService.horizonSessions(OpenOrdersService.DEFAULT_HORIZON_DAYS);
-        // σ scales by √sessions, so the calendar→session conversion is load-bearing: passing 90
-        // days through as 90 sessions would price ~19% more diffusion than the market gets.
-        assertTrue(sessions >= 62 && sessions <= 66, "90 days ≈ 64 sessions, got " + sessions);
-        assertTrue(sessions < OpenOrdersService.DEFAULT_HORIZON_DAYS);
+    void theHorizonIsInSessions_theSameUnitAsTheFixedTouchColumns() {
+        // The whole point of the column: P(5d)/P(20d) are trading sessions, σ scales by √sessions,
+        // and the daily vol comes from bars that only exist on trading days — so N is sessions too.
+        // Set the horizon to 5 and it must reproduce the row's P(5d) exactly, which is the check a
+        // reader can make on screen.
+        OpenOrdersService svc = new OpenOrdersService(new HoldingFileLocator(outDir), List.of(),
+                FX, new ExcelReportWriter(), outDir, null, null, new YahooTickerMap(), null);
+        BigDecimal cur = new BigDecimal("523.96"), lim = new BigDecimal("560"), vol = new BigDecimal("0.01095087");
+        assertEquals(PriceStats.touchProbability(PriceStats.sigmaDistance(cur, lim, vol, 5)),
+                svc.touchEstimate(cur, lim, vol, 5).probability());
+        assertEquals(PriceStats.touchProbability(PriceStats.sigmaDistance(cur, lim, vol, 20)),
+                svc.touchEstimate(cur, lim, vol, 20).probability());
     }
 
     @Test
-    void theDefaultHorizonDoesNotTripTheOverExtendedMark() {
+    void theDefaultHorizonIsCommonToEveryRowAndDoesNotTripTheOverExtendedMark() {
+        // The P(N) column compares orders, so its horizon has to be the same on every row — an
+        // order's own expiry is a keystroke away in the view when that is the question instead.
+        assertEquals(60, OpenOrdersService.DEFAULT_HORIZON_SESSIONS);
         // A mark that fires on every row on every load tells the reader nothing. The driftless
         // caveat that genuinely applies at a quarter is stated once in the panel footnote; the
         // per-row mark is reserved for a horizon pushed materially past the default.
-        int sessions = OpenOrdersService.horizonSessions(OpenOrdersService.DEFAULT_HORIZON_DAYS);
-        assertTrue(sessions <= OpenOrder.LONG_HORIZON_SESSIONS,
+        assertTrue(OpenOrdersService.DEFAULT_HORIZON_SESSIONS <= OpenOrder.LONG_HORIZON_SESSIONS,
                 "the standing default must not mark itself as over-extended");
+    }
+
+    @Test
+    void sessionsToExpiryTranslatesTheOrdersOwnDeadline() {
+        // Display only — it is how the view offers "expires 2026-08-28, about 41 sessions away"
+        // without the probability itself ever touching a calendar day.
+        Integer s = OpenOrdersService.sessionsToExpiry(LocalDate.now().plusDays(30));
+        assertNotNull(s);
+        assertTrue(s >= 20 && s <= 23, "30 calendar days ≈ 21 sessions, got " + s);
+        // No forward deadline to name: GTC, or an expiry today / already past.
+        assertNull(OpenOrdersService.sessionsToExpiry(null));
+        assertNull(OpenOrdersService.sessionsToExpiry(LocalDate.now()));
+        assertNull(OpenOrdersService.sessionsToExpiry(LocalDate.now().minusDays(3)));
     }
 
     @Test
@@ -79,27 +98,27 @@ class OpenOrdersServiceTest {
                 FX, new ExcelReportWriter(), outDir, null, null, new YahooTickerMap(), null);
         BigDecimal cur = new BigDecimal("100"), lim = new BigDecimal("95"), vol = new BigDecimal("0.02");
 
-        OpenOrdersService.TouchEstimate near = svc.touchEstimate(cur, lim, vol, 7);
-        OpenOrdersService.TouchEstimate far = svc.touchEstimate(cur, lim, vol, 400);
+        OpenOrdersService.TouchEstimate near = svc.touchEstimate(cur, lim, vol, 5);
+        OpenOrdersService.TouchEstimate far = svc.touchEstimate(cur, lim, vol, 300);
         assertTrue(near.probability().compareTo(far.probability()) < 0,
                 "same barrier, more time — the probability can only grow");
         assertTrue(near.sessions() < far.sessions());
         assertTrue(near.sigma().compareTo(far.sigma()) < 0, "σ distance shrinks as the horizon grows");
 
         // A horizon pushed well past the column's default is flagged rather than silently served;
-        // the default itself is not (see theDefaultHorizonDoesNotTripTheOverExtendedMark).
+        // the default itself is not (see the default-horizon test above).
         assertFalse(near.longHorizon());
-        assertFalse(svc.touchEstimate(cur, lim, vol, OpenOrdersService.DEFAULT_HORIZON_DAYS).longHorizon());
+        assertFalse(svc.touchEstimate(cur, lim, vol, OpenOrdersService.DEFAULT_HORIZON_SESSIONS).longHorizon());
         assertTrue(far.longHorizon());
 
-        // Days are clamped, not rejected — a stray keystroke can't ask for a 100k-session walk.
-        assertEquals(OpenOrdersService.MAX_HORIZON_DAYS, svc.touchEstimate(cur, lim, vol, 999999).days());
-        assertEquals(1, svc.touchEstimate(cur, lim, vol, 0).days());
+        // Clamped, not rejected — a stray keystroke can't ask for an absurd horizon.
+        assertEquals(OpenOrdersService.MAX_HORIZON_SESSIONS, svc.touchEstimate(cur, lim, vol, 999999).sessions());
+        assertEquals(1, svc.touchEstimate(cur, lim, vol, 0).sessions());
 
         // Missing inputs (no limit, no quote, no vol) give null rather than a fabricated number.
-        assertNull(svc.touchEstimate(cur, null, vol, 7).probability());
-        assertNull(svc.touchEstimate(null, lim, vol, 7).probability());
-        assertNull(svc.touchEstimate(cur, lim, null, 7).probability());
+        assertNull(svc.touchEstimate(cur, null, vol, 5).probability());
+        assertNull(svc.touchEstimate(null, lim, vol, 5).probability());
+        assertNull(svc.touchEstimate(cur, lim, null, 5).probability());
     }
 
     @Test

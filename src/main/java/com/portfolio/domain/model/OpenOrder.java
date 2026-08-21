@@ -47,13 +47,15 @@ public record OpenOrder(
                                 // off the same daily vol); a fraction. null when unavailable.
         String quoteSession,    // trading session currentPrice came from: "PRE" / "POST", or null
                                 // for a regular-hours quote, a daily close, or no quote at all.
-        Integer horizonDays,    // calendar days the P(N) column is priced over — one standing default
-                                // for every row (the column compares orders, so the horizon has to be
-                                // common), retunable per row from the view. null when unpriceable.
-        Integer horizonSessions,// `horizonDays` expressed in trading sessions (weekdays), which is
-                                // what the σ scaling actually consumes. null when horizonDays is.
-        BigDecimal touchProbHorizon // probability the market touches the limit within horizonSessions
+        Integer horizonSessions,// trading sessions the P(N) column is priced over — one standing
+                                // default for every row (the column compares orders, so the horizon
+                                // has to be common), retunable per row from the view. Sessions, like
+                                // touchProb5d/20d and the σ scaling itself. null when unpriceable.
+        BigDecimal touchProbHorizon,// probability the market touches the limit within horizonSessions
                                 // (same first-passage estimate as touchProb5d). null when unavailable.
+        Integer sessionsToExpiry// trading sessions from today to `expiry`; null for a GTC order or an
+                                // expiry already past. Display only — it is what lets the view offer
+                                // the order's own deadline as a horizon, and feeds no probability.
 ) {
     /**
      * True when a resting order is already through its own limit — a buy whose limit sits at or
@@ -135,7 +137,7 @@ public record OpenOrder(
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, gbp,
                 currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
-                touchProb20d, quoteSession, horizonDays, horizonSessions, touchProbHorizon);
+                touchProb20d, quoteSession, horizonSessions, touchProbHorizon, sessionsToExpiry);
     }
 
     /**
@@ -147,7 +149,7 @@ public record OpenOrder(
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
                 current, distance, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d, touchProb20d,
-                session, horizonDays, horizonSessions, touchProbHorizon);
+                session, horizonSessions, touchProbHorizon, sessionsToExpiry);
     }
 
     /**
@@ -160,23 +162,23 @@ public record OpenOrder(
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
                 currentPrice, distancePct, dv10, dv30, sigmaToLimit, touchProb5d, touchProb20d,
-                quoteSession, horizonDays, horizonSessions, touchProbHorizon);
+                quoteSession, horizonSessions, touchProbHorizon, sessionsToExpiry);
     }
 
     /**
-     * Copy with the expiry-horizon touch columns set — the horizon in calendar days, the same
-     * horizon in trading sessions, and the probability the market touches the limit inside it.
+     * Copy with the P(N) columns set — the horizon in trading sessions, the probability the market
+     * touches the limit inside it, and (display only) how many sessions this order's own expiry is
+     * away.
      *
      * <p>Its own wither rather than more parameters on {@link #withVolatility} because it answers a
-     * different question: the fixed 5- and 20-session columns compare every order on one yardstick,
-     * while this one is the order's <em>own</em> deadline — the days left before it expires — and is
-     * re-priced on demand when the reader types a different number of days into the row.
+     * different question: the fixed 5- and 20-session columns are the same window for every order,
+     * while this one is a window the reader chooses and re-prices on demand.
      */
-    public OpenOrder withHorizonTouch(Integer days, Integer sessions, BigDecimal prob) {
+    public OpenOrder withHorizonTouch(Integer sessions, BigDecimal prob, Integer sessionsToExpiry) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
                 currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
-                touchProb20d, quoteSession, days, sessions, prob);
+                touchProb20d, quoteSession, sessions, prob, sessionsToExpiry);
     }
 
     /**

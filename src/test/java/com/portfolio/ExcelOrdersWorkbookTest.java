@@ -1,5 +1,6 @@
 package com.portfolio;
 
+import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.OpenOrder;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -18,18 +19,23 @@ class ExcelOrdersWorkbookTest {
 
     @Test
     void writesOrdersSheetWithHeadersAndEstimatedPriceFormat() throws Exception {
-        OpenOrder ajb = new OpenOrder("AJ Bell SIPP", "EQQQ", "Invesco EQQQ NASDAQ-100 ETF GBP",
-                "Sell", "Limit", new BigDecimal("50"), new BigDecimal("538.00"), false,
-                new BigDecimal("26901.41"), "GBP", LocalDate.of(2026, 7, 14),
-                LocalDate.of(2026, 7, 29), null, "In progress", "ref1", new BigDecimal("26901.41"),
-                new BigDecimal("540.00"), new BigDecimal("0.0037"),
-                new BigDecimal("0.0200"), new BigDecimal("0.0250"), new BigDecimal("0.50"),
-                new BigDecimal("0.6170"), new BigDecimal("0.8000"), null,
-                11, new BigDecimal("0.7400"), 15);
-        OpenOrder ii = new OpenOrder("II SIPP", "NVDA", "NVIDIA Corp", "Sell", "Limit",
-                new BigDecimal("51"), new BigDecimal("224.8596"), true, new BigDecimal("11467.84"),
-                "USD", LocalDate.of(2026, 7, 14), null, null, "PENDING", "ref2", new BigDecimal("9174.27"),
-                null, null, null, null, null, null, null, null, null, null, null);
+        OpenOrder ajb = OpenOrder.parsed("AJ Bell SIPP", "EQQQ", "Invesco EQQQ NASDAQ-100 ETF GBP",
+                        "Sell", "Limit", new BigDecimal("50"), new BigDecimal("538.00"), false,
+                        new BigDecimal("26901.41"), "GBP", LocalDate.of(2026, 7, 14),
+                        LocalDate.of(2026, 7, 29), null, "In progress", "ref1")
+                .withAmountGbp(new BigDecimal("26901.41"))
+                .withCurrentPrice(new BigDecimal("540.00"), new BigDecimal("0.0037"), null)
+                .withVolatility(new BigDecimal("0.0200"), new BigDecimal("0.0225"),
+                        new BigDecimal("0.0250"), new BigDecimal("0.0180"),
+                        new BigDecimal("0.50"), new BigDecimal("0.6170"))
+                // Priced to its own expiry: 11 sessions away, which is what the sheet must say.
+                .withHorizonTouch(new VolForecast.Touch(11, new BigDecimal("0.0210"),
+                        new BigDecimal("0.8200"), VolForecast.Source.BLEND, new BigDecimal("0.33"),
+                        new BigDecimal("0.7400"), new BigDecimal("0.7100"), new BigDecimal("0.7700")), 11);
+        OpenOrder ii = OpenOrder.parsed("II SIPP", "NVDA", "NVIDIA Corp", "Sell", "Limit",
+                        new BigDecimal("51"), new BigDecimal("224.8596"), true, new BigDecimal("11467.84"),
+                        "USD", LocalDate.of(2026, 7, 14), null, null, "PENDING", "ref2")
+                .withAmountGbp(new BigDecimal("9174.27"));
 
         byte[] bytes = new ExcelReportWriter().ordersWorkbook(List.of(ajb, ii));
         assertTrue(bytes.length > 0);
@@ -50,12 +56,18 @@ class ExcelOrdersWorkbookTest {
             assertEquals("RV30", hdr.getCell(10).getStringCellValue());
             assertEquals("σ→lim (5d)", hdr.getCell(11).getStringCellValue());
             assertEquals("P(touch 5d)", hdr.getCell(12).getStringCellValue());
-            assertEquals("P(touch 20d)", hdr.getCell(13).getStringCellValue());
-            assertEquals("Horizon (sessions)", hdr.getCell(14).getStringCellValue());
+            // The 20-session column is gone: P(N) runs to each order's own expiry now, and the
+            // sheet carries the forecast that priced it rather than a second fixed horizon.
+            assertEquals("Horizon (sessions)", hdr.getCell(13).getStringCellValue());
+            assertEquals("Horizon from", hdr.getCell(14).getStringCellValue());
             assertEquals("P(touch horizon)", hdr.getCell(15).getStringCellValue());
-            assertEquals("Amount", hdr.getCell(16).getStringCellValue());
-            assertEquals("Amount GBP", hdr.getCell(17).getStringCellValue());
-            assertEquals("Expiry", hdr.getCell(19).getStringCellValue());
+            assertEquals("P(low)", hdr.getCell(16).getStringCellValue());
+            assertEquals("P(high)", hdr.getCell(17).getStringCellValue());
+            assertEquals("σ eff", hdr.getCell(18).getStringCellValue());
+            assertEquals("Vol source", hdr.getCell(19).getStringCellValue());
+            assertEquals("Amount", hdr.getCell(20).getStringCellValue());
+            assertEquals("Amount GBP", hdr.getCell(21).getStringCellValue());
+            assertEquals("Expiry", hdr.getCell(23).getStringCellValue());
 
             Row ajbRow = sheet.getRow(1);
             assertEquals("EQQQ", ajbRow.getCell(1).getStringCellValue());
@@ -74,15 +86,21 @@ class ExcelOrdersWorkbookTest {
             assertEquals(0.50, ajbRow.getCell(11).getNumericCellValue(), 1e-9);
             assertEquals(0.6170, ajbRow.getCell(12).getNumericCellValue(), 1e-9);
             assertTrue(ajbRow.getCell(12).getCellStyle().getDataFormatString().contains("%"));
-            assertEquals(0.8000, ajbRow.getCell(13).getNumericCellValue(), 1e-9);
-            assertTrue(ajbRow.getCell(13).getCellStyle().getDataFormatString().contains("%"));
-            // The horizon travels in sessions — the number the √-scaling actually consumed —
-            // beside the probability computed over it.
-            assertEquals(11, ajbRow.getCell(14).getNumericCellValue(), 1e-9);
+            // The horizon travels in sessions — the number the √-scaling actually consumed — and
+            // says where it came from, since 11 sessions to an expiry and 11 typed into a box are
+            // different claims about the same figure.
+            assertEquals(11, ajbRow.getCell(13).getNumericCellValue(), 1e-9);
+            assertEquals("expiry", ajbRow.getCell(14).getStringCellValue());
             assertEquals(0.7400, ajbRow.getCell(15).getNumericCellValue(), 1e-9);
             assertTrue(ajbRow.getCell(15).getCellStyle().getDataFormatString().contains("%"));
-            assertEquals(26901.41, ajbRow.getCell(17).getNumericCellValue(), 1e-6);
-            assertEquals("2026-07-29", ajbRow.getCell(19).getStringCellValue());
+            // The RV10/RV30 bracket, and the forecast that produced the headline: a probability
+            // read months later is only judgeable against the model that made it.
+            assertEquals(0.7100, ajbRow.getCell(16).getNumericCellValue(), 1e-9);
+            assertEquals(0.7700, ajbRow.getCell(17).getNumericCellValue(), 1e-9);
+            assertEquals(0.0210, ajbRow.getCell(18).getNumericCellValue(), 1e-9);
+            assertEquals("BLEND", ajbRow.getCell(19).getStringCellValue());
+            assertEquals(26901.41, ajbRow.getCell(21).getNumericCellValue(), 1e-6);
+            assertEquals("2026-07-29", ajbRow.getCell(23).getStringCellValue());
 
             Row iiRow = sheet.getRow(2);
             // value stays numeric; the "~" lives only in the display number format
@@ -94,9 +112,9 @@ class ExcelOrdersWorkbookTest {
             assertNull(iiRow.getCell(8));
             assertNull(iiRow.getCell(9));
             assertNull(iiRow.getCell(12));
-            assertNull(iiRow.getCell(13));
-            assertNull(iiRow.getCell(14), "no dated expiry → no horizon to price over");
+            assertNull(iiRow.getCell(13), "unpriced row → no horizon column either");
             assertNull(iiRow.getCell(15));
+            assertNull(iiRow.getCell(18));
         }
     }
 
@@ -104,11 +122,12 @@ class ExcelOrdersWorkbookTest {
     void extendedHoursQuoteIsLabelledInItsOwnColumn() throws Exception {
         // The price itself stays a plain number so the sheet can still sort and chart it; the
         // caveat rides alongside rather than being baked into the cell's text.
-        OpenOrder pre = new OpenOrder("Roth IRA", "MRNA", "Moderna, Inc.", "Buy", "Limit",
-                new BigDecimal("50"), new BigDecimal("150.00"), false, new BigDecimal("7500.00"),
-                "USD", LocalDate.of(2026, 8, 19), null, "GTC", "Open", "ref3",
-                new BigDecimal("5500.00"), new BigDecimal("160.90"), new BigDecimal("0.0727"),
-                null, null, null, null, null, "PRE", null, null, null);
+        OpenOrder pre = OpenOrder.parsed("Roth IRA", "MRNA", "Moderna, Inc.", "Buy", "Limit",
+                        new BigDecimal("50"), new BigDecimal("150.00"), false,
+                        new BigDecimal("7500.00"), "USD", LocalDate.of(2026, 8, 19), null, "GTC",
+                        "Open", "ref3")
+                .withAmountGbp(new BigDecimal("5500.00"))
+                .withCurrentPrice(new BigDecimal("160.90"), new BigDecimal("0.0727"), "PRE");
 
         try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(
                 new ExcelReportWriter().ordersWorkbook(List.of(pre))))) {

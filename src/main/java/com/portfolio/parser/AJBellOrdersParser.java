@@ -134,7 +134,7 @@ public class AJBellOrdersParser implements OrderParser {
                 BigDecimal qty = decimal(get(r, "Quantity"));
                 if (qty == null) continue;
 
-                orders.add(new OpenOrder(
+                orders.add(OpenOrder.parsed(
                         sourceName(),
                         symbolOrName(name),
                         name,
@@ -149,9 +149,7 @@ public class AJBellOrdersParser implements OrderParser {
                         date(get(r, "Expiry date")),
                         null,
                         get(r, "Status"),
-                        get(r, "Reference"),
-                        // enrichment (FX, live price, vol, touch horizons) — filled by the service
-                        null, null, null, null, null, null, null, null, null, null, null, null));
+                        get(r, "Reference")));
             }
         }
         return orders;

@@ -82,7 +82,7 @@ public class IIOrdersParser implements OrderParser {
                 BigDecimal price = priceEstimated
                         ? amount.divide(qty, 4, java.math.RoundingMode.HALF_UP) : null;
 
-                orders.add(new OpenOrder(
+                orders.add(OpenOrder.parsed(
                         sourceName(),
                         symbol,
                         get(r, "Name"),
@@ -97,9 +97,7 @@ public class IIOrdersParser implements OrderParser {
                         null,
                         null,
                         get(r, "Status"),
-                        get(r, "Reference"),
-                        // enrichment (FX, live price, vol, touch horizons) — filled by the service
-                        null, null, null, null, null, null, null, null, null, null, null, null));
+                        get(r, "Reference")));
             }
         }
         return orders;

@@ -405,6 +405,15 @@
             opacity: 0.45;
         }
 
+        /* The RV10/RV30 bracket under the headline probability. Deliberately quiet: the headline is
+           the number, the range is the check on it. */
+        .ord-range {
+            display: block;
+            font-size: 0.7rem;
+            opacity: 0.6;
+            white-space: nowrap;
+        }
+
         /* Past ~a quarter the driftless first-passage model is assuming, not merely conventional. */
         .ord-touch.long-horizon {
             color: #b8860b;
@@ -1549,9 +1558,10 @@
     <section class="probe-card">
         <h3 style="margin: 0 0 0.2rem; font-size: 0.95rem">Test a limit before you place it</h3>
         <p class="muted" style="margin: 0 0 0.6rem">
-            The same seven statistics the table below reports for a resting order — current price,
-            distance to the limit, RV10/RV30, &sigma;&rarr;lim, P(5d), P(20d) — plus the P(N)
-            horizon, for an order that doesn't exist yet. Enter the limit in the instrument's own
+            The same statistics the table below reports for a resting order — current price,
+            distance to the limit, RV10/RV30, &sigma;&rarr;lim, P(5d), and P(N) over a horizon you
+            pick with its volatility forecast and RV10/RV30 range — for an order that doesn't exist
+            yet. Enter the limit in the instrument's own
             quote currency (London listings in <strong>pounds</strong>, as the table prints them —
             not pence). Reads stored prices only, so it re-runs as you type: nudge the limit until
             the probability is the one you want.
@@ -1577,8 +1587,8 @@
             </label>
             <label>Horizon
                 <input id="probe-sessions" name="sessions" type="number" min="1" max="1250" step="1"
-                       value="60" size="6"
-                       title="Trading sessions the P(N) figure is priced over — the same unit as P(5d) and P(20d). Set it to 5 and P(N) reproduces P(5d) exactly.">
+                       value="90" size="6"
+                       title="Trading sessions the P(N) figure is priced over — the same unit as P(5d). Defaults to 90, the horizon the table assumes for an order with no dated expiry, since an order you have not placed has none either. Set it to 5 and P(N) reproduces P(5d) exactly.">
             </label>
             <button type="submit">Test</button>
         </form>

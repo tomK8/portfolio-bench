@@ -35,27 +35,34 @@ public record OpenOrder(
                                 // service from the intraday/daily feed. null when unavailable.
         BigDecimal distancePct, // signed (currentPrice − price) / price as a fraction — how far the
                                 // market sits from the limit. null when either side is missing/zero.
-        BigDecimal dailyVol10,  // realized daily volatility over the last 10 sessions (NOT annualised),
-                                // a fraction; enriched from the symbol's daily series. null when unknown.
-        BigDecimal dailyVol30,  // realized daily volatility over the last 30 sessions (NOT annualised).
-        BigDecimal sigmaToLimit,// signed distance current→limit in 5-session σ units (ln(limit/current)
-                                // ÷ dailyVol×√5). null when price/current/vol unavailable.
-        BigDecimal touchProb5d, // probability the market touches the limit within 5 sessions
-                                // (driftless first-passage, 2·Φ(−|sigmaToLimit|)); a fraction. null when
-                                // sigmaToLimit is unavailable.
-        BigDecimal touchProb20d,// same touch probability over a 20-session horizon (σ scaled by √20
-                                // off the same daily vol); a fraction. null when unavailable.
         String quoteSession,    // trading session currentPrice came from: "PRE" / "POST", or null
                                 // for a regular-hours quote, a daily close, or no quote at all.
-        Integer horizonSessions,// trading sessions the P(N) column is priced over — one standing
-                                // default for every row (the column compares orders, so the horizon
-                                // has to be common), retunable per row from the view. Sessions, like
-                                // touchProb5d/20d and the σ scaling itself. null when unpriceable.
-        BigDecimal touchProbHorizon,// probability the market touches the limit within horizonSessions
-                                // (same first-passage estimate as touchProb5d). null when unavailable.
+        // ---- realized-vol windows, all daily-return stdevs (NOT annualised), a fraction --------
+        BigDecimal dailyVol10,  // RV10 — displayed, and the low/high end of the probability range
+        BigDecimal dailyVol20,  // RV20 — *current state* in the mean-reversion blend
+        BigDecimal dailyVol30,  // RV30 — displayed, and the other end of the range
+        BigDecimal dailyVol250, // RV250 — the *long-run anchor* the blend reverts toward
+        // ---- the horizon-matched forecast and what it prices ----------------------------------
+        BigDecimal sigmaEff,    // daily σ the headline probability is scaled by: the blend of RV20
+                                // toward RV250 over `horizonSessions`. See domain/VolForecast.
+        BigDecimal decayWeight, // weight the blend put on current state at this horizon, in [0,1] —
+                                // 1 = all RV20, 0 = all RV250. Recorded so a probability can be
+                                // re-derived later from the record alone.
+        String volSource,       // VolForecast.Source name: BLEND / CURRENT_ONLY / ANCHOR_ONLY / NONE
+        BigDecimal sigmaToLimit,// signed distance current→limit in 5-session σ units, ln(limit/current)
+                                // ÷ (sigma_eff(5)×√5). null when price/current/vol unavailable.
+        BigDecimal touchProb5d, // probability the market touches the limit within 5 sessions
+                                // (driftless first-passage, 2·Φ(−|sigmaToLimit|)); a fraction.
+        Integer horizonSessions,// trading sessions the P(N) column is priced over: this order's own
+                                // sessions-to-expiry, or the GTC default when it has no dated one.
+                                // Retunable per row from the view.
+        BigDecimal touchProbHorizon,   // headline P over horizonSessions, on sigma_eff
+        BigDecimal touchProbLow,       // same P recomputed on min(RV10, RV30) — the low end of the
+                                       // plausibility range shown on hover
+        BigDecimal touchProbHigh,      // …and on the higher of the two
         Integer sessionsToExpiry// trading sessions from today to `expiry`; null for a GTC order or an
-                                // expiry already past. Display only — it is what lets the view offer
-                                // the order's own deadline as a horizon, and feeds no probability.
+                                // expiry already past. It *is* horizonSessions whenever it exists —
+                                // kept separately so the view can say which of the two the horizon is.
 ) {
     /**
      * True when a resting order is already through its own limit — a buy whose limit sits at or
@@ -132,12 +139,34 @@ public record OpenOrder(
         };
     }
 
+    /**
+     * An order exactly as a broker exported it, with every enrichment field null.
+     *
+     * <p>Parsers build FX-free, price-free orders and the service fills the rest in through the
+     * withers below, so this factory is what keeps a parser from carrying a dozen positional nulls
+     * that have to be recounted every time the enrichment set changes.
+     */
+    public static OpenOrder parsed(String broker, String symbol, String name, String side,
+                                   String orderType, BigDecimal quantity, BigDecimal price,
+                                   boolean priceEstimated, BigDecimal amount, String currency,
+                                   LocalDate dateEntered, LocalDate expiry, String duration,
+                                   String status, String reference) {
+        return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
+                amount, currency, dateEntered, expiry, duration, status, reference,
+                null, null, null, null,
+                null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, null);
+    }
+
     /** Copy with {@link #amountGbp} set — parsers build FX-free orders, the service enriches them. */
     public OpenOrder withAmountGbp(BigDecimal gbp) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, gbp,
-                currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
-                touchProb20d, quoteSession, horizonSessions, touchProbHorizon, sessionsToExpiry);
+                currentPrice, distancePct, quoteSession,
+                dailyVol10, dailyVol20, dailyVol30, dailyVol250,
+                sigmaEff, decayWeight, volSource, sigmaToLimit, touchProb5d,
+                horizonSessions, touchProbHorizon, touchProbLow, touchProbHigh, sessionsToExpiry);
     }
 
     /**
@@ -148,45 +177,75 @@ public record OpenOrder(
     public OpenOrder withCurrentPrice(BigDecimal current, BigDecimal distance, String session) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
-                current, distance, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d, touchProb20d,
-                session, horizonSessions, touchProbHorizon, sessionsToExpiry);
+                current, distance, session,
+                dailyVol10, dailyVol20, dailyVol30, dailyVol250,
+                sigmaEff, decayWeight, volSource, sigmaToLimit, touchProb5d,
+                horizonSessions, touchProbHorizon, touchProbLow, touchProbHigh, sessionsToExpiry);
     }
 
     /**
-     * Copy with the volatility columns set — realized daily σ over 10 / 30 sessions (not annualised),
-     * the signed 5-session σ distance from the market to the limit, and the 5- and 20-session touch
-     * probabilities. Enriched by the service, mirroring {@link #withCurrentPrice}.
+     * Copy with the realized-vol windows and the fixed 5-session columns set — RV10/RV20/RV30/RV250
+     * (daily σ, not annualised), the signed 5-session σ distance to the limit and the 5-session
+     * touch probability. Enriched by the service, mirroring {@link #withCurrentPrice}.
      */
-    public OpenOrder withVolatility(BigDecimal dv10, BigDecimal dv30, BigDecimal sigmaToLimit,
-                                    BigDecimal touchProb5d, BigDecimal touchProb20d) {
+    public OpenOrder withVolatility(BigDecimal dv10, BigDecimal dv20, BigDecimal dv30,
+                                    BigDecimal dv250, BigDecimal sigmaToLimit,
+                                    BigDecimal touchProb5d) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
-                currentPrice, distancePct, dv10, dv30, sigmaToLimit, touchProb5d, touchProb20d,
-                quoteSession, horizonSessions, touchProbHorizon, sessionsToExpiry);
+                currentPrice, distancePct, quoteSession,
+                dv10, dv20, dv30, dv250,
+                sigmaEff, decayWeight, volSource, sigmaToLimit, touchProb5d,
+                horizonSessions, touchProbHorizon, touchProbLow, touchProbHigh, sessionsToExpiry);
     }
 
     /**
-     * Copy with the P(N) columns set — the horizon in trading sessions, the probability the market
-     * touches the limit inside it, and (display only) how many sessions this order's own expiry is
+     * Copy with the P(N) column set: the horizon in trading sessions, the forecast that priced it
+     * ({@code sigma_eff}, its decay weight and which source produced it), the headline probability,
+     * the RV10/RV30 plausibility range around it, and how many sessions this order's own expiry is
      * away.
      *
      * <p>Its own wither rather than more parameters on {@link #withVolatility} because it answers a
-     * different question: the fixed 5- and 20-session columns are the same window for every order,
-     * while this one is a window the reader chooses and re-prices on demand.
+     * different question: those columns are a fixed 5-session window for every order, while this one
+     * is priced over <em>this order's</em> deadline and re-prices on demand.
      */
-    public OpenOrder withHorizonTouch(Integer sessions, BigDecimal prob, Integer sessionsToExpiry) {
+    public OpenOrder withHorizonTouch(com.portfolio.domain.VolForecast.Touch touch,
+                                      Integer sessionsToExpiry) {
         return new OpenOrder(broker, symbol, name, side, orderType, quantity, price, priceEstimated,
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
-                currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
-                touchProb20d, quoteSession, sessions, prob, sessionsToExpiry);
+                currentPrice, distancePct, quoteSession,
+                dailyVol10, dailyVol20, dailyVol30, dailyVol250,
+                touch == null ? null : touch.sigmaEff(),
+                touch == null ? null : touch.decay(),
+                touch == null || touch.source() == null ? null : touch.source().name(),
+                sigmaToLimit, touchProb5d,
+                touch == null ? null : touch.sessions(),
+                touch == null ? null : touch.probability(),
+                touch == null ? null : touch.probabilityLow(),
+                touch == null ? null : touch.probabilityHigh(),
+                sessionsToExpiry);
+    }
+
+    /** True when the P(N) horizon is this order's own expiry rather than the GTC default. */
+    public boolean horizonFromExpiry() {
+        return sessionsToExpiry != null && sessionsToExpiry.equals(horizonSessions);
+    }
+
+    /** True when the hover range around the headline probability exists. */
+    public boolean hasTouchRange() {
+        return touchProbLow != null && touchProbHigh != null;
     }
 
     /**
-     * The realized daily σ the touch columns are scaled by: the 10-session window when it exists,
-     * else the 30-session one. Exposed so the view can hand the number back for an on-demand
-     * re-price over a different horizon without the row having to be re-parsed server-side.
+     * True when this row has enough of a forecast to price anything at all — the test the view uses
+     * before offering an editable horizon box.
+     *
+     * <p>The re-price is done server-side from the four RV windows on the row (see
+     * {@code GET /orders/touch}), so what a row needs is a current price, a limit and at least one
+     * realized-vol window to blend; {@code VolForecast} decides which of them it can use.
      */
-    public BigDecimal baseVol() {
-        return dailyVol10 != null ? dailyVol10 : dailyVol30;
+    public boolean priceable() {
+        return currentPrice != null && price != null && price.signum() != 0
+                && (dailyVol20 != null || dailyVol250 != null);
     }
 }

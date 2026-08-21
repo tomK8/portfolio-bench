@@ -1,6 +1,7 @@
 package com.portfolio.web;
 
 import com.portfolio.application.OpenOrdersService;
+import com.portfolio.domain.VolForecast;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,9 +25,17 @@ public class OrdersController {
         this.openOrdersService = openOrdersService;
     }
 
+    /**
+     * @param halfLife   mean-reversion half-life in sessions for the volatility blend (default 20).
+     * @param gtcSessions horizon assumed for an order with no dated expiry (default 90). Both are
+     *                    query params so the forecast can be swept without a rebuild — the same
+     *                    convention the strategy tabs use for their knobs.
+     */
     @GetMapping("/orders")
-    public String orders(Model model) {
-        model.addAttribute("orders", openOrdersService.load());
+    public String orders(@RequestParam(required = false) Double halfLife,
+                         @RequestParam(required = false) Integer gtcSessions,
+                         Model model) {
+        model.addAttribute("orders", openOrdersService.load(VolForecast.Config.of(halfLife, gtcSessions)));
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/orders :: result";
     }
@@ -41,15 +50,25 @@ public class OrdersController {
      * Doing the arithmetic here rather than in the browser is what keeps this column and the fixed
      * 5d/20d ones on one implementation of the first-passage model.
      *
-     * @param sessions trading sessions — the same unit P(5d)/P(20d) and the σ scaling use.
+     * <p>It takes the row's four realized-vol windows rather than a single σ because the horizon is
+     * what the volatility forecast depends on: a new N re-blends current state toward the long-run
+     * anchor rather than rescaling one number by √N.
+     *
+     * @param sessions trading sessions — the same unit P(5d) and the σ scaling use.
      */
     @GetMapping("/orders/touch")
     @ResponseBody
     public OpenOrdersService.TouchEstimate touch(@RequestParam BigDecimal current,
                                                  @RequestParam BigDecimal limit,
-                                                 @RequestParam BigDecimal vol,
-                                                 @RequestParam int sessions) {
-        return openOrdersService.touchEstimate(current, limit, vol, sessions);
+                                                 @RequestParam(required = false) BigDecimal rv10,
+                                                 @RequestParam(required = false) BigDecimal rv20,
+                                                 @RequestParam(required = false) BigDecimal rv30,
+                                                 @RequestParam(required = false) BigDecimal rv250,
+                                                 @RequestParam int sessions,
+                                                 @RequestParam(required = false) Double halfLife) {
+        return openOrdersService.touchEstimate(current, limit,
+                new VolForecast.Inputs(rv10, rv20, rv30, rv250), sessions,
+                VolForecast.Config.of(halfLife, null));
     }
 
     /**
@@ -69,7 +88,7 @@ public class OrdersController {
                         @RequestParam(required = false) String sessions,
                         Model model) {
         model.addAttribute("probe", openOrdersService.probe(
-                symbol, decimalOrNull(limit), side, intOrNull(sessions)));
+                symbol, decimalOrNull(limit), side, intOrNull(sessions), VolForecast.Config.DEFAULT));
         return "fragments/orders :: probe";
     }
 

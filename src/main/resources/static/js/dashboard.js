@@ -152,8 +152,10 @@
             });
 
             // Editable horizon box → re-price P(N) on the server (see GET /orders/touch: the
-            // first-passage maths stays in one place rather than being mirrored here). The box is
-            // in trading sessions, the same unit as P(5d)/P(20d) — type 5 and the cell matches.
+            // first-passage maths and the vol blend stay in one place rather than being mirrored
+            // here). The box is in trading sessions, the same unit as P(5d) — type 5 and the cell
+            // matches. A new horizon re-blends the forecast rather than rescaling one σ by √N,
+            // which is why the row hands over four RV windows and not a single number.
             document.body.addEventListener('input', function (e) {
                 var input = e.target.closest ? e.target.closest('#orders-table .ord-days') : null;
                 if (!input) return;
@@ -165,8 +167,9 @@
 
         /**
          * Re-price one row's P(N) cell over the horizon in its sessions box. Everything the estimate
-         * needs — current price, limit, base vol — was rendered onto the cell, so this is a pure
-         * loopback calculation: no re-parse of the broker exports, no FX call.
+         * needs — current price, limit and the four realized-vol windows — was rendered onto the
+         * cell, so this is a pure loopback calculation: no re-parse of the broker exports, no FX
+         * call, no database read.
          *
          * A per-cell sequence number latches the response: typing "1", "1 2", "1 2 0" fires three
          * debounced requests and a slow early one landing last would otherwise repaint the cell for
@@ -175,20 +178,24 @@
         function repriceTouch(cell, input) {
             var out = cell.querySelector('.ord-touch');
             if (!out) return;
+            var range = cell.querySelector('.ord-range');
             var sessions = parseInt(input.value, 10);
             var seq = cell._ordSeq = (cell._ordSeq || 0) + 1;
             if (!isFinite(sessions) || sessions < 1) {  // box cleared — say nothing rather than guess
                 out.textContent = '—';
                 out.title = '';
                 out.className = 'ord-touch';
+                setRange(range, null, null);
                 cell.dataset.sortValue = '';
                 return;
             }
             out.classList.add('pending');
             var q = 'current=' + encodeURIComponent(cell.dataset.current) +
                 '&limit=' + encodeURIComponent(cell.dataset.limit) +
-                '&vol=' + encodeURIComponent(cell.dataset.vol) +
                 '&sessions=' + sessions;
+            ['rv10', 'rv20', 'rv30', 'rv250'].forEach(function (k) {
+                if (cell.dataset[k]) q += '&' + k + '=' + encodeURIComponent(cell.dataset[k]);
+            });
             fetch('/orders/touch?' + q)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -200,26 +207,64 @@
                     if (t.probability == null) {
                         out.textContent = '—';
                         out.title = 'No probability for this horizon.';
+                        setRange(range, null, null);
                         cell.dataset.sortValue = '';
                         return;
                     }
                     out.textContent = (t.probability * 100).toFixed(1) + '%';
                     cell.dataset.sortValue = t.probability;
                     out.classList.toggle('long-horizon', !!t.longHorizon);
-                    out.title = t.sessions + ' trading sessions' +
-                        (t.longHorizon
-                            ? '. This horizon runs well past the column default, where the driftless ' +
-                              'assumption stops being a convention and becomes the dominant one. ' +
-                              'Directional, not a number to read to the decimal.'
-                            : '');
+                    out.title = touchTooltip(t);
+                    // The printed RV10/RV30 bracket is priced at the same horizon as the headline,
+                    // so it has to move with it — left behind, it reads as the range for a horizon
+                    // the cell is no longer showing.
+                    setRange(range, t.probabilityLow, t.probabilityHigh);
                 })
                 .catch(function () {
                     if (seq !== cell._ordSeq) return;
                     out.classList.remove('pending');
                     out.textContent = '—';
                     out.title = 'Could not re-price this horizon.';
+                    setRange(range, null, null);
                     cell.dataset.sortValue = '';
                 });
+        }
+
+        /** Repaint (or blank) a P(N) cell's RV10/RV30 bracket. */
+        function setRange(el, low, high) {
+            if (!el) return;
+            if (low == null || high == null) {
+                el.textContent = '';
+                return;
+            }
+            el.textContent = (low * 100).toFixed(0) + '–' + (high * 100).toFixed(0) + '%';
+        }
+
+        /**
+         * The hover text for a re-priced P(N) cell: the horizon, the forecast that priced it, and
+         * the RV10/RV30 range around the headline.
+         *
+         * The range is the part worth hovering for. The headline is one point estimate from one vol
+         * model; if its low end already clears whatever you are deciding against, the call survives
+         * the vol input being wrong, and if only the high end does, it does not.
+         */
+        function touchTooltip(t) {
+            var parts = [t.sessions + ' trading sessions'];
+            if (t.probabilityLow != null && t.probabilityHigh != null) {
+                parts.push('Range on RV10/RV30: ' + (t.probabilityLow * 100).toFixed(1) + '% – ' +
+                    (t.probabilityHigh * 100).toFixed(1) + '%');
+            }
+            if (t.sigmaEff != null) {
+                parts.push('σ_eff ' + (t.sigmaEff * 100).toFixed(2) + '%/day' +
+                    (t.decay != null ? ', ' + (t.decay * 100).toFixed(0) + '% weight on current state' : '') +
+                    (t.volSource ? ' (' + t.volSource.toLowerCase().replace(/_/g, ' ') + ')' : ''));
+            }
+            if (t.longHorizon) {
+                parts.push('This horizon runs well past the order deadlines the column is built ' +
+                    'for, where the driftless assumption stops being a convention and becomes the ' +
+                    'dominant one. Directional, not a number to read to the decimal.');
+            }
+            return parts.join('. ');
         }
 
         // ── Instrument mappings ─────────────────────────────────────────────────────

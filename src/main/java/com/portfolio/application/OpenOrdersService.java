@@ -5,6 +5,7 @@ import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PriceStats;
+import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.MarketSession;
 import com.portfolio.domain.model.OpenOrder;
@@ -51,6 +52,21 @@ import java.util.function.Consumer;
 public class OpenOrdersService {
 
     private static final Logger log = LoggerFactory.getLogger(OpenOrdersService.class);
+
+    /**
+     * Calibration record — one line per priced order per snapshot, on its own logger so it can be
+     * routed to its own file (see {@code logback-spring.xml}) and left there without drowning the
+     * application log.
+     *
+     * <p>The point is to be able to answer, months from now, whether orders shown at P=60% actually
+     * filled about 60% of the time. That needs the inputs as well as the output, because a
+     * probability is only judgeable against the model that produced it: {@code sigmaEff}, the
+     * horizon it was priced over, the decay weight the blend used, and which source the σ came
+     * from. Written as {@code key=value} pairs so a later analysis is a grep and a split, not a
+     * parser.
+     */
+    private static final Logger calibration =
+            LoggerFactory.getLogger("com.portfolio.calibration.touch");
 
     /**
      * Statuses that mean the order is no longer working. Everything else (In progress / PENDING /
@@ -110,12 +126,18 @@ public class OpenOrdersService {
     /** Don't re-warm the same symbol more often than this, however many times the tab is opened. */
     private static final Duration WARM_COOLDOWN = Duration.ofMinutes(5);
 
-    /** Realized-daily-vol windows (in sessions): RV10 (short) + RV30 (long). */
+    /**
+     * Realized-daily-vol windows, in sessions. RV10/RV30 are displayed and bracket the headline
+     * probability as a plausibility range; RV20 is <em>current state</em> and RV250 the
+     * <em>long-run anchor</em> that {@link VolForecast} blends between (see that class for why the
+     * scaling vol is a forecast rather than a trailing window of the same length as the horizon).
+     */
     private static final int RV_SHORT = 10;
+    private static final int RV_NOW = 20;
     private static final int RV_LONG = 30;
-    /** Horizons (sessions) for the touch-probability columns; the σ-distance column uses the short one. */
+    private static final int RV_ANCHOR = 250;
+    /** Horizon (sessions) for the fixed near-term touch column; the σ-distance column shares it. */
     private static final int TOUCH_HORIZON_SESSIONS = 5;
-    private static final int TOUCH_HORIZON_SESSIONS_LONG = 20;
     /**
      * Upper bound on the user-supplied horizon for the {@code P(N)} column: about five years of
      * sessions, well past any resting order's life. The cap exists so a stray keystroke can't ask
@@ -124,27 +146,36 @@ public class OpenOrdersService {
      */
     static final int MAX_HORIZON_SESSIONS = 1250;
     /**
-     * Horizon the {@code P(N)} column starts on, for every row — <b>trading sessions</b>, the same
-     * unit as {@link #TOUCH_HORIZON_SESSIONS} and as the σ scaling itself.
+     * The horizon {@code P(N)} is priced over, per row — <b>each order's own trading sessions to
+     * expiry</b>, or {@link VolForecast.Config#gtcHorizonSessions()} when it has no dated one.
      *
-     * <p>Sessions rather than calendar days because that is what the whole app counts: the
-     * watchlist's momentum windows are {@code closeNSessionsBefore}, its vol horizons are session
-     * windows, and every strategy tab counts sessions. A calendar horizon here made {@code P(N)}
-     * the one place in the codebase where a "day" meant something different from the two columns
-     * beside it.
+     * <p>Sessions rather than calendar days because that is what the whole app counts, and what the
+     * σ scaling consumes: {@code σ_h = σ·√sessions}, off bars that exist only on trading days. The
+     * conversion from an order's calendar expiry happens once, in {@link #sessionsToExpiry}.
      *
-     * <p>Deliberately uniform rather than each order's own time-to-expiry. The column's job is to
-     * compare orders, and a horizon that varies per row compares nothing — a nearly-expired limit
-     * reading 7% beside a long-dated one reading 64% says more about the two deadlines than about
-     * the two markets. One horizon across the table makes the numbers commensurable, the way the
-     * fixed P(5d)/P(20d) columns already are; the difference is that this one is editable, so a
-     * specific order's own deadline is a keystroke away when that is the question (the view offers
-     * it via {@link #sessionsToExpiry}). Sixty sessions — about a quarter — is long enough to be a
-     * real question about a resting order and short enough that the estimate still means something.
+     * <p>Per-order rather than one standing horizon for the table. The question a resting order
+     * actually poses is whether it fills <em>before it lapses</em>, and that deadline is a property
+     * of the order, not of the reader — a common horizon made the column comparable across rows at
+     * the cost of answering nobody's question about any particular one. The comparison is not lost:
+     * P(5d) is still the same window for every row, and the box in each cell still re-prices that
+     * row over anything you type. A GTC order has no deadline of its own, so one has to be assumed
+     * to price it at all, and that assumption is a parameter rather than a constant.
      */
-    static final int DEFAULT_HORIZON_SESSIONS = 60;
-    /** Calendar-day lookback loaded per symbol to compute the daily-vol windows (≈ 60 sessions of margin). */
-    private static final int VOL_LOOKBACK_DAYS = 90;
+    static final int DEFAULT_HORIZON_SESSIONS = VolForecast.Config.DEFAULT_GTC_HORIZON_SESSIONS;
+    /**
+     * Calendar-day lookback loaded per symbol for the daily-vol windows. Sized for the RV250
+     * anchor: 250 sessions is about 350 calendar days, and the margin absorbs holidays and feed
+     * gaps. RV250 is what makes the forecast a forecast, so an under-sized window here would
+     * quietly reduce the whole model to a trailing RV20.
+     */
+    private static final int VOL_LOOKBACK_DAYS = 420;
+    /**
+     * Minimum daily returns behind the RV250 anchor before it is treated as a long-run estimate.
+     * {@link PriceStats#dailyVol} takes whatever the series offers, so a name listed three months
+     * ago would otherwise hand back a 60-session "anchor" that is really a second current-state
+     * window — the blend would then revert toward today, which is the one thing it must not do.
+     */
+    private static final int MIN_ANCHOR_RETURNS = 120;
 
     /** Words taken from an instrument description when suggesting a match keyword. */
     private static final int KEYWORD_WORDS = 4;
@@ -235,7 +266,17 @@ public class OpenOrdersService {
         }
     }
 
+    /** The panel's default view: shipped forecast knobs, calibration records written. */
     public OrdersReport load() {
+        return load(VolForecast.Config.DEFAULT);
+    }
+
+    /**
+     * @param cfg volatility-forecast knobs — the mean-reversion half-life and the horizon assumed
+     *            for a GTC order. Exposed as query params so both can be swept without a rebuild;
+     *            the defaults are what the panel ships with.
+     */
+    public OrdersReport load(VolForecast.Config cfg) {
         List<OpenOrder> orders = new ArrayList<>();
         List<String> sources = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
@@ -277,7 +318,7 @@ public class OpenOrdersService {
         }
 
         publishOrderSymbols(orders, sources);
-        Quotes quotes = enrichWithCurrentPrice(orders, rates);
+        Quotes quotes = enrichWithCurrentPrice(orders, rates, cfg, true);
         warnings.addAll(quotes.warnings());
         warmLaggingQuotes(quotes.warm());
         return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
@@ -305,7 +346,8 @@ public class OpenOrdersService {
      * first-passage touch probability. σ figures are currency-free return ratios, so they need no FX.
      * Degrades silently — anything we can't compute stays null ("—").
      */
-    private Quotes enrichWithCurrentPrice(List<OpenOrder> orders, Map<String, BigDecimal> rates) {
+    private Quotes enrichWithCurrentPrice(List<OpenOrder> orders, Map<String, BigDecimal> rates,
+                                          VolForecast.Config cfg, boolean recordCalibration) {
         Set<String> tickers = new LinkedHashSet<>();
         for (OpenOrder o : orders) {
             String tk = tickerFor(o.symbol());
@@ -314,7 +356,7 @@ public class OpenOrdersService {
         if (tickers.isEmpty()) return Quotes.none();
 
         Map<String, IntradayPrice> latest = intraday.loadLatestQuotes(tickers);
-        Map<String, BigDecimal[]> dailyVols = loadDailyVols(tickers);   // ticker → [RV10, RV30]
+        Map<String, VolForecast.Inputs> dailyVols = loadDailyVols(tickers);   // ticker → RV10/20/30/250
         Instant quoteCutoff = Instant.now().minus(Duration.ofDays(MAX_PRICE_AGE_DAYS));
         Map<String, String> stale = new LinkedHashMap<>();               // symbol → date last seen
         Map<String, String> notes = new LinkedHashMap<>();               // symbol → "as of …" label
@@ -340,8 +382,7 @@ public class OpenOrdersService {
             String tk = tickerFor(o.symbol());
             if (tk == null) continue;
 
-            BigDecimal[] vols = dailyVols.getOrDefault(tk, new BigDecimal[]{null, null});
-            BigDecimal dv10 = vols[0], dv30 = vols[1];
+            VolForecast.Inputs vols = dailyVols.getOrDefault(tk, VolForecast.Inputs.NONE);
 
             BigDecimal rawClose = null;
             String rawCcy = null;
@@ -393,25 +434,25 @@ public class OpenOrdersService {
                 o = o.withCurrentPrice(current.setScale(4, RoundingMode.HALF_UP), distance, quoteSession);
             }
 
-            // σ distance / touch prob need a limit and a live price; the short window is the near-term
-            // vol estimate, falling back to the 30-session one when the 10-session window is too thin.
-            // Both touch probabilities share one base vol — they differ only by the √horizon scaling.
-            BigDecimal baseVol = dv10 != null ? dv10 : dv30;
-            BigDecimal sigmaToLimit = PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS);
-            BigDecimal touchProb = PriceStats.touchProbability(sigmaToLimit);
-            BigDecimal touchProb20 = PriceStats.touchProbability(
-                    PriceStats.sigmaDistance(current, o.price(), baseVol, TOUCH_HORIZON_SESSIONS_LONG));
-            o = o.withVolatility(dv10, dv30, sigmaToLimit, touchProb, touchProb20);
+            // Both touch columns go through VolForecast.touch, so each is scaled by the σ forecast
+            // for *its own* horizon rather than by one trailing window shared across horizons. The
+            // near-term column keeps its fixed 5 sessions — it is the one figure that stays
+            // comparable across every row — and the σ→lim column is that same call's σ distance, so
+            // P(5d) = 2·Φ(−|σ→lim|) remains checkable by eye on the row.
+            VolForecast.Touch near = VolForecast.touch(vols, current, o.price(),
+                    TOUCH_HORIZON_SESSIONS, cfg);
+            o = o.withVolatility(vols.rv10(), vols.rv20(), vols.rv30(), vols.rv250(),
+                    near.sigmaToLimit(), near.probability());
 
-            // The third touch column: the same estimate as 5d/20d over a longer, *editable* horizon,
-            // on the same session scale. Every row starts on DEFAULT_HORIZON_SESSIONS so the column
-            // is comparable across orders; the reader retunes any row — to the order's own
-            // sessions-to-expiry, or to anything else — from the box in the cell.
-            int horizon = DEFAULT_HORIZON_SESSIONS;
-            orders.set(i, o.withHorizonTouch(horizon,
-                    PriceStats.touchProbability(
-                            PriceStats.sigmaDistance(current, o.price(), baseVol, horizon)),
-                    sessionsToExpiry(o.expiry())));
+            // P(N): the order's own deadline in trading sessions, or the GTC assumption when it has
+            // none. The reader retunes any row from the box in the cell (GET /orders/touch), which
+            // re-blends at the new horizon rather than rescaling a fixed σ.
+            Integer toExpiry = sessionsToExpiry(o.expiry());
+            int horizon = toExpiry != null ? toExpiry : cfg.gtcHorizonSessions();
+            VolForecast.Touch far = VolForecast.touch(vols, current, o.price(), horizon, cfg);
+            o = o.withHorizonTouch(far, toExpiry);
+            orders.set(i, o);
+            if (recordCalibration) recordTouch(o, far);
         }
         String asOf = newestOverall == null ? null : TIME_FMT.format(
                 newestOverall.atZone(ZoneId.systemDefault()));
@@ -424,6 +465,27 @@ public class OpenOrdersService {
         return new Quotes(List.of("No current price for " + String.join(", ", lines)
                 + " — nothing had been refreshing those feeds. They are in the fetch universe now; "
                 + "the price columns fill on the next tick."), notes, asOf, warm);
+    }
+
+    /**
+     * Write one calibration record for a priced order. Silent for a row that could not be priced
+     * (nothing to calibrate) and for the pre-trade probe, which prices orders that do not exist —
+     * a hypothetical in the record would look exactly like a real order that never filled.
+     *
+     * <p>Broker, reference and the order's own dates are included so a record can be joined against
+     * a later fill: the reference is the only field that identifies the order across snapshots.
+     */
+    private void recordTouch(OpenOrder o, VolForecast.Touch touch) {
+        if (touch == null || touch.probability() == null) return;
+        calibration.info(
+                "broker={} symbol={} ref={} side={} limit={} current={} entered={} expiry={} "
+                        + "sessions={} fromExpiry={} sigmaEff={} decay={} volSource={} "
+                        + "rv10={} rv20={} rv30={} rv250={} p={} pLow={} pHigh={}",
+                o.broker(), o.symbol(), o.reference(), o.side(), o.price(), o.currentPrice(),
+                o.dateEntered(), o.expiry() != null ? o.expiry() : o.duration(),
+                touch.sessions(), o.horizonFromExpiry(), touch.sigmaEff(), touch.decay(),
+                touch.source(), o.dailyVol10(), o.dailyVol20(), o.dailyVol30(), o.dailyVol250(),
+                touch.probability(), touch.probabilityLow(), touch.probabilityHigh());
     }
 
     /**
@@ -445,27 +507,45 @@ public class OpenOrdersService {
      * Re-price the touch probability over an arbitrary horizon, for the editable sessions box on
      * the {@code P(N)} column. Pure arithmetic on numbers the view already has on the row — no
      * re-parse, no FX call, no database read — so typing into the box costs a loopback round trip
-     * rather than a disk scan. The maths stays here rather than being reimplemented in the browser
-     * so this column and the panel's other two touch columns can never disagree; now that the
-     * horizon is in sessions, {@code sessions=5} reproduces the row's P(5d) exactly.
+     * rather than a disk scan.
+     *
+     * <p>It takes the row's four realized-vol windows rather than one σ, because the horizon is
+     * exactly what the forecast depends on: changing N re-blends current state toward the anchor
+     * (see {@link VolForecast}) instead of rescaling a fixed σ by {@code √N}. Rescaling a fixed σ
+     * is what a same-length trailing window would do, and it is the thing this change replaced.
+     * The maths stays server-side so this column and the table's other one can never disagree;
+     * {@code sessions=5} still reproduces the row's own P(5d) exactly.
      *
      * @param sessions trading sessions; clamped to {@code [1, MAX_HORIZON_SESSIONS]}.
      */
-    public TouchEstimate touchEstimate(BigDecimal current, BigDecimal limit, BigDecimal vol, int sessions) {
+    public TouchEstimate touchEstimate(BigDecimal current, BigDecimal limit,
+                                       VolForecast.Inputs vols, int sessions,
+                                       VolForecast.Config cfg) {
         int clamped = Math.max(1, Math.min(sessions, MAX_HORIZON_SESSIONS));
-        BigDecimal sigma = PriceStats.sigmaDistance(current, limit, vol, clamped);
-        return new TouchEstimate(clamped, sigma, PriceStats.touchProbability(sigma),
+        VolForecast.Touch t = VolForecast.touch(vols, current, limit, clamped,
+                cfg == null ? VolForecast.Config.DEFAULT : cfg);
+        return new TouchEstimate(clamped, t.sigmaToLimit(), t.probability(),
+                t.probabilityLow(), t.probabilityHigh(), t.sigmaEff(), t.decay(),
+                t.source() == null ? null : t.source().name(),
                 clamped > OpenOrder.LONG_HORIZON_SESSIONS);
     }
 
     /**
-     * One re-priced horizon for the P(N) column.
+     * One re-priced horizon for the P(N) column: the headline probability, the RV10/RV30 range
+     * around it, and the forecast that produced it.
      *
      * @param longHorizon true when the horizon is long enough that the driftless assumption is
      *                    doing real work — surfaced on screen rather than silently tolerated.
      */
     public record TouchEstimate(int sessions, BigDecimal sigma, BigDecimal probability,
+                                BigDecimal probabilityLow, BigDecimal probabilityHigh,
+                                BigDecimal sigmaEff, BigDecimal decay, String volSource,
                                 boolean longHorizon) {
+    }
+
+    /** The four realized-vol windows carried on an enriched row, as the forecast's input record. */
+    static VolForecast.Inputs volsOf(OpenOrder o) {
+        return new VolForecast.Inputs(o.dailyVol10(), o.dailyVol20(), o.dailyVol30(), o.dailyVol250());
     }
 
     /**
@@ -504,9 +584,16 @@ public class OpenOrdersService {
      *                 standing default, and it is clamped to {@code [1, MAX_HORIZON_SESSIONS]}.
      */
     public LimitProbe probe(String symbol, BigDecimal limit, String side, Integer sessions) {
+        return probe(symbol, limit, side, sessions, VolForecast.Config.DEFAULT);
+    }
+
+    public LimitProbe probe(String symbol, BigDecimal limit, String side, Integer sessions,
+                            VolForecast.Config cfg) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase();
+        // An order being considered has no expiry yet, so the GTC assumption is the natural default
+        // here — the same one a placed GTC order would be priced over.
         int horizon = Math.max(1, Math.min(
-                sessions == null ? DEFAULT_HORIZON_SESSIONS : sessions, MAX_HORIZON_SESSIONS));
+                sessions == null ? cfg.gtcHorizonSessions() : sessions, MAX_HORIZON_SESSIONS));
         if (sym.isEmpty()) {
             return LimitProbe.unpriceable(sym, null, List.of("Enter a symbol to test a limit against."));
         }
@@ -527,20 +614,22 @@ public class OpenOrdersService {
         }
 
         List<OpenOrder> hypothetical = new ArrayList<>();
-        hypothetical.add(new OpenOrder("What-if", sym, null,
+        hypothetical.add(OpenOrder.parsed("What-if", sym, null,
                 "sell".equalsIgnoreCase(side) ? "Sell" : "Buy", "Limit",
-                null, limit, false, null, ccy, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null));
+                null, limit, false, null, ccy, null, null, null, null, null));
 
         // Map.of() rather than a live FX snapshot: the order's currency *is* the quote's currency,
         // so priceInCurrency never needs a rate. Keeping the network out of this path is what makes
         // re-running the probe as the limit is typed cost nothing.
-        Quotes quotes = enrichWithCurrentPrice(hypothetical, Map.of());
+        Quotes quotes = enrichWithCurrentPrice(hypothetical, Map.of(), cfg, false);
         warmLaggingQuotes(quotes.warm());
 
         OpenOrder o = hypothetical.get(0);
-        o = o.withHorizonTouch(horizon, PriceStats.touchProbability(
-                PriceStats.sigmaDistance(o.currentPrice(), o.price(), o.baseVol(), horizon)), null);
+        // Re-price at the requested horizon. The enrichment pass has already priced this row over
+        // the GTC default; anything else the reader asked for is the same call at another N.
+        if (horizon != o.horizonSessions() && o.horizonSessions() != null) {
+            o = o.withHorizonTouch(VolForecast.touch(volsOf(o), o.currentPrice(), o.price(), horizon, cfg), null);
+        }
 
         List<String> warnings = new ArrayList<>(quotes.warnings());
         if (o.currentPrice() == null && quotes.warnings().isEmpty()) {
@@ -548,7 +637,7 @@ public class OpenOrdersService {
             warnings.add("No current price for " + ticker + " — the last stored quote is older than "
                     + MAX_PRICE_AGE_DAYS + " days. A fetch is queued; reload in a few seconds.");
         }
-        if (o.baseVol() == null) {
+        if (o.sigmaEff() == null) {
             warmHistory(sym);
             warnings.add("No usable daily history for " + ticker + " over the last " + VOL_LOOKBACK_DAYS
                     + " days, so there is no volatility to scale a probability by. A backfill is "
@@ -754,20 +843,33 @@ public class OpenOrdersService {
     }
 
     /**
-     * Realized daily σ (not annualised) over the RV10 / RV30 windows for each ticker, from one daily
-     * history read per symbol. Returns {@code [RV10, RV30]}; either entry is null when the series is
-     * too short. Currency-free — volatility is a return ratio, so a {@code .L} pence series needs no
-     * conversion.
+     * Realized daily σ (not annualised) over the four windows the forecast needs, from one daily
+     * history read per symbol: RV10 and RV30 for display and the plausibility range, RV20 as
+     * current state and RV250 as the long-run anchor. Any entry is null when the series can't
+     * support it. Currency-free — volatility is a return ratio, so a {@code .L} pence series needs
+     * no conversion.
+     *
+     * <p>The anchor is the one window with a quality bar on it. {@link PriceStats#dailyVol} shortens
+     * its window to whatever the series offers rather than returning null, which is right for a
+     * display column and wrong for an anchor: a name with four months of history would supply a
+     * 60-session "RV250" that is really current state under another name, and the blend would then
+     * revert toward the very thing it is supposed to be correcting. Below
+     * {@link #MIN_ANCHOR_RETURNS} returns there is no anchor and {@code VolForecast} says so in the
+     * source it reports.
      */
-    private Map<String, BigDecimal[]> loadDailyVols(Set<String> tickers) {
+    private Map<String, VolForecast.Inputs> loadDailyVols(Set<String> tickers) {
         LocalDate to = LocalDate.now();
         LocalDate from = to.minusDays(VOL_LOOKBACK_DAYS);
-        Map<String, BigDecimal[]> out = new HashMap<>();
+        Map<String, VolForecast.Inputs> out = new HashMap<>();
         for (String tk : tickers) {
             List<PriceBar> bars = history.getPriceHistory(tk, from, to);
-            out.put(tk, new BigDecimal[]{
+            BigDecimal anchor = (bars != null && bars.size() > MIN_ANCHOR_RETURNS)
+                    ? PriceStats.dailyVol(bars, RV_ANCHOR) : null;
+            out.put(tk, new VolForecast.Inputs(
                     PriceStats.dailyVol(bars, RV_SHORT),
-                    PriceStats.dailyVol(bars, RV_LONG)});
+                    PriceStats.dailyVol(bars, RV_NOW),
+                    PriceStats.dailyVol(bars, RV_LONG),
+                    anchor));
         }
         return out;
     }

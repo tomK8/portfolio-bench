@@ -3,6 +3,7 @@ package com.portfolio.application;
 import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooTickerMap;
+import com.portfolio.domain.AssetClass;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PriceStats;
 import com.portfolio.domain.VolForecast;
@@ -439,8 +440,11 @@ public class OpenOrdersService {
             // near-term column keeps its fixed 5 sessions — it is the one figure that stays
             // comparable across every row — and the σ→lim column is that same call's σ distance, so
             // P(5d) = 2·Φ(−|σ→lim|) remains checkable by eye on the row.
+            // Drift, when it is switched on at all, is a property of what the instrument *is* —
+            // resolved from the symbol, never from the ticker's own history.
+            AssetClass assetClass = Instruments.assetClassOf(o.symbol());
             VolForecast.Touch near = VolForecast.touch(vols, current, o.price(),
-                    TOUCH_HORIZON_SESSIONS, cfg);
+                    TOUCH_HORIZON_SESSIONS, cfg, assetClass);
             o = o.withVolatility(vols.rv10(), vols.rv20(), vols.rv30(), vols.rv250(),
                     near.sigmaToLimit(), near.probability());
 
@@ -449,10 +453,10 @@ public class OpenOrdersService {
             // re-blends at the new horizon rather than rescaling a fixed σ.
             Integer toExpiry = sessionsToExpiry(o.expiry());
             int horizon = toExpiry != null ? toExpiry : cfg.gtcHorizonSessions();
-            VolForecast.Touch far = VolForecast.touch(vols, current, o.price(), horizon, cfg);
+            VolForecast.Touch far = VolForecast.touch(vols, current, o.price(), horizon, cfg, assetClass);
             o = o.withHorizonTouch(far, toExpiry);
             orders.set(i, o);
-            if (recordCalibration) recordTouch(o, far);
+            if (recordCalibration) recordTouch(o, far, assetClass);
         }
         String asOf = newestOverall == null ? null : TIME_FMT.format(
                 newestOverall.atZone(ZoneId.systemDefault()));
@@ -475,16 +479,18 @@ public class OpenOrdersService {
      * <p>Broker, reference and the order's own dates are included so a record can be joined against
      * a later fill: the reference is the only field that identifies the order across snapshots.
      */
-    private void recordTouch(OpenOrder o, VolForecast.Touch touch) {
+    private void recordTouch(OpenOrder o, VolForecast.Touch touch, AssetClass assetClass) {
         if (touch == null || touch.probability() == null) return;
         calibration.info(
                 "broker={} symbol={} ref={} side={} limit={} current={} entered={} expiry={} "
                         + "sessions={} fromExpiry={} sigmaEff={} decay={} volSource={} "
+                        + "assetClass={} drifted={} mu={} "
                         + "rv10={} rv20={} rv30={} rv250={} p={} pLow={} pHigh={}",
                 o.broker(), o.symbol(), o.reference(), o.side(), o.price(), o.currentPrice(),
                 o.dateEntered(), o.expiry() != null ? o.expiry() : o.duration(),
                 touch.sessions(), o.horizonFromExpiry(), touch.sigmaEff(), touch.decay(),
-                touch.source(), o.dailyVol10(), o.dailyVol20(), o.dailyVol30(), o.dailyVol250(),
+                touch.source(), assetClass, touch.drifted(), touch.drift(),
+                o.dailyVol10(), o.dailyVol20(), o.dailyVol30(), o.dailyVol250(),
                 touch.probability(), touch.probabilityLow(), touch.probabilityHigh());
     }
 
@@ -520,10 +526,12 @@ public class OpenOrdersService {
      */
     public TouchEstimate touchEstimate(BigDecimal current, BigDecimal limit,
                                        VolForecast.Inputs vols, int sessions,
-                                       VolForecast.Config cfg) {
+                                       VolForecast.Config cfg, String symbol) {
         int clamped = Math.max(1, Math.min(sessions, MAX_HORIZON_SESSIONS));
+        // Resolving the asset class is a pure string predicate — no re-parse, no FX, no DB read —
+        // so the endpoint stays the loopback calculation it was even with drift wired in.
         VolForecast.Touch t = VolForecast.touch(vols, current, limit, clamped,
-                cfg == null ? VolForecast.Config.DEFAULT : cfg);
+                cfg == null ? VolForecast.Config.DEFAULT : cfg, Instruments.assetClassOf(symbol));
         return new TouchEstimate(clamped, t.sigmaToLimit(), t.probability(),
                 t.probabilityLow(), t.probabilityHigh(), t.sigmaEff(), t.decay(),
                 t.source() == null ? null : t.source().name(),
@@ -628,7 +636,8 @@ public class OpenOrdersService {
         // Re-price at the requested horizon. The enrichment pass has already priced this row over
         // the GTC default; anything else the reader asked for is the same call at another N.
         if (horizon != o.horizonSessions() && o.horizonSessions() != null) {
-            o = o.withHorizonTouch(VolForecast.touch(volsOf(o), o.currentPrice(), o.price(), horizon, cfg), null);
+            o = o.withHorizonTouch(VolForecast.touch(volsOf(o), o.currentPrice(), o.price(), horizon,
+                    cfg, Instruments.assetClassOf(sym)), null);
         }
 
         List<String> warnings = new ArrayList<>(quotes.warnings());

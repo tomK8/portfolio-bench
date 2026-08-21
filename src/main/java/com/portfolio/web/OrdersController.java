@@ -27,15 +27,18 @@ public class OrdersController {
 
     /**
      * @param halfLife   mean-reversion half-life in sessions for the volatility blend (default 20).
-     * @param gtcSessions horizon assumed for an order with no dated expiry (default 90). Both are
-     *                    query params so the forecast can be swept without a rebuild — the same
-     *                    convention the strategy tabs use for their knobs.
+     * @param gtcSessions horizon assumed for an order with no dated expiry (default 90).
+     * @param useDrift    price the drifted first passage, using the asset class's expected drift,
+     *                    instead of the driftless default. Every knob is a query param so the model
+     *                    can be swept without a rebuild — the convention the strategy tabs use.
      */
     @GetMapping("/orders")
     public String orders(@RequestParam(required = false) Double halfLife,
                          @RequestParam(required = false) Integer gtcSessions,
+                         @RequestParam(required = false) Boolean useDrift,
                          Model model) {
-        model.addAttribute("orders", openOrdersService.load(VolForecast.Config.of(halfLife, gtcSessions)));
+        model.addAttribute("orders",
+                openOrdersService.load(VolForecast.Config.of(halfLife, gtcSessions, useDrift)));
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/orders :: result";
     }
@@ -65,10 +68,12 @@ public class OrdersController {
                                                  @RequestParam(required = false) BigDecimal rv30,
                                                  @RequestParam(required = false) BigDecimal rv250,
                                                  @RequestParam int sessions,
-                                                 @RequestParam(required = false) Double halfLife) {
+                                                 @RequestParam(required = false) String symbol,
+                                                 @RequestParam(required = false) Double halfLife,
+                                                 @RequestParam(required = false) Boolean useDrift) {
         return openOrdersService.touchEstimate(current, limit,
                 new VolForecast.Inputs(rv10, rv20, rv30, rv250), sessions,
-                VolForecast.Config.of(halfLife, null));
+                VolForecast.Config.of(halfLife, null, useDrift), symbol);
     }
 
     /**

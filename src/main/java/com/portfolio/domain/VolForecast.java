@@ -39,9 +39,9 @@ import java.math.RoundingMode;
  *
  * <p><b>Everything routes through {@link #resolve}.</b> The first-passage call site takes whatever
  * {@code sigma_eff} comes back and asks no questions, so a later implied-vol or event-variance
- * source can be swapped in here without touching it — that is what the {@code useImpliedVol} /
- * {@code useEventVar} / {@code useDrift} flags on {@link Config} are reserved for. All three
- * default to false and are no-ops today.
+ * source can be swapped in here without touching it — that is what the {@code useImpliedVol} and
+ * {@code useEventVar} flags on {@link Config} are reserved for; both default to false and are
+ * no-ops today. {@code useDrift} is wired: see {@link #touch}.
  */
 public final class VolForecast {
 
@@ -70,7 +70,9 @@ public final class VolForecast {
      * @param gtcHorizonSessions horizon for an order with no dated expiry. A GTC order has no
      *                           deadline of its own, so one has to be assumed to price it at all;
      *                           90 sessions is about two quarters.
-     * @param useDrift           reserved: add an expected-drift term to the first passage. No-op.
+     * @param useDrift           use the drifted first passage, with the drift of the instrument's
+     *                           {@link AssetClass}. Default false: driftless is the neutral
+     *                           convention, and a wrong drift is worse than none.
      * @param useEventVar        reserved: add scheduled-event (earnings) variance inside the
      *                           horizon. No-op.
      * @param useImpliedVol      reserved: take {@code sigma_eff} from an option-implied term
@@ -92,10 +94,14 @@ public final class VolForecast {
 
         /** Defaults for anything the caller left null — the query-param entry point. */
         public static Config of(Double halfLifeDays, Integer gtcHorizonSessions) {
+            return of(halfLifeDays, gtcHorizonSessions, null);
+        }
+
+        public static Config of(Double halfLifeDays, Integer gtcHorizonSessions, Boolean useDrift) {
             return new Config(
                     halfLifeDays == null ? DEFAULT_HALF_LIFE_DAYS : halfLifeDays,
                     gtcHorizonSessions == null ? DEFAULT_GTC_HORIZON_SESSIONS : gtcHorizonSessions,
-                    false, false, false);
+                    useDrift != null && useDrift, false, false);
         }
     }
 
@@ -126,10 +132,18 @@ public final class VolForecast {
      */
     public record Touch(int sessions, BigDecimal sigmaEff, BigDecimal decay, Source source,
                         BigDecimal sigmaToLimit, BigDecimal probability,
-                        BigDecimal probabilityLow, BigDecimal probabilityHigh) {
+                        BigDecimal probabilityLow, BigDecimal probabilityHigh,
+                        /** Log drift per session actually applied; ZERO on the driftless branch. */
+                        BigDecimal drift) {
 
         public static Touch none(int sessions) {
-            return new Touch(sessions, null, null, Source.NONE, null, null, null, null);
+            return new Touch(sessions, null, null, Source.NONE, null, null, null, null,
+                    BigDecimal.ZERO);
+        }
+
+        /** True when the drifted first passage priced this, rather than the driftless default. */
+        public boolean drifted() {
+            return drift != null && drift.signum() != 0;
         }
 
         /** True when the RV10/RV30 bracket exists and is wide enough to be worth reading. */
@@ -206,32 +220,70 @@ public final class VolForecast {
      * Price the touch of {@code limit} from {@code current} over {@code sessions}, with the
      * horizon-matched {@code sigma_eff} — the call the whole panel goes through.
      *
-     * <p>The formula is unchanged and lives in {@link PriceStats}: {@code b = ln(K/S)},
-     * {@code P = 2·Φ(−|b| / (sigma_eff·√N))}, clamped to {@code [0,1]}. What this method decides is
-     * only <em>which</em> σ goes into it.
+     * <p>No asset class stated, so no drift can be applied whatever the config says. This is the
+     * form a caller uses when it genuinely doesn't know what it is pricing.
      */
     public static Touch touch(Inputs in, BigDecimal current, BigDecimal limit,
                               int sessions, Config cfg) {
+        return touch(in, current, limit, sessions, cfg, AssetClass.UNKNOWN);
+    }
+
+    /**
+     * Price the touch of {@code limit} from {@code current} over {@code sessions}, for an
+     * instrument of the given asset class.
+     *
+     * <p>Two models, one branch, chosen here:
+     * <pre>
+     *   useDrift &amp;&amp; μ ≠ 0  →  drifted first passage   (PriceStats.touchProbabilityDrifted)
+     *   otherwise          →  2·Φ(−|b| / (σ_eff·√N))  (PriceStats.touchProbability)
+     * </pre>
+     * <b>The two are mathematically identical at μ = 0</b>, so the short-circuit is a numerical
+     * safeguard rather than a behavioural switch: the drifted form carries an
+     * {@code exp(2νb/σ²)} term that is {@code 0/0} when σ is degenerate, and taking the driftless
+     * branch avoids evaluating it at all when it could only ever contribute {@code exp(0) = 1}.
+     * The equivalence is asserted both ways — directly on the two formulas, and through this
+     * method with the flag <em>on</em> against a zero-drift asset class, which is what shows the
+     * wiring didn't change the maths.
+     *
+     * <p>Drift comes from the {@link AssetClass}, never from the ticker: an expected return per
+     * name would be a forecast of that name wearing a parameter's clothing. Default is
+     * {@code useDrift = false} — driftless is the neutral convention over a short horizon, and over
+     * a long one a wrong drift does more damage than no drift.
+     *
+     * <p>The RV10/RV30 range takes the same branch as the headline. A drifted headline bracketed by
+     * driftless bounds would be a range around a different question.
+     */
+    public static Touch touch(Inputs in, BigDecimal current, BigDecimal limit,
+                              int sessions, Config cfg, AssetClass assetClass) {
         Config c = cfg == null ? Config.DEFAULT : cfg;
         int n = Math.max(1, sessions);
         Forecast f = resolve(in, n, c);
         if (f.sigmaEff() == null) return Touch.none(n);
 
-        if (c.useDrift()) {
-            // future: the drifted first passage — P = Φ((−|b| + μN)/σ√N) + e^{2μb/σ²}·Φ((−|b| − μN)/σ√N).
-            // Reserved deliberately: it needs a defensible μ, and a wrong drift is worse than none.
-        }
+        AssetClass ac = assetClass == null ? AssetClass.UNKNOWN : assetClass;
+        BigDecimal mu = c.useDrift() ? ac.dailyDrift() : BigDecimal.ZERO;
 
         BigDecimal sigmaToLimit = PriceStats.sigmaDistance(current, limit, f.sigmaEff(), n);
-        BigDecimal p = PriceStats.touchProbability(sigmaToLimit);
+        BigDecimal p = probability(current, limit, f.sigmaEff(), n, mu, sigmaToLimit);
 
-        BigDecimal a = PriceStats.touchProbability(
-                PriceStats.sigmaDistance(current, limit, positiveOrNull(in.rv10()), n));
-        BigDecimal b = PriceStats.touchProbability(
-                PriceStats.sigmaDistance(current, limit, positiveOrNull(in.rv30()), n));
-        BigDecimal low = min(a, b);
-        BigDecimal high = max(a, b);
-        return new Touch(n, f.sigmaEff(), f.decay(), f.source(), sigmaToLimit, p, low, high);
+        BigDecimal a = probability(current, limit, positiveOrNull(in.rv10()), n, mu, null);
+        BigDecimal b = probability(current, limit, positiveOrNull(in.rv30()), n, mu, null);
+        return new Touch(n, f.sigmaEff(), f.decay(), f.source(), sigmaToLimit, p,
+                min(a, b), max(a, b), mu);
+    }
+
+    /**
+     * The branch itself. {@code sigmaDistance} is passed in when the caller already has it (the
+     * headline), so the driftless path doesn't recompute the same logarithm twice.
+     */
+    private static BigDecimal probability(BigDecimal current, BigDecimal limit, BigDecimal sigma,
+                                          int sessions, BigDecimal mu, BigDecimal sigmaDistance) {
+        if (sigma == null) return null;
+        if (mu != null && mu.signum() != 0) {
+            return PriceStats.touchProbabilityDrifted(current, limit, sigma, sessions, mu);
+        }
+        return PriceStats.touchProbability(sigmaDistance != null ? sigmaDistance
+                : PriceStats.sigmaDistance(current, limit, sigma, sessions));
     }
 
     private static BigDecimal positiveOrNull(BigDecimal v) {

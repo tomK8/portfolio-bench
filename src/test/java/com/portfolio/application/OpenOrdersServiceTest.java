@@ -69,7 +69,7 @@ class OpenOrdersServiceTest {
         for (int n : new int[]{5, 20}) {
             BigDecimal sigmaEff = VolForecast.resolve(vols, n, VolForecast.Config.DEFAULT).sigmaEff();
             assertEquals(PriceStats.touchProbability(PriceStats.sigmaDistance(cur, lim, sigmaEff, n)),
-                    svc.touchEstimate(cur, lim, vols, n, VolForecast.Config.DEFAULT).probability(),
+                    svc.touchEstimate(cur, lim, vols, n, VolForecast.Config.DEFAULT, "WMT").probability(),
                     "N = " + n + " sessions");
         }
     }
@@ -109,8 +109,8 @@ class OpenOrdersServiceTest {
                 new BigDecimal("0.02"), new BigDecimal("0.02"), new BigDecimal("0.02"), new BigDecimal("0.02"));
         VolForecast.Config cfg = VolForecast.Config.DEFAULT;
 
-        OpenOrdersService.TouchEstimate near = svc.touchEstimate(cur, lim, vols, 5, cfg);
-        OpenOrdersService.TouchEstimate far = svc.touchEstimate(cur, lim, vols, 300, cfg);
+        OpenOrdersService.TouchEstimate near = svc.touchEstimate(cur, lim, vols, 5, cfg, "WMT");
+        OpenOrdersService.TouchEstimate far = svc.touchEstimate(cur, lim, vols, 300, cfg, "WMT");
         assertTrue(near.probability().compareTo(far.probability()) < 0,
                 "same barrier, more time — the probability can only grow");
         assertTrue(near.sessions() < far.sessions());
@@ -127,18 +127,18 @@ class OpenOrdersServiceTest {
         // A horizon pushed well past the order deadlines the column is built for is flagged rather
         // than silently served; the GTC default itself is not (see the default-horizon test above).
         assertFalse(near.longHorizon());
-        assertFalse(svc.touchEstimate(cur, lim, vols, OpenOrdersService.DEFAULT_HORIZON_SESSIONS, cfg).longHorizon());
+        assertFalse(svc.touchEstimate(cur, lim, vols, OpenOrdersService.DEFAULT_HORIZON_SESSIONS, cfg, "WMT").longHorizon());
         assertTrue(far.longHorizon());
 
         // Clamped, not rejected — a stray keystroke can't ask for an absurd horizon.
         assertEquals(OpenOrdersService.MAX_HORIZON_SESSIONS,
-                svc.touchEstimate(cur, lim, vols, 999999, cfg).sessions());
-        assertEquals(1, svc.touchEstimate(cur, lim, vols, 0, cfg).sessions());
+                svc.touchEstimate(cur, lim, vols, 999999, cfg, "WMT").sessions());
+        assertEquals(1, svc.touchEstimate(cur, lim, vols, 0, cfg, "WMT").sessions());
 
         // Missing inputs (no limit, no quote, no vol) give null rather than a fabricated number.
-        assertNull(svc.touchEstimate(cur, null, vols, 5, cfg).probability());
-        assertNull(svc.touchEstimate(null, lim, vols, 5, cfg).probability());
-        assertNull(svc.touchEstimate(cur, lim, VolForecast.Inputs.NONE, 5, cfg).probability());
+        assertNull(svc.touchEstimate(cur, null, vols, 5, cfg, "WMT").probability());
+        assertNull(svc.touchEstimate(null, lim, vols, 5, cfg, "WMT").probability());
+        assertNull(svc.touchEstimate(cur, lim, VolForecast.Inputs.NONE, 5, cfg, "WMT").probability());
     }
 
     @Test
@@ -221,6 +221,35 @@ class OpenOrdersServiceTest {
         assertTrue(far.touchProbHorizon().compareTo(far.touchProbLow()) < 0,
                 "a reverting forecast should sit below the flat-window band at 250 sessions: "
                         + far.touchProbHorizon() + " vs " + far.touchProbLow());
+    }
+
+    @Test
+    void driftIsAppliedPerAssetClassAndOnlyWhenAskedFor(@TempDir Path dir) {
+        // End to end: the same limit, the same vol, the same horizon — the only difference is what
+        // the instrument is. An equity carries 6%/yr, a bullion ETC carries none, and with the flag
+        // off neither carries any.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
+        // SGLN carries no entry in yahoo-tickers.properties, so it resolves to itself.
+        seedPrices(history, intraday, "SGLN", "GBp", 110.0, 115.40);
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                FX, new ExcelReportWriter(), outDir, intraday, history, new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")));
+        VolForecast.Config driftOn = VolForecast.Config.of(null, null, true);
+        BigDecimal limit = new BigDecimal("100.00");   // a buy limit well below the market
+
+        BigDecimal equityOff = service.probe("WMT", limit, "Buy", 250).hypothetical().touchProbHorizon();
+        BigDecimal equityOn = service.probe("WMT", limit, "Buy", 250, driftOn).hypothetical().touchProbHorizon();
+        assertTrue(equityOn.compareTo(equityOff) < 0,
+                "an equity drifts away from a limit below it: " + equityOn + " vs " + equityOff);
+
+        // SGLN is a physical-gold ETC: zero drift, so the flag must change nothing at all.
+        BigDecimal goldOff = service.probe("SGLN", limit, "Buy", 250).hypothetical().touchProbHorizon();
+        BigDecimal goldOn = service.probe("SGLN", limit, "Buy", 250, driftOn).hypothetical().touchProbHorizon();
+        assertEquals(goldOff, goldOn, "bullion has no drift — switching the model on is a no-op");
     }
 
     @Test

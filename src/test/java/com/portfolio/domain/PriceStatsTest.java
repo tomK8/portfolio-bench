@@ -234,6 +234,115 @@ class PriceStatsTest {
                 LocalDate.parse("2026-07-11"), LocalDate.parse("2026-07-12")));
     }
 
+    // ---- drifted first passage ---------------------------------------------
+
+    private static final BigDecimal EQUITY_MU =
+            AssetClass.EQUITY.dailyDrift();     // 0.06/yr ÷ 252 ≈ 0.000238 per session
+
+    @Test
+    void driftedFirstPassage_isTheDriftlessFormulaWhenDriftIsZero() {
+        // The identity the whole wiring rests on. Asserted on the formulas themselves, with the
+        // drifted one *actually evaluating* its exp(2νb/σ²) term (it is exp(0) = 1 here) rather
+        // than short-circuiting — a short-circuit inside the drifted form would make this test
+        // pass by construction and prove nothing.
+        BigDecimal sigma = new BigDecimal("0.02");
+        for (String limit : new String[]{"95", "99.5", "100", "104", "130", "60"}) {
+            for (int n : new int[]{1, 5, 20, 90, 250}) {
+                BigDecimal cur = new BigDecimal("100"), lim = new BigDecimal(limit);
+                double driftless = PriceStats.touchProbability(
+                        PriceStats.sigmaDistance(cur, lim, sigma, n)).doubleValue();
+                double drifted = PriceStats.touchProbabilityDrifted(
+                        cur, lim, sigma, n, BigDecimal.ZERO).doubleValue();
+                // The two expressions are algebraically identical; the residual is rounding, and
+                // its size is known rather than guessed. The driftless path goes through
+                // sigmaDistance, which rounds d to 4 dp (it is also a displayed column) — worth up
+                // to 5e-5 of d, and dP/dd = 2φ(d) ≤ 0.8, so ≤ 4e-5 of P — and both results are then
+                // themselves rounded to 4 dp, ±5e-5 each. 1.4e-4 is the bound; a real difference of
+                // model would be orders of magnitude larger.
+                assertEquals(driftless, drifted, 1.4e-4,
+                        "μ = 0 must reproduce 2·Φ(−|b|/σ√N) (limit " + limit + ", N=" + n + ")");
+            }
+        }
+        // A null drift reads as no drift, not as a missing input.
+        assertEquals(PriceStats.touchProbability(PriceStats.sigmaDistance(
+                                new BigDecimal("100"), new BigDecimal("95"), sigma, 20)).doubleValue(),
+                PriceStats.touchProbabilityDrifted(
+                        new BigDecimal("100"), new BigDecimal("95"), sigma, 20, null).doubleValue(),
+                1.4e-4);
+    }
+
+    @Test
+    void driftedFirstPassage_movesTheMarketAwayFromABuyLimitAndTowardASellLimit() {
+        // The sign of the drift term follows which side of the market the barrier is on. A rising
+        // asset is *less* likely to come back to a limit below it and *more* likely to reach one
+        // above — the textbook upper-barrier form fed |b| would raise both, which for a buy limit
+        // (the common case in this panel) is backwards.
+        BigDecimal cur = new BigDecimal("100"), sigma = new BigDecimal("0.015");
+        BigDecimal below = new BigDecimal("92"), above = new BigDecimal("108");
+
+        BigDecimal buyDriftless = PriceStats.touchProbability(PriceStats.sigmaDistance(cur, below, sigma, 250));
+        BigDecimal buyDrifted = PriceStats.touchProbabilityDrifted(cur, below, sigma, 250, EQUITY_MU);
+        assertTrue(buyDrifted.compareTo(buyDriftless) < 0,
+                "positive drift walks the market away from a limit below it: "
+                        + buyDrifted + " vs " + buyDriftless);
+
+        BigDecimal sellDriftless = PriceStats.touchProbability(PriceStats.sigmaDistance(cur, above, sigma, 250));
+        BigDecimal sellDrifted = PriceStats.touchProbabilityDrifted(cur, above, sigma, 250, EQUITY_MU);
+        assertTrue(sellDrifted.compareTo(sellDriftless) > 0,
+                "and toward a limit above it: " + sellDrifted + " vs " + sellDriftless);
+
+        // Symmetric under reflection: flipping the drift's sign and mirroring the barrier in log
+        // space is the same problem. ln(110/100) = −ln(100/110), so the pair has to agree.
+        BigDecimal mirrored = new BigDecimal("100").multiply(new BigDecimal("100"))
+                .divide(new BigDecimal("110"), 10, java.math.RoundingMode.HALF_UP);   // 100²/110
+        assertEquals(
+                PriceStats.touchProbabilityDrifted(cur, new BigDecimal("110"), sigma, 250, EQUITY_MU).doubleValue(),
+                PriceStats.touchProbabilityDrifted(cur, mirrored, sigma, 250, EQUITY_MU.negate()).doubleValue(),
+                1e-4);
+    }
+
+    @Test
+    void driftedFirstPassage_staysAProbabilityAtTheExtremes() {
+        BigDecimal cur = new BigDecimal("100");
+        for (String limit : new String[]{"100", "100.0001", "101", "180", "20", "0.01", "10000"}) {
+            for (String sigma : new String[]{"0.0000001", "0.001", "0.02", "0.4", "3.0"}) {
+                for (int n : new int[]{1, 5, 250, 1250}) {
+                    for (BigDecimal mu : List.of(EQUITY_MU, EQUITY_MU.negate(),
+                            new BigDecimal("0.05"), new BigDecimal("-0.05"))) {
+                        BigDecimal p = PriceStats.touchProbabilityDrifted(
+                                cur, new BigDecimal(limit), new BigDecimal(sigma), n, mu);
+                        assertNotNull(p, "limit " + limit + " σ " + sigma + " N " + n + " μ " + mu);
+                        assertTrue(p.doubleValue() >= 0.0 && p.doubleValue() <= 1.0,
+                                "P out of range: " + p + " (limit " + limit + ", σ " + sigma
+                                        + ", N " + n + ", μ " + mu + ")");
+                    }
+                }
+            }
+        }
+        // At the barrier a touch is certain whatever the drift — the two Φ terms are complements.
+        assertEquals(0, PriceStats.touchProbabilityDrifted(
+                cur, cur, new BigDecimal("0.02"), 30, EQUITY_MU).compareTo(BigDecimal.ONE));
+        // Bad inputs give null, not a fabricated number.
+        assertNull(PriceStats.touchProbabilityDrifted(null, cur, new BigDecimal("0.02"), 5, EQUITY_MU));
+        assertNull(PriceStats.touchProbabilityDrifted(cur, null, new BigDecimal("0.02"), 5, EQUITY_MU));
+        assertNull(PriceStats.touchProbabilityDrifted(cur, cur, null, 5, EQUITY_MU));
+        assertNull(PriceStats.touchProbabilityDrifted(cur, cur, new BigDecimal("0.02"), 0, EQUITY_MU));
+        assertNull(PriceStats.touchProbabilityDrifted(cur, cur, BigDecimal.ZERO, 5, EQUITY_MU));
+    }
+
+    @Test
+    void driftedFirstPassage_growsWithTheHorizonLikeTheDriftlessOneDoes() {
+        // Same barrier, more time. Checked on the side drift works *against*, where a naive
+        // implementation is most likely to go backwards.
+        BigDecimal cur = new BigDecimal("100"), lim = new BigDecimal("90"), sigma = new BigDecimal("0.02");
+        BigDecimal prev = BigDecimal.ZERO;
+        for (int n : new int[]{1, 5, 20, 60, 130, 250, 500, 1250}) {
+            BigDecimal p = PriceStats.touchProbabilityDrifted(cur, lim, sigma, n, EQUITY_MU);
+            assertTrue(p.compareTo(prev) >= 0, "P must not fall as N grows (N=" + n + ")");
+            prev = p;
+        }
+    }
+
     @Test
     void touchProbability_growsWithTheHorizon() {
         // Same barrier, more time: 20 sessions must never price below 5. The two share one daily

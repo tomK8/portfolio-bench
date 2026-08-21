@@ -259,7 +259,7 @@ public class CashTransactionRepository {
         if (rows.isEmpty()) return 0;
         Account account = rows.get(0).account();
         try (Connection conn = connections.open()) {
-            Set<String> existingKeys = new HashSet<>();
+            Map<String, Integer> existingKeys = new HashMap<>();
             Map<String, double[]> storedGroups = new HashMap<>();
             Double lastBalance = null;
             Double chainAnchor = null;   // the balance the ledger starts from, re-derived below
@@ -271,7 +271,7 @@ public class CashTransactionRepository {
                     while (rs.next()) {
                         String date = rs.getString(1), symbol = rs.getString(2), type = rs.getString(4);
                         double qty = rs.getDouble(3), amount = rs.getDouble(5);
-                        existingKeys.add(rothKey(date, symbol, qty, type, amount));
+                        existingKeys.merge(rothKey(date, symbol, qty, type, amount), 1, Integer::sum);
                         accumulateFills(storedGroups, fillGroupKey(date, symbol, type), qty, amount);
                         double bal = rs.getDouble(6);
                         if (!rs.wasNull()) {
@@ -289,7 +289,7 @@ public class CashTransactionRepository {
             double running = fromSeed ? seed.doubleValue() : lastBalance;
 
             List<CashTransaction> newRows = new ArrayList<>(rows.stream()
-                    .filter(t -> !existingKeys.contains(rothKey(
+                    .filter(t -> !consumeStoredRow(existingKeys, rothKey(
                             t.transactionDate(), t.symbol(), t.quantity(), t.type().name(), t.amount())))
                     .toList());
             Set<String> repartitioned = repartitionedFills(rows, newRows, storedGroups);
@@ -735,6 +735,31 @@ public class CashTransactionRepository {
     }
 
     private record StoredRow(long rowid, String date, Double cashBalanceGbp) {
+    }
+
+    /**
+     * Match one file row against the stored rows and <em>consume</em> the match — the dedup is a
+     * multiset, not a set. Returns true when a stored row was available to account for this one.
+     *
+     * <p>Counting matters because identical rows are real: a broker can fill one order as two
+     * partial fills of the same size at the same price (Citi, MRNA, 2026-08-21). With plain set
+     * membership the <em>n</em>-th identical file row matched the same single key as the first, so
+     * a genuinely new repeat of an already-stored fill was silently skipped. That is the case the
+     * group-level {@link #repartitionedFills} guard deliberately does not cover — a group whose net
+     * quantity and amount have changed is real activity, and is meant to fall through to row-by-row
+     * dedup, which then has to actually be right. Two shares and a few hundred dollars disappearing
+     * with no warning is the same failure shape as the re-partitioned-fill bug that overstated cash
+     * by $7,350 two days earlier.
+     */
+    private static boolean consumeStoredRow(Map<String, Integer> remaining, String key) {
+        Integer count = remaining.get(key);
+        if (count == null || count == 0) return false;
+        if (count == 1) {
+            remaining.remove(key);
+        } else {
+            remaining.put(key, count - 1);
+        }
+        return true;
     }
 
     private static String rothKey(String date, String symbol, double qty, String type, double amount) {

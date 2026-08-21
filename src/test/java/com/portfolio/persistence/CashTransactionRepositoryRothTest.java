@@ -269,6 +269,51 @@ class CashTransactionRepositoryRothTest {
         assertEquals(20350.0, finalBalance(), 1e-6);
     }
 
+    // ── Row-level dedup is a multiset: identical rows are real and are counted, not collapsed ──
+
+    /** n identical fills already stored, m in the file → the file's surplus is what's new. */
+    private int importIdenticalFills(CashTransactionRepository repo, int count) {
+        List<CashTransaction> file = new java.util.ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            file.add(row("2026-08-21", "MRNA", "TRANSACTION", -3, 444.69, 1.36));
+        }
+        return repo.saveRothIra(file, new BigDecimal("50000"));
+    }
+
+    @Test
+    void identicalFillsDedupByCountNotByMembership() throws Exception {
+        // Set membership made the n-th identical file row match the same single key as the first,
+        // so a genuinely new repeat of an already-stored fill was skipped without a word. That is
+        // precisely the case repartitionedFills declines to handle — a group whose net has changed
+        // is real activity and falls through to row-by-row dedup, which then has to be right.
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+
+        assertEquals(2, importIdenticalFills(repo, 2), "nothing stored yet — both are new");
+        assertEquals(2, rothRowCount());
+
+        assertEquals(0, importIdenticalFills(repo, 2), "same two rows re-exported — nothing new");
+        assertEquals(2, rothRowCount());
+
+        // The broker adds a third identical fill later the same day. The group's net quantity and
+        // amount have changed, so the re-partition guard correctly stands down and this must be
+        // caught here or not at all.
+        assertEquals(1, importIdenticalFills(repo, 3), "the third fill is genuinely new");
+        assertEquals(3, rothRowCount());
+        assertEquals(50000 + 3 * 444.69, finalBalance(), 1e-6);
+    }
+
+    @Test
+    void aShorterFileNeverDeletesStoredFills() throws Exception {
+        // Three stored, two in the file: the export window simply moved. Nothing is new and
+        // nothing may be removed — this path only ever inserts.
+        CashTransactionRepository repo = newRepo(new KeyValueStore(dbDir));
+        importIdenticalFills(repo, 3);
+
+        assertEquals(0, importIdenticalFills(repo, 2));
+        assertEquals(3, rothRowCount(), "a shorter file must not drop stored rows");
+        assertEquals(50000 + 3 * 444.69, finalBalance(), 1e-6);
+    }
+
     // ── Primary-key migration (databases created before cash_balance_gbp joined the key) ──────
 
     /** The pre-June-2026 shape: five-column key, and cash_balance appended after description. */

@@ -695,6 +695,12 @@ holdings; distinguished from II cash by header sniff), `cashstatements*.csv` (AJ
 - The holdings-vs-ledger reconciliation panel is what surfaced this, not the importer. AJ Bell and
   II have the same shape of key and are theoretically vulnerable; neither has ever shown the
   behaviour, so the guard is Roth-only.
+  Row-level dedup is a **multiset**, not a set: `existingKeys` counts occurrences and each file row
+  *consumes* one (`consumeStoredRow`). Identical rows being real means plain set membership let the
+  n-th identical file row match the same single key as the first, so a genuinely new repeat of an
+  already-stored fill was skipped in silence — and that is exactly the case `repartitionedFills`
+  declines to handle, since a group whose net has changed is real activity and is meant to fall
+  through to row-by-row dedup.
 - **The table's own primary key is `(transaction_date, account, type, symbol, amount_gbp,
   cash_balance_gbp)`, and `cash_balance_gbp` is in it on purpose.** A broker can work one order as
   two partial fills of the same size at the same price, producing rows identical in every other key

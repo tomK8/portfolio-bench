@@ -32,8 +32,8 @@ public class OrdersController {
     }
 
     /**
-     * Re-prices the P(N) column's touch probability over a caller-supplied horizon, for the
-     * editable days box on each row.
+     * Re-prices the {@code P(N)} column's touch probability over a caller-supplied horizon, for
+     * the editable sessions box on each row.
      *
      * <p>Takes the row's own numbers rather than a symbol because that keeps it a pure calculation:
      * no re-parse of the broker exports, no FX fetch, no database read — the panel already rendered
@@ -41,15 +41,15 @@ public class OrdersController {
      * Doing the arithmetic here rather than in the browser is what keeps this column and the fixed
      * 5d/20d ones on one implementation of the first-passage model.
      *
-     * @param days calendar days, converted to trading sessions server-side.
+     * @param sessions trading sessions — the same unit P(5d)/P(20d) and the σ scaling use.
      */
     @GetMapping("/orders/touch")
     @ResponseBody
     public OpenOrdersService.TouchEstimate touch(@RequestParam BigDecimal current,
                                                  @RequestParam BigDecimal limit,
                                                  @RequestParam BigDecimal vol,
-                                                 @RequestParam int days) {
-        return openOrdersService.touchEstimate(current, limit, vol, days);
+                                                 @RequestParam int sessions) {
+        return openOrdersService.touchEstimate(current, limit, vol, sessions);
     }
 
     /**

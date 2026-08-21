@@ -145,7 +145,8 @@
             });
 
             // Editable horizon box → re-price P(N) on the server (see GET /orders/touch: the
-            // first-passage maths stays in one place rather than being mirrored here).
+            // first-passage maths stays in one place rather than being mirrored here). The box is
+            // in trading sessions, the same unit as P(5d)/P(20d) — type 5 and the cell matches.
             document.body.addEventListener('input', function (e) {
                 var input = e.target.closest ? e.target.closest('#orders-table .ord-days') : null;
                 if (!input) return;
@@ -156,7 +157,7 @@
         }());
 
         /**
-         * Re-price one row's P(N) cell over the horizon in its days box. Everything the estimate
+         * Re-price one row's P(N) cell over the horizon in its sessions box. Everything the estimate
          * needs — current price, limit, base vol — was rendered onto the cell, so this is a pure
          * loopback calculation: no re-parse of the broker exports, no FX call.
          *
@@ -167,9 +168,9 @@
         function repriceTouch(cell, input) {
             var out = cell.querySelector('.ord-touch');
             if (!out) return;
-            var days = parseInt(input.value, 10);
+            var sessions = parseInt(input.value, 10);
             var seq = cell._ordSeq = (cell._ordSeq || 0) + 1;
-            if (!isFinite(days) || days < 1) {          // box cleared — say nothing rather than guess
+            if (!isFinite(sessions) || sessions < 1) {  // box cleared — say nothing rather than guess
                 out.textContent = '—';
                 out.title = '';
                 out.className = 'ord-touch';
@@ -180,7 +181,7 @@
             var q = 'current=' + encodeURIComponent(cell.dataset.current) +
                 '&limit=' + encodeURIComponent(cell.dataset.limit) +
                 '&vol=' + encodeURIComponent(cell.dataset.vol) +
-                '&days=' + days;
+                '&sessions=' + sessions;
             fetch('/orders/touch?' + q)
                 .then(function (r) {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -198,7 +199,7 @@
                     out.textContent = (t.probability * 100).toFixed(1) + '%';
                     cell.dataset.sortValue = t.probability;
                     out.classList.toggle('long-horizon', !!t.longHorizon);
-                    out.title = t.days + ' calendar days = ' + t.sessions + ' trading sessions' +
+                    out.title = t.sessions + ' trading sessions' +
                         (t.longHorizon
                             ? '. This horizon runs well past the column default, where the driftless ' +
                               'assumption stops being a convention and becomes the dominant one. ' +

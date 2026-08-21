@@ -86,7 +86,7 @@
                 <th data-sort="num" title="Signed distance from the current price to your limit, in 5-session σ units: ln(limit ÷ current) ÷ (RV10 × √5). + = limit above the market">σ→lim</th>
                 <th data-sort="num" title="Probability the market touches your limit within 5 sessions — driftless first-passage 2·Φ(−|σ→lim|)">P(5d)</th>
                 <th data-sort="num" title="Probability the market touches your limit within 20 sessions — same first-passage estimate, σ scaled to a 20-session horizon">P(20d)</th>
-                <th data-sort="num" title="Probability the market touches your limit within N days — the same first-passage estimate as P(5d)/P(20d), over a horizon you choose. Every row starts on 90 days so the column is comparable across orders; type any number of calendar days into a row's box to re-price just that row (days become trading sessions, since σ scales by √sessions — 90 days is about 64 sessions, not 90).">P(N)</th>
+                <th data-sort="num" title="Probability the market touches your limit within N trading sessions — the same first-passage estimate as P(5d) and P(20d), on the same scale. Every row starts at 60 sessions (about a quarter) so the column is comparable across orders; type any number of sessions into a row's box to re-price just that row. Set it to 5 and the cell reproduces P(5d) exactly.">P(N)</th>
                 <th data-sort="num">Amount</th>
                 <th data-sort="num">Amount £</th>
                 <th class="txt" data-sort="text">Date entered</th>
@@ -124,16 +124,16 @@
                     th:attr="data-sort-value=${o.touchProbHorizon != null ? o.touchProbHorizon : ''},
                              data-current=${o.currentPrice}, data-limit=${o.price}, data-vol=${o.baseVol()}">
                     <span class="ord-touch" th:classappend="${o.longHorizon()} ? 'long-horizon' : ''"
-                          th:title="${o.horizonSessions == null ? null : (o.horizonDays + ' calendar days = ' + o.horizonSessions + ' trading sessions'
+                          th:title="${o.horizonSessions == null ? null : (o.horizonSessions + ' trading sessions'
                                 + (o.longHorizon() ? '. This horizon runs well past the column default, where the driftless assumption stops being a convention and becomes the dominant one — expected drift is by then far larger than the diffusion term. Directional, not a number to read to the decimal.' : ''))}"
                           th:text="${o.touchProbHorizon != null
                                 ? #numbers.formatDecimal(o.touchProbHorizon.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
                                 : '—'}">—</span>
-                    <input type="number" class="ord-days" min="1" max="1825" step="1"
-                           th:if="${live}" th:value="${o.horizonDays}" placeholder="days"
-                           th:title="${o.expiry != null
-                                ? 'Calendar days this probability is priced over. This order expires ' + o.expiry.toString() + ' — set the box to that many days to ask whether it fills before it lapses.'
-                                : 'Calendar days this probability is priced over. This order carries no dated expiry, so nothing but your own horizon bounds it.'}">
+                    <input type="number" class="ord-days" min="1" max="1250" step="1"
+                           th:if="${live}" th:value="${o.horizonSessions}" placeholder="sessions"
+                           th:title="${o.sessionsToExpiry != null
+                                ? 'Trading sessions this probability is priced over. This order expires ' + o.expiry.toString() + ', about ' + o.sessionsToExpiry + ' sessions away — set the box to that to ask whether it fills before it lapses.'
+                                : 'Trading sessions this probability is priced over. This order carries no dated expiry, so nothing but your own horizon bounds it.'}">
                 </td>
                 <td th:text="${o.amount != null ? o.currencySymbol + #numbers.formatDecimal(o.amount, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td th:text="${o.amountGbp != null ? '£' + #numbers.formatDecimal(o.amountGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
@@ -167,12 +167,13 @@
 
         <p class="muted" style="margin-top: 0.6rem; font-size: 0.85rem"
            th:unless="${orders.orders.isEmpty()}">
-            <strong>P(N)</strong> is the same touch estimate over a horizon you pick. Every row
-            starts on <strong>90 days</strong> — a common horizon is what makes the column
-            comparable across orders, the way P(5d) and P(20d) already are — and each row's box is
-            editable, so an order's own days-to-expiry is a keystroke away when that is the
-            question. Days become trading sessions, since σ scales by √sessions: 90 calendar days is
-            about 64 sessions of diffusion, not 90. <strong>Read the whole column as indicative
+            <strong>P(N)</strong> is the same touch estimate over a horizon you pick, in
+            <strong>trading sessions</strong> — the unit P(5d) and P(20d) already use, and the one σ
+            is scaled in (√sessions), so all three columns sit on one scale: type 5 into a box and
+            it reproduces that row's P(5d). Every row starts at <strong>60 sessions</strong>, about
+            a quarter; a common horizon is what makes the column comparable across orders, and each
+            row's box is editable, so an order's own deadline is a keystroke away — hover the box
+            and it tells you how many sessions that is. <strong>Read the whole column as indicative
             rather than calibrated</strong> — the model assumes no drift, which is a fair convention
             over a week and an assumption over a quarter; push a row much past six months and the
             figure is <span class="ord-touch long-horizon" style="display:inline">marked</span> to

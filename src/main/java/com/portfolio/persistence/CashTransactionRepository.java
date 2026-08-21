@@ -32,8 +32,20 @@ public class CashTransactionRepository {
 
     private static final Logger log = LoggerFactory.getLogger(CashTransactionRepository.class);
 
-    private static final String CREATE_TABLE = """
-            CREATE TABLE IF NOT EXISTS cash_transactions (
+    /**
+     * Column and key definitions, kept apart from the {@code CREATE TABLE} preamble so the create
+     * and the primary-key migration below build from <em>one</em> definition of the schema. Two
+     * copies is exactly how the key drifted in the first place.
+     *
+     * <p><b>{@code cash_balance_gbp} is in the primary key on purpose.</b> A broker can fill one
+     * order as two partial fills of the same size at the same price, which produces two rows
+     * identical in every other key column — Citi did this with MRNA on 2026-08-21 (two sales of
+     * 3 shares at 148.23, $444.69 each). Those are two distinct economic events and both have to
+     * be storable. The running balance is what tells them apart, because it differs by
+     * construction: the second fill lands on top of the first.
+     */
+    private static final String TABLE_BODY = """
+            (
                 transaction_date TEXT NOT NULL,
                 account          TEXT NOT NULL CHECK (account IN ('RothIRA', 'AJBell', 'II')),
                 type             TEXT NOT NULL CHECK (type IN ('TRANSACTION', 'DIVIDEND', 'INTEREST', 'CHARGE', 'CONTRIBUTION')),
@@ -49,10 +61,22 @@ public class CashTransactionRepository {
                 PRIMARY KEY (transaction_date, account, type, symbol, amount_gbp, cash_balance_gbp)
             )""";
 
+    private static final String CREATE_TABLE =
+            "CREATE TABLE IF NOT EXISTS cash_transactions " + TABLE_BODY;
+
+    /**
+     * Every column, named. The migration copies by name rather than positionally because a table
+     * created before {@code cash_balance} was added carries it appended at the end
+     * ({@code … amount_gbp, cash_balance_gbp, description, cash_balance}) rather than in the
+     * position {@link #TABLE_BODY} declares — so {@code SELECT *} would silently transpose the two
+     * balances into the description column.
+     */
+    private static final String COLUMNS =
+            "transaction_date, account, type, symbol, quantity, amount, currency, " +
+                    "fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description";
+
     private static final String INSERT_SQL =
-            "INSERT INTO cash_transactions " +
-                    "(transaction_date, account, type, symbol, quantity, amount, currency, " +
-                    " fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description) " +
+            "INSERT INTO cash_transactions (" + COLUMNS + ") " +
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
     /** Tolerances for matching a re-partitioned fill group: exact share count, half a cent. */
@@ -77,8 +101,88 @@ public class CashTransactionRepository {
             } catch (SQLException alreadyMigrated) {
                 // cash_balance column already present — fine
             }
+            // After the ALTER, so the rebuild can copy cash_balance by name.
+            migratePrimaryKey(conn);
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise cash_transactions table", e);
+        }
+    }
+
+    /**
+     * Bring a pre-existing table's primary key in line with {@link #TABLE_BODY}.
+     *
+     * <p>{@code cash_balance_gbp} joined the key in June 2026, but the create is
+     * {@code CREATE TABLE IF NOT EXISTS} and no migration came with it — so a database created
+     * before then kept the old five-column key
+     * ({@code transaction_date, account, type, symbol, amount_gbp}) while every test, and every
+     * fresh install, ran on the six-column one. The difference is invisible until a broker reports
+     * two identical partial fills on one day, at which point the import dies on a primary-key
+     * violation with the ledger's own dedup logic having done nothing wrong.
+     *
+     * <p>Idempotent and cheap: on an already-correct database this is a single {@code PRAGMA}
+     * read and nothing else.
+     */
+    private static void migratePrimaryKey(Connection conn) throws SQLException {
+        if (primaryKeyIncludesBalance(conn)) return;
+        log.info("Migrating cash_transactions: adding cash_balance_gbp to the primary key so "
+                + "identical same-day partial fills can both be stored");
+        rebuildWithFullPrimaryKey(conn);
+    }
+
+    /**
+     * Whether {@code cash_balance_gbp} is part of the table's primary key. {@code PRAGMA
+     * table_info} reports {@code pk} as the column's 1-based position within the key, or 0 when it
+     * is not in it. Returns true when the table or the column is absent — there is then nothing to
+     * migrate, and the create statement has already produced the right shape.
+     */
+    static boolean primaryKeyIncludesBalance(Connection conn) throws SQLException {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("PRAGMA table_info(cash_transactions)")) {
+            while (rs.next()) {
+                if ("cash_balance_gbp".equals(rs.getString("name"))) return rs.getInt("pk") > 0;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * SQLite cannot alter a primary key in place, so the table is rebuilt: create, copy by name,
+     * drop, rename — all inside one transaction, which SQLite applies to DDL as well, so the
+     * ledger is never observable in a half-migrated state.
+     *
+     * <p>The row count is asserted across the copy and any mismatch rolls the whole thing back.
+     * The copy cannot collide on the new key: the old five-column key already made those five
+     * columns unique, so no two rows can agree on all six.
+     */
+    private static void rebuildWithFullPrimaryKey(Connection conn) throws SQLException {
+        boolean autoCommit = conn.getAutoCommit();
+        conn.setAutoCommit(false);
+        try (Statement st = conn.createStatement()) {
+            int before = countRows(st, "cash_transactions");
+            st.execute("DROP TABLE IF EXISTS cash_transactions_migrate");
+            st.execute("CREATE TABLE cash_transactions_migrate " + TABLE_BODY);
+            st.execute("INSERT INTO cash_transactions_migrate (" + COLUMNS + ") "
+                    + "SELECT " + COLUMNS + " FROM cash_transactions");
+            int after = countRows(st, "cash_transactions_migrate");
+            if (after != before) {
+                throw new SQLException(String.format(
+                        "cash_transactions migration copied %d of %d rows — rolling back", after, before));
+            }
+            st.execute("DROP TABLE cash_transactions");
+            st.execute("ALTER TABLE cash_transactions_migrate RENAME TO cash_transactions");
+            conn.commit();
+            log.info("Migrated cash_transactions to the six-column primary key: {} rows preserved", after);
+        } catch (SQLException e) {
+            conn.rollback();
+            throw e;
+        } finally {
+            conn.setAutoCommit(autoCommit);
+        }
+    }
+
+    private static int countRows(Statement st, String table) throws SQLException {
+        try (ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + table)) {
+            return rs.next() ? rs.getInt(1) : 0;
         }
     }
 

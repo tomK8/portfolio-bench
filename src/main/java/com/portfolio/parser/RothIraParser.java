@@ -21,6 +21,8 @@ import java.util.*;
  * <p>
  * Cash instruments (BDP, USD999997) are merged into a single CASH entry.
  * Average price paid is derived as (Market Value - Gain/Loss $) / Quantity.
+ * Zero-quantity rows — a position the broker still lists after it has been sold out — are
+ * dropped; see the comment at the filter for why.
  */
 public class RothIraParser implements AccountParser {
 
@@ -84,6 +86,17 @@ public class RothIraParser implements AccountParser {
                 if (quantity == null) continue;
 
                 String id = normaliseSecurityId(rawId);
+
+                // A fully-sold position keeps being exported for a while with zero shares and zero
+                // value but a live price — MRNA and MRVL both did on 2026-08-21, the day they were
+                // sold out — which lands a row between real positions reading 0.00 in every column.
+                // That is a row about something no longer owned, not a holding. The broker is also
+                // inconsistent about it (sometimes the row simply disappears instead), so dropping
+                // it is what makes the view read the same either way. Cash is exempt: a zero cash
+                // balance is a fact about the account, not a stale row. A short position (negative
+                // quantity) is real and is kept.
+                if (!CASH_ID.equals(id) && quantity.signum() == 0) continue;
+
                 BigDecimal mktVal = getDecimal(row, colIndex, COL_MARKET_VALUE);
                 BigDecimal gainLoss = getDecimal(row, colIndex, COL_GAIN_LOSS);
 

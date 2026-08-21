@@ -641,6 +641,15 @@ renamed to "Download Excel" too — both write to ~/Documents.)
 3. If the source provides GBP values directly, set `currentMarketValueGbp` + `costBasisGbp` on
    the `Holding`; otherwise leave them null and `PortfolioAggregator` will convert via FX.
 
+**Roth exports keep listing a position after it is sold out** — zero shares, zero value, but a
+live price — so `RothIraParser` drops any non-cash row whose quantity is exactly zero. MRNA and
+MRVL both did this on 2026-08-21, the day they were sold, landing rows between real positions
+reading 0.00 in every column. The broker is inconsistent about it (sometimes the row just
+disappears), so dropping it is also what makes the view read the same either way. Cash is exempt (a
+zero balance is a fact about the account, not a stale row) and negative quantities are kept (a short
+is a real position). `DividendService.reconcile` already treats an absent holding as zero shares, so
+dropping the row changes nothing there.
+
 File-detection: `Holdings*.xlsx` (Roth), `portfolio*.csv` (AJBell SIPP), UUID `.csv` (II SIPP
 holdings; distinguished from II cash by header sniff), `cashstatements*.csv` (AJBell cash),
 `History*.xlsx` (Roth cash), UUID `.csv` with `Debit,Credit,Running Balance` header (II cash).

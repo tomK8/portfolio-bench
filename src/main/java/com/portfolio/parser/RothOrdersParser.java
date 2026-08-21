@@ -67,7 +67,7 @@ public class RothOrdersParser implements OrderParser {
                 BigDecimal price = decimal(str(row, col, "Price"));
                 BigDecimal amount = price != null ? price.multiply(qty) : null;
 
-                orders.add(new OpenOrder(
+                orders.add(OpenOrder.parsed(
                         sourceName(),
                         symbol,
                         null,
@@ -82,9 +82,7 @@ public class RothOrdersParser implements OrderParser {
                         null,
                         str(row, col, "Duration"),
                         str(row, col, "Status"),
-                        null,
-                        // enrichment (FX, live price, vol, touch horizons) — filled by the service
-                        null, null, null, null, null, null, null, null, null, null, null, null));
+                        null));
             }
         }
         return orders;

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!--
+      Test logging. Mirrors the production console appender, but the calibration logger is OFF:
+      its production appender writes to ~/log/portfolio-bench-touch-calibration.log, and a test
+      suite pricing fabricated orders would file fabricated records among the real ones — the exact
+      data the log exists to keep clean.
+    -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="com.portfolio.calibration" level="OFF"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

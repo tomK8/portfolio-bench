@@ -720,11 +720,14 @@ public class ExcelReportWriter {
         // extended-hours session travels with the file instead of only living on screen.
         // The horizon is carried in sessions, not days: √sessions is what the σ scaling actually
         // consumed, so the sheet states the number the probability beside it was computed over. The
-        // calendar view of the same thing is the Expiry column two along.
+        // calendar view of the same thing is the Expiry column at the end.
+        // P(low)/P(high) bracket the headline with the same probability computed off RV10 and RV30,
+        // and σ eff / Vol source say which forecast produced it — a probability read months later
+        // is only judgeable against the model that made it, so the sheet carries both.
         String[] headers = {"Broker", "Symbol", "Side", "Type", "Quantity",
                 "Price", "Current", "Quote", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
-                "P(touch 20d)", "Horizon (sessions)", "P(touch horizon)",
-                "Amount", "Amount GBP", "Date entered", "Expiry"};
+                "Horizon (sessions)", "Horizon from", "P(touch horizon)", "P(low)", "P(high)",
+                "σ eff", "Vol source", "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
 
@@ -744,15 +747,19 @@ public class ExcelReportWriter {
             if (o.dailyVol30() != null) setStyled(row, 10, o.dailyVol30(), volPctStyle);
             if (o.sigmaToLimit() != null) setStyled(row, 11, o.sigmaToLimit(), sigmaStyle);
             if (o.touchProb5d() != null) setStyled(row, 12, o.touchProb5d(), touchPctStyle);
-            if (o.touchProb20d() != null) setStyled(row, 13, o.touchProb20d(), touchPctStyle);
-            if (o.horizonSessions() != null) setNumeric(row, 14, BigDecimal.valueOf(o.horizonSessions()), qtyNum);
+            if (o.horizonSessions() != null) setNumeric(row, 13, BigDecimal.valueOf(o.horizonSessions()), qtyNum);
+            styledCell(row, 14, o.horizonSessions() == null ? "" : (o.horizonFromExpiry() ? "expiry" : "GTC default"), text);
             if (o.touchProbHorizon() != null) setStyled(row, 15, o.touchProbHorizon(), touchPctStyle);
-            if (o.amount() != null) setMoney(row, 16, o.amount(), o.currency(), false, wb, moneyStyles);
-            if (o.amountGbp() != null) setMoney(row, 17, o.amountGbp(), "GBP", false, wb, moneyStyles);
-            styledCell(row, 18, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            if (o.touchProbLow() != null) setStyled(row, 16, o.touchProbLow(), touchPctStyle);
+            if (o.touchProbHigh() != null) setStyled(row, 17, o.touchProbHigh(), touchPctStyle);
+            if (o.sigmaEff() != null) setStyled(row, 18, o.sigmaEff(), volPctStyle);
+            styledCell(row, 19, dashIfNull(o.volSource()), text);
+            if (o.amount() != null) setMoney(row, 20, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 21, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 22, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 19, expiry, text);
+            styledCell(row, 23, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);

@@ -15,11 +15,10 @@ class OpenOrderTest {
 
     private static OpenOrder order(String side, String limit, String current, boolean estimated,
                                    String quoteSession) {
-        return new OpenOrder("AJ Bell SIPP", "SGLN", "iShares Physical Gold", side, "Limit",
-                new BigDecimal("50"), limit == null ? null : new BigDecimal(limit), estimated,
-                null, "GBP", null, null, "GTC", "In progress", null, null,
-                current == null ? null : new BigDecimal(current),
-                null, null, null, null, null, null, quoteSession, null, null, null);
+        return OpenOrder.parsed("AJ Bell SIPP", "SGLN", "iShares Physical Gold", side, "Limit",
+                        new BigDecimal("50"), limit == null ? null : new BigDecimal(limit),
+                        estimated, null, "GBP", null, null, "GTC", "In progress", null)
+                .withCurrentPrice(current == null ? null : new BigDecimal(current), null, quoteSession);
     }
 
     @Test

@@ -41,7 +41,8 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `buildAggHolding`), `PortfolioMetrics` (totals + `rtTotalGbp` for intraday valuation),
   `DividendAttributor` (FIFO), `CashLedgerReconstructor` (FIFO position-from-ledger
   reconstruction for the cash-ledger view), `Instruments.isBond` (single home of the
-  bond/gilt predicate). `domain.model`: `Holding` (Builder; many nullable fields),
+  bond/gilt predicate), `VolForecast` (the horizon-matched volatility forecast behind the
+  open-orders touch probabilities — see "Open orders"). `domain.model`: `Holding` (Builder; many nullable fields),
   `AggHolding`, `CashTransaction`, `Account` + `TransactionType` enums, `PriceBar`,
   `IntradayBar`, `IntradayPrice`.
 - `port` — `FxRateProvider`, `HistoricalFxRateProvider` (interfaces, faked in tests).
@@ -95,9 +96,10 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   a "Download Excel" button (`POST /orders/export`). Resting orders across brokers parsed on demand
   from the newest order-status export per broker in the input dir; a current FX snapshot fills the
   Amount GBP column, and a live intraday/daily quote fills the **Current** price + **vs limit** %
-  columns (how far the market sits from each resting limit). A **P(N)** column prices the touch
-  probability over a 60-session default horizon, editable per row, and clicking a row opens the
-  same price popup the Live and Watchlist tables use. See the Open-orders section below.
+  columns (how far the market sits from each resting limit). A **P(N)** column prices the
+  probability of the market touching each limit **before that order expires**, on a volatility
+  forecast matched to that horizon; it is editable per row, and clicking a row opens the same price
+  popup the Live and Watchlist tables use. See the Open-orders section below.
 - **Contributions** — `GET /contributions` → JSON, rendered by Chart.js. Cumulative
   per-account + Total.
 - **Value over time** — `GET /portfolio-value` → JSON, Chart.js. Monthly portfolio GBP
@@ -286,7 +288,7 @@ no `System.out` in production code.
 | Cash ledger → Excel   | `POST /sync-from-cash/export` | `ExportExcelService.exportLedger` (→ ~/Documents) |
 | Live positions → Excel| `POST /live/export`        | `ExportExcelService.exportLive` (→ ~/Documents) |
 | Open orders           | `GET /orders`              | `OpenOrdersService`       |
-| Order touch re-price  | `GET /orders/touch`        | `OpenOrdersService.touchEstimate` |
+| Order touch re-price  | `GET /orders/touch`        | `OpenOrdersService.touchEstimate` (re-blends σ at the new N) |
 | Pre-trade limit probe | `GET /orders/probe`        | `OpenOrdersService.probe` |
 | Open orders → Excel   | `POST /orders/export`      | `OpenOrdersService.export` (→ ~/Documents) |
 | Export Excel          | `POST /export`             | `ExportExcelService`      |
@@ -424,10 +426,15 @@ stored price feeds (`IntradayPriceRepository` + `PriceHistoryRepository`, fill t
 columns); all degrade to null + a warning rather than failing the view. Everything is normalised
 into one framework-free `domain.model.OpenOrder` record (broker, symbol, name, side, orderType,
 quantity, price, priceEstimated, amount, currency, dateEntered, expiry, duration, status, reference,
-amountGbp, currentPrice, distancePct, dailyVol10, dailyVol30, sigmaToLimit, touchProb5d,
-touchProb20d); absent fields are null → "—". Parsers build enrichment-free orders; the service adds `amountGbp` via
-`withAmountGbp` (`toGbp` divides by the rate — units of foreign ccy per GBP), the two live-price
-columns via `withCurrentPrice`, and the four volatility columns via `withVolatility`.
+amountGbp, currentPrice, distancePct, quoteSession, dailyVol10/20/30/250, sigmaEff, decayWeight,
+volSource, sigmaToLimit, touchProb5d, horizonSessions, touchProbHorizon, touchProbLow,
+touchProbHigh, sessionsToExpiry); absent fields are null → "—". Parsers build enrichment-free orders
+via the **`OpenOrder.parsed(...)` factory** — it takes the fifteen broker-exported fields and nulls
+the enrichment tail, so a parser never carries a dozen positional nulls that have to be recounted
+whenever the enrichment set changes. The service then adds `amountGbp` via `withAmountGbp` (`toGbp`
+divides by the rate — units of foreign ccy per GBP), the live-price columns via `withCurrentPrice`,
+the RV windows + 5-session columns via `withVolatility`, and the whole P(N) block via
+`withHorizonTouch(VolForecast.Touch, sessionsToExpiry)`.
 
 - **Live-price columns (`Current` + `vs limit`).** `enrichWithCurrentPrice` bulk-loads the latest
   intraday quote of **any session** (`loadLatestQuotes`) for every order symbol (one query;
@@ -439,63 +446,103 @@ columns via `withCurrentPrice`, and the four volatility columns via `withVolatil
   signed `(current − limit) / price` (positive = market above the resting limit), rendered as a
   green/red % and percent-formatted in Excel. Unenriched orders (no symbol, no quote) keep "—".
 
-- **Volatility columns (`RV10` / `RV30` / `σ→lim` / `P(5d)` / `P(20d)`).** Same `enrichWithCurrentPrice`
-  pass. `loadDailyVols` reads each symbol's daily series once (`VOL_LOOKBACK_DAYS` = 90 calendar days) and
-  computes **realized daily volatility, not annualised** over the last `RV_SHORT`=10 and `RV_LONG`=30
-  sessions via `PriceStats.dailyVol` (sample stdev of daily log returns; `annualizedVol` is now just
-  this × √252, sharing one `dailyVolRaw` engine). Vol is a return **ratio**, so it's currency-free — a
-  `.L` pence series needs no FX. `PriceStats.sigmaDistance(current, limit, dailyVol, 5)` = signed
-  `ln(limit/current) ÷ (dailyVol×√5)` — how many 5-session σ the limit sits from the market (+ above,
-  − below), using RV10 as the near-term σ (falls back to RV30 when the 10-session window is too thin).
-  `PriceStats.touchProbability` = the driftless first-passage `2·Φ(−|d|)` (standard-normal CDF via a
-  Numerical-Recipes `erfc`), the probability the market touches the limit at least once within the
-  horizon; capped to [0,1], = 1 at the barrier. Two horizons — `TOUCH_HORIZON_SESSIONS` 5 (also the
-  σ→lim column) and `..._LONG` 20 — share **one** base vol, so P(20d) ≥ P(5d) always (same barrier,
-  more time; only the √horizon scaling differs). σ/touch need a limit **and** a live price; RV10/RV30
-  need only the daily series, so a name with no live quote still shows its RVs. Excel formats:
-  RV10/RV30 `0.00%`, σ→lim `+0.00;-0.00`, both P(touch) `0.0%`.
+- **Volatility columns (`RV10` / `RV30` / `σ→lim` / `P(5d)`).** Same `enrichWithCurrentPrice`
+  pass. `loadDailyVols` reads each symbol's daily series once (`VOL_LOOKBACK_DAYS` = 420 calendar
+  days — sized for the RV250 anchor, ≈350 calendar days) and computes **realized daily volatility,
+  not annualised**, over four windows via `PriceStats.dailyVol` (sample stdev of daily log returns;
+  `annualizedVol` is now just this × √252, sharing one `dailyVolRaw` engine): RV10 and RV30 are
+  displayed and bracket the touch probability as a range; **RV20 is current state and RV250 the
+  long-run anchor** the forecast blends between (below). Vol is a return **ratio**, so it's
+  currency-free — a `.L` pence series needs no FX. `PriceStats.sigmaDistance(current, limit, σ, N)`
+  = signed `ln(limit/current) ÷ (σ×√N)` — how many N-session σ the limit sits from the market (+
+  above, − below). `PriceStats.touchProbability` = the driftless first-passage `2·Φ(−|d|)`
+  (standard-normal CDF via a Numerical-Recipes `erfc`), the probability the market touches the
+  limit at least once within the horizon; capped to [0,1], = 1 at the barrier. `σ→lim` and `P(5d)`
+  are one call at `TOUCH_HORIZON_SESSIONS` = 5, so `P(5d) = 2·Φ(−|σ→lim|)` stays checkable by eye
+  on the row. Excel formats: RV10/RV30 `0.00%`, σ→lim `+0.00;-0.00`, P(touch) `0.0%`.
 
-- **`P(N)` — a third touch column over an editable horizon, in sessions.** P(5d)/P(20d) are fixed;
-  this one runs over a horizon the reader picks, starting at `DEFAULT_HORIZON_SESSIONS` (60, ≈ a
-  quarter) on **every row**. Two decisions, both load-bearing.
-  **(1) The unit is trading sessions**, not calendar days. `sigmaDistance` scales σ by
-  `√horizonSessions`, and the `dailyVol` it consumes is the stdev of returns between consecutive
-  *daily bars* — which exist only on trading days. So sessions is what the model already speaks,
-  and it is what the rest of the app counts too (the watchlist's momentum windows are
-  `closeNSessionsBefore`, its vol horizons are session windows, every strategy tab counts sessions).
-  This column shipped briefly taking calendar days and converting internally (90 → 64), which made
-  it **the only calendar-based horizon in the codebase** and put two different meanings of "day"
-  inches apart in one table — documented in a tooltip and nowhere else. Now `sessions=5` reproduces
-  the row's own `P(5d)` exactly, which is the check a reader can make on screen and
-  `theHorizonIsInSessions_theSameUnitAsTheFixedTouchColumns` makes in a test.
-  **(2) The default is uniform**, not each order's own time-to-expiry. The column exists to compare
-  orders, and a per-row horizon compares nothing — a nearly-expired limit reading 7% beside a
-  long-dated one reading 64% says more about the two deadlines than about the two markets. The
-  order's own deadline is still a keystroke away: `sessionsToExpiry` (display only, the sole
-  remaining caller of `PriceStats.tradingSessionsBetween`) puts "expires 2026-08-28, about 41
-  sessions away" in the box's tooltip. It is null for GTC and for an expiry already past — no
-  forward horizon left to name, and the Expiry column beside it says so.
-  Enriched into `OpenOrder.horizonSessions/touchProbHorizon/sessionsToExpiry` via
-  `withHorizonTouch` — its own wither, not more parameters on `withVolatility`, because it answers
-  a different question. The **box is editable per row**: typing re-prices via
-  `GET /orders/touch?current=&limit=&vol=&sessions=` → `OpenOrdersService.touchEstimate`. It takes
-  the row's own numbers rather than a symbol, which keeps it pure arithmetic — no re-parse, no FX
-  call, no DB read — and keeps the first-passage maths in **one** implementation instead of
-  mirroring `erfc` into `dashboard.js`. Debounced 250ms with a per-cell `_ordSeq` latch (typing
-  "1", "12", "120" fires three requests; a slow early one landing last would otherwise repaint a
-  horizon the box no longer shows — the same guard Attribution's presets use). Clamped to
+- **`P(N)` — will this order fill before it expires?** Three decisions, all load-bearing.
+  **(1) N is each order's own trading sessions to expiry**, or `VolForecast.Config.gtcHorizonSessions`
+  (90, ≈two quarters) for a GTC order, which has no deadline of its own. The column briefly ran on
+  one standing horizon for every row, on the argument that a common horizon is what makes rows
+  comparable — true, but it made the column answer nobody's question about any particular order,
+  which is whether *this* limit fills before *this* deadline. The comparison is not lost: P(5d) is
+  still the same window on every row, and each cell's box still re-prices that row over anything
+  typed into it. **The unit is trading sessions**, not calendar days: `sigmaDistance` scales σ by
+  `√sessions` off bars that exist only on trading days, and the rest of the app counts sessions
+  everywhere. The calendar→session conversion happens once, in `sessionsToExpiry`;
+  `sessions=5` reproduces the row's own `P(5d)` exactly, which is the check a reader can make on
+  screen and `theHorizonIsInSessions_theSameUnitAsTheFixedTouchColumn` makes in a test.
+  **(2) σ is forecast for the horizon, not measured over a trailing window of the same length** —
+  see `domain/VolForecast` (below), the single place σ_eff is resolved.
+  **(3) The headline is bracketed by a range**: the same probability recomputed off RV10 and off
+  RV30 (flat trailing windows), printed small under the cell and spelled out on hover. When the low
+  end already clears the threshold you are deciding against, the call survives the vol input being
+  wrong; when only the high end does, it doesn't. The bracket does **not** always contain the
+  headline, and that is the point — a reverting forecast sits below it after a violent stretch and
+  above it after a calm one, which is exactly what the flat windows get wrong.
+  Enriched into `OpenOrder.horizonSessions/touchProbHorizon/touchProbLow/touchProbHigh/sigmaEff/
+  decayWeight/volSource/sessionsToExpiry` via `withHorizonTouch`, which takes a whole
+  `VolForecast.Touch`. The **box is editable per row**: typing re-prices via
+  `GET /orders/touch?current=&limit=&rv10=&rv20=&rv30=&rv250=&sessions=` →
+  `OpenOrdersService.touchEstimate`. It takes the row's four RV windows rather than one σ **because
+  a new horizon re-blends the forecast rather than rescaling a fixed number by √N** — and rather
+  than a symbol, which keeps it pure arithmetic (no re-parse, no FX call, no DB read) and keeps the
+  first-passage maths in **one** implementation instead of mirroring `erfc` into `dashboard.js`.
+  Debounced 250ms with a per-cell `_ordSeq` latch (typing "1", "12", "120" fires three requests; a
+  slow early one landing last would otherwise repaint a horizon the box no longer shows — the same
+  guard Attribution's presets use). The printed range repaints with the headline; left behind it
+  would read as the range for a horizon the cell no longer shows. Clamped to
   `[1, MAX_HORIZON_SESSIONS]` (1250, ≈5 years). **Past `OpenOrder.LONG_HORIZON_SESSIONS` (130, ≈6
-  months) the figure is marked amber with a `~`.** The honest boundary is lower — driftless
-  first-passage is a fair convention over a week and an assumption past a quarter — but the
-  *default horizon is a quarter*, so a mark at the honest boundary fired on every row on every
-  load, and a flag that never varies tells the reader nothing. That caveat is stated **once, in the
-  panel footnote**, where it applies to the whole column; the per-row mark is reserved for a
-  horizon the reader has pushed materially past the default, and a test pins the default below the
-  threshold so the two can't drift back together. The threshold lives on `OpenOrder.longHorizon()`
-  so the server-rendered cell and the JS re-price can't disagree about where the line is. The cell
-  reads top-down — probability (the value, and what the column sorts on), then the box that
-  produced it. Excel gains `Horizon (sessions)` + `P(touch horizon)`; the export re-parses, so an
-  on-screen edit stays a what-if rather than state.
+  months) the figure is marked amber with a `~`** — reserved for a horizon a reader has pushed past
+  any real order deadline, so it never fires on the GTC assumption itself (a test pins 90 < 130).
+  The driftless caveat that applies to the whole column is stated once, in the panel footnote. The
+  threshold lives on `OpenOrder.longHorizon()` so the server-rendered cell and the JS re-price can't
+  disagree. Excel gains `Horizon (sessions)`, `Horizon from` (expiry / GTC default), `P(touch
+  horizon)`, `P(low)`, `P(high)`, `σ eff` and `Vol source`; the export re-parses, so an on-screen
+  edit stays a what-if rather than state.
+- **The volatility forecast — `domain/VolForecast`.** The single resolution point for σ_eff, and the
+  reason the touch columns are not scaled by a trailing window. Realized vol mean-reverts, so
+  pricing a 90-session horizon off the last 90 sessions reads a name fresh from a violent fortnight
+  as though the next quarter stays violent, and one asleep for a month as though it stays asleep.
+  What a first passage over N sessions needs is the expected **average** variance over those N
+  sessions, so current state is blended toward a long-run anchor with the weight decaying at a
+  tunable half-life:
+  `κ = ln2/halfLifeDays` (default 20), `var_now = RV20²`, `var_LR = RV250²`,
+  `decay = (1 − e^{−κN})/(κN)`, `var_N = var_LR + (var_now − var_LR)·decay`, `σ_eff = √var_N`.
+  `decay` is the mean of `e^{−κt}` over `[0,N]`: → 1 as N → 0 (guarded as a genuine 0/0 with the
+  series expansion below `SMALL_KN`), → 0 as N grows. Every input is a **daily-return stdev**,
+  matching σ_eff's units — nothing here is annualised.
+  **Total variance still grows with N** even when the blend pulls σ_eff *down*:
+  `N·var_N = N·var_LR + (var_now − var_LR)(1 − e^{−κN})/κ`, whose derivative is bounded below by
+  `min(var_now, var_LR) > 0` — so P(touch) can never go backwards as the horizon lengthens, which a
+  test pins over N ∈ [1, 1250] on a reverting series.
+  **Degrades rather than failing**, and says which: `Source` = `BLEND` / `CURRENT_ONLY` (no anchor)
+  / `ANCHOR_ONLY` / `NONE`, recorded per row and per calibration line. The anchor carries a quality
+  bar — `MIN_ANCHOR_RETURNS` (120): `PriceStats.dailyVol` shortens its window to whatever the series
+  offers rather than returning null, so a name listed four months ago would hand back a 60-session
+  "RV250" that is really current state under another name, and the blend would revert toward the
+  very thing it exists to correct.
+  **`Config` carries three reserved flags — `useDrift`, `useEventVar`, `useImpliedVol` — all default
+  false and all no-ops.** They are the declared seams for later stages (a drifted first passage,
+  scheduled-earnings variance inside the horizon, an implied-vol term structure), and they live on
+  the config precisely so those arrive *in `VolForecast`* and nowhere else; the P(N) call site takes
+  whatever σ_eff comes back and asks no questions. `halfLifeDays` and `gtcHorizonSessions` are
+  parameters, not constants, and are query params on `GET /orders?halfLife=&gtcSessions=` (and
+  `halfLife` on `/orders/touch`), the same "every knob is a query param" convention the strategy
+  tabs use.
+- **Calibration record.** Every priced order writes one line per snapshot to a dedicated logger
+  (`com.portfolio.calibration.touch` → `~/log/portfolio-bench-touch-calibration.log`, monthly
+  rolling, 36 kept, `additivity=false` so it stays out of the app log). The question it exists to
+  answer — did orders shown at P=60% fill about 60% of the time? — can only be asked months later,
+  and only against the model that produced the number, so each line carries the inputs as well as
+  the output: `broker symbol ref side limit current entered expiry sessions fromExpiry sigmaEff
+  decay volSource rv10 rv20 rv30 rv250 p pLow pHigh`, as `key=value` pairs (a later analysis is a
+  grep and a split, not a parser). The **probe path deliberately writes nothing** — a hypothetical
+  in the record is indistinguishable from a real order that never filled. `src/test/resources/
+  logback-test.xml` sets that logger to OFF for the same reason: a suite pricing fabricated orders
+  would file fabricated records among the real ones.
+
 - **Pre-trade limit probe (`Test a limit before you place it`).** The touch probability is the
   number that says whether a limit is ambitious or lazy, and until now it was only readable *after*
   the order existed at a broker — the wrong way round for calibrating one. A card at the top of the
@@ -632,9 +679,10 @@ to report the path. Sheet built by `ExcelReportWriter.ordersWorkbook(List<OpenOr
 Current / Amount / Amount GBP are real numbers formatted with the row's currency symbol via a
 per-cell number format (mixed £/$ reads naturally, stays sortable); II estimated prices carry a
 literal "~" in the format (`"~$"#,##0.00`), mirroring the screen while keeping the numeric value; the
-`Vs limit` column is a signed percent (`+0.00%;-0.00%`); the `RV10`/`RV30` daily-vol columns are
-`0.00%`, `σ→lim (5d)` a signed plain number (`+0.00;-0.00`) and `P(touch 5d)`/`P(touch 20d)` a `0.0%`
-percent (all via `setStyled`, raw fraction/number in the cell). (The Files-tab portfolio button was
+`Vs limit` column is a signed percent (`+0.00%;-0.00%`); the `RV10`/`RV30`/`σ eff` daily-vol columns
+are `0.00%`, `σ→lim (5d)` a signed plain number (`+0.00;-0.00`) and `P(touch 5d)` / `P(touch
+horizon)` / `P(low)` / `P(high)` a `0.0%` percent (all via `setStyled`, raw fraction/number in the
+cell). (The Files-tab portfolio button was
 renamed to "Download Excel" too — both write to ~/Documents.)
 
 ## Excel exports (all four buttons)

@@ -92,21 +92,33 @@
                 <span class="sub">touched within 5</span>
             </div>
             <div class="returns-stat">
-                <span class="label">P(20d)</span>
-                <span class="value" th:classappend="${o.touchProb20d == null ? 'na' : ''}"
-                      th:text="${o.touchProb20d != null ? #numbers.formatDecimal(o.touchProb20d.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '—'}">—</span>
-                <span class="sub">touched within 20</span>
-            </div>
-            <div class="returns-stat">
                 <span class="label" th:text="'P(' + ${o.horizonSessions} + ')'">P(N)</span>
                 <span class="value" th:classappend="${o.touchProbHorizon == null ? 'na' : (o.longHorizon() ? 'probe-long' : '')}"
                       th:title="${o.longHorizon()
-                            ? 'This horizon runs well past the column default, where the driftless assumption stops being a convention and becomes the dominant one — expected drift is by then far larger than the diffusion term. Directional, not a number to read to the decimal.'
+                            ? 'This horizon runs well past the order deadlines this estimate is built for, where the driftless assumption stops being a convention and becomes the dominant one — expected drift is by then far larger than the diffusion term. Directional, not a number to read to the decimal.'
                             : null}"
                       th:text="${o.touchProbHorizon != null
                             ? (o.longHorizon() ? '~' : '') + #numbers.formatDecimal(o.touchProbHorizon.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
                             : '—'}">—</span>
                 <span class="sub" th:text="'touched within ' + ${o.horizonSessions} + ' sessions'">touched within N</span>
+            </div>
+            <div class="returns-stat">
+                <span class="label">P(N) range</span>
+                <span class="value" th:classappend="${!o.hasTouchRange()} ? 'na' : ''"
+                      th:title="'The same probability computed off RV10 and off RV30 instead of the blended forecast. When the low end already clears the threshold you are deciding against, the call survives the volatility input being wrong; when only the high end does, it does not.'"
+                      th:text="${o.hasTouchRange()
+                            ? #numbers.formatDecimal(o.touchProbLow.multiply(100), 1, 'COMMA', 1, 'POINT') + '–' + #numbers.formatDecimal(o.touchProbHigh.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
+                            : '—'}">—</span>
+                <span class="sub">on RV10 / RV30</span>
+            </div>
+            <div class="returns-stat">
+                <span class="label">σ_eff</span>
+                <span class="value" th:classappend="${o.sigmaEff == null ? 'na' : ''}"
+                      th:title="'The daily σ the headline probability is scaled by: RV20 (current state) blended toward RV250 (the long-run anchor) over this horizon. Volatility mean-reverts, so what a multi-month horizon needs is the expected average variance over it, not the last month restated.'"
+                      th:text="${o.sigmaEff != null ? #numbers.formatDecimal(o.sigmaEff.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</span>
+                <span class="sub" th:text="${o.decayWeight != null
+                        ? #numbers.formatDecimal(o.decayWeight.multiply(100), 1, 'COMMA', 0, 'POINT') + '% current state'
+                        : 'daily σ forecast'}">daily σ forecast</span>
             </div>
         </div>
 
@@ -200,9 +212,8 @@
                 <th data-sort="num" title="Realized daily volatility over the last 10 sessions (sample stdev of daily log returns, not annualised)">RV10</th>
                 <th data-sort="num" title="Realized daily volatility over the last 30 sessions (not annualised)">RV30</th>
                 <th data-sort="num" title="Signed distance from the current price to your limit, in 5-session σ units: ln(limit ÷ current) ÷ (RV10 × √5). + = limit above the market">σ→lim</th>
-                <th data-sort="num" title="Probability the market touches your limit within 5 sessions — driftless first-passage 2·Φ(−|σ→lim|)">P(5d)</th>
-                <th data-sort="num" title="Probability the market touches your limit within 20 sessions — same first-passage estimate, σ scaled to a 20-session horizon">P(20d)</th>
-                <th data-sort="num" title="Probability the market touches your limit within N trading sessions — the same first-passage estimate as P(5d) and P(20d), on the same scale. Every row starts at 60 sessions (about a quarter) so the column is comparable across orders; type any number of sessions into a row's box to re-price just that row. Set it to 5 and the cell reproduces P(5d) exactly.">P(N)</th>
+                <th data-sort="num" title="Probability the market touches your limit within 5 sessions — driftless first-passage 2·Φ(−|σ→lim|), on the 5-session volatility forecast. The one horizon that is the same for every row.">P(5d)</th>
+                <th data-sort="num" title="Probability the market touches your limit before it expires: the same first-passage estimate over N = this order's own trading sessions to expiry (90 for a GTC order, which has no deadline of its own). σ is forecast for that horizon rather than measured over a trailing window of the same length — RV20 blended toward RV250 as the horizon lengthens, because volatility mean-reverts. Hover a cell for the forecast and the RV10/RV30 range; type into a row's box to re-price it over any horizon.">P(N)</th>
                 <th data-sort="num">Amount</th>
                 <th data-sort="num">Amount £</th>
                 <th class="txt" data-sort="text">Date entered</th>
@@ -234,22 +245,29 @@
                 <td th:text="${o.dailyVol30 != null ? #numbers.formatDecimal(o.dailyVol30.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>
                 <td th:text="${o.sigmaToLimit != null ? (o.sigmaToLimit.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.sigmaToLimit, 1, 'COMMA', 2, 'POINT') + 'σ' : '—'}">—</td>
                 <td th:text="${o.touchProb5d != null ? #numbers.formatDecimal(o.touchProb5d.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '—'}">—</td>
-                <td th:text="${o.touchProb20d != null ? #numbers.formatDecimal(o.touchProb20d.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '—'}">—</td>
                 <td class="touch-horizon"
-                    th:with="live=${o.baseVol() != null and o.currentPrice != null and o.price != null and o.price.signum() != 0}"
                     th:attr="data-sort-value=${o.touchProbHorizon != null ? o.touchProbHorizon : ''},
-                             data-current=${o.currentPrice}, data-limit=${o.price}, data-vol=${o.baseVol()}">
+                             data-current=${o.currentPrice}, data-limit=${o.price},
+                             data-rv10=${o.dailyVol10}, data-rv20=${o.dailyVol20},
+                             data-rv30=${o.dailyVol30}, data-rv250=${o.dailyVol250}">
                     <span class="ord-touch" th:classappend="${o.longHorizon()} ? 'long-horizon' : ''"
-                          th:title="${o.horizonSessions == null ? null : (o.horizonSessions + ' trading sessions'
-                                + (o.longHorizon() ? '. This horizon runs well past the column default, where the driftless assumption stops being a convention and becomes the dominant one — expected drift is by then far larger than the diffusion term. Directional, not a number to read to the decimal.' : ''))}"
+                          th:title="${o.horizonSessions == null ? null : (
+                                o.horizonSessions + ' trading sessions'
+                                + (o.horizonFromExpiry() ? ' — to this order''s own expiry' : ' — the GTC assumption, this order has no dated expiry')
+                                + (o.hasTouchRange() ? '. Range on RV10/RV30: ' + #numbers.formatDecimal(o.touchProbLow.multiply(100), 1, 'COMMA', 1, 'POINT') + '% – ' + #numbers.formatDecimal(o.touchProbHigh.multiply(100), 1, 'COMMA', 1, 'POINT') + '%' : '')
+                                + (o.sigmaEff != null ? '. σ_eff ' + #numbers.formatDecimal(o.sigmaEff.multiply(100), 1, 'COMMA', 2, 'POINT') + '%/day' : '')
+                                + (o.decayWeight != null ? ', ' + #numbers.formatDecimal(o.decayWeight.multiply(100), 1, 'COMMA', 0, 'POINT') + '% weight on current state (RV20), the rest on the RV250 anchor' : '')
+                                + (o.longHorizon() ? '. This horizon runs well past the order deadlines the column is built for, where the driftless assumption stops being a convention and becomes the dominant one — expected drift is by then far larger than the diffusion term. Directional, not a number to read to the decimal.' : ''))}"
                           th:text="${o.touchProbHorizon != null
                                 ? #numbers.formatDecimal(o.touchProbHorizon.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
                                 : '—'}">—</span>
+                    <span class="ord-range" th:if="${o.hasTouchRange()}"
+                          th:text="${#numbers.formatDecimal(o.touchProbLow.multiply(100), 1, 'COMMA', 0, 'POINT') + '–' + #numbers.formatDecimal(o.touchProbHigh.multiply(100), 1, 'COMMA', 0, 'POINT') + '%'}">0–0%</span>
                     <input type="number" class="ord-days" min="1" max="1250" step="1"
-                           th:if="${live}" th:value="${o.horizonSessions}" placeholder="sessions"
+                           th:if="${o.priceable()}" th:value="${o.horizonSessions}" placeholder="sessions"
                            th:title="${o.sessionsToExpiry != null
-                                ? 'Trading sessions this probability is priced over. This order expires ' + o.expiry.toString() + ', about ' + o.sessionsToExpiry + ' sessions away — set the box to that to ask whether it fills before it lapses.'
-                                : 'Trading sessions this probability is priced over. This order carries no dated expiry, so nothing but your own horizon bounds it.'}">
+                                ? 'Trading sessions this probability is priced over — this order expires ' + o.expiry.toString() + ', about ' + o.sessionsToExpiry + ' sessions away, so the cell already answers whether it fills before it lapses. Type another horizon to ask a different question.'
+                                : 'Trading sessions this probability is priced over. This order carries no dated expiry, so the column assumes 90 sessions — nothing but your own horizon bounds it.'}">
                 </td>
                 <td th:text="${o.amount != null ? o.currencySymbol + #numbers.formatDecimal(o.amount, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td th:text="${o.amountGbp != null ? '£' + #numbers.formatDecimal(o.amountGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
@@ -283,17 +301,31 @@
 
         <p class="muted" style="margin-top: 0.6rem; font-size: 0.85rem"
            th:unless="${orders.orders.isEmpty()}">
-            <strong>P(N)</strong> is the same touch estimate over a horizon you pick, in
-            <strong>trading sessions</strong> — the unit P(5d) and P(20d) already use, and the one σ
-            is scaled in (√sessions), so all three columns sit on one scale: type 5 into a box and
-            it reproduces that row's P(5d). Every row starts at <strong>60 sessions</strong>, about
-            a quarter; a common horizon is what makes the column comparable across orders, and each
-            row's box is editable, so an order's own deadline is a keystroke away — hover the box
-            and it tells you how many sessions that is. <strong>Read the whole column as indicative
-            rather than calibrated</strong> — the model assumes no drift, which is a fair convention
-            over a week and an assumption over a quarter; push a row much past six months and the
-            figure is <span class="ord-touch long-horizon" style="display:inline">marked</span> to
-            say so.
+            <strong>P(N)</strong> asks whether each order fills <strong>before it expires</strong>:
+            N is that order's own trading sessions to expiry, or <strong>90 sessions</strong> for a
+            GTC order, which has no deadline of its own. Sessions, not calendar days — the unit
+            P(5d) uses and the one σ is scaled in (√sessions); type 5 into a row's box and it
+            reproduces that row's P(5d).
+            <br/>
+            The volatility is <strong>forecast for the horizon, not measured over a trailing window
+            of the same length</strong>. Realized vol mean-reverts, so a name fresh off a violent
+            fortnight would otherwise be priced as though the next quarter stays violent, and a
+            sleepy one as though it stays asleep. What the model needs is the expected
+            <em>average</em> variance over the sessions ahead, so current state (RV20) is blended
+            toward a long-run anchor (RV250) with the weight decaying at a 20-session half-life:
+            <code>var_N = var_LR + (var_now − var_LR)·(1 − e^−κN)/κN</code>. Hover any cell for the
+            σ it used and how much of it was current state. The small figure under each probability
+            is the same estimate computed off <strong>RV10 and RV30</strong> instead: when the low
+            end already clears the threshold you are deciding against, the call survives the vol
+            input being wrong — when only the high end does, it needs a second look.
+            <br/>
+            <strong>Read the column as indicative rather than calibrated</strong> — the model
+            assumes no drift, a fair convention over a week and an assumption over a quarter; push a
+            row much past six months and the figure is
+            <span class="ord-touch long-horizon" style="display:inline">marked</span> to say so.
+            Every row priced here is written to a calibration log
+            (<code>~/log/portfolio-bench-touch-calibration.log</code>) with its σ, horizon and
+            forecast, so these probabilities can be scored against actual fills later.
         </p>
 
         <p class="muted" style="margin-top: 0.6rem; font-size: 0.85rem"

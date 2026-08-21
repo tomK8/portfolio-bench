@@ -11,6 +11,29 @@
         </encoder>
     </appender>
 
+    <!--
+      Calibration record: one line per priced open order per snapshot (sigma_eff, horizon, decay
+      weight, vol source and the resulting probability). It goes to its own dated file rather than
+      the application log because it is data, not diagnostics — the question it exists to answer
+      ("did orders shown at P=60% fill about 60% of the time?") can only be asked months later, and
+      only if the records are still there and not interleaved with everything else. additivity
+      false keeps them out of the main log; a snapshot per tab click would otherwise bury it.
+    -->
+    <appender name="CALIBRATION" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${user.home}/log/portfolio-bench-touch-calibration.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${user.home}/log/portfolio-bench-touch-calibration.%d{yyyy-MM}.log</fileNamePattern>
+            <maxHistory>36</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="com.portfolio.calibration" level="INFO" additivity="false">
+        <appender-ref ref="CALIBRATION"/>
+    </logger>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
     </root>

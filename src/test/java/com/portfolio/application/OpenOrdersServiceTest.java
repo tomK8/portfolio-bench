@@ -5,6 +5,7 @@ import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.OpenOrdersService.OrdersReport;
 import com.portfolio.domain.PriceStats;
+import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
@@ -26,6 +27,7 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -53,30 +55,36 @@ class OpenOrdersServiceTest {
     }
 
     @Test
-    void theHorizonIsInSessions_theSameUnitAsTheFixedTouchColumns() {
-        // The whole point of the column: P(5d)/P(20d) are trading sessions, σ scales by √sessions,
-        // and the daily vol comes from bars that only exist on trading days — so N is sessions too.
-        // Set the horizon to 5 and it must reproduce the row's P(5d) exactly, which is the check a
-        // reader can make on screen.
+    void theHorizonIsInSessions_theSameUnitAsTheFixedTouchColumn() {
+        // P(5d) is trading sessions, σ scales by √sessions, and the daily vol comes from bars that
+        // only exist on trading days — so N is sessions too. Set the horizon to 5 and it must
+        // reproduce the row's P(5d) exactly, which is the check a reader can make on screen. Note
+        // the σ that goes in is the *forecast at that horizon*, so this only holds because both
+        // columns resolve their σ the same way: it is the guard against a second vol model.
         OpenOrdersService svc = new OpenOrdersService(new HoldingFileLocator(outDir), List.of(),
                 FX, new ExcelReportWriter(), outDir, null, null, new YahooTickerMap(), null);
-        BigDecimal cur = new BigDecimal("523.96"), lim = new BigDecimal("560"), vol = new BigDecimal("0.01095087");
-        assertEquals(PriceStats.touchProbability(PriceStats.sigmaDistance(cur, lim, vol, 5)),
-                svc.touchEstimate(cur, lim, vol, 5).probability());
-        assertEquals(PriceStats.touchProbability(PriceStats.sigmaDistance(cur, lim, vol, 20)),
-                svc.touchEstimate(cur, lim, vol, 20).probability());
+        BigDecimal cur = new BigDecimal("523.96"), lim = new BigDecimal("560");
+        VolForecast.Inputs vols = new VolForecast.Inputs(new BigDecimal("0.0120"),
+                new BigDecimal("0.01095087"), new BigDecimal("0.0105"), new BigDecimal("0.0090"));
+        for (int n : new int[]{5, 20}) {
+            BigDecimal sigmaEff = VolForecast.resolve(vols, n, VolForecast.Config.DEFAULT).sigmaEff();
+            assertEquals(PriceStats.touchProbability(PriceStats.sigmaDistance(cur, lim, sigmaEff, n)),
+                    svc.touchEstimate(cur, lim, vols, n, VolForecast.Config.DEFAULT).probability(),
+                    "N = " + n + " sessions");
+        }
     }
 
     @Test
-    void theDefaultHorizonIsCommonToEveryRowAndDoesNotTripTheOverExtendedMark() {
-        // The P(N) column compares orders, so its horizon has to be the same on every row — an
-        // order's own expiry is a keystroke away in the view when that is the question instead.
-        assertEquals(60, OpenOrdersService.DEFAULT_HORIZON_SESSIONS);
-        // A mark that fires on every row on every load tells the reader nothing. The driftless
-        // caveat that genuinely applies at a quarter is stated once in the panel footnote; the
-        // per-row mark is reserved for a horizon pushed materially past the default.
+    void theGtcAssumptionDoesNotTripTheOverExtendedMark() {
+        // P(N) runs to each order's own expiry; the only horizon the panel invents is the one for
+        // an order with no deadline of its own, and that assumption must not flag itself.
+        assertEquals(VolForecast.Config.DEFAULT_GTC_HORIZON_SESSIONS,
+                OpenOrdersService.DEFAULT_HORIZON_SESSIONS);
+        // A mark that fires on every GTC row on every load tells the reader nothing. The driftless
+        // caveat that genuinely applies past a quarter is stated once in the panel footnote; the
+        // per-row mark is reserved for a horizon pushed materially past that.
         assertTrue(OpenOrdersService.DEFAULT_HORIZON_SESSIONS <= OpenOrder.LONG_HORIZON_SESSIONS,
-                "the standing default must not mark itself as over-extended");
+                "the GTC assumption must not mark itself as over-extended");
     }
 
     @Test
@@ -96,29 +104,144 @@ class OpenOrdersServiceTest {
     void touchEstimateRePricesOverAnArbitraryHorizon() {
         OpenOrdersService svc = new OpenOrdersService(new HoldingFileLocator(outDir), List.of(),
                 FX, new ExcelReportWriter(), outDir, null, null, new YahooTickerMap(), null);
-        BigDecimal cur = new BigDecimal("100"), lim = new BigDecimal("95"), vol = new BigDecimal("0.02");
+        BigDecimal cur = new BigDecimal("100"), lim = new BigDecimal("95");
+        VolForecast.Inputs vols = new VolForecast.Inputs(
+                new BigDecimal("0.02"), new BigDecimal("0.02"), new BigDecimal("0.02"), new BigDecimal("0.02"));
+        VolForecast.Config cfg = VolForecast.Config.DEFAULT;
 
-        OpenOrdersService.TouchEstimate near = svc.touchEstimate(cur, lim, vol, 5);
-        OpenOrdersService.TouchEstimate far = svc.touchEstimate(cur, lim, vol, 300);
+        OpenOrdersService.TouchEstimate near = svc.touchEstimate(cur, lim, vols, 5, cfg);
+        OpenOrdersService.TouchEstimate far = svc.touchEstimate(cur, lim, vols, 300, cfg);
         assertTrue(near.probability().compareTo(far.probability()) < 0,
                 "same barrier, more time — the probability can only grow");
         assertTrue(near.sessions() < far.sessions());
         assertTrue(near.sigma().compareTo(far.sigma()) < 0, "σ distance shrinks as the horizon grows");
 
-        // A horizon pushed well past the column's default is flagged rather than silently served;
-        // the default itself is not (see the default-horizon test above).
+        // The re-price carries its own forecast, not just a number: a probability read off this
+        // endpoint has to be judgeable against the σ that produced it, same as a rendered row.
+        assertNotNull(near.sigmaEff());
+        assertNotNull(near.decay());
+        assertEquals(VolForecast.Source.BLEND.name(), near.volSource());
+        assertNotNull(near.probabilityLow());
+        assertNotNull(near.probabilityHigh());
+
+        // A horizon pushed well past the order deadlines the column is built for is flagged rather
+        // than silently served; the GTC default itself is not (see the default-horizon test above).
         assertFalse(near.longHorizon());
-        assertFalse(svc.touchEstimate(cur, lim, vol, OpenOrdersService.DEFAULT_HORIZON_SESSIONS).longHorizon());
+        assertFalse(svc.touchEstimate(cur, lim, vols, OpenOrdersService.DEFAULT_HORIZON_SESSIONS, cfg).longHorizon());
         assertTrue(far.longHorizon());
 
         // Clamped, not rejected — a stray keystroke can't ask for an absurd horizon.
-        assertEquals(OpenOrdersService.MAX_HORIZON_SESSIONS, svc.touchEstimate(cur, lim, vol, 999999).sessions());
-        assertEquals(1, svc.touchEstimate(cur, lim, vol, 0).sessions());
+        assertEquals(OpenOrdersService.MAX_HORIZON_SESSIONS,
+                svc.touchEstimate(cur, lim, vols, 999999, cfg).sessions());
+        assertEquals(1, svc.touchEstimate(cur, lim, vols, 0, cfg).sessions());
 
         // Missing inputs (no limit, no quote, no vol) give null rather than a fabricated number.
-        assertNull(svc.touchEstimate(cur, null, vol, 5).probability());
-        assertNull(svc.touchEstimate(null, lim, vol, 5).probability());
-        assertNull(svc.touchEstimate(cur, lim, null, 5).probability());
+        assertNull(svc.touchEstimate(cur, null, vols, 5, cfg).probability());
+        assertNull(svc.touchEstimate(null, lim, vols, 5, cfg).probability());
+        assertNull(svc.touchEstimate(cur, lim, VolForecast.Inputs.NONE, 5, cfg).probability());
+    }
+
+    @Test
+    void theHorizonIsTheOrdersOwnSessionsToExpiryAndTheGtcAssumptionOtherwise(@TempDir Path dir) throws Exception {
+        // The whole point of the column: an order's deadline is a property of the order. A dated
+        // AJ Bell order is priced to its expiry; a Roth GTC order, having none, takes the parameter.
+        Files.writeString(dir.resolve("activeorders-1.csv"), """
+                Date entered,Type,Investment,Order type,Quantity,Price,Amount,Expiry date,Status,Reference
+                14/07/2026,Buy,Invesco EQQQ NASDAQ-100 ETF,Limit,50,50000p,"25000.00",%s,In progress,ref1
+                """.formatted(LocalDate.now().plusDays(30).format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))));
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        // Seeded under the Yahoo ticker, not the internal symbol: EQQQ maps to EQQQ.L, and a row
+        // that never resolves a quote would price nothing and assert nothing.
+        seedPrices(history, intraday, "EQQQ.L", "GBp", 51000.0, 52000.0);
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new AJBellOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, history, new YahooTickerMap(), new KeyValueStore(dir.resolve("db")));
+
+        OpenOrder dated = find(service.load().orders(), "EQQQ");
+        assertNotNull(dated.sessionsToExpiry());
+        assertEquals(dated.sessionsToExpiry(), dated.horizonSessions(),
+                "a dated order is priced to its own expiry");
+        assertTrue(dated.horizonFromExpiry());
+
+        // The GTC assumption is a parameter, not a constant: the same order set priced under a
+        // different assumption moves only the rows that had no deadline of their own.
+        OpenOrder gtcDefault = service.probe("EQQQ", new BigDecimal("500"), "Buy", null).hypothetical();
+        assertEquals(VolForecast.Config.DEFAULT_GTC_HORIZON_SESSIONS, gtcDefault.horizonSessions());
+        OpenOrder gtcTuned = service.probe("EQQQ", new BigDecimal("500"), "Buy", null,
+                VolForecast.Config.of(null, 30)).hypothetical();
+        assertEquals(30, gtcTuned.horizonSessions());
+        assertTrue(gtcTuned.touchProbHorizon().compareTo(gtcDefault.touchProbHorizon()) < 0,
+                "a shorter assumed horizon is a lower probability of touching");
+    }
+
+    @Test
+    void theHeadlineVolIsForecastForTheHorizonRatherThanMeasuredOverIt(@TempDir Path dir) {
+        // A name fresh off a violent stretch: RV20 well above its RV250 anchor. A trailing-window
+        // model would price a long horizon at that elevated vol; the blend has to pull it back
+        // toward the anchor as the horizon lengthens, and say how much weight it left on RV20.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedVolatileTail(history, intraday, "WMT");
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                FX, new ExcelReportWriter(), outDir, intraday, history, new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")));
+
+        BigDecimal limit = new BigDecimal("90.00");
+        OpenOrder near = service.probe("WMT", limit, "Buy", 5).hypothetical();
+        OpenOrder far = service.probe("WMT", limit, "Buy", 250).hypothetical();
+
+        assertNotNull(near.dailyVol250(), "the anchor is loaded — the lookback covers 250 sessions");
+        assertTrue(near.dailyVol20().compareTo(near.dailyVol250()) > 0, "recent vol is elevated here");
+        assertTrue(far.sigmaEff().compareTo(near.sigmaEff()) < 0,
+                "the long horizon must revert toward the anchor: " + far.sigmaEff() + " vs " + near.sigmaEff());
+        assertTrue(near.decayWeight().doubleValue() > 0.9, "a 5-session horizon is nearly all current state");
+        assertTrue(far.decayWeight().doubleValue() < 0.2, "a 250-session horizon is nearly all anchor");
+        assertEquals(VolForecast.Source.BLEND.name(), far.volSource());
+        // Reverting σ downward must not make a longer horizon less likely to touch — total variance
+        // still grows with N, and the column would be nonsense if it didn't.
+        assertTrue(far.touchProbHorizon().compareTo(near.touchProbHorizon()) > 0);
+        // Near the front the blend sits inside the RV10/RV30 band, so the hover range brackets the
+        // headline the way a reader expects.
+        assertTrue(near.hasTouchRange());
+        assertTrue(near.touchProbLow().compareTo(near.touchProbHorizon()) <= 0
+                        && near.touchProbHorizon().compareTo(near.touchProbHigh()) <= 0,
+                "5-session headline should sit inside its range: " + near.touchProbLow()
+                        + " ≤ " + near.touchProbHorizon() + " ≤ " + near.touchProbHigh());
+
+        // Far out it deliberately does not, and that is the finding rather than a defect: RV10 and
+        // RV30 are flat trailing windows, so the range shows what the old same-length-window model
+        // would have said. With a violent recent tail it says a materially higher probability than
+        // the reverting forecast does — which is exactly the overstatement this change removed.
+        assertTrue(far.hasTouchRange());
+        assertTrue(far.touchProbHorizon().compareTo(far.touchProbLow()) < 0,
+                "a reverting forecast should sit below the flat-window band at 250 sessions: "
+                        + far.touchProbHorizon() + " vs " + far.touchProbLow());
+    }
+
+    @Test
+    void aShortHistoryHasNoAnchorAndSaysSoRatherThanInventingOne(@TempDir Path dir) {
+        // PriceStats.dailyVol shortens its window to whatever the series offers, which for a
+        // freshly-listed name would hand back a 60-session "RV250" that is really current state
+        // under another name — and the blend would then revert toward the very thing it corrects.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);   // ~40 bars
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                FX, new ExcelReportWriter(), outDir, intraday, history, new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")));
+
+        OpenOrder o = service.probe("WMT", new BigDecimal("108.00"), "Buy", 90).hypothetical();
+        assertNull(o.dailyVol250(), "no long-run anchor from 40 bars");
+        assertEquals(VolForecast.Source.CURRENT_ONLY.name(), o.volSource());
+        assertNotNull(o.touchProbHorizon(), "and it still prices — degraded, not blank");
+        assertEquals(o.dailyVol20(), o.sigmaEff(), "with no anchor, σ_eff is current state itself");
     }
 
     @Test
@@ -206,12 +329,15 @@ class OpenOrdersServiceTest {
         assertNotNull(nvda.currentPrice(), "daily-close fallback fills current");
         assertNotNull(nvda.sigmaToLimit(), "σ distance computed from current + limit + RV10");
         assertNotNull(nvda.touchProb5d());
-        assertNotNull(nvda.touchProb20d());
+        assertNotNull(nvda.touchProbHorizon());
         double p = nvda.touchProb5d().doubleValue();
         assertTrue(p >= 0.0 && p <= 1.0, "touch probability is a valid probability");
-        // longer horizon can only raise the touch probability (same barrier, more time)
-        assertTrue(nvda.touchProb20d().doubleValue() >= p - 1e-9,
-                "P(touch 20d) ≥ P(touch 5d) for the same limit");
+        // The order is GTC (II exports no expiry), so P(N) runs over the GTC assumption — a longer
+        // horizon than 5 sessions, and the same barrier, so it can only be larger.
+        assertEquals(VolForecast.Config.DEFAULT_GTC_HORIZON_SESSIONS, nvda.horizonSessions());
+        assertFalse(nvda.horizonFromExpiry());
+        assertTrue(nvda.touchProbHorizon().doubleValue() >= p - 1e-9,
+                "P(N) ≥ P(5d) for the same limit over a longer horizon");
     }
 
     @Test
@@ -421,6 +547,27 @@ class OpenOrdersServiceTest {
                 ticker, java.time.Instant.now(), quote, null, currency)));
     }
 
+    /**
+     * A long, calm history with a violent recent tail: ~300 sessions at ±0.4% a day, then 25 at
+     * ±4%. RV20 lands well above the RV250 anchor, which is exactly the shape a same-length
+     * trailing window gets wrong — it would price a year-out horizon off the panic fortnight.
+     */
+    private static void seedVolatileTail(PriceHistoryRepository history,
+                                         IntradayPriceRepository intraday, String ticker) {
+        List<com.portfolio.domain.model.PriceBar> bars = new java.util.ArrayList<>();
+        LocalDate d = LocalDate.now().minusDays(400);
+        double px = 100.0;
+        for (int i = 0; i < 325; i++) {
+            double step = (i < 300) ? 0.004 : 0.04;
+            px *= (i % 2 == 0) ? (1 + step) : (1 / (1 + step));
+            bars.add(new com.portfolio.domain.model.PriceBar(ticker, d, px, px, px, px, px, 1.0, 1L, "USD"));
+            d = d.plusDays(1);
+        }
+        history.savePriceBars(bars);
+        intraday.saveIntradayBars(List.of(new com.portfolio.domain.model.IntradayBar(
+                ticker, java.time.Instant.now(), px, null, "USD")));
+    }
+
     @Test
     void probeReportsExactlyWhatTheTableWouldForTheSameLimit(@TempDir Path dir) throws Exception {
         // The whole design claim: a hypothetical order is the same object as a real one, built
@@ -449,8 +596,13 @@ class OpenOrdersServiceTest {
         assertEquals(resting.dailyVol30(), hypothetical.dailyVol30(), "RV30");
         assertEquals(resting.sigmaToLimit(), hypothetical.sigmaToLimit(), "σ→lim");
         assertEquals(resting.touchProb5d(), hypothetical.touchProb5d(), "P(5d)");
-        assertEquals(resting.touchProb20d(), hypothetical.touchProb20d(), "P(20d)");
-        assertEquals(resting.touchProbHorizon(), hypothetical.touchProbHorizon(), "P(N) at the default horizon");
+        assertEquals(resting.sigmaEff(), hypothetical.sigmaEff(), "σ_eff");
+        assertEquals(resting.volSource(), hypothetical.volSource(), "vol source");
+        assertEquals(resting.touchProbHorizon(), hypothetical.touchProbHorizon(), "P(N)");
+        assertEquals(resting.touchProbLow(), hypothetical.touchProbLow(), "P(N) low");
+        assertEquals(resting.touchProbHigh(), hypothetical.touchProbHigh(), "P(N) high");
+        // The resting order is a II one, so it carries no dated expiry either — both land on the
+        // GTC assumption, which is what makes the two directly comparable here.
         assertEquals(OpenOrdersService.DEFAULT_HORIZON_SESSIONS, hypothetical.horizonSessions());
     }
 
@@ -470,8 +622,6 @@ class OpenOrdersServiceTest {
         BigDecimal limit = new BigDecimal("108.00");
         OpenOrder five = service.probe("WMT", limit, "Buy", 5).hypothetical();
         assertEquals(five.touchProb5d(), five.touchProbHorizon(), "N = 5 sessions is P(5d)");
-        OpenOrder twenty = service.probe("WMT", limit, "Buy", 20).hypothetical();
-        assertEquals(twenty.touchProb20d(), twenty.touchProbHorizon(), "N = 20 sessions is P(20d)");
         // Clamped, not rejected — a stray keystroke can't ask for an absurd horizon.
         assertEquals(1, service.probe("WMT", limit, "Buy", 0).hypothetical().horizonSessions());
         assertEquals(OpenOrdersService.MAX_HORIZON_SESSIONS,

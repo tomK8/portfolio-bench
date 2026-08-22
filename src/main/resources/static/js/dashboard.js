@@ -2251,11 +2251,18 @@
          * positions keeps the rows summing to the bucket exactly.
          */
         /**
-         * Group a bucket's constituents by Yahoo industry, biggest group first, each with its own
-         * subtotal and share of the bucket.
+         * Group a bucket's constituents, biggest group first, each with its own subtotal and share
+         * of the bucket.
          *
-         * Two deliberate behaviours. A bucket whose holdings all share one industry (or have none)
-         * comes back as a single unheaded group, so the popup is unchanged where there is nothing
+         * The heading is the *maintained* group where sectors.properties names one ("Banks",
+         * "Insurance"), otherwise Yahoo's own industry. Yahoo's taxonomy is finer than anyone reads
+         * a portfolio at — Financials arrives as six industries, splitting four banks and three
+         * insurers into groups of one and two — and the mapping collapses it. An unmapped industry
+         * deliberately keeps its raw name and appears as its own group: that is the signal a
+         * mapping is missing, which an "Other" bin would swallow.
+         *
+         * Two behaviours carried over unchanged. A bucket whose holdings all land in one group
+         * comes back as a single unheaded group, so the popup is as it was where there is nothing
          * to split. And fund slices are pooled under one "via funds" heading rather than being
          * given an industry: Yahoo publishes sectorWeightings at sector level only, so a fund's
          * contribution genuinely spans the whole sector and labelling it would be invention.
@@ -2266,7 +2273,7 @@
             var order = [];
             list.forEach(function (c) {
                 var name = c.viaFund ? 'via funds — sector-level only'
-                    : (c.industry || 'Industry not classified');
+                    : (c.industryGroup || c.industry || 'Industry not classified');
                 if (!byName[name]) {
                     byName[name] = {name: name, gbp: 0, items: [], viaFund: !!c.viaFund};
                     order.push(name);
@@ -2298,22 +2305,26 @@
 
             var list = row.constituents || [];
             var html = '<tr><th class="lbl">Holding</th><th>Value</th><th>% of sector</th>'
+                + '<th class="lbl" title="Yahoo\'s own industry, shipped verbatim. The group '
+                + 'headings above collapse these; keeping the raw value here is what makes an '
+                + 'upstream reclassification visible instead of silently overridden.">'
+                + 'Yahoo industry</th>'
                 + '<th class="lbl">How</th></tr>';
             if (!list.length) {
-                html += '<tr><td colspan="4" class="muted">No detail available.</td></tr>';
+                html += '<tr><td colspan="5" class="muted">No detail available.</td></tr>';
             }
             var isCash = bucket === 'CASH';
 
-            // Grouped by industry, with subtotals. A GICS sector can hold businesses with quite
-            // different drivers — Financials is banks, insurers and payment networks in one row —
-            // and the industry is already on each holding, so the split costs nothing but a sort.
-            // Groups only appear when there is more than one: a single-industry sector reads
+            // Grouped with subtotals. A GICS sector can hold businesses with quite different
+            // drivers — Financials is banks, insurers, payment networks and a data vendor in one
+            // row — and the group is already on each holding, so the split costs nothing but a
+            // sort. Groups only appear when there is more than one: a single-group sector reads
             // exactly as it did before.
             groupByIndustry(list).forEach(function (g) {
                 if (g.showHeading) {
                     html += '<tr class="sector-industry"><td class="lbl">' + escapeHtml(g.name)
                         + '</td><td>' + fmtMoney(g.gbp) + '</td><td>' + fmtPct(g.share)
-                        + '</td><td></td></tr>';
+                        + '</td><td></td><td></td></tr>';
                 }
                 g.items.forEach(function (c) {
                     var how = isCash ? 'cash balance'
@@ -2321,17 +2332,28 @@
                             ? 'via fund' + (c.shareOfPosition != null
                                 ? ' (' + fmtPct(c.shareOfPosition) + ' of ' + escapeHtml(c.label) + ')' : '')
                             : 'held directly';
+                    // The raw feed value sits beside the group it was mapped into. A per-symbol
+                    // override is marked, because it is the one layer that goes on asserting its
+                    // group whatever Yahoo later says — so it is the one worth checking this
+                    // column against.
+                    var raw = c.viaFund || !c.industry ? '—' : escapeHtml(c.industry);
+                    if (c.industryOverride) {
+                        raw += ' <span class="industry-override" title="Grouped under &quot;'
+                            + escapeHtml(c.industryGroup || '') + '&quot; by a per-symbol override '
+                            + 'in sectors.properties, not by this industry.">override</span>';
+                    }
                     html += '<tr' + (g.showHeading ? ' class="sector-industry-member"' : '') + '>'
                         + '<td class="lbl">' + escapeHtml(c.label) + '</td>'
                         + '<td>' + fmtMoney(parseFloat(c.gbp)) + '</td>'
                         + '<td>' + fmtPct(c.pctOfBucket) + '</td>'
+                        + '<td class="lbl muted">' + raw + '</td>'
                         + '<td class="lbl muted' + (c.viaFund ? ' sector-viafund' : '') + '">' + how + '</td>'
                         + '</tr>';
                 });
             });
             html += '<tr style="font-weight:600;border-top:2px solid #ccc;">'
                 + '<td class="lbl">Total</td><td>' + fmtMoney(parseFloat(row.gbp)) + '</td>'
-                + '<td>100.0%</td><td></td></tr>';
+                + '<td>100.0%</td><td></td><td></td></tr>';
             document.getElementById('sector-detail-table').innerHTML = html;
             document.getElementById('sector-detail-modal').classList.add('open');
         }

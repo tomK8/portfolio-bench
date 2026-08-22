@@ -430,6 +430,21 @@
             padding-left: 1.2rem;
         }
 
+        /* Marks a holding whose group was asserted per-symbol rather than derived from the
+           industry beside it — the one case where the raw column is worth re-reading. */
+        #sector-detail-modal .industry-override {
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            padding: 0.05rem 0.3rem;
+            margin-left: 0.3rem;
+            border-radius: 3px;
+            background: var(--amber-bg, #fff3cd);
+            color: var(--amber-fg, #7a5b00);
+            cursor: help;
+        }
+
         /* The one model switch for the whole panel, above the table. */
         .model-controls {
             display: flex;

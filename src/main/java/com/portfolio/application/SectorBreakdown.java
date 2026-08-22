@@ -55,8 +55,11 @@ public record SectorBreakdown(
                               boolean viaFund,
                               BigDecimal shareOfPosition,
                               /**
-                               * Yahoo's industry for a directly-held position ("Banks - Regional",
-                               * "Credit Services"), or null for a fund slice.
+                               * Yahoo's own industry for a directly-held position ("Banks -
+                               * Regional", "Credit Services"), or null for a fund slice. Shipped
+                               * <b>verbatim</b> and shown in its own column beside the group, so an
+                               * upstream reclassification is visible rather than silently absorbed
+                               * by a mapping that goes on asserting the old answer.
                                *
                                * <p>Null on a fund is a fact, not a gap: {@code sectorWeightings} is
                                * published at <em>sector</em> level only, so a fund's contribution to
@@ -64,7 +67,24 @@ public record SectorBreakdown(
                                * error as guessing an earnings date. The drill-down groups those
                                * slices under their own heading and says so.
                                */
-                              String industry) {
+                              String industry,
+                              /**
+                               * The maintained group {@code industry} collapses into ("Banks",
+                               * "Insurance"), from {@code sectors.properties} via {@link
+                               * com.portfolio.domain.IndustryGroups} — or null when no mapping
+                               * names one, in which case the drill-down groups by {@code industry}
+                               * itself. Null is deliberately not "Other": an unmapped industry
+                               * appearing as its own one-row group is the signal that a mapping is
+                               * missing.
+                               */
+                              String industryGroup,
+                              /**
+                               * True when {@code industryGroup} came from a per-symbol override
+                               * rather than from the industry map — i.e. the group is asserted in
+                               * spite of the feed. That is the one layer an upstream change cannot
+                               * dislodge, so the UI marks it.
+                               */
+                              boolean industryOverride) {
     }
 
     /**

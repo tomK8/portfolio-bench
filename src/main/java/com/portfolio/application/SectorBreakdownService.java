@@ -2,6 +2,7 @@ package com.portfolio.application;
 
 import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
 import com.portfolio.application.AllocationService.AllocationPoint;
+import com.portfolio.domain.IndustryGroups;
 import com.portfolio.domain.SectorBucket;
 import com.portfolio.domain.SectorClassifier;
 import com.portfolio.persistence.FundamentalsRepository;
@@ -41,15 +42,18 @@ public class SectorBreakdownService {
     private final AllocationService allocationService;
     private final FundamentalsRepository fundamentalsRepo;
     private final SectorClassifier classifier;
+    private final IndustryGroups industryGroups;
     private final FundamentalsWarmer warmer;
 
     public SectorBreakdownService(AllocationService allocationService,
                                   FundamentalsRepository fundamentalsRepo,
                                   SectorClassifier classifier,
+                                  IndustryGroups industryGroups,
                                   FundamentalsWarmer warmer) {
         this.allocationService = allocationService;
         this.fundamentalsRepo = fundamentalsRepo;
         this.classifier = classifier;
+        this.industryGroups = industryGroups;
         this.warmer = warmer;
     }
 
@@ -105,13 +109,18 @@ public class SectorBreakdownService {
                 if (b.getValue().signum() == 0) continue;
                 total.merge(b.getKey(), b.getValue(), BigDecimal::add);
                 (c.fund() ? viaFund : direct).merge(b.getKey(), b.getValue(), BigDecimal::add);
+                // Industry rides along from the same cached quote the sector came from — already
+                // fetched, never a second call. Only meaningful for a direct holding; a fund's
+                // slice spans a whole sector. The raw value and the maintained group both travel:
+                // the group is what the drill-down reads, the raw value is what shows it drifting.
+                String industry = c.fund() || quote == null ? null : quote.labels().get("industry");
+                IndustryGroups.Group group = c.fund() ? null : industryGroups.groupFor(symbol, industry);
                 members.computeIfAbsent(b.getKey(), k -> new ArrayList<>())
                         .add(new SectorBreakdown.Constituent(symbol, b.getValue(), null, c.fund(),
                                 c.fund() ? fraction(b.getValue(), gbp) : null,
-                                // Industry rides along from the same cached quote the sector came
-                                // from — already fetched, never a second call. Only meaningful for
-                                // a direct holding; a fund's slice spans a whole sector.
-                                c.fund() || quote == null ? null : quote.labels().get("industry")));
+                                industry,
+                                group == null ? null : group.name(),
+                                group != null && group.bySymbol()));
                 if (b.getKey() == SectorBucket.UNCLASSIFIED) {
                     String state = dataState(cache.get(symbol));
                     if (!"NO_SECTOR".equals(state)) awaitingData.add(symbol);
@@ -153,7 +162,8 @@ public class SectorBreakdownService {
             for (Map.Entry<String, BigDecimal> e : snapshot.cashGbpByAccountCcy().entrySet()) {
                 members.computeIfAbsent(SectorBucket.CASH, k -> new ArrayList<>())
                         .add(new SectorBreakdown.Constituent(
-                                e.getKey().replace("|", " · "), e.getValue(), null, false, null, null));
+                                e.getKey().replace("|", " · "), e.getValue(), null, false,
+                                null, null, null, false));
             }
         }
 
@@ -210,7 +220,8 @@ public class SectorBreakdownService {
         List<SectorBreakdown.Constituent> out = new ArrayList<>();
         for (SectorBreakdown.Constituent c : members) {
             out.add(new SectorBreakdown.Constituent(c.label(), scaled(c.gbp()),
-                    fraction(c.gbp(), bucketTotal), c.viaFund(), c.shareOfPosition(), c.industry()));
+                    fraction(c.gbp(), bucketTotal), c.viaFund(), c.shareOfPosition(),
+                    c.industry(), c.industryGroup(), c.industryOverride()));
         }
         out.sort(Comparator.comparing(SectorBreakdown.Constituent::gbp).reversed());
         return List.copyOf(out);

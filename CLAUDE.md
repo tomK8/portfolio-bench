@@ -1817,17 +1817,41 @@ invested.
   0%**; a popup built on that would look like a full decomposition while showing a third of one.
   Positions keep every penny accounted for — constituents sum to the bucket and `pctOfBucket` sums
   to 1. The `CASH` bucket's constituents are the per-`(account, currency)` balances.
-  **Constituents are grouped by Yahoo industry with subtotals** (`Constituent.industry`, from the
-  same cached quote the sector came from — no extra fetch). A GICS sector can hold businesses with
-  quite different drivers: Financials is £168k of banks, insurers, an asset manager and two payment
-  networks in one row, and the industry split is what shows BNP and LGEN are 70% of it between them.
+  **Constituents are grouped by industry with subtotals** (from the same cached quote the sector
+  came from — no extra fetch). A GICS sector can hold businesses with quite different drivers:
+  Financials is £168k of banks, insurers, payment networks and a data vendor in one row, and the
+  split is what shows BNP and LGEN are 70% of it between them.
+
+  **The heading is a maintained group, not Yahoo's raw industry** — `domain/IndustryGroups`, read
+  from `sectors.properties`. Yahoo's taxonomy is finer than anyone reads a portfolio at: Financials
+  arrives as six industries, splitting four banks and three insurers into groups of one and two.
+  Two layers, and the order between them is the design. `industry.group.<slug>` maps a **Yahoo
+  industry** to a group and is self-regulating — buy another regional bank and it lands in Banks
+  with no edit, because the key is what the feed says rather than a list of symbols.
+  `industry.override.<SYMBOL>` maps a **single holding** and wins, reserved for where the feed is
+  wrong about the business: Yahoo files LGEN under "Asset Management", which describes what L&G
+  does with the float rather than what it sells. Keys are slugs (lowercase, runs of
+  non-alphanumerics → one hyphen), so one key matches "Banks - Diversified", "Banks—Diversified"
+  and "Banks Diversified" — Yahoo has used the hyphen and the em dash for the same industry, and a
+  key that broke on the difference would be a mapping that silently stopped applying.
+  **An unmapped industry falls through to its own raw name, never to an "Other" bin**: a new
+  industry then appears as its own one-row group the day it shows up, which is the signal that a
+  mapping is missing. The map is currently scoped to Financials (Banks £74.8k / Insurance £80.1k /
+  Payments £7.0k / Financial Data £4.3k); every other sector groups by its raw industry as before.
+
+  **Yahoo's own value ships alongside in its own column** (`Constituent.industry` verbatim, beside
+  `industryGroup`). A per-symbol override is the one layer an upstream change cannot dislodge — it
+  goes on asserting its group whatever the feed later says — so those rows carry an amber
+  `override` badge (`Constituent.industryOverride`) and the raw column is what makes a
+  reclassification visible rather than silently overridden.
+
   The grouping is **drill-down only, never a top-level row**, and the distinction is the whole
   reason the Consumer split was possible and this one isn't: Cyclical/Defensive are two *sectors*
   Yahoo publishes separately in both shapes, including inside a fund's `sectorWeightings`, whereas
   industries exist only on direct holdings — `sectorWeightings` is sector-level, so a fund's slice
   has no industry at all. Promoting industries to table rows would mix two taxonomies in one
   partition and leave every fund slice homeless. Fund slices are instead pooled under a
-  "via funds — sector-level only" heading, and a bucket whose holdings share one industry renders
+  "via funds — sector-level only" heading, and a bucket whose holdings land in one group renders
   exactly as before (headings appear only when there is more than one group). The row
   click-handler is **delegated from the `<table>`**, since `renderSectorTable` replaces its
   innerHTML on every basis toggle.

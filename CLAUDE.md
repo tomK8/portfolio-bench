@@ -1728,7 +1728,19 @@ invested.
   fundamentals cache, so resolvable coverage runs EQQQ 46.3% / SPX5 36.4% / **RBTX 5.9% / MCTS
   0%**; a popup built on that would look like a full decomposition while showing a third of one.
   Positions keep every penny accounted for — constituents sum to the bucket and `pctOfBucket` sums
-  to 1. The `CASH` bucket's constituents are the per-`(account, currency)` balances. The row
+  to 1. The `CASH` bucket's constituents are the per-`(account, currency)` balances.
+  **Constituents are grouped by Yahoo industry with subtotals** (`Constituent.industry`, from the
+  same cached quote the sector came from — no extra fetch). A GICS sector can hold businesses with
+  quite different drivers: Financials is £168k of banks, insurers, an asset manager and two payment
+  networks in one row, and the industry split is what shows BNP and LGEN are 70% of it between them.
+  The grouping is **drill-down only, never a top-level row**, and the distinction is the whole
+  reason the Consumer split was possible and this one isn't: Cyclical/Defensive are two *sectors*
+  Yahoo publishes separately in both shapes, including inside a fund's `sectorWeightings`, whereas
+  industries exist only on direct holdings — `sectorWeightings` is sector-level, so a fund's slice
+  has no industry at all. Promoting industries to table rows would mix two taxonomies in one
+  partition and leave every fund slice homeless. Fund slices are instead pooled under a
+  "via funds — sector-level only" heading, and a bucket whose holdings share one industry renders
+  exactly as before (headings appear only when there is more than one group). The row
   click-handler is **delegated from the `<table>`**, since `renderSectorTable` replaces its
   innerHTML on every basis toggle.
 

@@ -405,6 +405,18 @@
             opacity: 0.45;
         }
 
+        /* Industry subtotals inside the sector drill-down: a heading row per industry, its members
+           indented beneath. Only rendered when a bucket actually holds more than one. */
+        #sector-detail-modal tr.sector-industry td {
+            font-weight: 600;
+            padding-top: 0.5rem;
+            border-bottom: 1px solid var(--border, #ddd);
+        }
+
+        #sector-detail-modal tr.sector-industry-member td:first-child {
+            padding-left: 1.2rem;
+        }
+
         /* The one model switch for the whole panel, above the table. */
         .model-controls {
             display: flex;

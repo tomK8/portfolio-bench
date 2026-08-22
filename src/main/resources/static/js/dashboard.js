@@ -2250,6 +2250,41 @@
          * only a fund's top 10 and several of ours resolve almost none of themselves. Listing
          * positions keeps the rows summing to the bucket exactly.
          */
+        /**
+         * Group a bucket's constituents by Yahoo industry, biggest group first, each with its own
+         * subtotal and share of the bucket.
+         *
+         * Two deliberate behaviours. A bucket whose holdings all share one industry (or have none)
+         * comes back as a single unheaded group, so the popup is unchanged where there is nothing
+         * to split. And fund slices are pooled under one "via funds" heading rather than being
+         * given an industry: Yahoo publishes sectorWeightings at sector level only, so a fund's
+         * contribution genuinely spans the whole sector and labelling it would be invention.
+         */
+        function groupByIndustry(list) {
+            var total = list.reduce(function (a, c) { return a + parseFloat(c.gbp); }, 0);
+            var byName = {};
+            var order = [];
+            list.forEach(function (c) {
+                var name = c.viaFund ? 'via funds — sector-level only'
+                    : (c.industry || 'Industry not classified');
+                if (!byName[name]) {
+                    byName[name] = {name: name, gbp: 0, items: [], viaFund: !!c.viaFund};
+                    order.push(name);
+                }
+                byName[name].gbp += parseFloat(c.gbp);
+                byName[name].items.push(c);
+            });
+            var groups = order.map(function (n) { return byName[n]; });
+            groups.sort(function (a, b) { return b.gbp - a.gbp; });
+            var multiple = groups.length > 1;
+            groups.forEach(function (g) {
+                g.share = total > 0 ? g.gbp / total : 0;
+                g.showHeading = multiple;
+                g.items.sort(function (a, b) { return parseFloat(b.gbp) - parseFloat(a.gbp); });
+            });
+            return groups;
+        }
+
         function openSectorDetail(bucket) {
             if (!sectorData) return;
             var row = (sectorData.rows || []).filter(function (r) { return r.bucket === bucket; })[0];
@@ -2268,18 +2303,31 @@
                 html += '<tr><td colspan="4" class="muted">No detail available.</td></tr>';
             }
             var isCash = bucket === 'CASH';
-            list.forEach(function (c) {
-                var how = isCash ? 'cash balance'
-                    : c.viaFund
-                        ? 'via fund' + (c.shareOfPosition != null
-                            ? ' (' + fmtPct(c.shareOfPosition) + ' of ' + escapeHtml(c.label) + ')' : '')
-                        : 'held directly';
-                html += '<tr>'
-                    + '<td class="lbl">' + escapeHtml(c.label) + '</td>'
-                    + '<td>' + fmtMoney(parseFloat(c.gbp)) + '</td>'
-                    + '<td>' + fmtPct(c.pctOfBucket) + '</td>'
-                    + '<td class="lbl muted' + (c.viaFund ? ' sector-viafund' : '') + '">' + how + '</td>'
-                    + '</tr>';
+
+            // Grouped by industry, with subtotals. A GICS sector can hold businesses with quite
+            // different drivers — Financials is banks, insurers and payment networks in one row —
+            // and the industry is already on each holding, so the split costs nothing but a sort.
+            // Groups only appear when there is more than one: a single-industry sector reads
+            // exactly as it did before.
+            groupByIndustry(list).forEach(function (g) {
+                if (g.showHeading) {
+                    html += '<tr class="sector-industry"><td class="lbl">' + escapeHtml(g.name)
+                        + '</td><td>' + fmtMoney(g.gbp) + '</td><td>' + fmtPct(g.share)
+                        + '</td><td></td></tr>';
+                }
+                g.items.forEach(function (c) {
+                    var how = isCash ? 'cash balance'
+                        : c.viaFund
+                            ? 'via fund' + (c.shareOfPosition != null
+                                ? ' (' + fmtPct(c.shareOfPosition) + ' of ' + escapeHtml(c.label) + ')' : '')
+                            : 'held directly';
+                    html += '<tr' + (g.showHeading ? ' class="sector-industry-member"' : '') + '>'
+                        + '<td class="lbl">' + escapeHtml(c.label) + '</td>'
+                        + '<td>' + fmtMoney(parseFloat(c.gbp)) + '</td>'
+                        + '<td>' + fmtPct(c.pctOfBucket) + '</td>'
+                        + '<td class="lbl muted' + (c.viaFund ? ' sector-viafund' : '') + '">' + how + '</td>'
+                        + '</tr>';
+                });
             });
             html += '<tr style="font-weight:600;border-top:2px solid #ccc;">'
                 + '<td class="lbl">Total</td><td>' + fmtMoney(parseFloat(row.gbp)) + '</td>'

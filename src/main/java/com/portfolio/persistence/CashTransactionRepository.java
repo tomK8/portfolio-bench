@@ -44,11 +44,11 @@ public class CashTransactionRepository {
      * be storable. The running balance is what tells them apart, because it differs by
      * construction: the second fill lands on top of the first.
      */
-    private static final String TABLE_BODY = """
+    private static final String TABLE_BODY_TEMPLATE = """
             (
                 transaction_date TEXT NOT NULL,
-                account          TEXT NOT NULL CHECK (account IN ('RothIRA', 'AJBell', 'II')),
-                type             TEXT NOT NULL CHECK (type IN ('TRANSACTION', 'DIVIDEND', 'INTEREST', 'CHARGE', 'CONTRIBUTION')),
+                account          TEXT NOT NULL CHECK (account IN (%ACCOUNTS%)),
+                type             TEXT NOT NULL CHECK (type IN (%TYPES%)),
                 symbol           TEXT NOT NULL,
                 quantity         REAL NOT NULL,
                 amount           REAL NOT NULL,
@@ -60,6 +60,28 @@ public class CashTransactionRepository {
                 description      TEXT,
                 PRIMARY KEY (transaction_date, account, type, symbol, amount_gbp, cash_balance_gbp)
             )""";
+
+    /**
+     * The two CHECK lists are generated from the enums rather than written out here, so adding an
+     * {@link Account} or a {@link TransactionType} constant needs no SQL edit and cannot silently
+     * disagree with the code that writes the column. {@link #migrateConstraints} rebuilds an
+     * existing table whenever the stored DDL no longer matches what this produces.
+     */
+    private static final String TABLE_BODY = TABLE_BODY_TEMPLATE
+            .replace("%ACCOUNTS%", sqlLiteralList(java.util.Arrays.stream(Account.values())
+                    .map(Account::dbValue).toList()))
+            .replace("%TYPES%", sqlLiteralList(java.util.Arrays.stream(TransactionType.values())
+                    .map(Enum::name).toList()));
+
+    /** {@code a, b, c} as {@code 'a', 'b', 'c'} — enum-derived, so no quoting hazard. */
+    private static String sqlLiteralList(List<String> values) {
+        StringBuilder sb = new StringBuilder();
+        for (String v : values) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append('\'').append(v).append('\'');
+        }
+        return sb.toString();
+    }
 
     private static final String CREATE_TABLE =
             "CREATE TABLE IF NOT EXISTS cash_transactions " + TABLE_BODY;
@@ -101,8 +123,9 @@ public class CashTransactionRepository {
             } catch (SQLException alreadyMigrated) {
                 // cash_balance column already present — fine
             }
-            // After the ALTER, so the rebuild can copy cash_balance by name.
+            // After the ALTER, so the rebuilds can copy cash_balance by name.
             migratePrimaryKey(conn);
+            migrateConstraints(conn);
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise cash_transactions table", e);
         }
@@ -126,7 +149,7 @@ public class CashTransactionRepository {
         if (primaryKeyIncludesBalance(conn)) return;
         log.info("Migrating cash_transactions: adding cash_balance_gbp to the primary key so "
                 + "identical same-day partial fills can both be stored");
-        rebuildWithFullPrimaryKey(conn);
+        rebuildTable(conn, "six-column primary key");
     }
 
     /**
@@ -146,15 +169,60 @@ public class CashTransactionRepository {
     }
 
     /**
-     * SQLite cannot alter a primary key in place, so the table is rebuilt: create, copy by name,
-     * drop, rename — all inside one transaction, which SQLite applies to DDL as well, so the
-     * ledger is never observable in a half-migrated state.
+     * Bring a pre-existing table's CHECK constraints in line with the {@link Account} and
+     * {@link TransactionType} enums.
+     *
+     * <p>The lists are baked into the column definitions, and the create is
+     * {@code CREATE TABLE IF NOT EXISTS} — so adding an enum constant changes what a fresh install
+     * accepts while an existing database goes on rejecting it, and the first insert of the new
+     * value dies on a constraint violation with nothing wrong upstream. That is exactly how the
+     * primary key drifted (see {@link #migratePrimaryKey}); this closes the same gap for the one
+     * other part of the schema that is derived rather than fixed.
+     *
+     * <p>There is no {@code PRAGMA} for CHECK expressions, so the stored DDL is read back from
+     * {@code sqlite_master} and compared against what {@link #TABLE_BODY} now produces. The
+     * comparison is on the constraint lists alone rather than the whole statement: SQLite stores
+     * the original text verbatim, including whitespace, so comparing the full body would rebuild
+     * the table on every start after any cosmetic edit.
+     *
+     * <p>Idempotent and cheap: on an already-correct database this is one small {@code SELECT}.
+     */
+    private static void migrateConstraints(Connection conn) throws SQLException {
+        String stored = storedTableSql(conn);
+        if (stored == null) return;
+        List<String> missing = new ArrayList<>();
+        for (Account a : Account.values()) {
+            if (!stored.contains("'" + a.dbValue() + "'")) missing.add("account " + a.dbValue());
+        }
+        for (TransactionType t : TransactionType.values()) {
+            if (!stored.contains("'" + t.name() + "'")) missing.add("type " + t.name());
+        }
+        if (missing.isEmpty()) return;
+        log.info("Migrating cash_transactions: CHECK constraints predate {}", missing);
+        rebuildTable(conn, "CHECK constraints for " + missing);
+    }
+
+    /** The table's stored {@code CREATE} statement, or null when the table does not exist yet. */
+    private static String storedTableSql(Connection conn) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cash_transactions'");
+             ResultSet rs = ps.executeQuery()) {
+            return rs.next() ? rs.getString(1) : null;
+        }
+    }
+
+    /**
+     * SQLite cannot alter a primary key or a CHECK constraint in place, so the table is rebuilt:
+     * create, copy by name, drop, rename — all inside one transaction, which SQLite applies to DDL
+     * as well, so the ledger is never observable in a half-migrated state. Shared by both
+     * migrations, since the mechanics are identical and only the trigger differs.
      *
      * <p>The row count is asserted across the copy and any mismatch rolls the whole thing back.
      * The copy cannot collide on the new key: the old five-column key already made those five
-     * columns unique, so no two rows can agree on all six.
+     * columns unique, so no two rows can agree on all six. Nor can it violate the new CHECK lists —
+     * they only ever gain members, since a constant is added to an enum rather than removed.
      */
-    private static void rebuildWithFullPrimaryKey(Connection conn) throws SQLException {
+    private static void rebuildTable(Connection conn, String reason) throws SQLException {
         boolean autoCommit = conn.getAutoCommit();
         conn.setAutoCommit(false);
         try (Statement st = conn.createStatement()) {
@@ -171,7 +239,7 @@ public class CashTransactionRepository {
             st.execute("DROP TABLE cash_transactions");
             st.execute("ALTER TABLE cash_transactions_migrate RENAME TO cash_transactions");
             conn.commit();
-            log.info("Migrated cash_transactions to the six-column primary key: {} rows preserved", after);
+            log.info("Migrated cash_transactions ({}): {} rows preserved", reason, after);
         } catch (SQLException e) {
             conn.rollback();
             throw e;
@@ -455,32 +523,200 @@ public class CashTransactionRepository {
     }
 
     /**
+     * Insert hand-entered rows for a manual account — one with no broker export, whose ledger is
+     * typed in on the Manual positions screen rather than imported from a file.
+     *
+     * <p>There is deliberately no dedup rule here, unlike the three broker paths. Those exist
+     * because an export re-states rows the ledger already holds, and each broker re-states them
+     * differently; a person filling in a form states each row once and can see what is already
+     * stored. The primary key is still the backstop: entering the same buy twice on the same day
+     * for the same amount is rejected by the database rather than silently doubling a position.
+     *
+     * <p>Balances are recomputed rather than supplied. A manual row is almost always back-dated —
+     * you enter a holding you have had for years — so it lands ahead of rows already stored and
+     * every balance from there on would otherwise be out of sequence. The anchor is zero because a
+     * manual account's first row is its own opening balance.
+     *
+     * @return the account's closing cash balance after the insert
+     */
+    public double saveManual(Account account, List<CashTransaction> rows) {
+        requireManual(account);
+        if (rows.isEmpty()) return 0;
+        for (CashTransaction t : rows) {
+            if (t.account() != account) {
+                throw new IllegalArgumentException(
+                        "Row for " + t.account() + " passed to saveManual(" + account + ")");
+            }
+        }
+        try (Connection conn = connections.open()) {
+            boolean autoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                try (PreparedStatement ps = conn.prepareStatement(INSERT_SQL)) {
+                    for (CashTransaction t : rows) {
+                        bindCashRow(ps, t);
+                        ps.addBatch();
+                    }
+                    ps.executeBatch();
+                }
+                double closing = rebuildBalanceChain(conn, account, 0.0);
+                conn.commit();
+                log.info("Stored {} manual row(s) for {}; closing balance {}",
+                        rows.size(), account.dbValue(), closing);
+                return closing;
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(autoCommit);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Could not save manual rows for " + account.dbValue() + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Delete one hand-entered row by its {@code rowid} and recompute the account's balance chain.
+     * Restricted to manual accounts: an imported row deleted here would simply return on the next
+     * import, and the ledger has no other undo.
+     *
+     * @return true when a row was deleted
+     */
+    public boolean deleteManualRow(Account account, long rowid) {
+        requireManual(account);
+        try (Connection conn = connections.open()) {
+            boolean autoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                int deleted;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "DELETE FROM cash_transactions WHERE rowid = ? AND account = ?")) {
+                    ps.setLong(1, rowid);
+                    ps.setString(2, account.dbValue());
+                    deleted = ps.executeUpdate();
+                }
+                if (deleted > 0) rebuildBalanceChain(conn, account, 0.0);
+                conn.commit();
+                return deleted > 0;
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(autoCommit);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Could not delete manual row " + rowid + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** Every stored row for the manual accounts, oldest first, carrying its {@code rowid}. */
+    public List<LedgerRow> loadManualRows() {
+        List<LedgerRow> rows = new ArrayList<>();
+        List<Account> manual = Account.manualAccounts();
+        if (manual.isEmpty() || !connections.dbExists()) return rows;
+        String placeholders = String.join(", ", Collections.nCopies(manual.size(), "?"));
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT rowid, " + COLUMNS + " FROM cash_transactions "
+                             + "WHERE account IN (" + placeholders + ") "
+                             + "ORDER BY transaction_date, rowid")) {
+            for (int i = 0; i < manual.size(); i++) ps.setString(i + 1, manual.get(i).dbValue());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    // Column 1 is the rowid, so the shared mapper's 1-based indices shift by one.
+                    CashTransaction tx = mapCashRow(rs, 1);
+                    if (tx != null) rows.add(new LedgerRow(rs.getLong(1), tx));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not load manual ledger rows", e);
+        }
+        return rows;
+    }
+
+    /** A stored row with the {@code rowid} needed to delete exactly it. */
+    public record LedgerRow(long rowid, CashTransaction tx) {
+    }
+
+    private static void requireManual(Account account) {
+        if (!account.isManual()) {
+            throw new IllegalArgumentException(account.dbValue()
+                    + " is an imported account — its rows come from broker exports, not by hand");
+        }
+    }
+
+    /**
+     * The one query-and-map path behind every {@code CashTransaction} read. {@code filter} is an
+     * optional {@code WHERE} clause; the column list, the ordering and the failure behaviour are
+     * shared so four near-identical copies cannot drift.
+     *
+     * <p>Reads degrade: a failure logs and returns whatever was mapped so far, per the
+     * repository's read/write split.
+     */
+    private List<CashTransaction> loadRows(String filter, String label) {
+        List<CashTransaction> rows = new ArrayList<>();
+        if (!connections.dbExists()) return rows;
+        String sql = "SELECT " + COLUMNS + " FROM cash_transactions "
+                + (filter.isEmpty() ? "" : filter + " ") + "ORDER BY transaction_date, rowid";
+        try (Connection conn = connections.open();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            while (rs.next()) {
+                CashTransaction row = mapCashRow(rs);
+                if (row != null) rows.add(row);
+            }
+        } catch (Exception e) {
+            log.warn("Could not load {}", label, e);
+        }
+        return rows;
+    }
+
+    /**
+     * One row, or null when its {@code account} is not a known {@link Account}.
+     *
+     * <p><b>Skipping the row is the point.</b> This used to call {@link Account#fromDbValue}
+     * inline, which throws on an unrecognised value — inside a {@code catch} that logs and returns
+     * the rows gathered so far. A single unknown account therefore truncated the entire ledger at
+     * that row, silently, everywhere it is read: positions vanish, totals shrink, and the only
+     * evidence is one WARN. That is a whole-portfolio failure from one bad cell, so an unmappable
+     * row is now dropped on its own and named in the log while the rest of the ledger loads.
+     */
+    private static CashTransaction mapCashRow(ResultSet rs) throws SQLException {
+        return mapCashRow(rs, 0);
+    }
+
+    /** {@code offset} shifts the 1-based indices for a query that selects extra leading columns. */
+    private static CashTransaction mapCashRow(ResultSet rs, int offset) throws SQLException {
+        Account account = accountOrNull(rs.getString(2 + offset));
+        if (account == null) return null;
+        return new CashTransaction(
+                rs.getString(1 + offset), account,
+                TransactionType.valueOf(rs.getString(3 + offset)), rs.getString(4 + offset),
+                rs.getDouble(5 + offset), rs.getDouble(6 + offset), rs.getString(7 + offset),
+                rs.getDouble(8 + offset), rs.getDouble(9 + offset),
+                getNullableDouble(rs, 10 + offset), getNullableDouble(rs, 11 + offset),
+                rs.getString(12 + offset));
+    }
+
+    private static Account accountOrNull(String dbValue) {
+        try {
+            return Account.fromDbValue(dbValue);
+        } catch (IllegalArgumentException unknown) {
+            log.warn("Skipping cash_transactions row with unknown account '{}' — it is not one of "
+                    + "{}. The rest of the ledger still loads.", dbValue, Account.values());
+            return null;
+        }
+    }
+
+    /**
      * The {@code TRANSACTION} and {@code DIVIDEND} rows, oldest first — the raw material
      * for dividend attribution. Buys/sells are returned alongside dividends so the share
      * timeline can be reconstructed.
      */
     public List<CashTransaction> loadDividendTransactions() {
-        List<CashTransaction> rows = new ArrayList<>();
-        if (!connections.dbExists()) return rows;
-        try (Connection conn = connections.open();
-             Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(
-                     "SELECT transaction_date, account, type, symbol, quantity, amount, currency, " +
-                             "fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description " +
-                             "FROM cash_transactions WHERE type IN ('TRANSACTION', 'DIVIDEND') " +
-                             "ORDER BY transaction_date, rowid")) {
-            while (rs.next()) {
-                rows.add(new CashTransaction(
-                        rs.getString(1), Account.fromDbValue(rs.getString(2)),
-                        TransactionType.valueOf(rs.getString(3)), rs.getString(4),
-                        rs.getDouble(5), rs.getDouble(6), rs.getString(7), rs.getDouble(8),
-                        rs.getDouble(9), getNullableDouble(rs, 10), getNullableDouble(rs, 11),
-                        rs.getString(12)));
-            }
-        } catch (Exception e) {
-            log.warn("Could not load dividend transactions", e);
-        }
-        return rows;
+        return loadRows("WHERE type IN ('TRANSACTION', 'DIVIDEND')", "dividend transactions");
     }
 
     /**
@@ -488,26 +724,7 @@ public class CashTransactionRepository {
      * needs to replay the full ledger end-to-end (positions plus every cash movement).
      */
     public List<CashTransaction> loadAllTransactions() {
-        List<CashTransaction> rows = new ArrayList<>();
-        if (!connections.dbExists()) return rows;
-        try (Connection conn = connections.open();
-             Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(
-                     "SELECT transaction_date, account, type, symbol, quantity, amount, currency, " +
-                             "fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description " +
-                             "FROM cash_transactions ORDER BY transaction_date, rowid")) {
-            while (rs.next()) {
-                rows.add(new CashTransaction(
-                        rs.getString(1), Account.fromDbValue(rs.getString(2)),
-                        TransactionType.valueOf(rs.getString(3)), rs.getString(4),
-                        rs.getDouble(5), rs.getDouble(6), rs.getString(7), rs.getDouble(8),
-                        rs.getDouble(9), getNullableDouble(rs, 10), getNullableDouble(rs, 11),
-                        rs.getString(12)));
-            }
-        } catch (Exception e) {
-            log.warn("Could not load all transactions", e);
-        }
-        return rows;
+        return loadRows("", "all transactions");
     }
 
     /**
@@ -528,9 +745,10 @@ public class CashTransactionRepository {
                              "FROM cash_transactions WHERE type = 'TRANSACTION' " +
                              "ORDER BY transaction_date DESC, rowid DESC")) {
             while (rs.next()) {
+                Account account = accountOrNull(rs.getString(3));
+                if (account == null) continue;
                 rows.add(new TradeRow(
-                        rs.getLong(1), rs.getString(2),
-                        Account.fromDbValue(rs.getString(3)), rs.getString(4),
+                        rs.getLong(1), rs.getString(2), account, rs.getString(4),
                         rs.getDouble(5), rs.getDouble(6), rs.getString(7),
                         rs.getDouble(8), rs.getString(9)));
             }
@@ -550,27 +768,18 @@ public class CashTransactionRepository {
      * Other types (TRANSACTION, DIVIDEND, INTEREST, CHARGE) are not external contributions.
      */
     public List<CashTransaction> loadContributions() {
-        List<CashTransaction> rows = new ArrayList<>();
-        if (!connections.dbExists()) return rows;
-        try (Connection conn = connections.open();
-             Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(
-                     "SELECT transaction_date, account, type, symbol, quantity, amount, currency, " +
-                             "fx_to_gbp, amount_gbp, cash_balance, cash_balance_gbp, description " +
-                             "FROM cash_transactions WHERE type = 'CONTRIBUTION' " +
-                             "ORDER BY transaction_date, rowid")) {
-            while (rs.next()) {
-                rows.add(new CashTransaction(
-                        rs.getString(1), Account.fromDbValue(rs.getString(2)),
-                        TransactionType.valueOf(rs.getString(3)), rs.getString(4),
-                        rs.getDouble(5), rs.getDouble(6), rs.getString(7), rs.getDouble(8),
-                        rs.getDouble(9), getNullableDouble(rs, 10), getNullableDouble(rs, 11),
-                        rs.getString(12)));
-            }
-        } catch (Exception e) {
-            log.warn("Could not load contribution transactions", e);
-        }
-        return rows;
+        return loadRows("WHERE type = 'CONTRIBUTION'", "contribution transactions");
+    }
+
+    /**
+     * Every {@code OPENING_BALANCE} row, oldest first — an account's balance on the day its
+     * recorded history starts. Deliberately <em>not</em> returned by {@link #loadContributions()}:
+     * both step the portfolio's value for a non-market reason and both belong in the TWR's
+     * external-flow term, but only one of them is money anyone paid in. See
+     * {@link TransactionType#OPENING_BALANCE}.
+     */
+    public List<CashTransaction> loadOpeningBalances() {
+        return loadRows("WHERE type = 'OPENING_BALANCE'", "opening balances");
     }
 
     /**

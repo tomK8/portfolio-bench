@@ -17,12 +17,26 @@ import java.util.*;
  */
 public class PortfolioGatherer {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(PortfolioGatherer.class);
+
     private final FxRateProvider fxRateProvider;
     private final HoldingFileLocator fileLocator;
+    private final ManualPositionService manualPositions;
 
     public PortfolioGatherer(FxRateProvider fxRateProvider, HoldingFileLocator fileLocator) {
+        this(fxRateProvider, fileLocator, null);
+    }
+
+    /**
+     * @param manualPositions accounts with no downloadable export, whose holdings are derived from
+     *                        the cash ledger instead of a file; null when there are none
+     */
+    public PortfolioGatherer(FxRateProvider fxRateProvider, HoldingFileLocator fileLocator,
+                             ManualPositionService manualPositions) {
         this.fxRateProvider = fxRateProvider;
         this.fileLocator = fileLocator;
+        this.manualPositions = manualPositions;
     }
 
     public GatheredPortfolio gather() {
@@ -51,6 +65,21 @@ public class PortfolioGatherer {
             }
         } catch (IOException | ParseException e) {
             throw new IllegalStateException("Failed to read or parse input files", e);
+        }
+
+        // Hand-entered accounts have no file to locate, so they are appended rather than parsed.
+        // A failure here must not take the whole sync down with it: the broker exports parsed
+        // fine and are worth showing.
+        if (manualPositions != null) {
+            try {
+                List<Holding> manual = manualPositions.holdings();
+                if (!manual.isEmpty()) {
+                    holdings.addAll(manual);
+                    for (Holding h : manual) sources.putIfAbsent(h.getSource(), null);
+                }
+            } catch (Exception e) {
+                log.warn("Could not read manually entered positions — continuing without them", e);
+            }
         }
 
         return new GatheredPortfolio(rates, holdings, sources);

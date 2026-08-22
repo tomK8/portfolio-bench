@@ -52,7 +52,9 @@ class PortfolioReturnServiceTest {
         for (CashTransaction t : contribs) {
             // Use saveII so contributions land as-is without dedup confusion; II key is by
             // (date, type, symbol, amount, currency) which is fine for our synthetic rows.
-            repo.saveII(List.of(t));
+            // Hand-entered accounts have their own write path and reject the broker ones.
+            if (t.account().isManual()) repo.saveManual(t.account(), List.of(t));
+            else repo.saveII(List.of(t));
         }
         PortfolioValueService stub = new PortfolioValueService(null, null, null, null, null) {
             @Override
@@ -85,6 +87,12 @@ class PortfolioReturnServiceTest {
     private static CashTransaction contrib(String date, double amountGbp) {
         return new CashTransaction(date, Account.II, TransactionType.CONTRIBUTION, "GBP",
                 0.0, amountGbp, "GBP", 1.0, amountGbp, null, null, "test");
+    }
+
+    /** A hand-entered account's opening balance — an external step that nobody paid in. */
+    private static CashTransaction opening(String date, double amountGbp) {
+        return new CashTransaction(date, Account.EQUATE, TransactionType.OPENING_BALANCE, "GBP",
+                0.0, amountGbp, "GBP", 1.0, amountGbp, 0.0, 0.0, "Opening balance for BARC");
     }
 
     @Test
@@ -287,6 +295,36 @@ class PortfolioReturnServiceTest {
         assertEquals(0, new BigDecimal("50").compareTo(d.contributionsGbp()));
         assertEquals(0, BigDecimal.ZERO.compareTo(d.gainGbp()), "nothing was earned");
         assertEquals(0, BigDecimal.ZERO.compareTo(d.totalReturn()), "TWR is contribution-neutral");
+    }
+
+    @Test
+    void periodDiffReportsAnOpeningBalanceSeparatelyFromContributions() {
+        // Same £100 → £150 step, but this time it is a position entering the ledger, not a payment.
+        PeriodDiff d = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "150")
+        ), List.of(opening("2024-01-02", 50.0)))
+                .periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-02"));
+
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.contributionsGbp()),
+                "an opening balance is not money anyone paid in");
+        assertEquals(0, new BigDecimal("50").compareTo(d.broughtForwardGbp()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.gainGbp()), "nothing was earned");
+        assertEquals(0, BigDecimal.ZERO.compareTo(d.totalReturn()),
+                "the step must not book as a one-day gain");
+        assertTrue(d.warnings().stream().anyMatch(w -> w.contains("opening balance")),
+                "the reader has to be told which of the two figures this is");
+    }
+
+    @Test
+    void anOpeningBalanceStillCountsAsAnExternalFlow() {
+        // Without it in the C term, a £100 account gaining a £50 position would read as +50%.
+        PeriodDiff withStep = service(List.of(
+                dv("2024-01-01", "100"),
+                dv("2024-01-02", "150")
+        ), List.of(opening("2024-01-02", 50.0)))
+                .periodDiff(LocalDate.parse("2024-01-01"), LocalDate.parse("2024-01-02"));
+        assertEquals(0, BigDecimal.ZERO.compareTo(withStep.totalReturn()));
     }
 
     @Test

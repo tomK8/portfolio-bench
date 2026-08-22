@@ -429,12 +429,11 @@ public class PortfolioReturnService {
 
     /**
      * Every external GBP cash flow per date — the {@code C} term of the TWR formula. Two
-     * different things land here and the TWR needs both: ledger {@code CONTRIBUTION} rows,
-     * and the Roth USD brought-forward seed converted at the FX rate on Roth's earliest
-     * ledger date. The seed is not money anyone paid in; it is an opening balance for an
-     * account whose recorded history simply starts there. But the portfolio's value still
-     * jumps by it for a non-market reason on that one day, so leaving it out would book the
-     * whole opening balance as a one-day gain.
+     * different things land here and the TWR needs both: ledger {@code CONTRIBUTION} rows, and
+     * opening balances (see {@link #broughtForwardByDate()}). An opening balance is not money
+     * anyone paid in; it is what an account already held on the day its recorded history starts.
+     * But the portfolio's value still jumps by it for a non-market reason on that one day, so
+     * leaving it out would book the whole opening balance as a one-day gain.
      *
      * <p>Reporting has to keep them apart even though the maths doesn't — see
      * {@link #ledgerContributionsByDate()} and {@link #broughtForwardByDate()}. Labelling the
@@ -464,15 +463,30 @@ public class PortfolioReturnService {
         return out;
     }
 
-    /** The Roth USD opening balance as a single GBP step on Roth's earliest ledger date. */
+    /**
+     * Every account's opening balance, by date. Two sources, one meaning: the Roth USD seed held
+     * in the key-value store, and ledger {@code OPENING_BALANCE} rows — which is how a manually
+     * entered account (one with no broker export) states the holding it already had on the day its
+     * recorded history starts.
+     *
+     * <p>Both are external steps in the portfolio's value that nobody paid in during the window,
+     * so both belong here and neither belongs in {@link #ledgerContributionsByDate()}.
+     */
     private Map<LocalDate, BigDecimal> broughtForwardByDate() {
+        Map<LocalDate, BigDecimal> out = new HashMap<>();
         BigDecimal rothSeedUsd = settings.getBigDecimal(
                 CashTransactionRepository.ROTH_BROUGHT_FORWARD_KEY, BigDecimal.ZERO);
         String rothStartStr = cashRepo.earliestTransactionDate(Account.ROTH_IRA);
-        if (rothSeedUsd.signum() <= 0 || rothStartStr == null) return Map.of();
-        LocalDate rothStart = LocalDate.parse(rothStartStr);
-        BigDecimal seedGbp = rothSeedToGbp(rothSeedUsd, rothStart);
-        return seedGbp.signum() > 0 ? Map.of(rothStart, seedGbp) : Map.of();
+        if (rothSeedUsd.signum() > 0 && rothStartStr != null) {
+            LocalDate rothStart = LocalDate.parse(rothStartStr);
+            BigDecimal seedGbp = rothSeedToGbp(rothSeedUsd, rothStart);
+            if (seedGbp.signum() > 0) out.merge(rothStart, seedGbp, BigDecimal::add);
+        }
+        for (CashTransaction t : cashRepo.loadOpeningBalances()) {
+            out.merge(LocalDate.parse(t.transactionDate()),
+                    BigDecimal.valueOf(t.amountGbp()), BigDecimal::add);
+        }
+        return out;
     }
 
     /**

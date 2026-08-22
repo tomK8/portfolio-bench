@@ -34,7 +34,8 @@ public class ContributionService {
     private static final Map<Account, String> ACCOUNT_LABELS = Map.of(
             Account.AJBELL, "AJ Bell SIPP",
             Account.II, "II SIPP",
-            Account.ROTH_IRA, "Roth IRA");
+            Account.ROTH_IRA, "Roth IRA",
+            Account.EQUATE, "Equate");
 
     private final CashTransactionRepository repo;
     private final KeyValueStore settings;

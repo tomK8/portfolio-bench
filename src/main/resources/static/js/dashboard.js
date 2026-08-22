@@ -523,6 +523,7 @@
             if (panelId === 'panel-mosig') setupMomentumSignals();
             if (panelId === 'panel-range') setupRange();
             if (panelId === 'panel-earnings') setupEarnings();
+            if (panelId === 'panel-manual') setupManualPositions();
             if (panelId === 'panel-period') setupPeriodDiff();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
@@ -9198,6 +9199,186 @@
         }
 
         // ---- Earnings calendar tab ----------------------------------------
+        // ---------------------------------------------------------------- Manual positions
+        // Accounts with no downloadable export. Every write goes through the same POST helper and
+        // then reloads the whole view, so the table can never show a position the ledger doesn't
+        // hold — the server is the only thing that decides what is stored.
+        var mpInit = false, mpBrokers = [];
+
+        function setupManualPositions() {
+            if (mpInit) return;
+            mpInit = true;
+            var today = new Date().toISOString().slice(0, 10);
+            ['mp-buy-date', 'mp-sell-date', 'mp-wd-date'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el && !el.value) el.value = today;
+            });
+            bindOnce(document.getElementById('mp-buy-save'), 'click', function () {
+                mpSubmit('/positions/manual/buy', 'mp-buy-status', {
+                    broker: mpVal('mp-buy-broker'), symbol: mpVal('mp-buy-symbol'),
+                    quantity: mpVal('mp-buy-qty'), cost: mpVal('mp-buy-cost'),
+                    date: mpVal('mp-buy-date'), note: mpVal('mp-buy-note')
+                }, ['mp-buy-symbol', 'mp-buy-qty', 'mp-buy-cost', 'mp-buy-note']);
+            });
+            bindOnce(document.getElementById('mp-sell-save'), 'click', function () {
+                mpSubmit('/positions/manual/sell', 'mp-sell-status', {
+                    broker: mpVal('mp-sell-broker'), symbol: mpVal('mp-sell-symbol'),
+                    quantity: mpVal('mp-sell-qty'), proceeds: mpVal('mp-sell-proceeds'),
+                    date: mpVal('mp-sell-date'), note: mpVal('mp-sell-note')
+                }, ['mp-sell-symbol', 'mp-sell-qty', 'mp-sell-proceeds', 'mp-sell-note']);
+            });
+            bindOnce(document.getElementById('mp-wd-save'), 'click', function () {
+                mpSubmit('/positions/manual/withdraw', 'mp-wd-status', {
+                    broker: mpVal('mp-wd-broker'), amount: mpVal('mp-wd-amount'),
+                    date: mpVal('mp-wd-date'), note: mpVal('mp-wd-note')
+                }, ['mp-wd-amount', 'mp-wd-note']);
+            });
+            // Delegated: the rows table is replaced on every reload.
+            bindOnce(document.getElementById('mp-rows'), 'click', function (ev) {
+                var btn = ev.target.closest('button[data-rowid]');
+                if (!btn) return;
+                if (!window.confirm('Delete this row? The account\'s running balance is recomputed.')) return;
+                mpPost('/positions/manual/delete',
+                    {broker: btn.getAttribute('data-broker'), rowid: btn.getAttribute('data-rowid')})
+                    .then(loadManualPositions)
+                    .catch(function (e) { window.alert(e.message); });
+            });
+            loadManualPositions();
+        }
+
+        function mpVal(id) {
+            var el = document.getElementById(id);
+            return el ? (el.value || '').trim() : '';
+        }
+
+        function mpPost(url, params) {
+            var body = new URLSearchParams();
+            Object.keys(params).forEach(function (k) {
+                if (params[k] !== null && params[k] !== undefined && params[k] !== '') body.append(k, params[k]);
+            });
+            return fetch(url, {method: 'POST', body: body}).then(function (r) {
+                if (!r.ok) {
+                    return r.text().then(function (t) {
+                        throw new Error((t || '').slice(0, 300) || ('HTTP ' + r.status));
+                    });
+                }
+                return r.json();
+            });
+        }
+
+        function mpSubmit(url, statusId, params, clearIds) {
+            var status = document.getElementById(statusId);
+            if (status) { status.textContent = 'Saving…'; status.style.color = ''; }
+            mpPost(url, params).then(function () {
+                if (status) { status.textContent = 'Saved.'; status.style.color = ''; }
+                clearIds.forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el) el.value = '';
+                });
+                return loadManualPositions();
+            }).catch(function (e) {
+                if (status) { status.textContent = e.message; status.style.color = '#c0392b'; }
+            });
+        }
+
+        function loadManualPositions() {
+            clearPanelError('panel-manual');
+            return fetch('/positions/manual')
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(renderManualPositions)
+                .catch(function (err) {
+                    // The latch stays set on purpose — the retry button re-runs the fetch, and
+                    // re-running setup would stack a second set of handlers on the forms.
+                    panelLoadFailed('panel-manual', err, loadManualPositions);
+                });
+        }
+
+        function renderManualPositions(view) {
+            mpBrokers = view.brokers || [];
+            ['mp-buy-broker', 'mp-sell-broker', 'mp-wd-broker'].forEach(function (id) {
+                var sel = document.getElementById(id);
+                if (!sel) return;
+                var keep = sel.value;
+                sel.innerHTML = mpBrokers.map(function (b) {
+                    return '<option value="' + escapeHtml(b) + '">' + escapeHtml(b) + '</option>';
+                }).join('');
+                if (keep && mpBrokers.indexOf(keep) >= 0) sel.value = keep;
+            });
+
+            var warn = document.getElementById('mp-warnings');
+            var warnings = view.warnings || [];
+            warn.innerHTML = warnings.length
+                ? '<div class="value-warnings pending"><ul style="margin:0;padding-left:1.1rem">'
+                    + warnings.map(function (w) { return '<li>' + escapeHtml(w) + '</li>'; }).join('')
+                    + '</ul></div>'
+                : '';
+
+            var positions = view.positions || [];
+            var box = document.getElementById('mp-positions');
+            if (!positions.length) {
+                box.innerHTML = '<p class="muted">Nothing entered yet.</p>';
+            } else {
+                var rows = positions.map(function (p) {
+                    return '<tr>'
+                        + '<td class="txt">' + escapeHtml(p.symbol) + '</td>'
+                        + '<td class="txt">' + escapeHtml(p.broker) + '</td>'
+                        + '<td>' + mpNum(p.quantity, 0) + '</td>'
+                        + '<td>' + mpMoney(p.costGbp) + '</td>'
+                        + '<td>' + (p.price == null ? '—' : mpNum(p.price, 4)) + '</td>'
+                        + '<td>' + mpMoney(p.marketValueGbp) + '</td>'
+                        + '<td class="' + mpSign(p.gainGbp) + '">' + mpMoney(p.gainGbp) + '</td>'
+                        + '<td class="' + mpSign(p.gainPct) + '">'
+                        + (p.gainPct == null ? '—' : (p.gainPct * 100).toFixed(2) + '%') + '</td>'
+                        + '<td class="txt muted">' + escapeHtml(p.priceSource || '—') + '</td>'
+                        + '</tr>';
+                }).join('');
+                box.innerHTML = '<table class="swing-tbl"><thead><tr>'
+                    + '<th>Symbol</th><th>Broker</th><th>Shares</th><th>Cost £</th>'
+                    + '<th>Price</th><th>Value £</th><th>Gain £</th><th>Gain %</th>'
+                    + '<th title="which stored feed priced this row">Priced from</th>'
+                    + '</tr></thead><tbody>' + rows + '</tbody></table>';
+            }
+
+            var ledger = view.rows || [];
+            var rowsBox = document.getElementById('mp-rows');
+            if (!ledger.length) {
+                rowsBox.innerHTML = '<p class="muted">No stored rows.</p>';
+                return;
+            }
+            rowsBox.innerHTML = '<table class="swing-tbl"><thead><tr>'
+                + '<th>Date</th><th>Broker</th><th>Type</th><th>Symbol</th><th>Shares</th>'
+                + '<th>Amount £</th><th>Note</th><th></th></tr></thead><tbody>'
+                + ledger.map(function (r) {
+                    return '<tr>'
+                        + '<td class="txt">' + escapeHtml(r.date) + '</td>'
+                        + '<td class="txt">' + escapeHtml(r.broker) + '</td>'
+                        + '<td class="txt">' + escapeHtml(r.type) + '</td>'
+                        + '<td class="txt">' + escapeHtml(r.symbol) + '</td>'
+                        + '<td>' + (Number(r.quantity) ? mpNum(r.quantity, 0) : '—') + '</td>'
+                        + '<td class="' + mpSign(r.amount) + '">' + mpMoney(r.amount) + '</td>'
+                        + '<td class="txt muted">' + escapeHtml(r.description || '') + '</td>'
+                        + '<td><button type="button" data-rowid="' + r.rowid + '" data-broker="'
+                        + escapeHtml(r.broker) + '">Delete</button></td>'
+                        + '</tr>';
+                }).join('')
+                + '</tbody></table>';
+        }
+
+        function mpNum(v, dp) {
+            if (v == null) return '—';
+            return Number(v).toLocaleString(undefined, {minimumFractionDigits: dp, maximumFractionDigits: dp});
+        }
+
+        function mpMoney(v) {
+            if (v == null) return '—';
+            return Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        }
+
+        function mpSign(v) {
+            if (v == null || Number(v) === 0) return '';
+            return Number(v) > 0 ? 'pos' : 'neg';
+        }
+
         var earnInit = false, earnReport = null;
 
         function setupEarnings() {

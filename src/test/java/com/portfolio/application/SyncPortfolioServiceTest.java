@@ -38,15 +38,67 @@ class SyncPortfolioServiceTest {
     Path dbDir;
 
     private SyncPortfolioService service() {
+        return service(false);
+    }
+
+    private SyncPortfolioService service(boolean withManualPositions) {
         JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
         KeyValueStore kv = new KeyValueStore(dbDir);
         CashTransactionRepository cashRepo = new CashTransactionRepository(cf, kv);
         SnapshotRepository snapshots = new SnapshotRepository(cf);
         IntradayPriceRepository intraday = new IntradayPriceRepository(cf);
         PriceHistoryRepository priceHistory = new PriceHistoryRepository(cf);
-        PortfolioGatherer gatherer = new PortfolioGatherer(FX, new HoldingFileLocator(inputDir));
+        ManualPositionService manual = withManualPositions
+                ? new ManualPositionService(cashRepo, intraday, priceHistory, new YahooTickerMap())
+                : null;
+        PortfolioGatherer gatherer =
+                new PortfolioGatherer(FX, new HoldingFileLocator(inputDir), manual);
         return new SyncPortfolioService(gatherer, snapshots, intraday,
                 new DividendService(cashRepo), new YahooTickerMap(), cashRepo, priceHistory, kv);
+    }
+
+    /** Enter a BARC position at the hand-entered account and give it a live quote. */
+    private void seedManualBarc() {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
+        KeyValueStore kv = new KeyValueStore(dbDir);
+        new ManualPositionService(new CashTransactionRepository(cf, kv),
+                new IntradayPriceRepository(cf), new PriceHistoryRepository(cf), new YahooTickerMap())
+                .buy(com.portfolio.domain.model.Account.EQUATE, "BARC",
+                        new BigDecimal("7227"), new BigDecimal("18500"),
+                        java.time.LocalDate.parse("2020-06-01"), null);
+        new IntradayPriceRepository(cf).saveIntradayBars(List.of(
+                new com.portfolio.domain.model.IntradayBar("BARC.L", java.time.Instant.now(),
+                        320.5, null, "GBp")));
+    }
+
+    @Test
+    void aHandEnteredPositionReachesTheHoldingsPipeline() {
+        seedManualBarc();
+        SyncResult result = service(true).sync(BigDecimal.ZERO, BigDecimal.ZERO);
+
+        assertTrue(result.holdings().stream().anyMatch(h -> "BARC".equals(h.securityId())),
+                "an account with no export still has to appear on the Files tab");
+    }
+
+    @Test
+    void aHandEnteredPositionIsPublishedToHeldSymbols() {
+        seedManualBarc();
+        service(true).sync(BigDecimal.ZERO, BigDecimal.ZERO);
+
+        // held_symbols is what feeds the fundamentals, earnings and price-fetch universes.
+        assertTrue(new KeyValueStore(dbDir).getStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY)
+                .contains("BARC"));
+    }
+
+    @Test
+    void aHandEnteredPositionDoesNotShowAsReconciliationDrift() {
+        seedManualBarc();
+        SyncResult result = service(true).sync(BigDecimal.ZERO, BigDecimal.ZERO);
+
+        // Both sides derive from the same ledger rows and the same quote, so a drift row here
+        // would be the panel disagreeing with itself.
+        assertTrue(result.assetRecon().stream().noneMatch(r -> r.symbol().equalsIgnoreCase("BARC")),
+                "holdings side and ledger side must agree on a position neither has a file for");
     }
 
     @Test

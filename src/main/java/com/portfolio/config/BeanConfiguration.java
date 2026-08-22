@@ -148,9 +148,19 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public ManualPositionService manualPositionService(CashTransactionRepository cashTransactionRepository,
+                                                      IntradayPriceRepository intradayPriceRepository,
+                                                      PriceHistoryRepository priceHistoryRepository,
+                                                      YahooTickerMap yahooTickerMap) {
+        return new ManualPositionService(cashTransactionRepository, intradayPriceRepository,
+                priceHistoryRepository, yahooTickerMap);
+    }
+
+    @Bean
     public PortfolioGatherer portfolioGatherer(FxRateProvider fxRateProvider,
-                                               HoldingFileLocator holdingFileLocator) {
-        return new PortfolioGatherer(fxRateProvider, holdingFileLocator);
+                                               HoldingFileLocator holdingFileLocator,
+                                               ManualPositionService manualPositionService) {
+        return new PortfolioGatherer(fxRateProvider, holdingFileLocator, manualPositionService);
     }
 
     @Bean

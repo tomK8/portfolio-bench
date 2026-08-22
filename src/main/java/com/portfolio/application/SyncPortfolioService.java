@@ -306,7 +306,11 @@ public class SyncPortfolioService {
     private static final Map<String, String> ACCOUNT_KEY_BY_SOURCE = Map.of(
             "AJ Bell SIPP", "AJBell",
             "Roth IRA", "RothIRA",
-            "II SIPP", "II");
+            "II SIPP", "II",
+            // A manual account's source label is its own db value, so the identity fallback below
+            // would resolve it anyway. Stated explicitly because relying on that coincidence is
+            // how a silent phantom-drift row would appear if either name ever changed.
+            "Equate", "Equate");
 
     /**
      * II SIPP cash entered on the dashboard as two amounts (GBP + USD). Convert the USD

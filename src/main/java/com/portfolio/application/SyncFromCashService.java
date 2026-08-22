@@ -59,7 +59,8 @@ public class SyncFromCashService {
     private static final Map<String, String> ACCOUNT_LABELS = Map.of(
             "AJBell", "AJ Bell SIPP",
             "RothIRA", "Roth IRA",
-            "II", "II SIPP");
+            "II", "II SIPP",
+            "Equate", "Equate");
 
     private final CashTransactionRepository repo;
     private final IntradayPriceRepository intraday;
@@ -143,6 +144,11 @@ public class SyncFromCashService {
                     agg.marketValueGbp(), agg.rtMarketValue(), agg.currencyCode(), today));
         }
         for (CashBalance cb : cashBalances) {
+            // A dead-zero balance is noise in a value table, and every account whose cash is
+            // fully deployed reports one — an employee share plan holding only shares, for
+            // instance. Suppressed here rather than at the query, which several other callers
+            // rely on to report a genuinely emptied account.
+            if (cb.cashGbp() == 0 && (cb.cashNative() == null || cb.cashNative() == 0)) continue;
             aggregated.add(cashRow(cb, rates));
         }
         aggregated.sort(Comparator.comparingInt(SyncFromCashService::section)

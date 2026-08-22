@@ -53,7 +53,18 @@ public record SectorBreakdown(
                               BigDecimal gbp,
                               BigDecimal pctOfBucket,
                               boolean viaFund,
-                              BigDecimal shareOfPosition) {
+                              BigDecimal shareOfPosition,
+                              /**
+                               * Yahoo's industry for a directly-held position ("Banks - Regional",
+                               * "Credit Services"), or null for a fund slice.
+                               *
+                               * <p>Null on a fund is a fact, not a gap: {@code sectorWeightings} is
+                               * published at <em>sector</em> level only, so a fund's contribution to
+                               * a bucket has no single industry and inventing one would be the same
+                               * error as guessing an earnings date. The drill-down groups those
+                               * slices under their own heading and says so.
+                               */
+                              String industry) {
     }
 
     /**

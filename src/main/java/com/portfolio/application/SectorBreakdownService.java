@@ -107,7 +107,11 @@ public class SectorBreakdownService {
                 (c.fund() ? viaFund : direct).merge(b.getKey(), b.getValue(), BigDecimal::add);
                 members.computeIfAbsent(b.getKey(), k -> new ArrayList<>())
                         .add(new SectorBreakdown.Constituent(symbol, b.getValue(), null, c.fund(),
-                                c.fund() ? fraction(b.getValue(), gbp) : null));
+                                c.fund() ? fraction(b.getValue(), gbp) : null,
+                                // Industry rides along from the same cached quote the sector came
+                                // from — already fetched, never a second call. Only meaningful for
+                                // a direct holding; a fund's slice spans a whole sector.
+                                c.fund() || quote == null ? null : quote.labels().get("industry")));
                 if (b.getKey() == SectorBucket.UNCLASSIFIED) {
                     String state = dataState(cache.get(symbol));
                     if (!"NO_SECTOR".equals(state)) awaitingData.add(symbol);
@@ -149,7 +153,7 @@ public class SectorBreakdownService {
             for (Map.Entry<String, BigDecimal> e : snapshot.cashGbpByAccountCcy().entrySet()) {
                 members.computeIfAbsent(SectorBucket.CASH, k -> new ArrayList<>())
                         .add(new SectorBreakdown.Constituent(
-                                e.getKey().replace("|", " · "), e.getValue(), null, false, null));
+                                e.getKey().replace("|", " · "), e.getValue(), null, false, null, null));
             }
         }
 
@@ -206,7 +210,7 @@ public class SectorBreakdownService {
         List<SectorBreakdown.Constituent> out = new ArrayList<>();
         for (SectorBreakdown.Constituent c : members) {
             out.add(new SectorBreakdown.Constituent(c.label(), scaled(c.gbp()),
-                    fraction(c.gbp(), bucketTotal), c.viaFund(), c.shareOfPosition()));
+                    fraction(c.gbp(), bucketTotal), c.viaFund(), c.shareOfPosition(), c.industry()));
         }
         out.sort(Comparator.comparing(SectorBreakdown.Constituent::gbp).reversed());
         return List.copyOf(out);

@@ -2,9 +2,18 @@ package com.portfolio.domain;
 
 /**
  * The sector buckets the Allocation → Breakdown panel reports. Coarser than Yahoo's own sector
- * list on purpose: the two Consumer sectors are merged, and everything that is not a single-name
- * equity gets a top-level home ({@link #FIXED_INCOME}, {@link #CASH}, {@link #COMMODITIES}) so
- * equity percentages are never quietly diluted by gilts or an idle cash pile.
+ * list in places, but everything that is not a single-name equity gets a top-level home
+ * ({@link #FIXED_INCOME}, {@link #CASH}, {@link #COMMODITIES}) so equity percentages are never
+ * quietly diluted by gilts or an idle cash pile.
+ *
+ * <p><b>The two Consumer sectors are kept apart</b>, as GICS and Yahoo both have them. They were
+ * briefly merged into one "Consumer" row, which cost real information for nothing: staples and
+ * discretionary are the classic defensive/cyclical pair, they behave differently in a drawdown, and
+ * a single row reading ~7% hid a book that was two-thirds discretionary. Nothing was gained by the
+ * merge either — Yahoo returns the two separately in <em>both</em> shapes it publishes, the display
+ * form on a stock ("Consumer Cyclical" / "Consumer Defensive") and the snake_case keys inside a
+ * fund's {@code sectorWeightings} — so the split needs no extra data, no extra fetch and no
+ * look-through changes.
  *
  * <p>{@link #UNCLASSIFIED} is load-bearing, not a dumping ground: anything that lands here is
  * surfaced by name in the UI rather than folded into a neighbouring bucket. Silently absorbing an
@@ -23,7 +32,11 @@ public enum SectorBucket {
     COMMS_MEDIA("Communications/Media"),
     FINANCIALS("Financials"),
     HEALTHCARE("Healthcare"),
-    CONSUMER("Consumer"),
+    // GICS names rather than Yahoo's ("Consumer Cyclical" / "Consumer Defensive"): discretionary
+    // and staples is the vocabulary the split exists to express, and fromYahooSector accepts
+    // Yahoo's spellings on the way in regardless.
+    CONSUMER_DISCRETIONARY("Consumer Discretionary"),
+    CONSUMER_STAPLES("Consumer Staples"),
     INDUSTRIALS_DEFENCE("Industrials/Defence"),
     ENERGY("Energy"),
     MATERIALS_MINING("Materials/Mining"),
@@ -62,7 +75,8 @@ public enum SectorBucket {
             case "communication_services", "communications" -> COMMS_MEDIA;
             case "financial_services", "financial" -> FINANCIALS;
             case "healthcare", "health_care" -> HEALTHCARE;
-            case "consumer_cyclical", "consumer_defensive" -> CONSUMER;
+            case "consumer_cyclical", "consumer_discretionary" -> CONSUMER_DISCRETIONARY;
+            case "consumer_defensive", "consumer_staples" -> CONSUMER_STAPLES;
             case "industrials" -> INDUSTRIALS_DEFENCE;
             case "energy" -> ENERGY;
             case "basic_materials" -> MATERIALS_MINING;

@@ -1635,11 +1635,21 @@ invested.
   row, but none of the ~550 weekly snapshots are valued. **Don't use `SyncFromCashService.sync()`**
   here — it hits the network for FX on every call, throws on failure, and drops equities with no
   intraday quote.
-- **`domain.SectorBucket`** — 14 buckets incl. `FIXED_INCOME`/`CASH`/`COMMODITIES` as top-level
+- **`domain.SectorBucket`** — 15 buckets incl. `FIXED_INCOME`/`CASH`/`COMMODITIES` as top-level
   (so equity percentages aren't diluted by gilts or idle cash) and `UNCLASSIFIED`.
   `fromYahooSector` accepts **both** Yahoo spellings — display form from `summaryProfile`
   ("Financial Services") and snake_case from `topHoldings` ("financial_services") — which is what
   lets a fund's constituent sectors and a directly-held stock's sector be compared at all.
+  **The two Consumer sectors are separate buckets** (`CONSUMER_DISCRETIONARY` /
+  `CONSUMER_STAPLES`, labelled with the GICS names). They were briefly merged into one "Consumer"
+  row, which cost information for nothing: staples and discretionary are the defensive/cyclical
+  pair and behave differently in a drawdown, and one row at ~6.8% hid a book that is two-thirds
+  discretionary. The merge bought nothing either — Yahoo publishes the two separately in *both*
+  shapes ("Consumer Cyclical"/"Consumer Defensive" on a stock, `consumer_cyclical`/
+  `consumer_defensive` inside a fund's `sectorWeightings`) — so the split needed no extra data, no
+  extra fetch and no look-through change, only a second enum constant and a `SECTOR_COLORS` entry.
+  Currently Discretionary £53,446 (4.2% of total; £27,175 direct + £26,271 via funds) and Staples
+  £32,296 (2.5%; £17,470 + £14,825).
 - **`domain.SectorClassifier`** (framework-free, unit-tested). Resolution order:
   `Instruments.isBond` → `override.<SYMBOL>` → **fund look-through** → Yahoo sector →
   `UNCLASSIFIED`. Anything unclassifiable is surfaced by name in an amber strip, never absorbed

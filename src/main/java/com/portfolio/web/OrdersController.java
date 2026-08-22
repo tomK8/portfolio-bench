@@ -38,9 +38,10 @@ public class OrdersController {
     public String orders(@RequestParam(required = false) Double halfLife,
                          @RequestParam(required = false) Integer gtcSessions,
                          @RequestParam(required = false) Boolean useDrift,
+                         @RequestParam(required = false) Boolean useEventVar,
                          Model model) {
-        model.addAttribute("orders",
-                openOrdersService.load(openOrdersService.effectiveConfig(halfLife, gtcSessions, useDrift)));
+        model.addAttribute("orders", openOrdersService.load(
+                openOrdersService.effectiveConfig(halfLife, gtcSessions, useDrift, useEventVar)));
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/orders :: result";
     }
@@ -125,6 +126,19 @@ public class OrdersController {
     @PostMapping("/orders/drift")
     public String setDrift(@RequestParam boolean enabled, Model model) {
         openOrdersService.setUseDrift(enabled);
+        model.addAttribute("orders", openOrdersService.load());
+        model.addAttribute("completedAt", WebSupport.now());
+        return "fragments/orders :: result";
+    }
+
+    /**
+     * Stores the app-wide event-variance setting, on the same terms as the drift switch: one
+     * stored value, every surface reads it, and the table repaints under the new model in the same
+     * round trip.
+     */
+    @PostMapping("/orders/event-var")
+    public String setEventVar(@RequestParam boolean enabled, Model model) {
+        openOrdersService.setUseEventVar(enabled);
         model.addAttribute("orders", openOrdersService.load());
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/orders :: result";

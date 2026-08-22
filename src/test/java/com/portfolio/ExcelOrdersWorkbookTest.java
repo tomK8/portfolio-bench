@@ -30,10 +30,9 @@ class ExcelOrdersWorkbookTest {
                         new BigDecimal("0.0250"), new BigDecimal("0.0180"),
                         new BigDecimal("0.50"), new BigDecimal("0.6170"))
                 // Priced to its own expiry: 11 sessions away, which is what the sheet must say.
-                .withHorizonTouch(new VolForecast.Touch(11, new BigDecimal("0.0210"),
+                .withHorizonTouch(VolForecast.Touch.diffusive(11, new BigDecimal("0.0210"),
                         new BigDecimal("0.8200"), VolForecast.Source.BLEND, new BigDecimal("0.33"),
-                        new BigDecimal("0.7400"), new BigDecimal("0.7100"), new BigDecimal("0.7700"),
-                        BigDecimal.ZERO), 11);
+                        new BigDecimal("0.7400"), new BigDecimal("0.7100"), new BigDecimal("0.7700")), 11);
         OpenOrder ii = OpenOrder.parsed("II SIPP", "NVDA", "NVIDIA Corp", "Sell", "Limit",
                         new BigDecimal("51"), new BigDecimal("224.8596"), true, new BigDecimal("11467.84"),
                         "USD", LocalDate.of(2026, 7, 14), null, null, "PENDING", "ref2")
@@ -66,11 +65,13 @@ class ExcelOrdersWorkbookTest {
             assertEquals("P(low)", hdr.getCell(16).getStringCellValue());
             assertEquals("P(high)", hdr.getCell(17).getStringCellValue());
             assertEquals("σ eff", hdr.getCell(18).getStringCellValue());
-            assertEquals("Vol source", hdr.getCell(19).getStringCellValue());
-            assertEquals("Drift (annual)", hdr.getCell(20).getStringCellValue());
-            assertEquals("Amount", hdr.getCell(21).getStringCellValue());
-            assertEquals("Amount GBP", hdr.getCell(22).getStringCellValue());
-            assertEquals("Expiry", hdr.getCell(24).getStringCellValue());
+            assertEquals("σ eff (diffusive)", hdr.getCell(19).getStringCellValue());
+            assertEquals("Vol source", hdr.getCell(20).getStringCellValue());
+            assertEquals("Drift (annual)", hdr.getCell(21).getStringCellValue());
+            assertEquals("Events in horizon", hdr.getCell(22).getStringCellValue());
+            assertEquals("Amount", hdr.getCell(23).getStringCellValue());
+            assertEquals("Amount GBP", hdr.getCell(24).getStringCellValue());
+            assertEquals("Expiry", hdr.getCell(26).getStringCellValue());
 
             Row ajbRow = sheet.getRow(1);
             assertEquals("EQQQ", ajbRow.getCell(1).getStringCellValue());
@@ -101,12 +102,16 @@ class ExcelOrdersWorkbookTest {
             assertEquals(0.7100, ajbRow.getCell(16).getNumericCellValue(), 1e-9);
             assertEquals(0.7700, ajbRow.getCell(17).getNumericCellValue(), 1e-9);
             assertEquals(0.0210, ajbRow.getCell(18).getNumericCellValue(), 1e-9);
-            assertEquals("BLEND", ajbRow.getCell(19).getStringCellValue());
-            // Driftless row: 0%, stated rather than blank — "no drift was applied" is a fact about
-            // the number beside it, not missing data.
-            assertEquals(0.0, ajbRow.getCell(20).getNumericCellValue(), 1e-12);
-            assertEquals(26901.41, ajbRow.getCell(22).getNumericCellValue(), 1e-6);
-            assertEquals("2026-07-29", ajbRow.getCell(24).getStringCellValue());
+            assertEquals("BLEND", ajbRow.getCell(20).getStringCellValue());
+            // Driftless, event-free row: 0% and 0, stated rather than blank — "no adjustment was
+            // applied" is a fact about the number beside it, not missing data. And σ eff equals its
+            // own diffusive value, which is what "no calendar contribution" looks like.
+            assertEquals(0.0, ajbRow.getCell(21).getNumericCellValue(), 1e-12);
+            assertEquals(0.0, ajbRow.getCell(22).getNumericCellValue(), 1e-12);
+            assertEquals(ajbRow.getCell(18).getNumericCellValue(),
+                    ajbRow.getCell(19).getNumericCellValue(), 1e-12);
+            assertEquals(26901.41, ajbRow.getCell(24).getNumericCellValue(), 1e-6);
+            assertEquals("2026-07-29", ajbRow.getCell(26).getStringCellValue());
 
             Row iiRow = sheet.getRow(2);
             // value stays numeric; the "~" lives only in the display number format
@@ -121,6 +126,7 @@ class ExcelOrdersWorkbookTest {
             assertNull(iiRow.getCell(13), "unpriced row → no horizon column either");
             assertNull(iiRow.getCell(15));
             assertNull(iiRow.getCell(18));
+            assertNull(iiRow.getCell(21), "unpriced row → no model columns either");
         }
     }
 
@@ -139,7 +145,8 @@ class ExcelOrdersWorkbookTest {
                 .withHorizonTouch(new VolForecast.Touch(90, new BigDecimal("0.01296727"),
                         new BigDecimal("0.3064"), VolForecast.Source.BLEND, new BigDecimal("-0.15"),
                         new BigDecimal("0.8800"), new BigDecimal("0.8600"), new BigDecimal("0.9000"),
-                        AssetClass.EQUITY.dailyDrift()), null);
+                        AssetClass.EQUITY.dailyDrift(), new BigDecimal("0.000153"),
+                        new BigDecimal("0.01296727"), 0, BigDecimal.ZERO), null);
 
         try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(
                 new ExcelReportWriter().ordersWorkbook(List.of(drifted))))) {
@@ -147,9 +154,9 @@ class ExcelOrdersWorkbookTest {
             // 1e-6, not exact: the row carries the per-session figure the model actually consumed,
             // rounded to 10 dp, so annualising it back lands at 0.0599999904 — 6.00% once the cell
             // format is applied. The per-session number is the one that has to be faithful.
-            assertEquals(0.06, row.getCell(20).getNumericCellValue(), 1e-6,
+            assertEquals(0.06, row.getCell(21).getNumericCellValue(), 1e-6,
                     "the per-session drift, stated back in the year it was quoted in");
-            assertTrue(row.getCell(20).getCellStyle().getDataFormatString().contains("%"));
+            assertTrue(row.getCell(21).getCellStyle().getDataFormatString().contains("%"));
         }
     }
 

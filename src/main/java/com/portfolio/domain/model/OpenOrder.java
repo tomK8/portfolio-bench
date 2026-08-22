@@ -49,6 +49,11 @@ public record OpenOrder(
                                 // 1 = all RV20, 0 = all RV250. Recorded so a probability can be
                                 // re-derived later from the record alone.
         String volSource,       // VolForecast.Source name: BLEND / CURRENT_ONLY / ANCHOR_ONLY / NONE
+        BigDecimal sigmaEffDiffusive, // σ_eff before scheduled-event variance; equal to sigmaEff
+                                // when none applied. The gap between the two *is* the calendar's
+                                // contribution, and nothing else records it.
+        int eventCount,         // scheduled prints found inside horizonSessions
+        BigDecimal eventVariance, // Σ move² folded into the horizon's total variance
         BigDecimal driftPerSession, // log drift per session the first passage applied; ZERO on the
                                 // driftless model. Carried for the same reason sigmaEff is: the
                                 // probability beside it is only judgeable against the model that
@@ -159,7 +164,7 @@ public record OpenOrder(
                 amount, currency, dateEntered, expiry, duration, status, reference,
                 null, null, null, null,
                 null, null, null, null,
-                null, null, null, null, null, null,
+                null, null, null, null, 0, null, null, null, null,
                 null, null, null, null, null);
     }
 
@@ -169,7 +174,8 @@ public record OpenOrder(
                 amount, currency, dateEntered, expiry, duration, status, reference, gbp,
                 currentPrice, distancePct, quoteSession,
                 dailyVol10, dailyVol20, dailyVol30, dailyVol250,
-                sigmaEff, decayWeight, volSource, driftPerSession, sigmaToLimit, touchProb5d,
+                sigmaEff, decayWeight, volSource, sigmaEffDiffusive, eventCount, eventVariance,
+                driftPerSession, sigmaToLimit, touchProb5d,
                 horizonSessions, touchProbHorizon, touchProbLow, touchProbHigh, sessionsToExpiry);
     }
 
@@ -183,7 +189,8 @@ public record OpenOrder(
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
                 current, distance, session,
                 dailyVol10, dailyVol20, dailyVol30, dailyVol250,
-                sigmaEff, decayWeight, volSource, driftPerSession, sigmaToLimit, touchProb5d,
+                sigmaEff, decayWeight, volSource, sigmaEffDiffusive, eventCount, eventVariance,
+                driftPerSession, sigmaToLimit, touchProb5d,
                 horizonSessions, touchProbHorizon, touchProbLow, touchProbHigh, sessionsToExpiry);
     }
 
@@ -199,7 +206,8 @@ public record OpenOrder(
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
                 currentPrice, distancePct, quoteSession,
                 dv10, dv20, dv30, dv250,
-                sigmaEff, decayWeight, volSource, driftPerSession, sigmaToLimit, touchProb5d,
+                sigmaEff, decayWeight, volSource, sigmaEffDiffusive, eventCount, eventVariance,
+                driftPerSession, sigmaToLimit, touchProb5d,
                 horizonSessions, touchProbHorizon, touchProbLow, touchProbHigh, sessionsToExpiry);
     }
 
@@ -222,6 +230,9 @@ public record OpenOrder(
                 touch == null ? null : touch.sigmaEff(),
                 touch == null ? null : touch.decay(),
                 touch == null || touch.source() == null ? null : touch.source().name(),
+                touch == null ? null : touch.sigmaEffDiffusive(),
+                touch == null ? 0 : touch.eventCount(),
+                touch == null ? null : touch.eventVariance(),
                 touch == null ? null : touch.drift(),
                 sigmaToLimit, touchProb5d,
                 touch == null ? null : touch.sessions(),
@@ -241,6 +252,11 @@ public record OpenOrder(
         return driftPerSession == null ? java.math.BigDecimal.ZERO
                 : driftPerSession.multiply(java.math.BigDecimal.valueOf(
                         com.portfolio.domain.AssetClass.SESSIONS_PER_YEAR));
+    }
+
+    /** True when scheduled-event variance was folded into this row's figure. */
+    public boolean eventAdjusted() {
+        return eventCount > 0;
     }
 
     /** True when the hover range around the headline probability exists. */

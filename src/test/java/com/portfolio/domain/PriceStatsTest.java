@@ -240,11 +240,30 @@ class PriceStatsTest {
             AssetClass.EQUITY.dailyDrift();     // 0.06/yr ÷ 252 ≈ 0.000238 per session
 
     @Test
+    void driftedFirstPassage_reducesToTheDriftlessFormulaExactlyAtZeroLogDrift() {
+        // The barrier-maths validation, and the reason PriceStats takes ν rather than μ: at ν = 0
+        // the two Φ terms collapse onto the same argument and exp(0) = 1, so the drifted expression
+        // *is* 2·Φ(−|b|/σ√N) — not approximately, identically. Asserted on the raw doubles the
+        // public forms wrap, since the BigDecimal API rounds to 4 dp and could never show 1e-10.
+        double current = 100.0;
+        for (double limit : new double[]{60, 90, 95, 99.5, 99.999, 100, 100.001, 104, 130, 250}) {
+            for (double sigma : new double[]{0.0005, 0.002, 0.01, 0.02, 0.05, 0.15, 0.5}) {
+                for (int n : new int[]{1, 2, 5, 20, 63, 90, 250, 500, 1250}) {
+                    double drifted = PriceStats.driftedTouchRaw(current, limit, sigma, n, 0.0);
+                    double driftless = PriceStats.driftlessTouchRaw(current, limit, sigma, n);
+                    assertEquals(driftless, drifted, 1e-10,
+                            "ν = 0 must reproduce the driftless form exactly (limit " + limit
+                                    + ", σ " + sigma + ", N " + n + ")");
+                }
+            }
+        }
+    }
+
+    @Test
     void driftedFirstPassage_isTheDriftlessFormulaWhenDriftIsZero() {
-        // The identity the whole wiring rests on. Asserted on the formulas themselves, with the
-        // drifted one *actually evaluating* its exp(2νb/σ²) term (it is exp(0) = 1 here) rather
-        // than short-circuiting — a short-circuit inside the drifted form would make this test
-        // pass by construction and prove nothing.
+        // The same identity through the public BigDecimal API, where it can only hold to the
+        // rounding those two paths carry (see the bound below). The exact statement is the raw-double
+        // test above; this one guards the wrappers.
         BigDecimal sigma = new BigDecimal("0.02");
         for (String limit : new String[]{"95", "99.5", "100", "104", "130", "60"}) {
             for (int n : new int[]{1, 5, 20, 90, 250}) {

@@ -23,6 +23,7 @@ import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.InstrumentMappingRepository;
 import com.portfolio.persistence.EarningsDateRepository;
+import com.portfolio.domain.EventMoves;
 import com.portfolio.domain.SectorClassifier;
 import com.portfolio.domain.StyleClassifier;
 import com.portfolio.persistence.FundamentalsRepository;
@@ -50,6 +51,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 
 /**
  * The only place outside the web layer that knows about Spring. Wires the
@@ -161,6 +163,8 @@ public class BeanConfiguration {
                                                KeyValueStore keyValueStore,
                                                IntradayPriceFetchJob intradayPriceFetchJob,
                                                PriceFetchJob priceFetchJob,
+                                               EarningsCalendarRepository earningsCalendarRepository,
+                                               EarningsCalendarService earningsCalendarService,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -178,7 +182,26 @@ public class BeanConfiguration {
                 // named, so their daily series — the volatility every probability is scaled by — can
                 // be missing entirely. fetchSingleIfStale is the right depth: it skips a name whose
                 // history is already current, so re-probing a held position costs no HTTP at all.
-                backfillOnBackgroundThread(priceFetchJob));
+                backfillOnBackgroundThread(priceFetchJob),
+                // Scheduled-event variance reads the cached earnings calendar and never fetches
+                // inline: a date we don't have yields an unadjusted probability and a warning, not
+                // an inferred date. The Earnings tab and the calendar warmer keep the cache filled.
+                new OrderEventVariance(earningsCalendarRepository, yahooTickerMap,
+                        new EventMoves(), warmCalendarOnBackgroundThread(earningsCalendarService)));
+    }
+
+    /**
+     * Fills the earnings calendar forward on a daemon thread. One thread, so a burst of tab clicks
+     * queues rather than racing Nasdaq — and the panel never waits: an unadjusted probability is
+     * rendered now and the event-adjusted one appears on a later reload.
+     */
+    private static IntConsumer warmCalendarOnBackgroundThread(EarningsCalendarService service) {
+        ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "orders-calendar-warm");
+            t.setDaemon(true);
+            return t;
+        });
+        return days -> exec.submit(() -> service.warmForward(days));
     }
 
     private static Consumer<Collection<String>> warmOnBackgroundThread(IntradayPriceFetchJob job) {

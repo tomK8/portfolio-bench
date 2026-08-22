@@ -256,28 +256,52 @@ public final class PriceStats {
      * driftless value rather than propagating. Clamped to {@code [0,1]}; at the barrier ({@code b =
      * 0}) it is 1 whatever the drift, as it must be.
      *
-     * @param driftPerSession log drift per trading session — see {@link AssetClass#dailyDrift()}.
+     * <p><b>The parameter is ν, the log drift — not an expected arithmetic return.</b> That is the
+     * quantity the first passage is written in, and keeping the conversion out of here is what lets
+     * {@code ν = 0} reduce to the driftless form <em>exactly</em>: the reduction is the test that
+     * validates the barrier algebra, and it could not be stated at all if this method silently
+     * subtracted a variance drag from whatever it was handed. The Itô conversion
+     * {@code ν = μ − σ²/2} belongs where μ and σ meet, in {@link VolForecast#touch}.
+     *
+     * @param logDriftPerSession ν per trading session; null or zero gives the driftless result.
      */
     public static BigDecimal touchProbabilityDrifted(BigDecimal current, BigDecimal limit,
                                                      BigDecimal sigmaPerSession, int sessions,
-                                                     BigDecimal driftPerSession) {
+                                                     BigDecimal logDriftPerSession) {
         if (current == null || limit == null || sigmaPerSession == null || sessions < 1) return null;
         double s = current.doubleValue(), k = limit.doubleValue(), sigma = sigmaPerSession.doubleValue();
         if (s <= 0 || k <= 0 || sigma <= 0) return null;
-        double nu = driftPerSession == null ? 0.0 : driftPerSession.doubleValue();
+        double nu = logDriftPerSession == null ? 0.0 : logDriftPerSession.doubleValue();
 
-        double b = Math.log(k / s);
+        double p = driftedTouchRaw(s, k, sigma, sessions, nu);
+        if (!Double.isFinite(p)) {
+            return touchProbability(sigmaDistance(current, limit, sigmaPerSession, sessions));
+        }
+        return BigDecimal.valueOf(Math.max(0.0, Math.min(1.0, p))).setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * The drifted first passage as a raw double — unrounded and unclamped, so the reduction to the
+     * driftless form at {@code ν = 0} can be asserted to 1e-10 rather than to the 4 dp the
+     * {@code BigDecimal} API rounds to. Both public forms are thin wrappers over this and
+     * {@link #driftlessTouchRaw}, so the exact test really does validate the shipped path.
+     */
+    static double driftedTouchRaw(double current, double limit, double sigma, int sessions, double nu) {
+        double b = Math.log(limit / current);
         double absB = Math.abs(b);
         double sign = b >= 0 ? 1.0 : -1.0;
         double sigmaH = sigma * Math.sqrt(sessions);
         double z1 = (-absB + sign * nu * sessions) / sigmaH;
         double z2 = (-absB - sign * nu * sessions) / sigmaH;
-        double p = normalCdf(z1) + Math.exp(2.0 * nu * b / (sigma * sigma) + Math.log(normalCdf(z2)));
-        if (!Double.isFinite(p)) {
-            return touchProbability(sigmaDistance(current, limit, sigmaPerSession, sessions));
-        }
-        p = Math.max(0.0, Math.min(1.0, p));
-        return BigDecimal.valueOf(p).setScale(4, RoundingMode.HALF_UP);
+        // Second term in log space: exp(2νb/σ²) can be enormous while Φ(z₂) has underflowed, and
+        // ∞ × 0 is NaN where the true product is negligible. exp(−∞) is 0, which it should be.
+        return normalCdf(z1) + Math.exp(2.0 * nu * b / (sigma * sigma) + Math.log(normalCdf(z2)));
+    }
+
+    /** {@code 2·Φ(−|b|/(σ√N))} as a raw double — the ν = 0 case, for the same exact comparison. */
+    static double driftlessTouchRaw(double current, double limit, double sigma, int sessions) {
+        double d = Math.log(limit / current) / (sigma * Math.sqrt(sessions));
+        return 2.0 * normalCdf(-Math.abs(d));
     }
 
     /** Standard normal CDF {@code Φ(x)} via the {@link #erfc} approximation. */

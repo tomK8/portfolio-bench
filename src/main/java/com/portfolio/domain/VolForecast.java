@@ -2,6 +2,7 @@ package com.portfolio.domain;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.List;
 
 /**
  * The volatility forecast behind the open-orders touch probabilities, and the single point where
@@ -37,11 +38,17 @@ import java.math.RoundingMode;
  * So {@code σ_h = sigma_eff·√N} is strictly increasing in {@code N} even when the blend is pulling
  * {@code sigma_eff} <em>down</em> — P(touch) never goes backwards as the horizon lengthens.
  *
+ * <p><b>Drift, when it is switched on, is Itô-corrected here.</b> An asset class carries an
+ * expected <em>arithmetic</em> return (equities 6%/yr); the first passage consumes a <em>log</em>
+ * drift, so {@link #touch} applies {@code ν = μ − σ_eff²/2} before calling it. Because σ_eff
+ * depends on the horizon, so does ν — the same class produces a different log drift at 5 sessions
+ * and at 250.
+ *
  * <p><b>Everything routes through {@link #resolve}.</b> The first-passage call site takes whatever
  * {@code sigma_eff} comes back and asks no questions, so a later implied-vol or event-variance
- * source can be swapped in here without touching it — that is what the {@code useImpliedVol} and
- * {@code useEventVar} flags on {@link Config} are reserved for; both default to false and are
- * no-ops today. {@code useDrift} is wired: see {@link #touch}.
+ * source can be swapped in here without touching it — that is what the {@code useImpliedVol} flag
+ * on {@link Config} is reserved for; it defaults to false and is a no-op today. {@code useDrift}
+ * and {@code useEventVar} are both wired: see {@link #touch} and {@code withEvents}.
  */
 public final class VolForecast {
 
@@ -73,8 +80,8 @@ public final class VolForecast {
      * @param useDrift           use the drifted first passage, with the drift of the instrument's
      *                           {@link AssetClass}. Default false: driftless is the neutral
      *                           convention, and a wrong drift is worse than none.
-     * @param useEventVar        reserved: add scheduled-event (earnings) variance inside the
-     *                           horizon. No-op.
+     * @param useEventVar        add scheduled-event (earnings) variance for prints falling inside
+     *                           the horizon — see {@code withEvents}. Default false.
      * @param useImpliedVol      reserved: take {@code sigma_eff} from an option-implied term
      *                           structure instead of realized windows. No-op.
      */
@@ -98,10 +105,15 @@ public final class VolForecast {
         }
 
         public static Config of(Double halfLifeDays, Integer gtcHorizonSessions, Boolean useDrift) {
+            return of(halfLifeDays, gtcHorizonSessions, useDrift, null);
+        }
+
+        public static Config of(Double halfLifeDays, Integer gtcHorizonSessions,
+                                Boolean useDrift, Boolean useEventVar) {
             return new Config(
                     halfLifeDays == null ? DEFAULT_HALF_LIFE_DAYS : halfLifeDays,
                     gtcHorizonSessions == null ? DEFAULT_GTC_HORIZON_SESSIONS : gtcHorizonSessions,
-                    useDrift != null && useDrift, false, false);
+                    useDrift != null && useDrift, useEventVar != null && useEventVar, false);
         }
     }
 
@@ -110,15 +122,57 @@ public final class VolForecast {
      * {@code rv20} is current state and {@code rv250} the long-run anchor; {@code rv10} and
      * {@code rv30} carry the displayed columns and bracket the headline with a plausible range.
      */
-    public record Inputs(BigDecimal rv10, BigDecimal rv20, BigDecimal rv30, BigDecimal rv250) {
+    public record Inputs(BigDecimal rv10, BigDecimal rv20, BigDecimal rv30, BigDecimal rv250,
+                         List<Event> events) {
 
         public static final Inputs NONE = new Inputs(null, null, null, null);
+
+        public Inputs {
+            events = events == null ? List.of() : List.copyOf(events);
+        }
+
+        /** The realized windows alone — no scheduled events known, or none wanted. */
+        public Inputs(BigDecimal rv10, BigDecimal rv20, BigDecimal rv30, BigDecimal rv250) {
+            this(rv10, rv20, rv30, rv250, List.of());
+        }
     }
 
-    /** A resolved {@code sigma_eff}, with the provenance a calibration record needs. */
-    public record Forecast(BigDecimal sigmaEff, BigDecimal decay, Source source) {
+    /**
+     * A scheduled event inside (or beyond) the horizon — an earnings print, in practice.
+     *
+     * <p>Measured in <b>sessions away</b> rather than as a date, so the forecast never has to know
+     * what today is and the same input can be tested at any horizon: {@link #resolve} keeps the
+     * events with {@code 0 ≤ sessionsAway ≤ N} and ignores the rest, which is how one input set
+     * yields two prints at N=126 and one at N=63.
+     *
+     * @param move typical absolute one-day move on the event, as a fraction (0.06 = 6%). See
+     *             {@link EventMoves}.
+     */
+    public record Event(int sessionsAway, BigDecimal move) {
 
-        public static final Forecast NONE = new Forecast(null, null, Source.NONE);
+        boolean insideHorizon(int sessions) {
+            return sessionsAway >= 0 && sessionsAway <= sessions && move != null && move.signum() > 0;
+        }
+    }
+
+    /**
+     * A resolved {@code sigma_eff}, with the provenance a calibration record needs.
+     *
+     * @param sigmaEffDiffusive σ_eff before any event variance was folded in — kept so a record
+     *                          says what the diffusive model alone thought, which is the only way
+     *                          to see afterwards how much of a probability the calendar supplied.
+     * @param eventCount        scheduled events found inside the horizon.
+     * @param eventVariance     Σ move² added to the total variance over the horizon.
+     */
+    public record Forecast(BigDecimal sigmaEff, BigDecimal decay, Source source,
+                           BigDecimal sigmaEffDiffusive, int eventCount, BigDecimal eventVariance) {
+
+        public static final Forecast NONE =
+                new Forecast(null, null, Source.NONE, null, 0, BigDecimal.ZERO);
+
+        public Forecast(BigDecimal sigmaEff, BigDecimal decay, Source source) {
+            this(sigmaEff, decay, source, sigmaEff, 0, BigDecimal.ZERO);
+        }
     }
 
     /**
@@ -133,12 +187,41 @@ public final class VolForecast {
     public record Touch(int sessions, BigDecimal sigmaEff, BigDecimal decay, Source source,
                         BigDecimal sigmaToLimit, BigDecimal probability,
                         BigDecimal probabilityLow, BigDecimal probabilityHigh,
-                        /** Log drift per session actually applied; ZERO on the driftless branch. */
-                        BigDecimal drift) {
+                        /** μ — the asset class's expected annual return, per session. ZERO when drift is off. */
+                        BigDecimal drift,
+                        /**
+                         * ν = μ − σ_eff²/2 — the <em>log</em> drift the first passage actually
+                         * consumed. Horizon-dependent, because σ_eff is: the same μ produces a
+                         * different ν at 5 sessions and at 250. ZERO on the driftless branch.
+                         */
+                        BigDecimal logDrift,
+                        /** σ_eff before event variance — equal to {@link #sigmaEff} when none applied. */
+                        BigDecimal sigmaEffDiffusive,
+                        /** Scheduled events found inside the horizon. */
+                        int eventCount,
+                        /** Σ move² folded into the horizon's total variance. */
+                        BigDecimal eventVariance) {
+
+        /**
+         * The plain case: a diffusive, driftless, event-free pricing. Spelled out so callers that
+         * genuinely have none of the extras (and the fixtures that stand in for them) don't have to
+         * pass a row of zeroes whose meaning has to be looked up.
+         */
+        public static Touch diffusive(int sessions, BigDecimal sigmaEff, BigDecimal decay,
+                                      Source source, BigDecimal sigmaToLimit, BigDecimal probability,
+                                      BigDecimal low, BigDecimal high) {
+            return new Touch(sessions, sigmaEff, decay, source, sigmaToLimit, probability, low, high,
+                    BigDecimal.ZERO, BigDecimal.ZERO, sigmaEff, 0, BigDecimal.ZERO);
+        }
 
         public static Touch none(int sessions) {
             return new Touch(sessions, null, null, Source.NONE, null, null, null, null,
-                    BigDecimal.ZERO);
+                    BigDecimal.ZERO, BigDecimal.ZERO, null, 0, BigDecimal.ZERO);
+        }
+
+        /** True when the calendar contributed variance to this figure. */
+        public boolean eventAdjusted() {
+            return eventCount > 0;
         }
 
         /** True when the drifted first passage priced this, rather than the driftless default. */
@@ -190,30 +273,75 @@ public final class VolForecast {
         Config c = cfg == null ? Config.DEFAULT : cfg;
         int n = Math.max(1, horizonSessions);
 
-        // Reserved sources. Both are no-ops today and fall through to the realized blend; they are
-        // named here so that when one arrives it arrives in this method and nowhere else.
+        // Reserved source. A no-op today, falling through to the realized blend; named here so that
+        // when it arrives it arrives in this method and nowhere else.
         if (c.useImpliedVol()) {
             // future: implied-vol term structure interpolated at n sessions
-        }
-        if (c.useEventVar()) {
-            // future: + scheduled-event variance for earnings dates inside the horizon
         }
 
         BigDecimal now = positiveOrNull(in == null ? null : in.rv20());
         BigDecimal anchor = positiveOrNull(in == null ? null : in.rv250());
         if (now == null && anchor == null) return Forecast.NONE;
-        if (anchor == null) return new Forecast(now, BigDecimal.ONE, Source.CURRENT_ONLY);
-        if (now == null) return new Forecast(anchor, BigDecimal.ZERO, Source.ANCHOR_ONLY);
+        // The degraded paths fold events in too: a short-history name with a print next week is
+        // exactly the case where the calendar is carrying most of the information.
+        if (anchor == null) return withEvents(now, BigDecimal.ONE, Source.CURRENT_ONLY, in, n, c);
+        if (now == null) return withEvents(anchor, BigDecimal.ZERO, Source.ANCHOR_ONLY, in, n, c);
 
         double varNow = now.doubleValue() * now.doubleValue();
         double varLr = anchor.doubleValue() * anchor.doubleValue();
         double decay = decayWeight(c.halfLifeDays(), n);
         double varN = varLr + (varNow - varLr) * decay;
         if (varN <= 0) return Forecast.NONE;   // only reachable if both windows are degenerate
-        return new Forecast(
+        return withEvents(
                 BigDecimal.valueOf(Math.sqrt(varN)).setScale(SCALE, RoundingMode.HALF_UP),
                 BigDecimal.valueOf(decay).setScale(4, RoundingMode.HALF_UP),
-                Source.BLEND);
+                Source.BLEND, in, n, c);
+    }
+
+    /**
+     * Fold scheduled-event variance into a diffusive forecast:
+     * <pre>
+     *   totalVar  = var_N · N + Σ move²      (events with 0 ≤ sessionsAway ≤ N)
+     *   sigma_eff = √(totalVar / N)
+     * </pre>
+     *
+     * <p><b>Events enter as variance, not as volatility.</b> A trailing window cannot see a date in
+     * the calendar: a name quiet for twenty sessions that reports next month is not a quiet name,
+     * and no amount of blending RV20 toward RV250 will discover that. Adding the print's move in
+     * quadrature is the arithmetic that says "the horizon contains one ordinary diffusion of N
+     * sessions <em>and</em> one jump", rather than pretending the jump was in the trailing sample.
+     *
+     * <p>A 90-session horizon usually contains two prints (quarterly ≈ 63 sessions apart), so every
+     * event inside the horizon is summed rather than just the next one. Outside it, none: the same
+     * input set therefore yields a different σ_eff at 63 sessions and at 126, which is correct and
+     * is what makes the editable horizon box meaningful for a name with a print coming.
+     *
+     * <p>With the flag off, or with no events supplied, this returns the diffusive forecast
+     * untouched — including the case that matters most: a symbol whose earnings date we could not
+     * obtain contributes nothing and is reported as unadjusted, rather than being given a guessed
+     * date that would look identical to a real one.
+     */
+    private static Forecast withEvents(BigDecimal sigmaDiffusive, BigDecimal decay, Source source,
+                                       Inputs in, int sessions, Config cfg) {
+        if (!cfg.useEventVar() || in == null || in.events().isEmpty() || sigmaDiffusive == null) {
+            return new Forecast(sigmaDiffusive, decay, source);
+        }
+        double eventVar = 0.0;
+        int count = 0;
+        for (Event e : in.events()) {
+            if (!e.insideHorizon(sessions)) continue;
+            double move = e.move().doubleValue();
+            eventVar += move * move;
+            count++;
+        }
+        if (count == 0) return new Forecast(sigmaDiffusive, decay, source);
+
+        double s = sigmaDiffusive.doubleValue();
+        double totalVar = s * s * sessions + eventVar;
+        BigDecimal withEvent = BigDecimal.valueOf(Math.sqrt(totalVar / sessions))
+                .setScale(SCALE, RoundingMode.HALF_UP);
+        return new Forecast(withEvent, decay, source, sigmaDiffusive, count,
+                BigDecimal.valueOf(eventVar).setScale(SCALE, RoundingMode.HALF_UP));
     }
 
     /**
@@ -266,24 +394,48 @@ public final class VolForecast {
         BigDecimal sigmaToLimit = PriceStats.sigmaDistance(current, limit, f.sigmaEff(), n);
         BigDecimal p = probability(current, limit, f.sigmaEff(), n, mu, sigmaToLimit);
 
+        // The range is priced on RV10/RV30, so each end gets the ν its own σ implies — the drag is
+        // a function of the volatility being used, not a constant to be shared across the three.
         BigDecimal a = probability(current, limit, positiveOrNull(in.rv10()), n, mu, null);
         BigDecimal b = probability(current, limit, positiveOrNull(in.rv30()), n, mu, null);
         return new Touch(n, f.sigmaEff(), f.decay(), f.source(), sigmaToLimit, p,
-                min(a, b), max(a, b), mu);
+                min(a, b), max(a, b), mu, logDrift(mu, f.sigmaEff()),
+                f.sigmaEffDiffusive(), f.eventCount(), f.eventVariance());
     }
 
     /**
-     * The branch itself. {@code sigmaDistance} is passed in when the caller already has it (the
-     * headline), so the driftless path doesn't recompute the same logarithm twice.
+     * The branch itself, and the one place μ is converted to ν.
+     *
+     * <p>{@code ν = μ − σ²/2}: the 6%/yr an asset class carries is an expected <em>arithmetic</em>
+     * return, while the first passage is written in log space, and the gap between them — the
+     * variance drag — is not decoration. At a 1%/day σ it is 1.26%/yr, a fifth of the figure.
+     *
+     * <p><b>The branch tests μ, not ν</b>, which matters in both directions. A class with μ = 0
+     * (gilts, bullion) takes the driftless path and is left exactly alone rather than being handed
+     * a small negative drift it never asked for; and because the conversion happens here rather
+     * than inside {@link PriceStats#touchProbabilityDrifted}, that method still reduces to the
+     * driftless form exactly at ν = 0, which is what the barrier algebra is tested against.
      */
     private static BigDecimal probability(BigDecimal current, BigDecimal limit, BigDecimal sigma,
                                           int sessions, BigDecimal mu, BigDecimal sigmaDistance) {
         if (sigma == null) return null;
         if (mu != null && mu.signum() != 0) {
-            return PriceStats.touchProbabilityDrifted(current, limit, sigma, sessions, mu);
+            return PriceStats.touchProbabilityDrifted(current, limit, sigma, sessions,
+                    logDrift(mu, sigma));
         }
         return PriceStats.touchProbability(sigmaDistance != null ? sigmaDistance
                 : PriceStats.sigmaDistance(current, limit, sigma, sessions));
+    }
+
+    /**
+     * {@code ν = μ − σ²/2}, per session. Zero μ stays zero ν: a class with no expected return is
+     * modelled as having no drift at all, not as one dragged below zero by its own variance.
+     */
+    static BigDecimal logDrift(BigDecimal mu, BigDecimal sigma) {
+        if (mu == null || mu.signum() == 0) return BigDecimal.ZERO;
+        if (sigma == null) return mu;
+        double s = sigma.doubleValue();
+        return BigDecimal.valueOf(mu.doubleValue() - s * s / 2.0).setScale(12, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal positiveOrNull(BigDecimal v) {

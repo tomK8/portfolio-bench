@@ -11,6 +11,7 @@ import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
+import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
@@ -302,7 +303,7 @@ class OpenOrdersServiceTest {
         try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
                 Files.newInputStream(Path.of(export.files().get(0))))) {
             var row = wb.getSheet("Open Orders").getRow(1);
-            assertEquals(0.06, row.getCell(20).getNumericCellValue(), 1e-6, "Drift (annual)");
+            assertEquals(0.06, row.getCell(21).getNumericCellValue(), 1e-6, "Drift (annual)");
         }
 
         service.setUseDrift(false);
@@ -344,6 +345,85 @@ class OpenOrdersServiceTest {
         assertFalse(service.effectiveConfig(null, null, null).useDrift());
         assertDoesNotThrow(() -> service.setUseDrift(true));
         assertFalse(service.useDrift(), "nowhere to store it, so nothing changes");
+    }
+
+    @Test
+    void aScheduledPrintInsideTheHorizonRaisesTheProbability(@TempDir Path dir) {
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
+        EarningsCalendarRepository calendar = new EarningsCalendarRepository(connections);
+        // A print 20 calendar days out, and a fully-fetched calendar around it.
+        LocalDate print = LocalDate.now().plusDays(20);
+        seedCalendar(calendar, LocalDate.now(), LocalDate.now().plusDays(140), print, "WMT");
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                FX, new ExcelReportWriter(), outDir, intraday, history, new YahooTickerMap(),
+                new KeyValueStore(dir.resolve("db")), tickers -> { }, symbol -> { },
+                new OrderEventVariance(calendar, new YahooTickerMap()));
+        VolForecast.Config eventsOn = VolForecast.Config.of(null, null, false, true);
+
+        OpenOrder off = service.probe("WMT", new BigDecimal("100.00"), "Buy", 90).hypothetical();
+        OpenOrder on = service.probe("WMT", new BigDecimal("100.00"), "Buy", 90, eventsOn).hypothetical();
+
+        assertEquals(0, off.eventCount(), "flag off: the calendar is not consulted");
+        assertEquals(1, on.eventCount());
+        assertTrue(on.eventAdjusted());
+        assertTrue(on.sigmaEff().compareTo(on.sigmaEffDiffusive()) > 0,
+                "the print inflates σ_eff above the diffusive figure");
+        assertEquals(off.sigmaEff(), on.sigmaEffDiffusive(), "and the diffusive figure is preserved");
+        assertTrue(on.touchProbHorizon().compareTo(off.touchProbHorizon()) > 0,
+                "a quiet name with a report due is not a quiet name: " + on.touchProbHorizon()
+                        + " vs " + off.touchProbHorizon());
+
+        // A five-session horizon does not contain a print twenty calendar days out.
+        assertEquals(0, service.probe("WMT", new BigDecimal("100.00"), "Buy", 5, eventsOn)
+                .hypothetical().eventCount());
+    }
+
+    @Test
+    void anUnavailableEarningsDateLeavesTheProbabilityVisiblyUnadjusted(@TempDir Path dir) throws Exception {
+        // The instruction that matters most: no date, no adjustment, and *say so*. A guessed
+        // quarterly cadence would land close enough to look right and be indistinguishable on
+        // screen from a real date — so the row is named in a warning instead.
+        Files.writeString(dir.resolve("2bc3405a-877c-4bf3-ac16-8dcb5303b89a.csv"), """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                19/08/2026 16:52,27726IDT248,BUY/LIMIT,WMT,Walmart Inc,50,n/a,"$5,000.00",PENDING
+                """);
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
+        EarningsCalendarRepository calendar = new EarningsCalendarRepository(connections);   // empty
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, history, new YahooTickerMap(), new KeyValueStore(dir.resolve("db")),
+                tickers -> { }, symbol -> { }, new OrderEventVariance(calendar, new YahooTickerMap()));
+
+        OrdersReport report = service.load(VolForecast.Config.of(null, null, false, true));
+        OpenOrder wmt = find(report.orders(), "WMT");
+        assertEquals(0, wmt.eventCount());
+        assertEquals(wmt.sigmaEffDiffusive(), wmt.sigmaEff(), "unadjusted means identical, not similar");
+        assertTrue(report.warnings().stream().anyMatch(w -> w.contains("WMT") && w.contains("earnings date")),
+                "and the row is named: " + report.warnings());
+    }
+
+    @Test
+    void aNonUsListingIsReportedAsNeverCoveredRatherThanMerelyUnfetched(@TempDir Path dir) {
+        // The Nasdaq calendar is US-only. "No date yet" and "no date ever" are different facts and
+        // the panel says which — one is worth reloading for, the other never will be.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        EarningsCalendarRepository calendar = new EarningsCalendarRepository(connections);
+        OrderEventVariance events = new OrderEventVariance(calendar, new YahooTickerMap());
+
+        assertEquals(OrderEventVariance.Coverage.NOT_COVERED, events.eventsFor("LSEG", 90).coverage());
+        assertEquals(OrderEventVariance.Coverage.NONE, events.eventsFor("WMT", 90).coverage());
+        // A fund, gilt or bullion ETC has nothing to adjust for, so its window is complete, not a gap.
+        assertEquals(OrderEventVariance.Coverage.COMPLETE, events.eventsFor("SGLN", 90).coverage());
+        assertEquals(OrderEventVariance.Coverage.COMPLETE,
+                events.eventsFor("GILT 4.75% 2038", 90).coverage());
     }
 
     @Test
@@ -689,6 +769,25 @@ class OpenOrdersServiceTest {
         history.savePriceBars(bars);
         intraday.saveIntradayBars(List.of(new com.portfolio.domain.model.IntradayBar(
                 ticker, java.time.Instant.now(), px, null, "USD")));
+    }
+
+    /**
+     * Marks every weekday in {@code [from, to]} as fetched (so coverage reads COMPLETE) and puts one
+     * earnings row on {@code print}. The fetch bookkeeping is the point: an unfetched date is a date
+     * on which every symbol looks free of events, which is why coverage is tracked separately.
+     */
+    private static void seedCalendar(EarningsCalendarRepository repo, LocalDate from, LocalDate to,
+                                     LocalDate print, String symbol) {
+        for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
+            if (d.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                    || d.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+                continue;
+            }
+            repo.save(d, d.equals(print)
+                    ? List.of(new com.portfolio.domain.model.EarningsEvent(
+                            d, symbol, "Walmart Inc", "AMC", 500_000_000_000L, 1.2, 30, 1.1))
+                    : List.of());
+        }
     }
 
     @Test

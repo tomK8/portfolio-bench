@@ -212,6 +212,13 @@
             <span class="muted" th:text="${orders.config.useDrift()
                     ? 'on — equities and equity funds 6%/yr, gilts and bullion 0'
                     : 'off — driftless first passage (the shipped default)'}">off</span>
+            <label title="Add the variance of scheduled earnings prints falling inside each order's horizon. Diffusive volatility can't see the calendar: a name quiet for twenty sessions that reports next month is not a quiet name. Events are added as variance (totalVar = var_N×N + Σmove², σ_eff = √(totalVar/N)), 6% per print for a single-name equity, nothing for funds, gilts and bullion. A date we don't have is left unadjusted and named below — never estimated.">
+                <input type="checkbox" name="enabled" value="true"
+                       th:checked="${orders.config.useEventVar()}"
+                       hx-post="/orders/event-var" hx-target="#orders-result" hx-swap="innerHTML"
+                       hx-vals='js:{enabled: event.target.checked}'/>
+                Add earnings variance
+            </label>
             <span class="muted" th:text="'· vol half-life ' + ${orders.config.halfLifeDays()}
                     + ' sessions · GTC horizon ' + ${orders.config.gtcHorizonSessions()} + ' sessions'">·</span>
         </div>
@@ -345,6 +352,12 @@
                 market reads lower than it would driftless and a sell limit above it reads higher.
                 One consequence worth knowing — <strong>P(5d) is no longer 2·Φ(−|σ→lim|)</strong>.
                 σ→lim is a distance, and only the driftless branch is its exponential.</span>
+            <span th:if="${orders.config.useEventVar()}"><strong>Earnings variance is on</strong>:
+                a scheduled print inside a row's horizon adds its own move in quadrature
+                (6% for a single-name equity), so a quiet name with a report due prices higher than
+                its trailing volatility alone would say. Rows whose date could not be obtained are
+                named in the warnings above and are left <em>unadjusted</em> — never estimated from a
+                quarterly cadence, which would be indistinguishable on screen from a real date.</span>
             Push a row much past six months and the figure is
             <span class="ord-touch long-horizon" style="display:inline">marked</span> to say so.
             Every row priced here is written to a calibration log

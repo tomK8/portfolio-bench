@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -54,6 +55,10 @@ public class EarningsCalendarService {
      */
     static final int MAX_BACK = 14;
     static final int MAX_FORWARD = 45;
+    /** Upper bound on {@link #warmForward}: beyond a year ahead no roster is published anyway. */
+    static final int MAX_WARM_DAYS = 400;
+    /** Politeness gap between calendar fetches on the warm path. */
+    private static final long WARM_THROTTLE_MS = 200;
 
     /** Default look-ahead for the holdings section, independent of the daily tables' window. */
     static final int DEFAULT_HOLDINGS_FORWARD = 21;
@@ -256,6 +261,54 @@ public class EarningsCalendarService {
         static PositionSizes empty() {
             return new PositionSizes(Map.of(), null);
         }
+    }
+
+    /**
+     * Fill the per-date cache forward from today, for readers that need the calendar further out
+     * than the tab shows — the open-orders event-variance term, which prices horizons of a quarter
+     * or more and needs to know whether a print falls inside one.
+     *
+     * <p>Deliberately not bounded by {@link #MAX_FORWARD}: that clamp exists so a stray query param
+     * can't fan the *tab* out, while this is an internal caller asking for a specific, bounded
+     * window. It is bounded all the same ({@link #MAX_WARM_DAYS}) and throttled, because each date
+     * is one HTTP GET — a quarter is about 65 weekday fetches on a cold cache, which is why this
+     * belongs on a background thread and never on a render path.
+     *
+     * <p>Past dates cache forever and future ones for {@link #REFRESH_TTL}, so a second call the
+     * same afternoon costs almost nothing. Failures are logged and skipped: a partial calendar is
+     * reported as partial by the caller, not papered over.
+     *
+     * @return how many dates were actually fetched (as opposed to already cached)
+     */
+    public int warmForward(int calendarDays) {
+        int days = Math.min(Math.max(calendarDays, 0), MAX_WARM_DAYS);
+        LocalDate today = LocalDate.now();
+        int fetched = 0;
+        for (int i = 0; i <= days; i++) {
+            LocalDate date = today.plusDays(i);
+            if (date.getDayOfWeek() == DayOfWeek.SATURDAY || date.getDayOfWeek() == DayOfWeek.SUNDAY) {
+                continue;   // no roster is ever published, and an unfetched weekend is not a gap
+            }
+            Instant fetchedAt = repo.lastFetched(date);
+            boolean fresh = fetchedAt != null
+                    && Duration.between(fetchedAt, Instant.now()).compareTo(REFRESH_TTL) < 0;
+            if (fresh) continue;
+            List<EarningsEvent> live = feed.forDate(date);
+            if (live == null) {
+                log.debug("Earnings calendar warm: fetch failed for {}", date);
+                continue;
+            }
+            repo.save(date, live);
+            fetched++;
+            try {
+                Thread.sleep(WARM_THROTTLE_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        if (fetched > 0) log.info("Earnings calendar warm: fetched {} date(s) forward", fetched);
+        return fetched;
     }
 
     /**

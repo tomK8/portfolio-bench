@@ -290,6 +290,7 @@ no `System.out` in production code.
 | Live positions → Excel| `POST /live/export`        | `ExportExcelService.exportLive` (→ ~/Documents) |
 | Open orders           | `GET /orders`              | `OpenOrdersService`       |
 | Order touch re-price  | `GET /orders/touch`        | `OpenOrdersService.touchEstimate` (re-blends σ at the new N) |
+| Drift switch (stored) | `POST /orders/drift`       | `OpenOrdersService.setUseDrift` |
 | Pre-trade limit probe | `GET /orders/probe`        | `OpenOrdersService.probe` |
 | Open orders → Excel   | `POST /orders/export`      | `OpenOrdersService.export` (→ ~/Documents) |
 | Export Excel          | `POST /export`             | `ExportExcelService`      |
@@ -377,6 +378,9 @@ To convert native → GBP, **divide** by the rate.
     running balance on first import. Charts must convert to GBP via historical FX
     (see `ContributionService.rothSeedAsGbp`, `PortfolioValueService.timeline`) — treating
     the file as GBP would understate the gap substantially.
+  - `orders_use_drift` — the app-wide drift switch for the open-orders touch model
+    (`true`/`false`; absent = the shipped driftless default). Written by the checkbox on the Open
+    orders panel, read by `OpenOrdersService.effectiveConfig` — see "Open orders".
   - `held_symbols` — newline-separated set of currently-held symbols, written by
     `SyncPortfolioService` after each `/sync`. Unioned with the cash-ledger symbol set in
     `PriceFetchSupport.tickersToFetch` so freshly bought names get an intraday quote before
@@ -531,6 +535,24 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   `gtcHorizonSessions` and `useDrift` are parameters, not constants, and are query params on
   `GET /orders?halfLife=&gtcSessions=&useDrift=` (and on `/orders/touch`), the same "every knob is a
   query param" convention the strategy tabs use.
+- **The drift switch is one stored, app-wide setting**, not a per-row option and not browser state.
+  A checkbox on the panel posts `POST /orders/drift?enabled=` → `orders_use_drift` in the
+  `KeyValueStore`, and **everything resolves through `OpenOrdersService.effectiveConfig`**:
+  the table, the pre-trade probe, the `P(N)` re-price box, the Excel export and therefore the
+  calibration log. Precedence is **explicit query param → stored setting → shipped default
+  (false)** — a null `useDrift` means "not stated", which is why the resolution can't live in
+  `VolForecast.Config.of` (the domain has no store to read) and why a one-off `?useDrift=false`
+  against a stored `true` works without moving the switch. Storing it server-side rather than in
+  the page is what stops a downloaded spreadsheet being priced on a different model from the screen
+  it came from; it also means **`dashboard.js` needs no drift logic at all** — the `/orders/touch`
+  call omits the flag and inherits the setting. `kv` is null-guarded (several callers construct the
+  service without a store, and a missing store is "nothing set", never a failure).
+  `OrdersReport.config` echoes the config actually used, so the checkbox renders from server state
+  and can't show a position the numbers beside it don't reflect (same convention as `GET /swing`
+  echoing its effective `SwingConfig`). When drift is on the panel **says so where the numbers
+  are** — the P(N) footnote names the model and warns that `P(5d) = 2·Φ(−|σ→lim|)` no longer holds —
+  and the Excel sheet gains a `Drift (annual)` column (6% / 0%), since which of the two models
+  produced a probability is exactly what a reader months later cannot otherwise recover.
 - **The drift branch (`useDrift`, default false).** `VolForecast.touch` picks between two models and
   is the only place that does:
   `useDrift && μ ≠ 0` → `PriceStats.touchProbabilityDrifted`, else the driftless
@@ -571,7 +593,8 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   answer — did orders shown at P=60% fill about 60% of the time? — can only be asked months later,
   and only against the model that produced the number, so each line carries the inputs as well as
   the output: `broker symbol ref side limit current entered expiry sessions fromExpiry sigmaEff
-  decay volSource assetClass drifted mu rv10 rv20 rv30 rv250 p pLow pHigh`, as `key=value` pairs (a later analysis is a
+  decay volSource assetClass drifted mu rv10 rv20 rv30 rv250 p pLow pHigh` — `drifted`/`mu` are per
+  line, so snapshots taken either side of a switch flip stay analysable together, as `key=value` pairs (a later analysis is a
   grep and a split, not a parser). The **probe path deliberately writes nothing** — a hypothetical
   in the record is indistinguishable from a real order that never filled. `src/test/resources/
   logback-test.xml` sets that logger to OFF for the same reason: a suite pricing fabricated orders
@@ -714,9 +737,9 @@ Current / Amount / Amount GBP are real numbers formatted with the row's currency
 per-cell number format (mixed £/$ reads naturally, stays sortable); II estimated prices carry a
 literal "~" in the format (`"~$"#,##0.00`), mirroring the screen while keeping the numeric value; the
 `Vs limit` column is a signed percent (`+0.00%;-0.00%`); the `RV10`/`RV30`/`σ eff` daily-vol columns
-are `0.00%`, `σ→lim (5d)` a signed plain number (`+0.00;-0.00`) and `P(touch 5d)` / `P(touch
-horizon)` / `P(low)` / `P(high)` a `0.0%` percent (all via `setStyled`, raw fraction/number in the
-cell). (The Files-tab portfolio button was
+are `0.00%`, `σ→lim (5d)` a signed plain number (`+0.00;-0.00`), `P(touch 5d)` / `P(touch horizon)`
+/ `P(low)` / `P(high)` a `0.0%` percent, and `Drift (annual)` a `0.00%` percent (all via
+`setStyled`, raw fraction/number in the cell). (The Files-tab portfolio button was
 renamed to "Download Excel" too — both write to ~/Documents.)
 
 ## Excel exports (all four buttons)

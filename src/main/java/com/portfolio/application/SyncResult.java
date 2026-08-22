@@ -1,6 +1,7 @@
 package com.portfolio.application;
 
 import com.portfolio.domain.PortfolioMetrics;
+import com.portfolio.domain.PositionIrr;
 import com.portfolio.domain.model.AggHolding;
 
 import java.math.BigDecimal;
@@ -23,7 +24,13 @@ public record SyncResult(
         List<String> dailyCloseFallbacks,
         List<AssetRecon> assetRecon,
         /** Held symbols with no price feed at all — see {@code SyncPortfolioService.unpricedSymbols}. */
-        List<UnpricedSymbol> unpricedSymbols) {
+        List<UnpricedSymbol> unpricedSymbols,
+        /**
+         * Per-symbol IRR over the position's own dated cash flows, keyed by {@code securityId}.
+         * Only the cash-ledger view populates it — the holdings-file view has a snapshot, not a
+         * flow history, and cannot derive one. Empty map there rather than a null to special-case.
+         */
+        Map<String, PositionIrr.Result> irrBySymbol) {
 
     /** Per {@code (account, currency)} comparison of holdings-side vs ledger-side cash, in GBP. */
     public record CashRecon(String account, String currency,
@@ -51,6 +58,6 @@ public record SyncResult(
 
     public static SyncResult empty(Map<String, BigDecimal> rates) {
         return new SyncResult(List.of(), null, rates, BigDecimal.ZERO, List.of(), true,
-                List.of(), List.of(), List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), List.of(), List.of(), Map.of());
     }
 }

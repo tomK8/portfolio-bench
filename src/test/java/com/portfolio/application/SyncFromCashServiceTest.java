@@ -82,6 +82,77 @@ class SyncFromCashServiceTest {
     }
 
     @Test
+    void everyPricedHoldingCarriesAnIrrKeyedByItsSecurityId() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        // £1,000 four years ago, now worth £2,000 on the live quote below.
+        cashRepo.saveAjBell(List.of(buy("2022-08-22", "AAPL", 10.0, 1000.0)));
+        var intraRepo = new IntradayPriceRepository(cf);
+        intraRepo.saveIntradayBars(List.of(
+                new IntradayBar("AAPL", Instant.now(), 200.0, null, "GBP")));
+
+        var svc = new SyncFromCashService(cashRepo, intraRepo, () -> Map.of(),
+                new YahooTickerMap(), new PriceHistoryRepository(cf));
+        SyncResult r = svc.sync();
+
+        var irr = r.irrBySymbol().get("AAPL");
+        assertNotNull(irr, "keyed by the same securityId the row renders");
+        assertTrue(irr.annualised());
+        assertNotNull(irr.annualisedReturn());
+        // Doubling over ~4 years is ≈19%/yr; the point is that it is a plausible rate solved
+        // against the row's own market value, not the exact figure (which moves with the clock).
+        assertTrue(irr.annualisedReturn().doubleValue() > 0.15
+                        && irr.annualisedReturn().doubleValue() < 0.25,
+                "got " + irr.annualisedReturn());
+        assertNotNull(irr.explain());
+    }
+
+    @Test
+    void theTerminalFlowIsTheRowsOwnMarketValue() {
+        // The rate must never describe a different valuation from the Market Value beside it.
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2020-01-06", "MSFT", 10.0, 1000.0)));
+        var intraRepo = new IntradayPriceRepository(cf);
+        intraRepo.saveIntradayBars(List.of(
+                new IntradayBar("MSFT", Instant.now(), 315.0, null, "GBP")));
+
+        var svc = new SyncFromCashService(cashRepo, intraRepo, () -> Map.of(),
+                new YahooTickerMap(), new PriceHistoryRepository(cf));
+        SyncResult r = svc.sync();
+
+        var h = r.holdings().get(0);
+        var irr = r.irrBySymbol().get("MSFT");
+        // Rebuild the rate from the rendered market value: they must agree.
+        var expected = com.portfolio.domain.Irr.solve(List.of(
+                new com.portfolio.domain.Irr.Flow(java.time.LocalDate.parse("2020-01-06"), -1000.0),
+                new com.portfolio.domain.Irr.Flow(java.time.LocalDate.now(
+                        java.time.ZoneId.of("Europe/London")), h.marketValueGbp().doubleValue())));
+        assertNotNull(expected);
+        assertEquals(expected, irr.annualisedReturn().doubleValue(), 1e-6);
+    }
+
+    @Test
+    void cashRowsHaveNoIrr() {
+        // Cash has no purchase date and no return to annualise; the column shows "—".
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var cashRepo = new CashTransactionRepository(cf, kv);
+        cashRepo.saveAjBell(List.of(buy("2023-01-01", "AAPL", 10.0, 1000.0)));
+        var intraRepo = new IntradayPriceRepository(cf);
+        intraRepo.saveIntradayBars(List.of(
+                new IntradayBar("AAPL", Instant.now(), 120.0, null, "GBP")));
+
+        var svc = new SyncFromCashService(cashRepo, intraRepo, () -> Map.of(),
+                new YahooTickerMap(), new PriceHistoryRepository(cf));
+        SyncResult r = svc.sync();
+
+        assertNull(r.irrBySymbol().get("CASH"));
+    }
+
+    @Test
     void bondWithoutIntradayFallsBackToDailyClose() {
         var cf = new JdbcConnectionFactory(dbDir);
         var kv = new KeyValueStore(dbDir);

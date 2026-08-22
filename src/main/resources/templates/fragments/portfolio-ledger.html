@@ -65,6 +65,10 @@
                 <th data-sort="num">Dividends (£)</th>
                 <th data-sort="num">Total Gain (£)</th>
                 <th data-sort="num">Total Gain %</th>
+                <th data-sort="num"
+                    title="Annualised return (IRR) over the position's own dated cash flows — buys, sells, dividends, and today's market value as a hypothetical liquidation. Unlike Gain %, it never divides by cost basis, so a broker-netted (even negative) average cost cannot distort it. Under 90 days the raw period return is shown instead. Hover any cell for its workings.">
+                    Annualised return
+                </th>
                 <th class="txt" data-sort="text">Sources</th>
             </tr>
             </thead>
@@ -92,10 +96,35 @@
                 </td>
                 <td th:classappend="${h.totalGainPct != null ? (h.totalGainPct.signum() > 0 ? 'val-pos' : (h.totalGainPct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
                     th:text="${h.totalGainPct != null ? #numbers.formatPercent(h.totalGainPct, 1, 2) : '—'}">—</td>
+                <td th:with="irr=${result.irrBySymbol.get(h.securityId)},
+                             rate=${irr != null ? irr.displayReturn() : null}"
+                    th:attr="data-sort-value=${rate != null ? rate : ''}"
+                    th:classappend="${rate != null ? (rate.signum() > 0 ? 'val-pos' : (rate.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                    th:title="${irr != null ? irr.explain() : null}">
+                    <span th:text="${rate != null ? #numbers.formatPercent(rate, 1, 2) : '—'}">—</span><!--
+                    A period return is not the same measure as the rest of the column, so it says
+                    so on the row rather than only in the tooltip.
+                 --><span class="irr-period" th:if="${irr != null and rate != null and !irr.annualised}"
+                          th:text="${irr.episodeDays} + 'd'">0d</span><!--
+                 --><span class="irr-flag" th:if="${irr != null and rate != null and irr.reentered()}"
+                          title="Re-entered position — the rate covers the current episode only.">&#8635;</span>
+                </td>
                 <td class="txt" th:text="${h.sources}">src</td>
             </tr>
             </tbody>
         </table>
+
+        <p class="muted irr-footnote">
+            <b>Annualised return</b> is an IRR over each position's dated cash flows (buys negative
+            and inclusive of fees, sells net, dividends on their pay date, current market value as a
+            terminal flow dated today), solved in GBP so FX is inside the figure. Positions are
+            accumulated in chunks, so there is no single holding period to annualise over and no
+            CAGR to compute; IRR needs no start date. A position sold to zero and re-entered
+            (<span class="irr-flag">&#8635;</span>) is reported for its current episode only, since
+            flows that change sign repeatedly can admit several rates. A span shorter than 90 days
+            shows the raw period return with its length beside it
+            (<span class="irr-period">41d</span>) rather than an annualised figure.
+        </p>
     </div>
 
 </div>

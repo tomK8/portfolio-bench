@@ -7,6 +7,7 @@ import com.portfolio.domain.DividendAttributor;
 import com.portfolio.domain.DividendAttributor.Attribution;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PortfolioMetrics;
+import com.portfolio.domain.PositionIrr;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayPrice;
@@ -110,6 +111,9 @@ public class SyncFromCashService {
         List<AggHolding> aggregated = new ArrayList<>();
         List<String> missingIntraday = new ArrayList<>();
         List<String> dailyCloseFallbacks = new ArrayList<>();
+        Map<String, List<CashTransaction>> rowsBySymbol = rowsBySymbol(rows);
+        Map<String, PositionIrr.Result> irrBySymbol = new LinkedHashMap<>();
+        LocalDate today = LocalDate.now(LONDON);
         for (Position p : positions) {
             IntradayPrice ip = latestBySymbol.get(p.securityId().toUpperCase());
             if (ip == null && Instruments.isBond(p.securityId())) {
@@ -126,8 +130,17 @@ public class SyncFromCashService {
                 log.warn("No intraday price for held symbol {}", p.securityId());
                 continue;
             }
-            aggregated.add(toAggHolding(p, ip, attributed, rates,
-                    monthChangeBySymbol.get(p.securityId().toUpperCase())));
+            AggHolding agg = toAggHolding(p, ip, attributed, rates,
+                    monthChangeBySymbol.get(p.securityId().toUpperCase()));
+            aggregated.add(agg);
+            // Terminal flow = the same live valuation the row already shows, so the rate and the
+            // Market Value it sits beside can never describe different numbers. The native leg
+            // gets the pre-FX value and the listing currency; PositionIrr decides for itself
+            // whether the ledger's own flows are denominated in it.
+            irrBySymbol.put(agg.securityId(), PositionIrr.compute(
+                    agg.securityId(),
+                    rowsBySymbol.getOrDefault(p.securityId().toUpperCase(), List.of()),
+                    agg.marketValueGbp(), agg.rtMarketValue(), agg.currencyCode(), today));
         }
         for (CashBalance cb : cashBalances) {
             aggregated.add(cashRow(cb, rates));
@@ -145,7 +158,8 @@ public class SyncFromCashService {
 
         return new SyncResult(aggregated, totals, rates, BigDecimal.ZERO, sources, false,
                 List.of(), missingIntraday, dailyCloseFallbacks, List.of(),
-                SyncPortfolioService.unpricedSymbols(missingIntraday, tickerBySymbol, priceHistory));
+                SyncPortfolioService.unpricedSymbols(missingIntraday, tickerBySymbol, priceHistory),
+                irrBySymbol);
     }
 
     /**
@@ -266,6 +280,22 @@ public class SyncFromCashService {
                     ? null : rtNative.divide(rate, 10, RoundingMode.HALF_UP);
         }
         return new BigDecimal[]{price, rtNative, rtGbp};
+    }
+
+    /**
+     * Ledger rows grouped by uppercase symbol, date order preserved — the input
+     * {@link PositionIrr} needs to walk a position's quantity timeline and build its flows.
+     * Rows arrive ordered by {@code (transaction_date, rowid)} from the repository, and the
+     * grouping keeps that order within each symbol, which is what makes the episode walk and
+     * the same-day flow ordering correct.
+     */
+    private static Map<String, List<CashTransaction>> rowsBySymbol(List<CashTransaction> rows) {
+        Map<String, List<CashTransaction>> bySymbol = new LinkedHashMap<>();
+        for (CashTransaction t : rows) {
+            if (t.symbol() == null || t.symbol().isBlank()) continue;
+            bySymbol.computeIfAbsent(t.symbol().toUpperCase(), k -> new ArrayList<>()).add(t);
+        }
+        return bySymbol;
     }
 
     /** Broker symbol (uppercase) → Yahoo ticker, for the intraday-price and month-change joins. */

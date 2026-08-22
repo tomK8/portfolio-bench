@@ -1,7 +1,9 @@
 package com.portfolio;
 
 import com.portfolio.application.LivePricesService;
+import com.portfolio.domain.Irr;
 import com.portfolio.domain.PortfolioMetrics;
+import com.portfolio.domain.PositionIrr;
 import com.portfolio.domain.model.AggHolding;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -12,8 +14,10 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Currency;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -58,9 +62,11 @@ class ExcelLedgerLiveWorkbookTest {
             assertEquals("Price", hdr.getCell(3).getStringCellValue());
             assertEquals("Market Value £", hdr.getCell(4).getStringCellValue());
             assertEquals("Portfolio %", hdr.getCell(5).getStringCellValue());
-            assertEquals("Sources", hdr.getCell(11).getStringCellValue());
+            assertEquals("Annualised return", hdr.getCell(11).getStringCellValue());
+            assertEquals("Return basis", hdr.getCell(12).getStringCellValue());
+            assertEquals("Sources", hdr.getCell(16).getStringCellValue());
             // No II SIPP cash input column/cell: ledger cash is already in the rows.
-            assertEquals(12, hdr.getLastCellNum());
+            assertEquals(17, hdr.getLastCellNum());
 
             Row first = sheet.getRow(1);
             assertEquals("NVDA", first.getCell(0).getStringCellValue());
@@ -83,6 +89,59 @@ class ExcelLedgerLiveWorkbookTest {
 
             assertTrue(wb.getForceFormulaRecalculation(),
                     "formula cells open blank without the fullCalcOnLoad flag");
+        }
+    }
+
+    @Test
+    void ledgerSheetCarriesTheIrrAsNumbersWithItsCaveatInItsOwnColumn() throws Exception {
+        // A sheet has nowhere to put a tooltip, so the rate stays a real number the sheet can
+        // sort and the caveat travels beside it — same convention as the orders sheet's Quote.
+        List<AggHolding> rows = List.of(equity("NVDA", "500.00"), equity("MRNA", "-40.00"));
+        PortfolioMetrics.Totals totals = new PortfolioMetrics().compute(rows, BigDecimal.ZERO);
+
+        var annualised = new PositionIrr.Result("NVDA", new BigDecimal("0.184200"),
+                new BigDecimal("0.500000"), true, new BigDecimal("2.75"),
+                LocalDate.parse("2023-02-01"), 1298, 2, 4,
+                new BigDecimal("0.210000"), "USD", Irr.Method.NEWTON);
+        var shortHold = new PositionIrr.Result("MRNA", null, new BigDecimal("-0.026700"),
+                false, new BigDecimal("0.11"), LocalDate.parse("2026-07-12"), 41, 1, 2,
+                null, null, null);
+
+        byte[] bytes = new ExcelReportWriter().ledgerWorkbook(rows, totals,
+                Map.of("NVDA", annualised, "MRNA", shortHold));
+
+        try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
+            Sheet sheet = wb.getSheet("Portfolio (ledger)");
+
+            Row nvda = sheet.getRow(1);
+            assertEquals(0.1842, nvda.getCell(11).getNumericCellValue(), 1e-9);
+            assertEquals("Annualised (current episode)", nvda.getCell(12).getStringCellValue());
+            assertEquals(2.75, nvda.getCell(13).getNumericCellValue(), 1e-9);
+            assertEquals(0.21, nvda.getCell(14).getNumericCellValue(), 1e-9);
+            // Currency effect = GBP rate − native rate: the pound cost 2.58pp a year here.
+            assertEquals(-0.0258, nvda.getCell(15).getNumericCellValue(), 1e-9);
+
+            Row mrna = sheet.getRow(2);
+            assertEquals(-0.0267, mrna.getCell(11).getNumericCellValue(), 1e-9);
+            assertEquals("Period return, 41d", mrna.getCell(12).getStringCellValue(),
+                    "a sub-90-day figure must not be readable as an annual rate");
+            assertNull(mrna.getCell(14), "no native leg, no cell — not a zero");
+        }
+    }
+
+    @Test
+    void aPositionWithNoSolvableRateWritesAnEmptyCellRatherThanZero() throws Exception {
+        // An empty cell reads as "not computed"; a 0.00% reads as "broke even". Opposite claims.
+        List<AggHolding> rows = List.of(equity("NVDA", "500.00"));
+        PortfolioMetrics.Totals totals = new PortfolioMetrics().compute(rows, BigDecimal.ZERO);
+
+        byte[] bytes = new ExcelReportWriter().ledgerWorkbook(rows, totals,
+                Map.of("NVDA", PositionIrr.Result.unavailable("NVDA")));
+
+        try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
+            Row nvda = wb.getSheet("Portfolio (ledger)").getRow(1);
+            assertNull(nvda.getCell(11));
+            assertEquals("No rate", nvda.getCell(12).getStringCellValue());
         }
     }
 

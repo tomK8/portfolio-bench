@@ -78,7 +78,7 @@ class ExportExcelServiceTest {
     private static SyncResult ledgerResult(List<AggHolding> holdings) {
         return new SyncResult(holdings, new PortfolioMetrics().compute(holdings, BigDecimal.ZERO),
                 Map.of("USD", new BigDecimal("1.25")), BigDecimal.ZERO, List.of("Roth IRA"), false,
-                List.of(), List.of(), List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), List.of(), List.of(), Map.of());
     }
 
     @Test

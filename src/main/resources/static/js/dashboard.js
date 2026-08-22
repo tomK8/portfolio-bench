@@ -2167,7 +2167,8 @@
         // red for Unclassified, which is meant to draw the eye.
         var SECTOR_COLORS = {
             TECH_AI: '#1f77b4', COMMS_MEDIA: '#17becf', FINANCIALS: '#2ca02c',
-            HEALTHCARE: '#9467bd', CONSUMER: '#ff7f0e', INDUSTRIALS_DEFENCE: '#8c564b',
+            HEALTHCARE: '#9467bd', CONSUMER_DISCRETIONARY: '#ff7f0e',
+            CONSUMER_STAPLES: '#98df8a', INDUSTRIALS_DEFENCE: '#8c564b',
             ENERGY: '#bcbd22', MATERIALS_MINING: '#e377c2', UTILITIES_INFRA: '#aec7e8',
             REAL_ESTATE: '#ffbb78', FIXED_INCOME: '#7f7f7f', COMMODITIES: '#c5b0d5',
             CASH: '#cccccc', UNCLASSIFIED: '#d62728'

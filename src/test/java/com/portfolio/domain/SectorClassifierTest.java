@@ -67,8 +67,16 @@ class SectorClassifierTest {
     void bothYahooSectorSpellingsMapToTheSameBucket() {
         assertEquals(SectorBucket.FINANCIALS, SectorBucket.fromYahooSector("Financial Services"));
         assertEquals(SectorBucket.FINANCIALS, SectorBucket.fromYahooSector("financial_services"));
-        assertEquals(SectorBucket.CONSUMER, SectorBucket.fromYahooSector("Consumer Cyclical"));
-        assertEquals(SectorBucket.CONSUMER, SectorBucket.fromYahooSector("consumer_defensive"));
+        // The two Consumer sectors are distinct buckets, and Yahoo distinguishes them in both of
+        // its spellings — the display form on a stock and the snake_case key inside a fund's
+        // sectorWeightings — which is what makes the split free of any extra data.
+        assertEquals(SectorBucket.CONSUMER_DISCRETIONARY, SectorBucket.fromYahooSector("Consumer Cyclical"));
+        assertEquals(SectorBucket.CONSUMER_DISCRETIONARY, SectorBucket.fromYahooSector("consumer_cyclical"));
+        assertEquals(SectorBucket.CONSUMER_STAPLES, SectorBucket.fromYahooSector("Consumer Defensive"));
+        assertEquals(SectorBucket.CONSUMER_STAPLES, SectorBucket.fromYahooSector("consumer_defensive"));
+        // The GICS names are accepted too, since that is what the buckets are labelled with.
+        assertEquals(SectorBucket.CONSUMER_DISCRETIONARY, SectorBucket.fromYahooSector("Consumer Discretionary"));
+        assertEquals(SectorBucket.CONSUMER_STAPLES, SectorBucket.fromYahooSector("Consumer Staples"));
         assertEquals(SectorBucket.REAL_ESTATE, SectorBucket.fromYahooSector("realestate"));
         assertEquals(SectorBucket.REAL_ESTATE, SectorBucket.fromYahooSector("Real Estate"));
         assertNull(SectorBucket.fromYahooSector("Nonsense"));
@@ -96,7 +104,7 @@ class SectorClassifierTest {
         assertEquals(0, amzn.aiTechGbp().compareTo(gbp("20757.00")));
         // ...while still sitting in their real sector for the breakdown itself.
         assertEquals(0, bucket(goog, SectorBucket.COMMS_MEDIA).compareTo(gbp("76415.00")));
-        assertEquals(0, bucket(amzn, SectorBucket.CONSUMER).compareTo(gbp("20757.00")));
+        assertEquals(0, bucket(amzn, SectorBucket.CONSUMER_DISCRETIONARY).compareTo(gbp("20757.00")));
     }
 
     @Test
@@ -123,8 +131,14 @@ class SectorClassifierTest {
         // Normalised by the weights' own total (Yahoo's sum to 1.000099998, not exactly 1),
         // with the rounding remainder absorbed by the largest bucket.
         assertEquals(0, bucket(c, SectorBucket.TECH_AI).compareTo(gbp("126092.82")));
-        assertEquals(0, bucket(c, SectorBucket.CONSUMER).compareTo(gbp("38883.34")),
-                "the two Consumer sectors merge into one bucket");
+        // The two Consumer sectors land in their own buckets and still account for exactly what the
+        // single merged row used to: a split that moved value would be a bug, not a finer view.
+        BigDecimal discretionary = bucket(c, SectorBucket.CONSUMER_DISCRETIONARY);
+        BigDecimal staples = bucket(c, SectorBucket.CONSUMER_STAPLES);
+        assertEquals(0, discretionary.add(staples).compareTo(gbp("38883.34")),
+                "the split must preserve the combined consumer value to the penny");
+        assertTrue(discretionary.compareTo(staples) > 0,
+                "the Nasdaq-100's consumer weight is roughly two-thirds cyclical");
         assertEquals(0, bucket(c, SectorBucket.COMMS_MEDIA).compareTo(gbp("29505.98")));
     }
 

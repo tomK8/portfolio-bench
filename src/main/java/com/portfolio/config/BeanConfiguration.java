@@ -24,6 +24,7 @@ import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.InstrumentMappingRepository;
 import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.domain.EventMoves;
+import com.portfolio.domain.IndustryGroups;
 import com.portfolio.domain.SectorClassifier;
 import com.portfolio.domain.StyleClassifier;
 import com.portfolio.persistence.FundamentalsRepository;
@@ -385,12 +386,18 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public IndustryGroups industryGroups() {
+        return new IndustryGroups();
+    }
+
+    @Bean
     public SectorBreakdownService sectorBreakdownService(AllocationService allocationService,
                                                         FundamentalsRepository fundamentalsRepository,
                                                         SectorClassifier sectorClassifier,
+                                                        IndustryGroups industryGroups,
                                                         FundamentalsWarmer fundamentalsWarmer) {
         return new SectorBreakdownService(allocationService, fundamentalsRepository, sectorClassifier,
-                fundamentalsWarmer);
+                industryGroups, fundamentalsWarmer);
     }
 
     @Bean

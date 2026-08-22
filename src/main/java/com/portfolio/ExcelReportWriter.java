@@ -666,8 +666,12 @@ public class ExcelReportWriter {
                     wb.createSheet("Portfolio"), aggregated, gbpRates, iiSippCash, wb);
             writePortfolioSheet(
                     wb.createSheet("Portfolio Raw"), holdings, gbpRates, portfolioInputRef, dividendsBySymbol, wb);
-            for (Map.Entry<String, Path> e : rawSources.entrySet())
+            for (Map.Entry<String, Path> e : rawSources.entrySet()) {
+                // A hand-entered account contributes holdings but no file, so there is no raw
+                // sheet to copy — it is named in the Portfolio sheet's Source column instead.
+                if (e.getValue() == null) continue;
                 writeRawSheet(e.getValue(), wb.createSheet(e.getKey()));
+            }
             wb.setForceFormulaRecalculation(true);   // else formula cells (incl. Portfolio %) open blank
             write(wb, outputPath);
         }

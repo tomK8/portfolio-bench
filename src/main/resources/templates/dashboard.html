@@ -1582,6 +1582,7 @@
     <button class="tab" data-panel="panel-trades" type="button">Journal</button>
     <button class="tab" data-panel="panel-watchlist" type="button">Watchlist</button>
     <button class="tab" data-panel="panel-earnings" type="button">Earnings</button>
+    <button class="tab" data-panel="panel-manual" type="button">Manual positions</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -3055,6 +3056,73 @@
     <div id="ea-warnings" style="margin-top: 0.5rem;"></div>
     <div id="ea-days" style="margin-top: 0.6rem;"></div>
     <div id="ea-source" class="muted" style="font-size: 0.78rem; margin-top: 0.6rem;"></div>
+</section>
+
+<section class="tab-panel" id="panel-manual">
+    <p class="muted" style="margin-top: 0">
+        Positions at an account with <b>no downloadable export</b> — an employee share plan, say —
+        typed in here and stored as ordinary cash-ledger rows. That is what makes them
+        <b>first-class</b>: the ledger feeds Allocation, Value over time, Returns, Period diff,
+        Attribution, the sector and style breakdowns, Live, Concentration and Currency exposure, so a
+        position entered here is risk-managed alongside everything else rather than sitting in a
+        note. Prices come from the normal feeds once the symbol is known.
+    </p>
+    <p class="muted" style="margin-top: 0.4rem; font-size: 0.82rem;">
+        Each purchase is written as two rows: the shares, and an <b>opening balance</b> funding them.
+        The funding row is deliberately <em>not</em> a contribution — shares that vested from an
+        employer are not money you paid in, so the Contributions chart stays honest while the
+        time-weighted return still sees the step. Amounts are the <b>total</b> consideration in
+        <b>£</b>, not a per-share price.
+    </p>
+
+    <div id="mp-warnings" style="margin-top: 0.5rem;"></div>
+
+    <h3 style="margin-top: 1rem; font-size: 1rem;">Current positions</h3>
+    <div id="mp-positions" style="margin-top: 0.4rem;"></div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Add a purchase</h3>
+    <div class="benchmark-controls">
+        <label>Broker: <select id="mp-buy-broker"></select></label>
+        <label>Symbol: <input id="mp-buy-symbol" type="text" size="8" placeholder="BARC" autocomplete="off"/></label>
+        <label>Shares: <input id="mp-buy-qty" type="text" size="9" placeholder="7227"/></label>
+        <label title="total consideration, not a per-share price">Total cost £: <input id="mp-buy-cost" type="text" size="10" placeholder="18500"/></label>
+        <label>Date: <input id="mp-buy-date" type="date"/></label>
+        <label>Note: <input id="mp-buy-note" type="text" size="18" placeholder="optional"/></label>
+        <button id="mp-buy-save" type="button">Add</button>
+        <span id="mp-buy-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Record a sale</h3>
+    <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">
+        Proceeds stay as cash in the account, which is where they actually are. Use
+        <b>Withdraw</b> once the money leaves the portfolio.
+    </p>
+    <div class="benchmark-controls">
+        <label>Broker: <select id="mp-sell-broker"></select></label>
+        <label>Symbol: <input id="mp-sell-symbol" type="text" size="8" placeholder="BARC" autocomplete="off"/></label>
+        <label>Shares: <input id="mp-sell-qty" type="text" size="9"/></label>
+        <label title="total received, net of fees">Proceeds £: <input id="mp-sell-proceeds" type="text" size="10"/></label>
+        <label>Date: <input id="mp-sell-date" type="date"/></label>
+        <label>Note: <input id="mp-sell-note" type="text" size="18" placeholder="optional"/></label>
+        <button id="mp-sell-save" type="button">Record sale</button>
+        <span id="mp-sell-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Withdraw cash</h3>
+    <div class="benchmark-controls">
+        <label>Broker: <select id="mp-wd-broker"></select></label>
+        <label>Amount £: <input id="mp-wd-amount" type="text" size="10"/></label>
+        <label>Date: <input id="mp-wd-date" type="date"/></label>
+        <label>Note: <input id="mp-wd-note" type="text" size="18" placeholder="optional"/></label>
+        <button id="mp-wd-save" type="button">Withdraw</button>
+        <span id="mp-wd-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Stored rows</h3>
+    <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">
+        Every row entered here, oldest first. Deleting one recomputes the account's running balance.
+    </p>
+    <div id="mp-rows"></div>
 </section>
 
 <section class="tab-panel" id="panel-period">

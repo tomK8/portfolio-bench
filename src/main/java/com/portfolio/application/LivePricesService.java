@@ -68,7 +68,8 @@ public class LivePricesService {
     private static final Map<String, String> ACCOUNT_LABELS = Map.of(
             "AJBell", "AJ Bell SIPP",
             "RothIRA", "Roth IRA",
-            "II", "II SIPP");
+            "II", "II SIPP",
+            "Equate", "Equate");
 
     private final CashTransactionRepository repo;
     private final IntradayPriceRepository intraday;

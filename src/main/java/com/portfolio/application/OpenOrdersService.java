@@ -178,6 +178,16 @@ public class OpenOrdersService {
      */
     private static final int MIN_ANCHOR_RETURNS = 120;
 
+    /**
+     * KV key for the stored drift setting — one app-wide switch, not a per-row or per-view one.
+     *
+     * <p>It lives on the service rather than in the view because every surface has to agree: the
+     * table, the pre-trade probe, the {@code P(N)} re-price box, the Excel export and the
+     * calibration log all resolve their config through {@link #effectiveConfig}, so a spreadsheet
+     * can never be priced on a different model from the screen it was downloaded from.
+     */
+    static final String USE_DRIFT_KEY = "orders_use_drift";
+
     /** Words taken from an instrument description when suggesting a match keyword. */
     private static final int KEYWORD_WORDS = 4;
 
@@ -253,6 +263,10 @@ public class OpenOrdersService {
      * output directory (defaults to ~/Documents — same place the portfolio exports land, not the
      * browser's download folder). Returns the written path, or {@link ExportResult#nothing()} when
      * no order files were found at all.
+     *
+     * <p>Re-parses through {@link #load()}, so the file carries the stored forecast setting the
+     * screen is showing rather than the shipped default — a spreadsheet priced on a different model
+     * from the panel it came from would be indistinguishable from one priced on the same.
      */
     public ExportResult export() {
         OrdersReport report = load();
@@ -267,15 +281,45 @@ public class OpenOrdersService {
         }
     }
 
-    /** The panel's default view: shipped forecast knobs, calibration records written. */
-    public OrdersReport load() {
-        return load(VolForecast.Config.DEFAULT);
+    /** Whether the drifted first passage is switched on, from the stored setting. */
+    public boolean useDrift() {
+        return kv != null && kv.getBoolean(USE_DRIFT_KEY, false);
+    }
+
+    /** Store the drift setting. Takes effect on the next read of any surface — see {@link #USE_DRIFT_KEY}. */
+    public void setUseDrift(boolean enabled) {
+        if (kv != null) kv.putBoolean(USE_DRIFT_KEY, enabled);
     }
 
     /**
-     * @param cfg volatility-forecast knobs — the mean-reversion half-life and the horizon assumed
-     *            for a GTC order. Exposed as query params so both can be swept without a rebuild;
-     *            the defaults are what the panel ships with.
+     * The forecast config actually in force, resolving <b>explicit request → stored setting →
+     * shipped default</b>.
+     *
+     * <p>A null {@code useDrift} means "not stated", which is not the same as false — that is why
+     * the resolution can't live in {@link VolForecast.Config#of}, where the domain has no store to
+     * read. A request may still override the setting in either direction
+     * ({@code ?useDrift=false} against a stored true), which is what keeps a one-off comparison
+     * possible without touching the switch.
+     *
+     * <p>Null-safe on the store: several callers construct this service without one, and a missing
+     * store means the shipped default rather than a failure.
+     */
+    public VolForecast.Config effectiveConfig(Double halfLifeDays, Integer gtcSessions,
+                                             Boolean useDrift) {
+        boolean drift = useDrift != null ? useDrift : useDrift();
+        return VolForecast.Config.of(halfLifeDays, gtcSessions, drift);
+    }
+
+    /** The panel's default view: the stored forecast setting, calibration records written. */
+    public OrdersReport load() {
+        return load(effectiveConfig(null, null, null));
+    }
+
+    /**
+     * @param cfg volatility-forecast knobs — the mean-reversion half-life, the horizon assumed for
+     *            a GTC order, and whether to apply drift. Exposed as query params so each can be
+     *            swept without a rebuild; absent ones come from the stored setting or the shipped
+     *            default (see {@link #effectiveConfig}).
      */
     public OrdersReport load(VolForecast.Config cfg) {
         List<OpenOrder> orders = new ArrayList<>();
@@ -323,7 +367,8 @@ public class OpenOrdersService {
         warnings.addAll(quotes.warnings());
         warmLaggingQuotes(quotes.warm());
         return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
-                unmappedInstruments(orders), quotes.notes(), quotes.asOf(), chartableSymbols(orders));
+                unmappedInstruments(orders), quotes.notes(), quotes.asOf(), chartableSymbols(orders),
+                cfg);
     }
 
     /**
@@ -529,9 +574,12 @@ public class OpenOrdersService {
                                        VolForecast.Config cfg, String symbol) {
         int clamped = Math.max(1, Math.min(sessions, MAX_HORIZON_SESSIONS));
         // Resolving the asset class is a pure string predicate — no re-parse, no FX, no DB read —
-        // so the endpoint stays the loopback calculation it was even with drift wired in.
+        // so the endpoint stays the loopback calculation it was even with drift wired in. A null
+        // config means the caller stated nothing, so the stored setting applies: that is what lets
+        // the P(N) box follow the table's model without the browser having to know which it is.
         VolForecast.Touch t = VolForecast.touch(vols, current, limit, clamped,
-                cfg == null ? VolForecast.Config.DEFAULT : cfg, Instruments.assetClassOf(symbol));
+                cfg == null ? effectiveConfig(null, null, null) : cfg,
+                Instruments.assetClassOf(symbol));
         return new TouchEstimate(clamped, t.sigmaToLimit(), t.probability(),
                 t.probabilityLow(), t.probabilityHigh(), t.sigmaEff(), t.decay(),
                 t.source() == null ? null : t.source().name(),
@@ -592,7 +640,7 @@ public class OpenOrdersService {
      *                 standing default, and it is clamped to {@code [1, MAX_HORIZON_SESSIONS]}.
      */
     public LimitProbe probe(String symbol, BigDecimal limit, String side, Integer sessions) {
-        return probe(symbol, limit, side, sessions, VolForecast.Config.DEFAULT);
+        return probe(symbol, limit, side, sessions, effectiveConfig(null, null, null));
     }
 
     public LimitProbe probe(String symbol, BigDecimal limit, String side, Integer sessions,
@@ -1075,11 +1123,18 @@ public class OpenOrdersService {
      *                   daily close, or a quote well behind its market peers). Absent = current.
      * @param quotesAsOf newest quote across the table, as a local time; null when none was used.
      */
+    /**
+     * @param config the forecast config this report was actually priced with — echoed so the view
+     *               renders its own controls from server state and can never show a switch position
+     *               the numbers beside it don't reflect. Same convention as {@code GET /swing}
+     *               echoing its effective {@code SwingConfig}.
+     */
     public record OrdersReport(List<OpenOrder> orders, List<String> sources,
                                List<String> warnings, boolean empty,
                                List<UnmappedInstrument> unmapped,
                                Map<String, String> priceNotes, String quotesAsOf,
-                               Set<String> chartableSymbols) {
+                               Set<String> chartableSymbols,
+                               VolForecast.Config config) {
 
         /**
          * Whether clicking this row can open the price popup. Only a symbol that resolves to a

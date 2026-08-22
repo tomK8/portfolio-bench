@@ -4,6 +4,7 @@ import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.OpenOrdersService.OrdersReport;
+import com.portfolio.domain.AssetClass;
 import com.portfolio.domain.PriceStats;
 import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.OpenOrder;
@@ -250,6 +251,99 @@ class OpenOrdersServiceTest {
         BigDecimal goldOff = service.probe("SGLN", limit, "Buy", 250).hypothetical().touchProbHorizon();
         BigDecimal goldOn = service.probe("SGLN", limit, "Buy", 250, driftOn).hypothetical().touchProbHorizon();
         assertEquals(goldOff, goldOn, "bullion has no drift — switching the model on is a no-op");
+    }
+
+    @Test
+    void theDriftSettingIsStoredAndEverySurfaceReadsIt(@TempDir Path dir) throws Exception {
+        // The point of storing it server-side rather than holding it in the browser: one switch,
+        // and the table, the probe, the P(N) re-price and the Excel export can't disagree.
+        Files.writeString(dir.resolve("2bc3405a-877c-4bf3-ac16-8dcb5303b89a.csv"), """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                19/08/2026 16:52,27726IDT248,BUY/LIMIT,WMT,Walmart Inc,50,n/a,"$5,000.00",PENDING
+                """);
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
+        KeyValueStore kv = new KeyValueStore(dir.resolve("db"));
+
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, history, new YahooTickerMap(), kv);
+
+        assertFalse(service.useDrift(), "driftless is the shipped default");
+        OpenOrder off = find(service.load().orders(), "WMT");
+        VolForecast.Inputs vols = new VolForecast.Inputs(off.dailyVol10(), off.dailyVol20(),
+                off.dailyVol30(), off.dailyVol250());
+
+        service.setUseDrift(true);
+        assertTrue(service.useDrift(), "and it is stored, not held in the request");
+
+        OpenOrder on = find(service.load().orders(), "WMT");
+        assertTrue(on.touchProbHorizon().compareTo(off.touchProbHorizon()) < 0,
+                "the table follows the setting with no query param: " + on.touchProbHorizon()
+                        + " vs " + off.touchProbHorizon());
+        assertEquals(0, on.driftPerSession().compareTo(AssetClass.EQUITY.dailyDrift()));
+        assertEquals(0.06, on.driftAnnual().doubleValue(), 1e-6);
+
+        // The probe, the re-price box and the report's own echo all resolve the same setting.
+        assertEquals(on.touchProbHorizon(),
+                service.probe("WMT", off.price(), "Buy", on.horizonSessions()).hypothetical().touchProbHorizon(),
+                "the pre-trade probe reads the stored setting");
+        assertEquals(on.touchProbHorizon(),
+                service.touchEstimate(on.currentPrice(), on.price(), vols, on.horizonSessions(),
+                        null, "WMT").probability(),
+                "so does the P(N) box, which sends no flag of its own");
+        assertTrue(service.load().config().useDrift(), "and the report echoes what priced it");
+
+        // The Excel export re-parses through load(), so the file cannot be on the other model.
+        ExportResult export = service.export();
+        assertFalse(export.empty());
+        try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
+                Files.newInputStream(Path.of(export.files().get(0))))) {
+            var row = wb.getSheet("Open Orders").getRow(1);
+            assertEquals(0.06, row.getCell(20).getNumericCellValue(), 1e-6, "Drift (annual)");
+        }
+
+        service.setUseDrift(false);
+        assertEquals(off.touchProbHorizon(), find(service.load().orders(), "WMT").touchProbHorizon(),
+                "and unticking puts every number back");
+    }
+
+    @Test
+    void anExplicitRequestOverridesTheStoredSettingBothWays(@TempDir Path dir) {
+        // A one-off comparison must not require touching the switch — and must not leave it moved.
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
+        KeyValueStore kv = new KeyValueStore(dir.resolve("db"));
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
+                FX, new ExcelReportWriter(), outDir, intraday, history, new YahooTickerMap(), kv);
+
+        assertFalse(service.effectiveConfig(null, null, null).useDrift());
+        assertTrue(service.effectiveConfig(null, null, true).useDrift(), "request wins when off");
+
+        service.setUseDrift(true);
+        assertTrue(service.effectiveConfig(null, null, null).useDrift(), "stored value when unstated");
+        assertFalse(service.effectiveConfig(null, null, false).useDrift(), "request wins when on");
+        assertTrue(service.useDrift(), "and a one-off override leaves the setting alone");
+
+        // The other knobs still resolve alongside it.
+        assertEquals(45.0, service.effectiveConfig(45.0, null, null).halfLifeDays());
+        assertEquals(30, service.effectiveConfig(null, 30, null).gtcHorizonSessions());
+    }
+
+    @Test
+    void withNoSettingsStoreTheShippedDefaultApplies() {
+        // Several callers build this service without a store; a missing one is "nothing set",
+        // never a failure.
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(outDir), List.of(),
+                FX, new ExcelReportWriter(), outDir, null, null, new YahooTickerMap(), null);
+        assertFalse(service.useDrift());
+        assertFalse(service.effectiveConfig(null, null, null).useDrift());
+        assertDoesNotThrow(() -> service.setUseDrift(true));
+        assertFalse(service.useDrift(), "nowhere to store it, so nothing changes");
     }
 
     @Test

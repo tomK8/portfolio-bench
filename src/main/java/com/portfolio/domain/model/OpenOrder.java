@@ -49,6 +49,10 @@ public record OpenOrder(
                                 // 1 = all RV20, 0 = all RV250. Recorded so a probability can be
                                 // re-derived later from the record alone.
         String volSource,       // VolForecast.Source name: BLEND / CURRENT_ONLY / ANCHOR_ONLY / NONE
+        BigDecimal driftPerSession, // log drift per session the first passage applied; ZERO on the
+                                // driftless model. Carried for the same reason sigmaEff is: the
+                                // probability beside it is only judgeable against the model that
+                                // produced it, and *which* model that was is part of the model.
         BigDecimal sigmaToLimit,// signed distance current→limit in 5-session σ units, ln(limit/current)
                                 // ÷ (sigma_eff(5)×√5). null when price/current/vol unavailable.
         BigDecimal touchProb5d, // probability the market touches the limit within 5 sessions
@@ -155,7 +159,7 @@ public record OpenOrder(
                 amount, currency, dateEntered, expiry, duration, status, reference,
                 null, null, null, null,
                 null, null, null, null,
-                null, null, null, null, null,
+                null, null, null, null, null, null,
                 null, null, null, null, null);
     }
 
@@ -165,7 +169,7 @@ public record OpenOrder(
                 amount, currency, dateEntered, expiry, duration, status, reference, gbp,
                 currentPrice, distancePct, quoteSession,
                 dailyVol10, dailyVol20, dailyVol30, dailyVol250,
-                sigmaEff, decayWeight, volSource, sigmaToLimit, touchProb5d,
+                sigmaEff, decayWeight, volSource, driftPerSession, sigmaToLimit, touchProb5d,
                 horizonSessions, touchProbHorizon, touchProbLow, touchProbHigh, sessionsToExpiry);
     }
 
@@ -179,7 +183,7 @@ public record OpenOrder(
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
                 current, distance, session,
                 dailyVol10, dailyVol20, dailyVol30, dailyVol250,
-                sigmaEff, decayWeight, volSource, sigmaToLimit, touchProb5d,
+                sigmaEff, decayWeight, volSource, driftPerSession, sigmaToLimit, touchProb5d,
                 horizonSessions, touchProbHorizon, touchProbLow, touchProbHigh, sessionsToExpiry);
     }
 
@@ -195,7 +199,7 @@ public record OpenOrder(
                 amount, currency, dateEntered, expiry, duration, status, reference, amountGbp,
                 currentPrice, distancePct, quoteSession,
                 dv10, dv20, dv30, dv250,
-                sigmaEff, decayWeight, volSource, sigmaToLimit, touchProb5d,
+                sigmaEff, decayWeight, volSource, driftPerSession, sigmaToLimit, touchProb5d,
                 horizonSessions, touchProbHorizon, touchProbLow, touchProbHigh, sessionsToExpiry);
     }
 
@@ -218,6 +222,7 @@ public record OpenOrder(
                 touch == null ? null : touch.sigmaEff(),
                 touch == null ? null : touch.decay(),
                 touch == null || touch.source() == null ? null : touch.source().name(),
+                touch == null ? null : touch.drift(),
                 sigmaToLimit, touchProb5d,
                 touch == null ? null : touch.sessions(),
                 touch == null ? null : touch.probability(),
@@ -229,6 +234,13 @@ public record OpenOrder(
     /** True when the P(N) horizon is this order's own expiry rather than the GTC default. */
     public boolean horizonFromExpiry() {
         return sessionsToExpiry != null && sessionsToExpiry.equals(horizonSessions);
+    }
+
+    /** The applied drift expressed per year — the unit a reader states policy in. Zero when driftless. */
+    public BigDecimal driftAnnual() {
+        return driftPerSession == null ? java.math.BigDecimal.ZERO
+                : driftPerSession.multiply(java.math.BigDecimal.valueOf(
+                        com.portfolio.domain.AssetClass.SESSIONS_PER_YEAR));
     }
 
     /** True when the hover range around the headline probability exists. */

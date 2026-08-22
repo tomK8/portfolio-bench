@@ -198,6 +198,24 @@
             No open orders — every order in the exported files has been filled, cancelled or expired.
         </div>
 
+        <!-- One app-wide switch, rendered from the config the report was actually priced with, so
+             the box can never show a position the numbers beside it don't reflect. Posting it
+             stores the setting and repaints the table in the same round trip. -->
+        <div class="model-controls" th:unless="${orders.orders.isEmpty()}">
+            <label title="Price the touch probabilities with an expected drift instead of the driftless convention. Drift is per asset class — 6%/yr for equities and equity funds, zero for gilts and bullion — never per instrument. Stored app-wide: it applies to this table, the pre-trade probe, the P(N) box, the Excel download and the calibration log, and survives a restart.">
+                <input type="checkbox" name="enabled" value="true"
+                       th:checked="${orders.config.useDrift()}"
+                       hx-post="/orders/drift" hx-target="#orders-result" hx-swap="innerHTML"
+                       hx-vals='js:{enabled: event.target.checked}'/>
+                Use expected drift
+            </label>
+            <span class="muted" th:text="${orders.config.useDrift()
+                    ? 'on — equities and equity funds 6%/yr, gilts and bullion 0'
+                    : 'off — driftless first passage (the shipped default)'}">off</span>
+            <span class="muted" th:text="'· vol half-life ' + ${orders.config.halfLifeDays()}
+                    + ' sessions · GTC horizon ' + ${orders.config.gtcHorizonSessions()} + ' sessions'">·</span>
+        </div>
+
         <table id="orders-table" class="sticky-head" th:unless="${orders.orders.isEmpty()}">
             <thead>
             <tr>
@@ -319,9 +337,15 @@
             end already clears the threshold you are deciding against, the call survives the vol
             input being wrong — when only the high end does, it needs a second look.
             <br/>
-            <strong>Read the column as indicative rather than calibrated</strong> — the model
-            assumes no drift, a fair convention over a week and an assumption over a quarter; push a
-            row much past six months and the figure is
+            <strong>Read the column as indicative rather than calibrated.</strong>
+            <span th:unless="${orders.config.useDrift()}">The model assumes <strong>no drift</strong>,
+                a fair convention over a week and an assumption over a quarter.</span>
+            <span th:if="${orders.config.useDrift()}"><strong>Drift is on</strong>: equities and
+                equity funds are given 6%/yr and gilts and bullion none, so a buy limit below the
+                market reads lower than it would driftless and a sell limit above it reads higher.
+                One consequence worth knowing — <strong>P(5d) is no longer 2·Φ(−|σ→lim|)</strong>.
+                σ→lim is a distance, and only the driftless branch is its exponential.</span>
+            Push a row much past six months and the figure is
             <span class="ord-touch long-horizon" style="display:inline">marked</span> to say so.
             Every row priced here is written to a calibration log
             (<code>~/log/portfolio-bench-touch-calibration.log</code>) with its σ, horizon and

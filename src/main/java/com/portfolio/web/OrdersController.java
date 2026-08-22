@@ -28,9 +28,11 @@ public class OrdersController {
     /**
      * @param halfLife   mean-reversion half-life in sessions for the volatility blend (default 20).
      * @param gtcSessions horizon assumed for an order with no dated expiry (default 90).
-     * @param useDrift    price the drifted first passage, using the asset class's expected drift,
-     *                    instead of the driftless default. Every knob is a query param so the model
-     *                    can be swept without a rebuild — the convention the strategy tabs use.
+     * @param useDrift    price the drifted first passage, using the asset class's expected drift.
+     *                    Omitted, the stored setting applies (see {@code POST /orders/drift}); given,
+     *                    it overrides that setting for this request only, in either direction. Every
+     *                    knob is a query param so the model can be swept without a rebuild — the
+     *                    convention the strategy tabs use.
      */
     @GetMapping("/orders")
     public String orders(@RequestParam(required = false) Double halfLife,
@@ -38,7 +40,7 @@ public class OrdersController {
                          @RequestParam(required = false) Boolean useDrift,
                          Model model) {
         model.addAttribute("orders",
-                openOrdersService.load(VolForecast.Config.of(halfLife, gtcSessions, useDrift)));
+                openOrdersService.load(openOrdersService.effectiveConfig(halfLife, gtcSessions, useDrift)));
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/orders :: result";
     }
@@ -73,7 +75,7 @@ public class OrdersController {
                                                  @RequestParam(required = false) Boolean useDrift) {
         return openOrdersService.touchEstimate(current, limit,
                 new VolForecast.Inputs(rv10, rv20, rv30, rv250), sessions,
-                VolForecast.Config.of(halfLife, null, useDrift), symbol);
+                openOrdersService.effectiveConfig(halfLife, null, useDrift), symbol);
     }
 
     /**
@@ -93,7 +95,8 @@ public class OrdersController {
                         @RequestParam(required = false) String sessions,
                         Model model) {
         model.addAttribute("probe", openOrdersService.probe(
-                symbol, decimalOrNull(limit), side, intOrNull(sessions), VolForecast.Config.DEFAULT));
+                symbol, decimalOrNull(limit), side, intOrNull(sessions),
+                openOrdersService.effectiveConfig(null, null, null)));
         return "fragments/orders :: probe";
     }
 
@@ -111,6 +114,20 @@ public class OrdersController {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    /**
+     * Stores the app-wide drift setting and repaints the table under the new model in one round
+     * trip. One switch, every surface: the stored value is what {@code GET /orders},
+     * {@code /orders/touch}, {@code /orders/probe} and the Excel export all resolve against, so
+     * there is no state here for the browser to hold and nothing to get out of step.
+     */
+    @PostMapping("/orders/drift")
+    public String setDrift(@RequestParam boolean enabled, Model model) {
+        openOrdersService.setUseDrift(enabled);
+        model.addAttribute("orders", openOrdersService.load());
+        model.addAttribute("completedAt", WebSupport.now());
+        return "fragments/orders :: result";
     }
 
     /**

@@ -405,6 +405,23 @@
             opacity: 0.45;
         }
 
+        /* The one model switch for the whole panel, above the table. */
+        .model-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+            margin: 0.6rem 0 0.4rem;
+            font-size: 0.85rem;
+        }
+
+        .model-controls label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            cursor: pointer;
+        }
+
         /* The RV10/RV30 bracket under the headline probability. Deliberately quiet: the headline is
            the number, the range is the check on it. */
         .ord-range {

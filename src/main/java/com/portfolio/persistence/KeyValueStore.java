@@ -47,6 +47,35 @@ public class KeyValueStore {
         }
     }
 
+    /**
+     * A stored flag. Anything other than a literal {@code true}/{@code false} (a missing file, an
+     * empty one, a half-written one) is "not set" and returns {@code defaultValue} — the same
+     * degrade-rather-than-throw contract the other accessors keep, and the reason a caller can
+     * treat the default as the shipped behaviour rather than as an error state.
+     */
+    public boolean getBoolean(String key, boolean defaultValue) {
+        Path file = dir.resolve(key + ".txt");
+        if (!Files.exists(file)) return defaultValue;
+        try {
+            String saved = Files.readString(file).trim();
+            if (saved.equalsIgnoreCase("true")) return true;
+            if (saved.equalsIgnoreCase("false")) return false;
+            return defaultValue;
+        } catch (IOException e) {
+            log.warn("Could not read setting {}", key, e);
+            return defaultValue;
+        }
+    }
+
+    public void putBoolean(String key, boolean value) {
+        try {
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve(key + ".txt"), Boolean.toString(value));
+        } catch (IOException e) {
+            log.warn("Could not write setting {}", key, e);
+        }
+    }
+
     /** Newline-separated string set; blanks dropped. Returns an empty set if the file is missing. */
     public Set<String> getStringSet(String key) {
         Path file = dir.resolve(key + ".txt");

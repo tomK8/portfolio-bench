@@ -1,5 +1,6 @@
 package com.portfolio;
 
+import com.portfolio.domain.AssetClass;
 import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.OpenOrder;
 import org.apache.poi.ss.usermodel.Row;
@@ -66,9 +67,10 @@ class ExcelOrdersWorkbookTest {
             assertEquals("P(high)", hdr.getCell(17).getStringCellValue());
             assertEquals("σ eff", hdr.getCell(18).getStringCellValue());
             assertEquals("Vol source", hdr.getCell(19).getStringCellValue());
-            assertEquals("Amount", hdr.getCell(20).getStringCellValue());
-            assertEquals("Amount GBP", hdr.getCell(21).getStringCellValue());
-            assertEquals("Expiry", hdr.getCell(23).getStringCellValue());
+            assertEquals("Drift (annual)", hdr.getCell(20).getStringCellValue());
+            assertEquals("Amount", hdr.getCell(21).getStringCellValue());
+            assertEquals("Amount GBP", hdr.getCell(22).getStringCellValue());
+            assertEquals("Expiry", hdr.getCell(24).getStringCellValue());
 
             Row ajbRow = sheet.getRow(1);
             assertEquals("EQQQ", ajbRow.getCell(1).getStringCellValue());
@@ -100,8 +102,11 @@ class ExcelOrdersWorkbookTest {
             assertEquals(0.7700, ajbRow.getCell(17).getNumericCellValue(), 1e-9);
             assertEquals(0.0210, ajbRow.getCell(18).getNumericCellValue(), 1e-9);
             assertEquals("BLEND", ajbRow.getCell(19).getStringCellValue());
-            assertEquals(26901.41, ajbRow.getCell(21).getNumericCellValue(), 1e-6);
-            assertEquals("2026-07-29", ajbRow.getCell(23).getStringCellValue());
+            // Driftless row: 0%, stated rather than blank — "no drift was applied" is a fact about
+            // the number beside it, not missing data.
+            assertEquals(0.0, ajbRow.getCell(20).getNumericCellValue(), 1e-12);
+            assertEquals(26901.41, ajbRow.getCell(22).getNumericCellValue(), 1e-6);
+            assertEquals("2026-07-29", ajbRow.getCell(24).getStringCellValue());
 
             Row iiRow = sheet.getRow(2);
             // value stays numeric; the "~" lives only in the display number format
@@ -116,6 +121,35 @@ class ExcelOrdersWorkbookTest {
             assertNull(iiRow.getCell(13), "unpriced row → no horizon column either");
             assertNull(iiRow.getCell(15));
             assertNull(iiRow.getCell(18));
+        }
+    }
+
+    @Test
+    void aDriftedRowStatesTheDriftThatPricedIt() throws Exception {
+        // The sheet already carries σ_eff and the vol source so a probability read months later is
+        // judgeable against its model. Which of the two first-passage models produced it is part of
+        // that, and it is the one thing the other columns cannot imply.
+        OpenOrder drifted = OpenOrder.parsed("Roth IRA", "PEP", "PepsiCo", "Buy", "Limit",
+                        new BigDecimal("10"), new BigDecimal("140.87"), false, new BigDecimal("1408.70"),
+                        "USD", LocalDate.of(2026, 8, 19), null, "GTC", "Open", "ref9")
+                .withCurrentPrice(new BigDecimal("143.48"), new BigDecimal("0.0185"), null)
+                .withVolatility(new BigDecimal("0.011"), new BigDecimal("0.012"),
+                        new BigDecimal("0.013"), new BigDecimal("0.014"),
+                        new BigDecimal("-0.80"), new BigDecimal("0.4200"))
+                .withHorizonTouch(new VolForecast.Touch(90, new BigDecimal("0.01296727"),
+                        new BigDecimal("0.3064"), VolForecast.Source.BLEND, new BigDecimal("-0.15"),
+                        new BigDecimal("0.8800"), new BigDecimal("0.8600"), new BigDecimal("0.9000"),
+                        AssetClass.EQUITY.dailyDrift()), null);
+
+        try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(
+                new ExcelReportWriter().ordersWorkbook(List.of(drifted))))) {
+            Row row = wb.getSheet("Open Orders").getRow(1);
+            // 1e-6, not exact: the row carries the per-session figure the model actually consumed,
+            // rounded to 10 dp, so annualising it back lands at 0.0599999904 — 6.00% once the cell
+            // format is applied. The per-session number is the one that has to be faithful.
+            assertEquals(0.06, row.getCell(20).getNumericCellValue(), 1e-6,
+                    "the per-session drift, stated back in the year it was quoted in");
+            assertTrue(row.getCell(20).getCellStyle().getDataFormatString().contains("%"));
         }
     }
 

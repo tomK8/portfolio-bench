@@ -727,7 +727,7 @@ public class ExcelReportWriter {
         String[] headers = {"Broker", "Symbol", "Side", "Type", "Quantity",
                 "Price", "Current", "Quote", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
                 "Horizon (sessions)", "Horizon from", "P(touch horizon)", "P(low)", "P(high)",
-                "σ eff", "Vol source", "Drift (annual)",
+                "σ eff", "σ eff (diffusive)", "Vol source", "Drift (annual)", "Events in horizon",
                 "Amount", "Amount GBP", "Date entered", "Expiry"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
@@ -754,17 +754,24 @@ public class ExcelReportWriter {
             if (o.touchProbLow() != null) setStyled(row, 16, o.touchProbLow(), touchPctStyle);
             if (o.touchProbHigh() != null) setStyled(row, 17, o.touchProbHigh(), touchPctStyle);
             if (o.sigmaEff() != null) setStyled(row, 18, o.sigmaEff(), volPctStyle);
-            styledCell(row, 19, dashIfNull(o.volSource()), text);
+            // The diffusive σ beside the one actually used: the gap between them is exactly what the
+            // calendar contributed, and it is the only way to see afterwards how much of a
+            // probability came from a scheduled print rather than from the trailing windows.
+            if (o.sigmaEffDiffusive() != null) setStyled(row, 19, o.sigmaEffDiffusive(), volPctStyle);
+            styledCell(row, 20, dashIfNull(o.volSource()), text);
             // Annualised back up from the per-session figure the model consumed (×252), because a
             // reader comparing this file against a policy ("we assume 6% for equities") is thinking
             // in years, and 0.000238 is the same number in a unit nobody states.
-            if (o.touchProbHorizon() != null) setStyled(row, 20, o.driftAnnual(), volPctStyle);
-            if (o.amount() != null) setMoney(row, 21, o.amount(), o.currency(), false, wb, moneyStyles);
-            if (o.amountGbp() != null) setMoney(row, 22, o.amountGbp(), "GBP", false, wb, moneyStyles);
-            styledCell(row, 23, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            if (o.touchProbHorizon() != null) setStyled(row, 21, o.driftAnnual(), volPctStyle);
+            if (o.touchProbHorizon() != null) {
+                setNumeric(row, 22, BigDecimal.valueOf(o.eventCount()), qtyNum);
+            }
+            if (o.amount() != null) setMoney(row, 23, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 24, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 25, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 24, expiry, text);
+            styledCell(row, 26, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);

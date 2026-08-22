@@ -188,6 +188,9 @@ public class OpenOrdersService {
      */
     static final String USE_DRIFT_KEY = "orders_use_drift";
 
+    /** KV key for the stored event-variance setting — same one-switch-for-everything contract. */
+    static final String USE_EVENT_VAR_KEY = "orders_use_event_var";
+
     /** Words taken from an instrument description when suggesting a match keyword. */
     private static final int KEYWORD_WORDS = 4;
 
@@ -202,6 +205,12 @@ public class OpenOrdersService {
     private final KeyValueStore kv;
     private final Consumer<Collection<String>> quoteWarmer;
     private final Consumer<String> historyWarmer;
+    /**
+     * Scheduled events per symbol, for the event-variance term. Optional: an absent source means no
+     * events are ever found, which is the same state as an unfetched calendar and is reported the
+     * same way — unadjusted, never guessed.
+     */
+    private final OrderEventVariance eventVariance;
     private final Map<String, Instant> lastWarmed = new ConcurrentHashMap<>();
 
     public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
@@ -245,6 +254,22 @@ public class OpenOrdersService {
                              PriceHistoryRepository history, YahooTickerMap tickerMap,
                              KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
                              Consumer<String> historyWarmer) {
+        this(fileLocator, parsers, fxRateProvider, excelReportWriter, outputDir, intraday, history,
+                tickerMap, kv, quoteWarmer, historyWarmer, null);
+    }
+
+    /**
+     * @param eventVariance source of scheduled earnings dates for the {@code useEventVar} term.
+     *                      Null means none are available, which resolves to an unadjusted
+     *                      probability rather than an inferred date — see {@link OrderEventVariance}.
+     */
+    public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
+                             FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
+                             Path outputDir, IntradayPriceRepository intraday,
+                             PriceHistoryRepository history, YahooTickerMap tickerMap,
+                             KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
+                             Consumer<String> historyWarmer, OrderEventVariance eventVariance) {
+        this.eventVariance = eventVariance;
         this.fileLocator = fileLocator;
         this.parsers = parsers;
         this.fxRateProvider = fxRateProvider;
@@ -291,6 +316,15 @@ public class OpenOrdersService {
         if (kv != null) kv.putBoolean(USE_DRIFT_KEY, enabled);
     }
 
+    /** Whether scheduled-event variance is switched on, from the stored setting. */
+    public boolean useEventVar() {
+        return kv != null && kv.getBoolean(USE_EVENT_VAR_KEY, false);
+    }
+
+    public void setUseEventVar(boolean enabled) {
+        if (kv != null) kv.putBoolean(USE_EVENT_VAR_KEY, enabled);
+    }
+
     /**
      * The forecast config actually in force, resolving <b>explicit request → stored setting →
      * shipped default</b>.
@@ -306,8 +340,14 @@ public class OpenOrdersService {
      */
     public VolForecast.Config effectiveConfig(Double halfLifeDays, Integer gtcSessions,
                                              Boolean useDrift) {
+        return effectiveConfig(halfLifeDays, gtcSessions, useDrift, null);
+    }
+
+    public VolForecast.Config effectiveConfig(Double halfLifeDays, Integer gtcSessions,
+                                             Boolean useDrift, Boolean useEventVar) {
         boolean drift = useDrift != null ? useDrift : useDrift();
-        return VolForecast.Config.of(halfLifeDays, gtcSessions, drift);
+        boolean events = useEventVar != null ? useEventVar : useEventVar();
+        return VolForecast.Config.of(halfLifeDays, gtcSessions, drift, events);
     }
 
     /** The panel's default view: the stored forecast setting, calibration records written. */
@@ -406,6 +446,10 @@ public class OpenOrdersService {
         Instant quoteCutoff = Instant.now().minus(Duration.ofDays(MAX_PRICE_AGE_DAYS));
         Map<String, String> stale = new LinkedHashMap<>();               // symbol → date last seen
         Map<String, String> notes = new LinkedHashMap<>();               // symbol → "as of …" label
+        // Symbols whose probability could not be event-adjusted, and why. Surfaced rather than
+        // silently left diffusive: an unadjusted figure the reader knows about is usable, one they
+        // don't is a number that quietly understates a name with a print coming.
+        Map<String, OrderEventVariance.Coverage> eventGaps = new LinkedHashMap<>();
         Set<String> warm = new LinkedHashSet<>();                        // tickers to fetch now
         // Newest quote per market *and session*, so "behind" is judged against the symbols trading
         // alongside it rather than against the wall clock: after the LSE close every GBp quote is
@@ -488,7 +532,20 @@ public class OpenOrdersService {
             // Drift, when it is switched on at all, is a property of what the instrument *is* —
             // resolved from the symbol, never from the ticker's own history.
             AssetClass assetClass = Instruments.assetClassOf(o.symbol());
-            VolForecast.Touch near = VolForecast.touch(vols, current, o.price(),
+
+            // Scheduled events are looked up once per row over the longest horizon this row will be
+            // priced at, and VolForecast keeps whichever of them fall inside each individual
+            // horizon — so the 5-session column and the P(N) column see the same event set and
+            // disagree only about which of it is inside their own window, which is the truth.
+            Integer toExpiry = sessionsToExpiry(o.expiry());
+            int horizon = toExpiry != null ? toExpiry : cfg.gtcHorizonSessions();
+            OrderEventVariance.Events events = cfg.useEventVar() && eventVariance != null
+                    ? eventVariance.eventsFor(o.symbol(), horizon)
+                    : OrderEventVariance.Events.NONE;
+            VolForecast.Inputs withEvents = new VolForecast.Inputs(
+                    vols.rv10(), vols.rv20(), vols.rv30(), vols.rv250(), events.events());
+
+            VolForecast.Touch near = VolForecast.touch(withEvents, current, o.price(),
                     TOUCH_HORIZON_SESSIONS, cfg, assetClass);
             o = o.withVolatility(vols.rv10(), vols.rv20(), vols.rv30(), vols.rv250(),
                     near.sigmaToLimit(), near.probability());
@@ -496,24 +553,30 @@ public class OpenOrdersService {
             // P(N): the order's own deadline in trading sessions, or the GTC assumption when it has
             // none. The reader retunes any row from the box in the cell (GET /orders/touch), which
             // re-blends at the new horizon rather than rescaling a fixed σ.
-            Integer toExpiry = sessionsToExpiry(o.expiry());
-            int horizon = toExpiry != null ? toExpiry : cfg.gtcHorizonSessions();
-            VolForecast.Touch far = VolForecast.touch(vols, current, o.price(), horizon, cfg, assetClass);
+            VolForecast.Touch far = VolForecast.touch(withEvents, current, o.price(), horizon,
+                    cfg, assetClass);
             o = o.withHorizonTouch(far, toExpiry);
             orders.set(i, o);
-            if (recordCalibration) recordTouch(o, far, assetClass);
+            if (cfg.useEventVar() && !events.adjusted()
+                    && events.coverage() != OrderEventVariance.Coverage.COMPLETE) {
+                eventGaps.put(o.symbol(), events.coverage());
+            }
+            if (recordCalibration) recordTouch(o, far, assetClass, events);
         }
         String asOf = newestOverall == null ? null : TIME_FMT.format(
                 newestOverall.atZone(ZoneId.systemDefault()));
-        if (stale.isEmpty()) return new Quotes(List.of(), notes, asOf, warm);
-        List<String> lines = new ArrayList<>();
-        for (Map.Entry<String, String> e : stale.entrySet()) {
-            lines.add(e.getKey() + " (last priced " + e.getValue() + ")");
+        List<String> warnings = new ArrayList<>(eventGapWarnings(eventGaps));
+        if (!stale.isEmpty()) {
+            List<String> lines = new ArrayList<>();
+            for (Map.Entry<String, String> e : stale.entrySet()) {
+                lines.add(e.getKey() + " (last priced " + e.getValue() + ")");
+            }
+            log.warn("Open orders: price feed has gone quiet for {}", lines);
+            warnings.add("No current price for " + String.join(", ", lines)
+                    + " — nothing had been refreshing those feeds. They are in the fetch universe now; "
+                    + "the price columns fill on the next tick.");
         }
-        log.warn("Open orders: price feed has gone quiet for {}", lines);
-        return new Quotes(List.of("No current price for " + String.join(", ", lines)
-                + " — nothing had been refreshing those feeds. They are in the fetch universe now; "
-                + "the price columns fill on the next tick."), notes, asOf, warm);
+        return new Quotes(warnings, notes, asOf, warm);
     }
 
     /**
@@ -524,17 +587,20 @@ public class OpenOrdersService {
      * <p>Broker, reference and the order's own dates are included so a record can be joined against
      * a later fill: the reference is the only field that identifies the order across snapshots.
      */
-    private void recordTouch(OpenOrder o, VolForecast.Touch touch, AssetClass assetClass) {
+    private void recordTouch(OpenOrder o, VolForecast.Touch touch, AssetClass assetClass,
+                             OrderEventVariance.Events events) {
         if (touch == null || touch.probability() == null) return;
         calibration.info(
                 "broker={} symbol={} ref={} side={} limit={} current={} entered={} expiry={} "
-                        + "sessions={} fromExpiry={} sigmaEff={} decay={} volSource={} "
-                        + "assetClass={} drifted={} mu={} "
+                        + "sessions={} fromExpiry={} sigmaEffDiffusive={} sigmaEff={} decay={} "
+                        + "volSource={} assetClass={} driftUsed={} muUsed={} nuUsed={} "
+                        + "eventCount={} eventVarAdded={} eventCoverage={} "
                         + "rv10={} rv20={} rv30={} rv250={} p={} pLow={} pHigh={}",
                 o.broker(), o.symbol(), o.reference(), o.side(), o.price(), o.currentPrice(),
                 o.dateEntered(), o.expiry() != null ? o.expiry() : o.duration(),
-                touch.sessions(), o.horizonFromExpiry(), touch.sigmaEff(), touch.decay(),
-                touch.source(), assetClass, touch.drifted(), touch.drift(),
+                touch.sessions(), o.horizonFromExpiry(), touch.sigmaEffDiffusive(), touch.sigmaEff(),
+                touch.decay(), touch.source(), assetClass, touch.drifted(), touch.drift(),
+                touch.logDrift(), touch.eventCount(), touch.eventVariance(), events.coverage(),
                 o.dailyVol10(), o.dailyVol20(), o.dailyVol30(), o.dailyVol250(),
                 touch.probability(), touch.probabilityLow(), touch.probabilityHigh());
     }
@@ -875,6 +941,37 @@ public class OpenOrdersService {
     }
 
     /** Enrichment by-products the view needs: warnings, per-row age notes, the newest quote, and what to warm. */
+    /**
+     * Symbols whose probability could not be event-adjusted, phrased by *why* — the three states a
+     * blank would conflate. Only raised when the event term is switched on: with it off, every row
+     * is unadjusted by design and saying so on each would be noise.
+     */
+    private static List<String> eventGapWarnings(Map<String, OrderEventVariance.Coverage> gaps) {
+        if (gaps.isEmpty()) return List.of();
+        List<String> partial = new ArrayList<>();
+        List<String> uncovered = new ArrayList<>();
+        for (Map.Entry<String, OrderEventVariance.Coverage> e : gaps.entrySet()) {
+            switch (e.getValue()) {
+                case NOT_COVERED -> uncovered.add(e.getKey());
+                case PARTIAL, NONE -> partial.add(e.getKey());
+                default -> { }
+            }
+        }
+        List<String> out = new ArrayList<>();
+        if (!partial.isEmpty()) {
+            log.info("Event variance: calendar incomplete for {} — probabilities left unadjusted", partial);
+            out.add("No earnings date within the horizon for " + String.join(", ", partial)
+                    + " — the calendar hasn't been fetched that far ahead yet, so those probabilities "
+                    + "carry no event variance. A fetch is queued; reload in a few seconds.");
+        }
+        if (!uncovered.isEmpty()) {
+            out.add("Earnings dates aren't available for " + String.join(", ", uncovered)
+                    + " — the calendar feed is US-only, so these listings are never in it. Their "
+                    + "probabilities are diffusive-only and will stay that way.");
+        }
+        return out;
+    }
+
     private record Quotes(List<String> warnings, Map<String, String> notes, String asOf, Set<String> warm) {
         static Quotes none() {
             return new Quotes(List.of(), Map.of(), null, Set.of());

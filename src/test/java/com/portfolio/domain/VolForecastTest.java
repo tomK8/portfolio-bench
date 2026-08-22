@@ -188,6 +188,151 @@ class VolForecastTest {
     }
 
     @Test
+    void theDriftIsItoCorrectedAgainstTheHorizonsOwnSigma() {
+        // μ is an expected *arithmetic* return; the first passage consumes a log drift. The gap —
+        // σ²/2, worth 1.26%/yr of a 6% figure at a 1%/day σ — is applied where the two meet, so the
+        // probability must match the drifted formula fed ν, not μ.
+        Inputs in = inputs("0.015", "0.015", "0.015", "0.015");
+        Touch t = VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON, AssetClass.EQUITY);
+
+        BigDecimal mu = AssetClass.EQUITY.dailyDrift();
+        BigDecimal sigma = t.sigmaEff();
+        BigDecimal expectedNu = BigDecimal.valueOf(
+                mu.doubleValue() - sigma.doubleValue() * sigma.doubleValue() / 2.0);
+        assertEquals(expectedNu.doubleValue(), t.logDrift().doubleValue(), 1e-12);
+        assertEquals(mu, t.drift(), "μ is reported as well as ν — they are different claims");
+        assertEquals(PriceStats.touchProbabilityDrifted(dec("100"), dec("90"), sigma, 250, t.logDrift()),
+                t.probability());
+
+        // The correction bites in the right direction: less upward pull than raw μ, so a limit
+        // below the market is left slightly *more* reachable than the uncorrected model says.
+        assertTrue(t.logDrift().compareTo(mu) < 0);
+        assertTrue(t.probability().compareTo(
+                        PriceStats.touchProbabilityDrifted(dec("100"), dec("90"), sigma, 250, mu)) > 0,
+                "Itô-corrected drift must not overstate the walk away from a buy limit");
+
+        // ν is horizon-dependent because σ_eff is: a spike decaying toward the anchor changes the
+        // drag along with it, so the same class yields a different log drift at 5 sessions and 250.
+        Inputs violent = inputs("0.05", "0.05", "0.045", "0.02");
+        BigDecimal nuNear = VolForecast.touch(violent, dec("100"), dec("90"), 5, DRIFT_ON, AssetClass.EQUITY).logDrift();
+        BigDecimal nuFar = VolForecast.touch(violent, dec("100"), dec("90"), 250, DRIFT_ON, AssetClass.EQUITY).logDrift();
+        assertTrue(nuNear.compareTo(nuFar) < 0, "a wilder near-term σ means a heavier drag: "
+                + nuNear + " vs " + nuFar);
+    }
+
+    @Test
+    void aZeroDriftClassIsLeftAloneRatherThanDraggedBelowZero() {
+        // The branch tests μ, not ν. A gilt with no expected return is modelled as having no drift
+        // at all — handing it ν = −σ²/2 would invent a downward pull nobody asked for, and would
+        // break the equivalence the whole flag rests on.
+        Inputs in = inputs("0.015", "0.015", "0.015", "0.015");
+        for (AssetClass zero : new AssetClass[]{AssetClass.GILT, AssetClass.COMMODITY, AssetClass.UNKNOWN}) {
+            Touch on = VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON, zero);
+            assertEquals(0, on.logDrift().signum(), zero + " must not acquire a variance drag");
+            assertEquals(VolForecast.touch(in, dec("100"), dec("90"), 250, Config.DEFAULT, zero).probability(),
+                    on.probability());
+        }
+    }
+
+    // ---- event variance ----------------------------------------------------
+
+    private static final Config EVENTS_ON = new Config(20, 90, false, true, false);
+
+    private static Inputs withEvents(String rv, VolForecast.Event... events) {
+        return new Inputs(dec(rv), dec(rv), dec(rv), dec(rv), java.util.List.of(events));
+    }
+
+    @Test
+    void aScheduledPrintAddsVarianceRatherThanVolatility() {
+        // σ_eff = √((var_N·N + Σmove²)/N). A 6% print inside a 63-session horizon at 1%/day:
+        // total var = 0.0001·63 + 0.0036 = 0.0099, σ_eff = √(0.0099/63) = 1.2536%/day.
+        Inputs in = withEvents("0.01", new VolForecast.Event(20, dec("0.06")));
+        Touch t = VolForecast.touch(in, dec("100"), dec("90"), 63, EVENTS_ON, AssetClass.EQUITY);
+
+        assertEquals(0.012536, t.sigmaEff().doubleValue(), 1e-6);
+        assertEquals(0.01, t.sigmaEffDiffusive().doubleValue(), 1e-9, "the diffusive figure is kept");
+        assertEquals(1, t.eventCount());
+        assertEquals(0.0036, t.eventVariance().doubleValue(), 1e-9);
+        assertTrue(t.eventAdjusted());
+
+        // The whole point: a quiet name with a print ahead is not priced as a quiet name.
+        Touch without = VolForecast.touch(in, dec("100"), dec("90"), 63, Config.DEFAULT, AssetClass.EQUITY);
+        assertTrue(t.probability().compareTo(without.probability()) > 0);
+        assertEquals(0, without.eventCount(), "flag off: nothing added");
+        assertEquals(without.sigmaEff(), without.sigmaEffDiffusive());
+    }
+
+    @Test
+    void everyPrintInsideTheHorizonCountsAndNoneOutsideIt() {
+        // A 90-session window routinely holds two quarterly prints; a 63-session one holds the
+        // first only. The same input set has to give different answers at the two horizons.
+        Inputs in = withEvents("0.01",
+                new VolForecast.Event(20, dec("0.06")),
+                new VolForecast.Event(83, dec("0.06")),
+                new VolForecast.Event(146, dec("0.06")));
+
+        assertEquals(0, VolForecast.touch(in, dec("100"), dec("90"), 5, EVENTS_ON, AssetClass.EQUITY).eventCount());
+        assertEquals(1, VolForecast.touch(in, dec("100"), dec("90"), 63, EVENTS_ON, AssetClass.EQUITY).eventCount());
+        assertEquals(2, VolForecast.touch(in, dec("100"), dec("90"), 90, EVENTS_ON, AssetClass.EQUITY).eventCount());
+        assertEquals(3, VolForecast.touch(in, dec("100"), dec("90"), 250, EVENTS_ON, AssetClass.EQUITY).eventCount());
+
+        Touch one = VolForecast.touch(in, dec("100"), dec("90"), 63, EVENTS_ON, AssetClass.EQUITY);
+        Touch two = VolForecast.touch(in, dec("100"), dec("90"), 90, EVENTS_ON, AssetClass.EQUITY);
+        assertEquals(0.0036, one.eventVariance().doubleValue(), 1e-9);
+        assertEquals(0.0072, two.eventVariance().doubleValue(), 1e-9, "variance sums, vol does not");
+
+        // A print today is still ahead of a resting order; one already past is not an input at all.
+        assertEquals(1, VolForecast.touch(withEvents("0.01", new VolForecast.Event(0, dec("0.06"))),
+                dec("100"), dec("90"), 5, EVENTS_ON, AssetClass.EQUITY).eventCount());
+        assertEquals(0, VolForecast.touch(withEvents("0.01", new VolForecast.Event(-3, dec("0.06"))),
+                dec("100"), dec("90"), 90, EVENTS_ON, AssetClass.EQUITY).eventCount());
+    }
+
+    @Test
+    void anUnknownDateOrAZeroMoveLeavesTheFigureVisiblyUnadjusted() {
+        // The instruction that matters most here: no date, no adjustment — never a guessed one.
+        // An unadjusted probability has to be indistinguishable from the diffusive model, so the
+        // panel can say "unadjusted" rather than quietly showing a number that looks adjusted.
+        Inputs noDates = new Inputs(dec("0.01"), dec("0.01"), dec("0.01"), dec("0.01"));
+        Touch t = VolForecast.touch(noDates, dec("100"), dec("90"), 63, EVENTS_ON, AssetClass.EQUITY);
+        assertEquals(0, t.eventCount());
+        assertFalse(t.eventAdjusted());
+        assertEquals(t.sigmaEffDiffusive(), t.sigmaEff());
+        assertEquals(VolForecast.touch(noDates, dec("100"), dec("90"), 63, Config.DEFAULT, AssetClass.EQUITY)
+                .probability(), t.probability());
+
+        // A fund or gilt has a zero move even when a date somehow lands on it — no event, no jump.
+        assertEquals(0, VolForecast.touch(withEvents("0.01", new VolForecast.Event(10, BigDecimal.ZERO)),
+                dec("100"), dec("90"), 63, EVENTS_ON, AssetClass.GILT).eventCount());
+    }
+
+    @Test
+    void eventVarianceRidesOnTheDegradedForecastsToo() {
+        // A short-history name with a print next week is exactly where the calendar carries most of
+        // the information, so the CURRENT_ONLY path must fold events in as well.
+        Inputs shortHistory = new Inputs(dec("0.01"), dec("0.01"), dec("0.01"), null,
+                java.util.List.of(new VolForecast.Event(5, dec("0.06"))));
+        Touch t = VolForecast.touch(shortHistory, dec("100"), dec("90"), 20, EVENTS_ON, AssetClass.EQUITY);
+        assertEquals(Source.CURRENT_ONLY, t.source());
+        assertEquals(1, t.eventCount());
+        assertTrue(t.sigmaEff().compareTo(t.sigmaEffDiffusive()) > 0);
+    }
+
+    @Test
+    void driftAndEventsCompose() {
+        // Both flags on: the event inflates σ_eff, and ν is then computed against that inflated σ —
+        // the drag belongs to the volatility actually being used, not to the diffusive one.
+        Inputs in = withEvents("0.01", new VolForecast.Event(20, dec("0.06")));
+        Touch t = VolForecast.touch(in, dec("100"), dec("90"), 63,
+                new Config(20, 90, true, true, false), AssetClass.EQUITY);
+        assertTrue(t.eventAdjusted());
+        assertTrue(t.drifted());
+        double sigma = t.sigmaEff().doubleValue();
+        assertEquals(AssetClass.EQUITY.dailyDrift().doubleValue() - sigma * sigma / 2.0,
+                t.logDrift().doubleValue(), 1e-12);
+    }
+
+    @Test
     void aStatedAssetClassIsRequiredBeforeAnyDriftCanBeApplied() {
         // The 5-argument form says nothing about what it is pricing, so it can never inject drift
         // — an unclassified instrument defaults to the neutral model, not to an equity's.

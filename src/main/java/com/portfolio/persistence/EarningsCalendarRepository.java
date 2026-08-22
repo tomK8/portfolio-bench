@@ -129,6 +129,61 @@ public class EarningsCalendarRepository {
         return null;
     }
 
+    /**
+     * The dates on which {@code symbol} is scheduled to report inside {@code [from, to]}, ascending
+     * — the by-symbol view of a cache that is otherwise keyed by date.
+     *
+     * <p>Reads only what has already been fetched, and says nothing about coverage: an empty list
+     * means "no print cached in that window", which is a different thing from "no print due" and a
+     * caller that treats them the same will silently under-adjust. {@link #coveredThrough} is how
+     * the two are told apart.
+     */
+    public List<LocalDate> datesForSymbol(String symbol, LocalDate from, LocalDate to) {
+        List<LocalDate> out = new ArrayList<>();
+        if (symbol == null || symbol.isBlank() || from == null || to == null
+                || to.isBefore(from) || !connections.dbExists()) {
+            return out;
+        }
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT date FROM earnings_calendar WHERE symbol = ? AND date >= ? AND date <= ? "
+                             + "ORDER BY date")) {
+            ps.setString(1, symbol.trim().toUpperCase());
+            ps.setString(2, from.toString());
+            ps.setString(3, to.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) out.add(LocalDate.parse(rs.getString("date")));
+            }
+        } catch (Exception e) {
+            log.warn("Could not read earnings dates for {}", symbol, e);
+        }
+        return out;
+    }
+
+    /**
+     * The last date at or after {@code from} for which a roster has actually been fetched, with no
+     * gap before it — i.e. how far forward the calendar can be trusted to be complete.
+     *
+     * <p>A gap matters more than it looks: the roster is market-wide, so an unfetched date is a date
+     * on which <em>every</em> symbol appears to have nothing scheduled. Walking from {@code from}
+     * and stopping at the first missing day is what lets a caller say "unadjusted beyond here"
+     * instead of quietly reporting no events.
+     */
+    public LocalDate coveredThrough(LocalDate from, LocalDate to) {
+        if (from == null || to == null || to.isBefore(from) || !connections.dbExists()) return null;
+        LocalDate covered = null;
+        for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
+            // Weekends never carry a roster and are never fetched; they can't break the run.
+            if (d.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                    || d.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+                continue;
+            }
+            if (lastFetched(d) == null) return covered;
+            covered = d;
+        }
+        return covered;
+    }
+
     /** Cached roster for {@code date}, biggest market cap first (nulls last); empty when none stored. */
     public List<EarningsEvent> load(LocalDate date) {
         List<EarningsEvent> out = new ArrayList<>();

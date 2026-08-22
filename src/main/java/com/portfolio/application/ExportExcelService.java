@@ -82,7 +82,7 @@ public class ExportExcelService {
             return ExportResult.nothing();
         }
         return writeWorkbook("Portfolio Ledger-",
-                () -> writer.ledgerWorkbook(result.holdings(), result.totals()));
+                () -> writer.ledgerWorkbook(result.holdings(), result.totals(), result.irrBySymbol()));
     }
 
     /**

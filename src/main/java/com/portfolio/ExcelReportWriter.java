@@ -4,6 +4,7 @@ import com.portfolio.application.LivePricesService;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PortfolioAggregator;
 import com.portfolio.domain.PortfolioMetrics;
+import com.portfolio.domain.PositionIrr;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.Holding;
 import com.portfolio.domain.model.OpenOrder;
@@ -843,8 +844,13 @@ public class ExcelReportWriter {
     private static final int LED_DIV = 8;         // I
     private static final int LED_TOTAL_GAIN = 9;  // J
     private static final int LED_TOTAL_GAINPCT = 10; // K
-    private static final int LED_SOURCES = 11;    // L
-    private static final int LED_COLS = 12;
+    private static final int LED_IRR = 11;        // L  annualised return (IRR), or period return
+    private static final int LED_IRR_BASIS = 12;  // M  which of the two the cell above is
+    private static final int LED_IRR_YEARS = 13;  // N  cost-weighted holding period
+    private static final int LED_IRR_NATIVE = 14; // O  same rate in the listing currency
+    private static final int LED_IRR_FX = 15;     // P  GBP rate − native rate
+    private static final int LED_SOURCES = 16;    // Q
+    private static final int LED_COLS = 17;
 
     /**
      * Single-sheet workbook of the cash-ledger-derived portfolio, as bytes for the caller to write.
@@ -862,9 +868,22 @@ public class ExcelReportWriter {
      */
     public byte[] ledgerWorkbook(List<AggHolding> rows, PortfolioMetrics.Totals totals)
             throws IOException {
+        return ledgerWorkbook(rows, totals, Map.of());
+    }
+
+    /**
+     * As above, with the per-symbol IRR the cash-ledger table shows. The rate travels as four
+     * columns rather than one string because a sheet has nowhere to put a tooltip: the figure
+     * stays a real number the sheet can sort and chart, and {@code Return basis} carries the
+     * caveat (annualised vs a sub-90-day period return) beside it — the same convention the
+     * orders sheet uses for the PRE/AH quote badge.
+     */
+    public byte[] ledgerWorkbook(List<AggHolding> rows, PortfolioMetrics.Totals totals,
+                                 Map<String, PositionIrr.Result> irrBySymbol) throws IOException {
         try (Workbook wb = new XSSFWorkbook();
              ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
-            writeLedgerSheet(wb.createSheet("Portfolio (ledger)"), rows, totals, wb);
+            writeLedgerSheet(wb.createSheet("Portfolio (ledger)"), rows, totals, wb,
+                    irrBySymbol == null ? Map.of() : irrBySymbol);
             wb.setForceFormulaRecalculation(true);   // else every formula cell opens blank
             wb.write(bos);
             return bos.toByteArray();
@@ -872,7 +891,8 @@ public class ExcelReportWriter {
     }
 
     private static void writeLedgerSheet(Sheet sheet, List<AggHolding> rows,
-                                         PortfolioMetrics.Totals totals, Workbook wb) {
+                                         PortfolioMetrics.Totals totals, Workbook wb,
+                                         Map<String, PositionIrr.Result> irrBySymbol) {
         CellStyle text = wb.createCellStyle();
         CellStyle boldText = boldTextStyle(wb);
         CellStyle num = numericStyle(wb, false);
@@ -888,8 +908,13 @@ public class ExcelReportWriter {
         CellStyle gainPct = gainLossPctStyle(wb, true);
         CellStyle lossPct = gainLossPctStyle(wb, false);
 
+        CellStyle yearsNum = wb.createCellStyle();
+        yearsNum.setDataFormat(wb.createDataFormat().getFormat("0.00"));
+
         String[] headers = {"Security", "Ccy", "Quantity", "Price", "Market Value £", "Portfolio %",
-                "Gain (£)", "Gain %", "Dividends (£)", "Total Gain (£)", "Total Gain %", "Sources"};
+                "Gain (£)", "Gain %", "Dividends (£)", "Total Gain (£)", "Total Gain %",
+                "Annualised return", "Return basis", "Holding period (yr)", "Native return",
+                "Currency effect", "Sources"};
         Row hdr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, rows.size()), 0, LED_COLS - 1));
@@ -924,10 +949,14 @@ public class ExcelReportWriter {
                 setPercent(row, LED_TOTAL_GAINPCT, h.totalGainPct(),
                         h.totalGainPct().signum() >= 0 ? gainPct : lossPct);
             }
+            writeLedgerIrr(row, irrBySymbol.get(h.securityId()), gainPct, lossPct, text, yearsNum);
             styledCell(row, LED_SOURCES, h.sources(), text);
         }
 
         // Totals block — the same five figures the on-screen tiles show, in the same order.
+        // The IRR columns get no total: rates over different flow series do not sum, and a
+        // portfolio-level money-weighted return is a different calculation over different
+        // flows (Performance → Returns computes it).
         Row total = sheet.createRow(totalPoi);
         styledCell(total, LED_ID, "TOTAL", boldText);
         Row cash = sheet.createRow(totalPoi + 1);
@@ -964,6 +993,35 @@ public class ExcelReportWriter {
         formulaCell(totalReturn, LED_GAINPCT, "IFERROR(G" + t + "/E" + t + ",\"\")", boldPct);
 
         autoSizeColumns(sheet, LED_COLS);
+    }
+
+    /**
+     * The four IRR cells for one ledger row. A position with no solvable rate writes nothing
+     * at all rather than a zero — an empty cell reads as "not computed", a 0.00% reads as
+     * "broke even", and those are opposite claims.
+     */
+    private static void writeLedgerIrr(Row row, PositionIrr.Result irr,
+                                       CellStyle gainPct, CellStyle lossPct,
+                                       CellStyle text, CellStyle yearsNum) {
+        if (irr == null) return;
+        BigDecimal rate = irr.displayReturn();
+        if (rate != null) {
+            setPercent(row, LED_IRR, rate, rate.signum() >= 0 ? gainPct : lossPct);
+            styledCell(row, LED_IRR_BASIS, irr.annualised()
+                    ? (irr.reentered() ? "Annualised (current episode)" : "Annualised")
+                    : "Period return, " + irr.episodeDays() + "d", text);
+        } else {
+            styledCell(row, LED_IRR_BASIS, "No rate", text);
+        }
+        if (irr.holdingYears() != null) {
+            setStyled(row, LED_IRR_YEARS, irr.holdingYears(), yearsNum);
+        }
+        if (irr.nativeAnnualisedReturn() != null) {
+            BigDecimal n = irr.nativeAnnualisedReturn();
+            setPercent(row, LED_IRR_NATIVE, n, n.signum() >= 0 ? gainPct : lossPct);
+            BigDecimal fx = irr.currencyContribution();
+            if (fx != null) setPercent(row, LED_IRR_FX, fx, fx.signum() >= 0 ? gainPct : lossPct);
+        }
     }
 
     // -------------------------------------------------------------------------

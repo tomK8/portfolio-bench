@@ -143,6 +143,19 @@
         html[data-theme="dark"] td.mom-pos { background: rgba(74, 222, 128, 0.22); }
         html[data-theme="dark"] td.mom-neg { background: rgba(248, 113, 113, 0.22); }
 
+        /* Annualised-return (IRR) column markers. Both ride *inside* a val-pos/val-neg cell, so
+           they set their own colour explicitly — inheriting the green/red would make a caveat
+           read as part of the figure. */
+        .irr-period, .irr-flag {
+            color: #888;
+            font-size: 0.75rem;
+            margin-left: 0.3rem;
+        }
+        .irr-period::before { content: "\00b7\00a0"; }   /* "· 41d" — a qualifier, not a second number */
+        .irr-flag { cursor: help; }
+        html[data-theme="dark"] .irr-period, html[data-theme="dark"] .irr-flag { color: #9aa0a6; }
+        .irr-footnote { max-width: 60rem; margin-top: 0.75rem; }
+
         .totals {
             margin-bottom: 1.5rem;
         }

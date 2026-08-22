@@ -2,6 +2,7 @@ package com.portfolio.application;
 
 import com.portfolio.application.PortfolioValueService.DailyValue;
 import com.portfolio.application.PortfolioValueService.PeriodValues;
+import com.portfolio.domain.Irr;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.persistence.CashTransactionRepository;
@@ -477,8 +478,10 @@ public class PortfolioReturnService {
     /**
      * Money-weighted (IRR) return summary. Trailing windows treat the portfolio's GBP value
      * at window-start as a single outflow, every contribution during the window as a
-     * further outflow on its date, and today's value as the recovery inflow — then bisect
-     * for the annualised rate that makes the NPV of those flows zero. Since-inception
+     * further outflow on its date, and today's value as the recovery inflow — then solve
+     * (via {@link Irr}) for the annualised rate that makes the NPV of those flows zero.
+     * Stays on the 365.25-day house basis rather than XIRR's 365 so these tiles remain
+     * comparable with the annualised figures beside them. Since-inception
      * mirrors the same shape but with no window-start outflow.
      *
      * <p>Trailing windows beyond the data are returned as {@code null}.
@@ -511,12 +514,12 @@ public class PortfolioReturnService {
     private static Double xirrInception(Map<LocalDate, BigDecimal> contribsByDate,
                                         LocalDate today, BigDecimal valueToday) {
         if (contribsByDate.isEmpty() || valueToday.signum() <= 0) return null;
-        List<double[]> flows = new ArrayList<>();
+        List<Irr.Flow> flows = new ArrayList<>();
         for (var e : contribsByDate.entrySet()) {
-            flows.add(new double[]{epochDay(e.getKey()), -e.getValue().doubleValue()});
+            flows.add(new Irr.Flow(e.getKey(), -e.getValue().doubleValue()));
         }
-        flows.add(new double[]{epochDay(today), valueToday.doubleValue()});
-        return xirr(flows);
+        flows.add(new Irr.Flow(today, valueToday.doubleValue()));
+        return Irr.solve(flows, Irr.DAYS_PER_YEAR_CALENDAR);
     }
 
     private static Double xirrTrailing(List<DailyValue> values,
@@ -531,57 +534,15 @@ public class PortfolioReturnService {
         }
         if (startValue == null || startValue.signum() <= 0) return null;
 
-        List<double[]> flows = new ArrayList<>();
-        flows.add(new double[]{epochDay(windowStart), -startValue.doubleValue()});
+        List<Irr.Flow> flows = new ArrayList<>();
+        flows.add(new Irr.Flow(windowStart, -startValue.doubleValue()));
         for (var e : contribsByDate.entrySet()) {
             if (e.getKey().isAfter(windowStart) && !e.getKey().isAfter(today)) {
-                flows.add(new double[]{epochDay(e.getKey()), -e.getValue().doubleValue()});
+                flows.add(new Irr.Flow(e.getKey(), -e.getValue().doubleValue()));
             }
         }
-        flows.add(new double[]{epochDay(today), valueToday.doubleValue()});
-        return xirr(flows);
-    }
-
-    private static double epochDay(LocalDate d) {
-        return d.toEpochDay();
-    }
-
-    /**
-     * Bisection on the annualised IRR. NPV at rate r =
-     * Σ amount_i × (1+r)^(-(day_i − day0)/365.25). The amounts are signed (outflows
-     * negative, inflows positive). Bisects in [-0.99, 10.0] for 100 iterations — fast and
-     * robust for any return below 1000%. Returns {@code null} if NPV doesn't cross zero
-     * (e.g. all-positive or all-negative flows — pathological input).
-     */
-    private static Double xirr(List<double[]> flows) {
-        if (flows.size() < 2) return null;
-        double t0 = flows.get(0)[0];
-        for (double[] f : flows) if (f[0] < t0) t0 = f[0];
-        double lo = -0.99;
-        double hi = 10.0;
-        double npvLo = npv(flows, t0, lo);
-        double npvHi = npv(flows, t0, hi);
-        if (Double.isNaN(npvLo) || Double.isNaN(npvHi)) return null;
-        if (npvLo * npvHi > 0) return null;
-        for (int i = 0; i < 100; i++) {
-            double mid = 0.5 * (lo + hi);
-            double npvMid = npv(flows, t0, mid);
-            if (Math.abs(npvMid) < 1e-6) return mid;
-            if (npvLo * npvMid < 0) { hi = mid; npvHi = npvMid; }
-            else { lo = mid; npvLo = npvMid; }
-        }
-        return 0.5 * (lo + hi);
-    }
-
-    private static double npv(List<double[]> flows, double t0, double r) {
-        double s = 0.0;
-        double base = 1.0 + r;
-        if (base <= 0) return Double.NaN;
-        for (double[] f : flows) {
-            double dt = (f[0] - t0) / 365.25;
-            s += f[1] * Math.pow(base, -dt);
-        }
-        return s;
+        flows.add(new Irr.Flow(today, valueToday.doubleValue()));
+        return Irr.solve(flows, Irr.DAYS_PER_YEAR_CALENDAR);
     }
 
     private BigDecimal rothSeedToGbp(BigDecimal seedUsd, LocalDate rothStart) {

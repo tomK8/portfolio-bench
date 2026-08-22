@@ -106,7 +106,7 @@ public class SyncPortfolioService {
         List<SyncResult.UnpricedSymbol> unpriced = unpricedSymbols(missingIntraday, tickerBySymbol, priceHistory);
         List<SyncResult.AssetRecon> assetRecon = reconcileAssets(aggregated, latestBySymbol, gathered.rates());
         return new SyncResult(aggregated, totals, gathered.rates(), iiSippCash, sources, false,
-                recon, missingIntraday, List.of(), assetRecon, unpriced);
+                recon, missingIntraday, List.of(), assetRecon, unpriced, Map.of());
     }
 
     /**

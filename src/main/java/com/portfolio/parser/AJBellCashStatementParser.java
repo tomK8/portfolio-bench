@@ -156,22 +156,21 @@ public class AJBellCashStatementParser implements CashTransactionParser {
         // Compressed "TREASURY2.75L24" / "TSY3.5L28" format
         Matcher lm = PAT_GILT_TREASURY_L.matcher(name);
         if (lm.find()) {
-            return "GILT " + lm.group(1) + "% " + (Integer.parseInt(lm.group(2)) + 2000);
+            return Instruments.giltId(lm.group(1), Integer.parseInt(lm.group(2)) + 2000);
         }
         // Compressed "HM TREA0.2525" format (coupon=0.25, year=25)
         Matcher hm = PAT_GILT_HM_TREA.matcher(name);
         if (hm.find()) {
-            return "GILT " + hm.group(1) + "% " + (Integer.parseInt(hm.group(2)) + 2000);
+            return Instruments.giltId(hm.group(1), Integer.parseInt(hm.group(2)) + 2000);
         }
         // Standard "0.875% TREASURY GILT 22/01/2033" format
         Matcher cm = PAT_COUPON.matcher(name);
         Matcher dm = PAT_GILT_DATE.matcher(name);
         if (cm.find() && dm.find()) {
-            String coupon = cm.group(1);
             String yr = dm.group(1);
             int year = Integer.parseInt(yr);
             if (yr.length() == 2) year += 2000;
-            return "GILT " + coupon + "% " + year;
+            return Instruments.giltId(cm.group(1), year);
         }
         return null;
     }

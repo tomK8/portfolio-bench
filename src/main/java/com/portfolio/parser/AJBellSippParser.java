@@ -1,5 +1,6 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.Instruments;
 import com.portfolio.domain.model.Holding;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -63,11 +64,10 @@ public class AJBellSippParser implements AccountParser {
         Matcher cm = COUPON.matcher(investment);
         Matcher dm = DATE.matcher(investment);
         if (cm.find() && dm.find()) {
-            String coupon = cm.group(1);
             String yr = dm.group(1);
             int year = Integer.parseInt(yr);
             if (yr.length() == 2) year += 2000;
-            return "GILT " + coupon + "% " + year;
+            return Instruments.giltId(cm.group(1), year);
         }
         return investment.replaceAll("\\s*\\(SEDOL:[^)]+\\)", "").trim();
     }

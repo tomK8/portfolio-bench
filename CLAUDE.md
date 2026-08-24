@@ -426,9 +426,36 @@ in `PortfolioAggregator.realtime`, `SyncFromCashService.realtime` (cash-ledger v
 `PortfolioValueService.positionGbp` (value chart) — keep these in sync if the bond price model
 changes.
 
-Bonds in AJBell exports are normalised to `"GILT {coupon}% {year}"` by `AJBellSippParser.extractBondId`.
-The same string is the symbol under which `GiltPriceFetchJob` writes to `price_intraday`, so the
-aggregator joins holding → RT price without any ticker translation.
+**The gilt id is built in exactly one place — `Instruments.giltId(coupon, year)`** — and it
+canonicalises the coupon by trimming trailing zeros, so `4.5` / `4.50` / `4.500` all produce
+`GILT 4.5% 2028`. That string is a **join key** across four writers that each read the coupon out
+of different text, and the sources disagree about trailing zeros: HL pads (`"4.750"`), Tradeweb
+pads (`"3.000"`), AJ Bell's *holdings* export doesn't (`"4.75%"`) — and AJ Bell's *cash statement*
+writes `"GILT 4.50%"`. Each writer used to normalise for itself or not at all (two private copies
+of the same trim, two parsers with none), so a coupon a broker happened to spell with a trailing
+zero produced the position under one string and its prices under another. A £50,597 gilt bought
+2026-08-21 landed in the ledger as `GILT 4.50% 2028` while HL had been pricing it all along as
+`GILT 4.5% 2028`: the cash-ledger view joined neither the intraday quote nor the daily close, so
+it reported the position as unpriced and **dropped it from the totals** (2026-08-24).
+`GILT 1.00% 2024` and `GILT 5.00% 2025` carry the same defect and were only ever invisible because
+both matured before anyone read a total that was missing them. Building the whole id there rather
+than exposing a coupon-trimming helper is deliberate: a caller cannot then assemble the string
+correctly and forget to canonicalise it. The four writers are `AJBellSippParser.extractBondId`
+(holdings CSV), `AJBellCashStatementParser.tryExtractGiltId` (all three description shapes),
+`GiltPriceFetcher` (HL) and `TradewebGiltPriceParser` — **never concatenate `"GILT " + coupon`
+anywhere else.**
+
+`persistence/GiltSymbolMigration` re-keys rows written before that, run from the
+`CashTransactionRepository` and `PriceHistoryRepository` constructors (the ledger has no re-import
+path that rewrites a symbol in place, so nothing else can reach those rows). `UPDATE OR REPLACE`,
+not a plain `UPDATE`: a bond may already hold rows under both spellings — the live database had
+`GILT 1.00% 2024` beside `GILT 1% 2024` — and a primary-key collision would otherwise abort the
+repository's whole constructor. Idempotent: once every stored symbol is canonical it is one
+`SELECT DISTINCT` and no writes. `price_intraday` is deliberately not migrated (15-day retention,
+self-heals).
+
+The resulting string is the symbol under which `GiltPriceFetchJob` writes to `price_intraday`, so
+the aggregator joins holding → RT price without any ticker translation.
 
 ## Dividends
 

@@ -1,5 +1,6 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.Instruments;
 import com.portfolio.domain.model.PriceBar;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -24,8 +25,8 @@ import java.util.regex.Pattern;
  * Parses the FTSE/Tradeweb gilt close-price CSV that the user downloads manually from Tradeweb.
  * One file = one gilt across a date range. Columns of interest: {@code Gilt Name}, {@code Close of
  * Business Date} (M/D/YYYY, US format), {@code Coupon}, {@code Maturity} (M/D/YYYY) and
- * {@code Clean Price}. The resulting symbol matches {@code "GILT {coupon}% {year}"} produced by
- * {@code AJBellSippParser.extractBondId}, so the join key lines up with the rest of the system.
+ * {@code Clean Price}. The symbol is built by {@link Instruments#giltId} (Tradeweb pads coupons —
+ * "3.000" — and that trim is what keeps the join key lined up with the rest of the system).
  *
  * <p>Only {@code close} / {@code adjClose} are populated; OHLV stay null. Currency is GBP.
  */
@@ -69,13 +70,12 @@ public class TradewebGiltPriceParser {
             if (couponRaw.isEmpty() || maturity.isEmpty() || dateRaw.isEmpty() || priceRaw.isEmpty()) {
                 return null;
             }
-            String coupon = normaliseCoupon(couponRaw);
             String year = maturityYear(maturity);
             if (year == null) {
                 log.warn("Skipping row with unparseable maturity: {}", maturity);
                 return null;
             }
-            String symbol = "GILT " + coupon + "% " + year;
+            String symbol = Instruments.giltId(couponRaw, Integer.parseInt(year));
             LocalDate date = LocalDate.parse(dateRaw, US_DATE);
             double price = Double.parseDouble(priceRaw);
             return new PriceBar(symbol, date, null, null, null, price, price, 1.0, null, CURRENCY);
@@ -83,15 +83,6 @@ public class TradewebGiltPriceParser {
             log.warn("Skipping unparseable Tradeweb row: {}", r, e);
             return null;
         }
-    }
-
-    /** "3.750" → "3.75"; "0.875" → "0.875"; "3.000" → "3". Matches AJBellSippParser's coupon style. */
-    static String normaliseCoupon(String raw) {
-        String s = raw.trim();
-        if (!s.contains(".")) return s;
-        s = s.replaceAll("0+$", "");
-        if (s.endsWith(".")) s = s.substring(0, s.length() - 1);
-        return s;
     }
 
     private static String maturityYear(String maturity) {

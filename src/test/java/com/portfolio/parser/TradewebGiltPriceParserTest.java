@@ -1,5 +1,6 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.Instruments;
 import com.portfolio.domain.model.PriceBar;
 import org.junit.jupiter.api.Test;
 
@@ -31,12 +32,14 @@ class TradewebGiltPriceParserTest {
         assertEquals("GBP", first.currency());
     }
 
+    /**
+     * Tradeweb pads coupons; the symbol must still come back in the canonical form the ledger
+     * and the HL feed use. The trim itself is {@code InstrumentsTest}'s to prove — what matters
+     * here is that this parser goes through it rather than concatenating its own string.
+     */
     @Test
-    void normaliseCouponStripsTrailingZerosButPreservesSignificantOnes() {
-        assertEquals("3.75", TradewebGiltPriceParser.normaliseCoupon("3.750"));
-        assertEquals("0.875", TradewebGiltPriceParser.normaliseCoupon("0.875"));
-        assertEquals("1.5", TradewebGiltPriceParser.normaliseCoupon("1.500"));
-        assertEquals("3", TradewebGiltPriceParser.normaliseCoupon("3.000"));
-        assertEquals("4", TradewebGiltPriceParser.normaliseCoupon("4"));
+    void paddedCouponsProduceCanonicalSymbols() {
+        assertEquals("GILT 3.75% 2028", Instruments.giltId("3.750", 2028));
+        assertEquals("GILT 3% 2028", Instruments.giltId("3.000", 2028));
     }
 }

@@ -1,5 +1,6 @@
 package com.portfolio.adapter;
 
+import com.portfolio.domain.Instruments;
 import com.portfolio.domain.model.IntradayBar;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,7 +27,7 @@ import java.util.regex.Pattern;
  *
  * <p>The page identifies gilts by name/ISIN/SEDOL, but our internal {@code securityId} uses the
  * human-readable {@code "GILT {coupon}% {year}"} form produced by
- * {@code AJBellSippParser.extractBondId}. We key on {@code (coupon, year)} from the row's
+ * {@link Instruments#giltId}. We key on {@code (coupon, year)} from the row's
  * decimal-coupon and maturity-date columns so the resulting symbols join cleanly to
  * {@code Holding.securityId}. {@code (coupon, year)} is unique across all conventional gilts
  * on the page (index-linked gilts live on a separate page and are not fetched).
@@ -106,7 +107,7 @@ public class GiltPriceFetcher {
             Double price = priceValue(cells.get(3));
             if (coupon == null || year == null || price == null) continue;
 
-            String symbol = "GILT " + coupon + "% " + year;
+            String symbol = Instruments.giltId(coupon, Integer.parseInt(year));
             bars.add(new IntradayBar(symbol, ts, price, null, "GBP"));
         }
         return bars;
@@ -120,15 +121,12 @@ public class GiltPriceFetcher {
     }
 
     /**
-     * HL pads coupons with trailing zeros ("4.750", "1.000") while {@code extractBondId}'s
-     * symbols carry the coupon as brokers write it ("4.75", "1") — trim so the join holds.
+     * The coupon cell verbatim. HL pads with trailing zeros ("4.750", "1.000");
+     * {@link Instruments#giltId} trims them, so the join holds without a second trim here.
      */
     private static String couponDecimal(String cell) {
         Matcher m = COUPON_DECIMAL.matcher(cell);
-        if (!m.matches()) return null;
-        String c = m.group(1);
-        if (c.contains(".")) c = c.replaceAll("0+$", "").replaceAll("\\.$", "");
-        return c.isEmpty() ? null : c;
+        return m.matches() ? m.group(1) : null;
     }
 
     private static String maturityYear(String cell) {

@@ -141,6 +141,26 @@ class AJBellCashStatementParserTest {
         assertEquals(List.of("PHP", "LMP", "BLND"), symbols, "rows come back oldest-first");
     }
 
+    /**
+     * The coupon has to come back canonical, however the broker spelled it. AJ Bell's cash
+     * statement writes trailing zeros ({@code "GILT 4.50%"}) where its own holdings export and
+     * the HL price feed do not ({@code "4.5"}), so the row below stored a £50,597 gilt under a
+     * symbol that joined neither its intraday quote nor its daily close — the cash-ledger view
+     * called the position unpriced and left it out of the totals (2026-08-24).
+     */
+    @Test
+    void parse_giltCouponIsCanonicalWhateverTheBrokerSpelling(@TempDir Path dir) throws Exception {
+        Path f = dir.resolve("cashstatements.csv");
+        Files.writeString(f, """
+                "Date","Description","Reference","Settlement date","Receipt (GBP)","Payment (GBP)","Balance (GBP)"
+                "21/08/2026","Purchase 50,000 HM TREASURY GILT 4.50% (07/06/28)","44626CH48M7","24/08/2026","0","-50597.51","66,426.90"
+                "31/07/2026","Dividend 200000   HMTREASURY  GILT 0.875% (31/07/33)","9950450 / 10","-","875","0","128,132.13"
+                """);
+
+        List<String> symbols = parser.parse(f).stream().map(CashTransaction::symbol).toList();
+        assertEquals(List.of("GILT 0.875% 2033", "GILT 4.5% 2028"), symbols);
+    }
+
     /** An unmapped name still parses — it just keeps its cleaned-up name as the symbol (and warns). */
     @Test
     void parse_unmappedNameKeepsCleanedNameAsSymbol(@TempDir Path dir) throws Exception {

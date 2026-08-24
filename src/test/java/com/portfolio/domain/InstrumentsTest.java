@@ -7,6 +7,7 @@ import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class InstrumentsTest {
@@ -118,6 +119,59 @@ class InstrumentsTest {
         for (String s : new String[]{"Legal & General Group PLC", "iShares Physical Gold ETC GBP",
                 "HICL Infrastructure PLC Ord", "3M Co."}) {
             assertEquals(Instruments.matchKey(s), Instruments.matchKey(Instruments.matchKey(s)));
+        }
+    }
+
+    // --- giltId / canonicalGiltId ---
+
+    @Test
+    void giltIdTrimsTrailingZerosFromTheCoupon() {
+        // The four writers read the coupon out of four different sources, which disagree about
+        // trailing zeros. All four spellings of the same bond must land on one string.
+        assertEquals("GILT 4.5% 2028", Instruments.giltId("4.5", 2028));
+        assertEquals("GILT 4.5% 2028", Instruments.giltId("4.50", 2028), "AJ Bell cash statement");
+        assertEquals("GILT 4.5% 2028", Instruments.giltId("4.500", 2028), "HL / Tradeweb padding");
+        assertEquals("GILT 3% 2028", Instruments.giltId("3.000", 2028));
+    }
+
+    @Test
+    void giltIdPreservesSignificantDecimals() {
+        assertEquals("GILT 0.875% 2033", Instruments.giltId("0.875", 2033));
+        assertEquals("GILT 0.125% 2028", Instruments.giltId("0.125", 2028));
+        assertEquals("GILT 4.75% 2038", Instruments.giltId("4.75", 2038));
+        assertEquals("GILT 1.25% 2027", Instruments.giltId("1.25", 2027));
+    }
+
+    @Test
+    void everyGiltIdIsItsOwnBond() {
+        assertTrue(Instruments.isBond(Instruments.giltId("4.50", 2028)));
+    }
+
+    @Test
+    void canonicalGiltIdRewritesStoredSymbols() {
+        // What the repository migrations run over every stored symbol.
+        assertEquals("GILT 4.5% 2028", Instruments.canonicalGiltId("GILT 4.50% 2028"));
+        assertEquals("GILT 1% 2024", Instruments.canonicalGiltId("GILT 1.00% 2024"));
+        assertEquals("GILT 5% 2025", Instruments.canonicalGiltId("GILT 5.00% 2025"));
+    }
+
+    @Test
+    void canonicalGiltIdLeavesEverythingElseAlone() {
+        // Safe to run over a whole symbol column: only a gilt id shaped exactly as giltId writes
+        // one is touched, and an already-canonical one is returned unchanged (so the migration
+        // is idempotent and a second start does no writes).
+        for (String s : new String[]{"GILT 0.875% 2033", "GILT 4.75% 2038", "AAPL", "BRK.B",
+                "GILT 2025", "PRIMARY HEALTH PROPERTIES PLC", ""}) {
+            assertEquals(s, Instruments.canonicalGiltId(s));
+        }
+        assertNull(Instruments.canonicalGiltId(null));
+    }
+
+    @Test
+    void canonicalGiltIdIsIdempotent() {
+        for (String s : new String[]{"GILT 4.50% 2028", "GILT 1.00% 2024", "GILT 0.875% 2033"}) {
+            String once = Instruments.canonicalGiltId(s);
+            assertEquals(once, Instruments.canonicalGiltId(once));
         }
     }
 }

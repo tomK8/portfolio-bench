@@ -1,6 +1,8 @@
 package com.portfolio.domain;
 
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Pure-domain predicates over the internal {@code securityId} string. Concentrated here so
@@ -29,6 +31,10 @@ public final class Instruments {
      * the direct holdings (whose ids carry a coupon or a {@code GILT} prefix).
      */
     private static final Set<String> BOND_FUNDS = Set.of("VGOV", "IGLT", "GLTY");
+
+    /** The id shape {@link #giltId} produces, for re-canonicalising strings already stored. */
+    private static final Pattern GILT_ID =
+            Pattern.compile("GILT\\s+(\\d+(?:\\.\\d+)?)%\\s+(\\d{4})", Pattern.CASE_INSENSITIVE);
 
     private Instruments() {
     }
@@ -65,6 +71,52 @@ public final class Instruments {
     public static boolean isBond(String securityId) {
         return securityId != null
                 && (securityId.contains("%") || securityId.toUpperCase().startsWith("GILT"));
+    }
+
+    /**
+     * The one place a gilt's internal id is built: {@code "GILT {coupon}% {year}"}, with the
+     * coupon in its <b>canonical</b> form — trailing zeros trimmed, so 4.50, 4.500 and 4.5 all
+     * produce {@code "GILT 4.5% 2028"}.
+     *
+     * <p>That trim is the whole reason this exists. The id is a join key between four writers
+     * that each read the coupon out of different text, and the sources disagree about trailing
+     * zeros: HL pads ({@code "4.750"}), Tradeweb pads ({@code "3.000"}), AJ Bell's <em>holdings</em>
+     * export doesn't ({@code "4.75%"}) — and AJ Bell's <em>cash statement</em> writes
+     * {@code "GILT 4.50%"}. Each writer used to normalise for itself, or not at all, so a coupon
+     * a broker happened to spell with a trailing zero produced a position under one string and its
+     * prices under another. A £50,597 gilt bought 2026-08-21 landed in the ledger as
+     * {@code "GILT 4.50% 2028"} while HL priced it all along as {@code "GILT 4.5% 2028"}: the
+     * cash-ledger view could join neither the intraday quote nor the daily close, so it reported
+     * the position as unpriced and dropped it from the totals (2026-08-24). {@code GILT 1.00% 2024}
+     * and {@code GILT 5.00% 2025} carry the same defect and were only ever invisible because both
+     * matured before anyone read a total that was missing them.
+     *
+     * <p>Building the whole id here rather than exposing a coupon-trimming helper is deliberate:
+     * a caller cannot then assemble the string correctly and forget to canonicalise it.
+     */
+    public static String giltId(String coupon, int year) {
+        return "GILT " + canonicalCoupon(coupon) + "% " + year;
+    }
+
+    /**
+     * Re-canonicalises an id that was built before {@link #giltId} was the only way to build one.
+     * Returns non-gilt ids, and ids already canonical, unchanged — so it is safe to run over every
+     * stored symbol, which is what the repository migrations do.
+     */
+    public static String canonicalGiltId(String securityId) {
+        if (securityId == null) return null;
+        Matcher m = GILT_ID.matcher(securityId.trim());
+        if (!m.matches()) return securityId;
+        return giltId(m.group(1), Integer.parseInt(m.group(2)));
+    }
+
+    /** {@code "4.50"} → {@code "4.5"}; {@code "3.000"} → {@code "3"}; {@code "0.875"} unchanged. */
+    private static String canonicalCoupon(String coupon) {
+        String c = coupon == null ? "" : coupon.trim();
+        if (!c.contains(".")) return c;
+        c = c.replaceAll("0+$", "");
+        if (c.endsWith(".")) c = c.substring(0, c.length() - 1);
+        return c.isEmpty() ? coupon.trim() : c;
     }
 
     /**

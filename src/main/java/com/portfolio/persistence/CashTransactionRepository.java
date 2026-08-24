@@ -126,6 +126,7 @@ public class CashTransactionRepository {
             // After the ALTER, so the rebuilds can copy cash_balance by name.
             migratePrimaryKey(conn);
             migrateConstraints(conn);
+            GiltSymbolMigration.run(conn, "cash_transactions");
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise cash_transactions table", e);
         }

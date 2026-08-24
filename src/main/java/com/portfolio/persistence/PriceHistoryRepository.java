@@ -59,6 +59,7 @@ public class PriceHistoryRepository {
             } catch (SQLException alreadyMigrated) {
                 // split_factor column already present — fine
             }
+            GiltSymbolMigration.run(conn, "price_history");
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise price_history table", e);
         }

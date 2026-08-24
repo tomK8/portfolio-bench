@@ -176,6 +176,7 @@ public class BeanConfiguration {
                                                PriceFetchJob priceFetchJob,
                                                EarningsCalendarRepository earningsCalendarRepository,
                                                EarningsCalendarService earningsCalendarService,
+                                               FundamentalsRepository fundamentalsRepository,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -198,7 +199,12 @@ public class BeanConfiguration {
                 // inline: a date we don't have yields an unadjusted probability and a warning, not
                 // an inferred date. The Earnings tab and the calendar warmer keep the cache filled.
                 new OrderEventVariance(earningsCalendarRepository, yahooTickerMap,
-                        new EventMoves(), warmCalendarOnBackgroundThread(earningsCalendarService)));
+                        new EventMoves(), warmCalendarOnBackgroundThread(earningsCalendarService)),
+                // Forward dividend yields, netted off each class's total return to reach the price
+                // drift the first passage actually wants. Read-only and already populated by
+                // FundamentalsFetchJob for every held name — a symbol it has never seen prices at
+                // the gross figure and says so, rather than blocking the panel on a fetch.
+                fundamentalsRepository);
     }
 
     /**

@@ -3,6 +3,7 @@ package com.portfolio.domain;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
+import java.util.List;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -44,7 +45,7 @@ class InstrumentsTest {
         assertEquals(AssetClass.GILT, Instruments.assetClassOf("TREASURY 2.75% 2024"));
         // A gilt wrapped in an ETF is still a gilt — isBond only sees the direct holdings.
         assertEquals(AssetClass.GILT, Instruments.assetClassOf("VGOV"));
-        assertEquals(0.0, AssetClass.GILT.annualDrift());
+        assertEquals(0.0, AssetClass.GILT.annualTotalReturn());
     }
 
     @Test
@@ -52,7 +53,7 @@ class InstrumentsTest {
         assertEquals(AssetClass.COMMODITY, Instruments.assetClassOf("SGLN"));
         assertEquals(AssetClass.COMMODITY, Instruments.assetClassOf("sgln"), "case-insensitive");
         assertEquals(AssetClass.COMMODITY, Instruments.assetClassOf("PHGP"));
-        assertEquals(0.0, AssetClass.COMMODITY.annualDrift());
+        assertEquals(0.0, AssetClass.COMMODITY.annualTotalReturn());
     }
 
     @Test
@@ -61,20 +62,54 @@ class InstrumentsTest {
         assertEquals(AssetClass.EQUITY, Instruments.assetClassOf("LSEG"));
         // No fund list is maintained: an equity ETF lands on EQUITY, which carries the same drift.
         assertEquals(AssetClass.EQUITY, Instruments.assetClassOf("EQQQ"));
-        assertEquals(AssetClass.EQUITY.annualDrift(), AssetClass.ETF.annualDrift());
+        assertEquals(AssetClass.EQUITY.annualTotalReturn(), AssetClass.ETF.annualTotalReturn());
 
         assertEquals(AssetClass.UNKNOWN, Instruments.assetClassOf(null));
         assertEquals(AssetClass.UNKNOWN, Instruments.assetClassOf("  "));
-        assertEquals(0.0, AssetClass.UNKNOWN.annualDrift(), "nothing stated can never inject drift");
+        assertEquals(0.0, AssetClass.UNKNOWN.annualTotalReturn(), "nothing stated can never inject drift");
     }
 
     @Test
     void driftConvertsToTheSameSessionClockTheVolatilityScalingUses() {
-        assertEquals(0.06, AssetClass.EQUITY.annualDrift());
+        assertEquals(0.08, AssetClass.EQUITY.annualTotalReturn());
         // Carried at 10 dp: enough that the rounding is ~2e-7 of the figure (invisible in any
         // probability) and few enough digits that a calibration line stays readable.
-        assertEquals(0.06 / 252.0, AssetClass.EQUITY.dailyDrift().doubleValue(), 1e-9);
+        assertEquals(0.08 / 252.0, AssetClass.EQUITY.dailyTotalReturn().doubleValue(), 1e-9);
         assertEquals(252.0, AssetClass.SESSIONS_PER_YEAR, "σ scales by √252; drift divides by 252");
+    }
+
+    @Test
+    void onlyTheClassesWithSomethingToNetOffApplyAYield() {
+        // The zero-return classes must not net a yield, and the reason is arithmetic rather than
+        // tidiness: they start at zero, so any subtraction hands them a *negative* drift they never
+        // asked for, and a non-zero mu also drops them off the driftless first-passage branch.
+        assertFalse(AssetClass.GILT.appliesYield());
+        assertFalse(AssetClass.COMMODITY.appliesYield());
+        assertFalse(AssetClass.UNKNOWN.appliesYield(), "nothing stated stays at nothing");
+        assertTrue(AssetClass.EQUITY.appliesYield());
+        assertTrue(AssetClass.ETF.appliesYield(), "a distributing fund's yield is a real price drag");
+
+        for (AssetClass ac : AssetClass.values()) {
+            if (ac.annualTotalReturn() == 0.0) {
+                assertFalse(ac.appliesYield(),
+                        ac + " has no return to net a yield off — subtracting one inverts its drift");
+            }
+        }
+    }
+
+    @Test
+    void bullionEtcsInInstrumentsAreAllZeroDrift() {
+        // The reverse of everyZeroSectorOverrideInSectorsPropertiesIsAlsoZeroDrift: that one walks
+        // sectors.properties into Instruments, this one pins the bullion set itself. SGLN is the
+        // one that matters — it is the gold ETC actually held, and it is absent from
+        // sectors.properties, so the other test never reaches it.
+        for (String symbol : List.of("SGLN", "IGLN", "PHGP", "PHAU", "GBS", "SGBX",
+                "SSLN", "PHSP", "PHAG", "PHPD", "PHPT")) {
+            AssetClass ac = Instruments.assetClassOf(symbol);
+            assertEquals(AssetClass.COMMODITY, ac, symbol + " should classify as bullion");
+            assertEquals(0.0, ac.annualTotalReturn(), symbol + " must carry no drift");
+            assertFalse(ac.appliesYield(), symbol + " must not net a yield off a zero drift");
+        }
     }
 
     @Test
@@ -91,7 +126,7 @@ class InstrumentsTest {
             String bucket = p.getProperty(key).trim();
             if (!bucket.equals("COMMODITIES") && !bucket.equals("FIXED_INCOME")) continue;
             String symbol = key.substring("override.".length());
-            assertEquals(0.0, Instruments.assetClassOf(symbol).annualDrift(),
+            assertEquals(0.0, Instruments.assetClassOf(symbol).annualTotalReturn(),
                     symbol + " is " + bucket + " in sectors.properties but carries drift as "
                             + Instruments.assetClassOf(symbol) + " — add it to Instruments");
         }

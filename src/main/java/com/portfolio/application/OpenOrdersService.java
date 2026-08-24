@@ -12,6 +12,7 @@ import com.portfolio.domain.model.MarketSession;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.parser.OrderParser;
+import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
@@ -176,6 +177,15 @@ public class OpenOrdersService {
      * ago would otherwise hand back a 60-session "anchor" that is really a second current-state
      * window — the blend would then revert toward today, which is the one thing it must not do.
      */
+    /**
+     * Above this, a forward dividend yield is treated as a data error rather than a very generous
+     * payer. 15% is comfortably clear of anything real — the highest-yielding thing held here is a
+     * UK REIT in the 7s — while still catching the two ways this field goes wrong: a stale dividend
+     * rate divided by a collapsed price, and a value shipped on a percent scale
+     * ({@code 2.34}) into a field the whole codebase reads as a fraction ({@code 0.0234}).
+     */
+    private static final BigDecimal MAX_PLAUSIBLE_YIELD = new BigDecimal("0.15");
+
     private static final int MIN_ANCHOR_RETURNS = 120;
 
     /**
@@ -211,6 +221,7 @@ public class OpenOrdersService {
      * same way — unadjusted, never guessed.
      */
     private final OrderEventVariance eventVariance;
+    private final FundamentalsRepository fundamentals;
     private final Map<String, Instant> lastWarmed = new ConcurrentHashMap<>();
 
     public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
@@ -269,6 +280,26 @@ public class OpenOrdersService {
                              PriceHistoryRepository history, YahooTickerMap tickerMap,
                              KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
                              Consumer<String> historyWarmer, OrderEventVariance eventVariance) {
+        this(fileLocator, parsers, fxRateProvider, excelReportWriter, outputDir, intraday, history,
+                tickerMap, kv, quoteWarmer, historyWarmer, eventVariance, null);
+    }
+
+    /**
+     * @param fundamentals source of the per-symbol forward dividend yield netted off the asset
+     *                     class's total return to reach the price drift. Null means none is
+     *                     available, which prices every row at its class's gross figure and flags
+     *                     the row as having used a fallback — the same degradation {@code kv} and
+     *                     {@code eventVariance} take, and for the same reason: a missing input must
+     *                     never be the difference between a panel that renders and one that fails.
+     */
+    public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
+                             FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
+                             Path outputDir, IntradayPriceRepository intraday,
+                             PriceHistoryRepository history, YahooTickerMap tickerMap,
+                             KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
+                             Consumer<String> historyWarmer, OrderEventVariance eventVariance,
+                             FundamentalsRepository fundamentals) {
+        this.fundamentals = fundamentals;
         this.eventVariance = eventVariance;
         this.fileLocator = fileLocator;
         this.parsers = parsers;
@@ -443,6 +474,9 @@ public class OpenOrdersService {
 
         Map<String, IntradayPrice> latest = intraday.loadLatestQuotes(tickers);
         Map<String, VolForecast.Inputs> dailyVols = loadDailyVols(tickers);   // ticker → RV10/20/30/250
+        // Keyed on the *internal* symbol, not the ticker — that is how the fundamentals cache is
+        // addressed. One bulk read for the whole panel, the same shape as loadDailyVols above.
+        Map<String, BigDecimal> yields = loadForwardYields(orders);
         Instant quoteCutoff = Instant.now().minus(Duration.ofDays(MAX_PRICE_AGE_DAYS));
         Map<String, String> stale = new LinkedHashMap<>();               // symbol → date last seen
         Map<String, String> notes = new LinkedHashMap<>();               // symbol → "as of …" label
@@ -545,8 +579,13 @@ public class OpenOrdersService {
             VolForecast.Inputs withEvents = new VolForecast.Inputs(
                     vols.rv10(), vols.rv20(), vols.rv30(), vols.rv250(), events.events());
 
+            // The dividend yield netted off that class's total return. Resolved per symbol because
+            // the dispersion inside "equity" — an accumulating tracker against a high-yielding
+            // REIT — is the entire reason the netting exists.
+            VolForecast.Yield yield = yieldFor(yields, o.symbol(), assetClass);
+
             VolForecast.Touch near = VolForecast.touch(withEvents, current, o.price(),
-                    TOUCH_HORIZON_SESSIONS, cfg, assetClass);
+                    TOUCH_HORIZON_SESSIONS, cfg, assetClass, yield);
             o = o.withVolatility(vols.rv10(), vols.rv20(), vols.rv30(), vols.rv250(),
                     near.sigmaToLimit(), near.probability());
 
@@ -554,7 +593,7 @@ public class OpenOrdersService {
             // none. The reader retunes any row from the box in the cell (GET /orders/touch), which
             // re-blends at the new horizon rather than rescaling a fixed σ.
             VolForecast.Touch far = VolForecast.touch(withEvents, current, o.price(), horizon,
-                    cfg, assetClass);
+                    cfg, assetClass, yield);
             o = o.withHorizonTouch(far, toExpiry);
             orders.set(i, o);
             if (cfg.useEventVar() && !events.adjusted()
@@ -586,6 +625,12 @@ public class OpenOrdersService {
      *
      * <p>Broker, reference and the order's own dates are included so a record can be joined against
      * a later fill: the reference is the only field that identifies the order across snapshots.
+     *
+     * <p>The drift is recorded as <b>three</b> numbers and a flag — the class's gross total return,
+     * the yield netted off it, whether that yield was a substituted zero, and the resulting
+     * {@code muPrice} — because a calibration miss months later has to be attributable. Collapsed
+     * into one figure, an over-optimistic probability cannot be told apart as a wrong vol forecast,
+     * a wrong return assumption or a yield that silently failed to resolve.
      */
     private void recordTouch(OpenOrder o, VolForecast.Touch touch, AssetClass assetClass,
                              OrderEventVariance.Events events) {
@@ -593,13 +638,15 @@ public class OpenOrdersService {
         calibration.info(
                 "broker={} symbol={} ref={} side={} limit={} current={} entered={} expiry={} "
                         + "sessions={} fromExpiry={} sigmaEffDiffusive={} sigmaEff={} decay={} "
-                        + "volSource={} assetClass={} driftUsed={} muUsed={} nuUsed={} "
+                        + "volSource={} assetClass={} driftUsed={} muTotal={} fwdYield={} "
+                        + "yieldFallback={} muPrice={} nuUsed={} "
                         + "eventCount={} eventVarAdded={} eventCoverage={} "
                         + "rv10={} rv20={} rv30={} rv250={} p={} pLow={} pHigh={}",
                 o.broker(), o.symbol(), o.reference(), o.side(), o.price(), o.currentPrice(),
                 o.dateEntered(), o.expiry() != null ? o.expiry() : o.duration(),
                 touch.sessions(), o.horizonFromExpiry(), touch.sigmaEffDiffusive(), touch.sigmaEff(),
-                touch.decay(), touch.source(), assetClass, touch.drifted(), touch.drift(),
+                touch.decay(), touch.source(), assetClass, touch.drifted(),
+                touch.muTotal(), touch.forwardYield(), touch.yieldFallback(), touch.drift(),
                 touch.logDrift(), touch.eventCount(), touch.eventVariance(), events.coverage(),
                 o.dailyVol10(), o.dailyVol20(), o.dailyVol30(), o.dailyVol250(),
                 touch.probability(), touch.probabilityLow(), touch.probabilityHigh());
@@ -626,6 +673,13 @@ public class OpenOrdersService {
      * re-parse, no FX call, no database read — so typing into the box costs a loopback round trip
      * rather than a disk scan.
      *
+     * <p>Drift is the one input it does not take from the row: the yield netted off the class's
+     * total return is looked up here, one primary-key read against the fundamentals cache. That is
+     * a deliberate exception to the "no database read" rule above — it keeps the plausibility guard
+     * in a single place instead of mirroring it into the browser, and it keeps a modelling
+     * parameter off the query string where it could go stale or be edited. The expensive reads the
+     * rule exists to prevent are the vol windows, and those are still passed in.
+     *
      * <p>It takes the row's four realized-vol windows rather than one σ, because the horizon is
      * exactly what the forecast depends on: changing N re-blends current state toward the anchor
      * (see {@link VolForecast}) instead of rescaling a fixed σ by {@code √N}. Rescaling a fixed σ
@@ -643,9 +697,10 @@ public class OpenOrdersService {
         // so the endpoint stays the loopback calculation it was even with drift wired in. A null
         // config means the caller stated nothing, so the stored setting applies: that is what lets
         // the P(N) box follow the table's model without the browser having to know which it is.
+        AssetClass ac = Instruments.assetClassOf(symbol);
         VolForecast.Touch t = VolForecast.touch(vols, current, limit, clamped,
                 cfg == null ? effectiveConfig(null, null, null) : cfg,
-                Instruments.assetClassOf(symbol));
+                ac, yieldFor(symbol, ac));
         return new TouchEstimate(clamped, t.sigmaToLimit(), t.probability(),
                 t.probabilityLow(), t.probabilityHigh(), t.sigmaEff(), t.decay(),
                 t.source() == null ? null : t.source().name(),
@@ -750,8 +805,9 @@ public class OpenOrdersService {
         // Re-price at the requested horizon. The enrichment pass has already priced this row over
         // the GTC default; anything else the reader asked for is the same call at another N.
         if (horizon != o.horizonSessions() && o.horizonSessions() != null) {
+            AssetClass probeClass = Instruments.assetClassOf(sym);
             o = o.withHorizonTouch(VolForecast.touch(volsOf(o), o.currentPrice(), o.price(), horizon,
-                    cfg, Instruments.assetClassOf(sym)), null);
+                    cfg, probeClass, yieldFor(sym, probeClass)), null);
         }
 
         List<String> warnings = new ArrayList<>(quotes.warnings());
@@ -1011,6 +1067,64 @@ public class OpenOrdersService {
      * {@link #MIN_ANCHOR_RETURNS} returns there is no anchor and {@code VolForecast} says so in the
      * source it reports.
      */
+    /**
+     * Forward dividend yields for the order symbols, or an empty map when no fundamentals cache is
+     * wired. Degrades like every other read on this panel: a missing yield costs a row its netting
+     * and is flagged, never its probability.
+     */
+    private Map<String, BigDecimal> loadForwardYields(List<OpenOrder> orders) {
+        if (fundamentals == null) return Map.of();
+        Set<String> symbols = new LinkedHashSet<>();
+        for (OpenOrder o : orders) {
+            if (o.symbol() != null && !o.symbol().isBlank()) symbols.add(o.symbol());
+        }
+        return fundamentals.loadForwardYields(symbols);
+    }
+
+    /**
+     * The yield to net off this row, with the one validation the domain cannot do for itself.
+     *
+     * <p><b>The guard is on the input, not the output.</b> A negative price drift is a legitimate
+     * result — a name yielding more than its class's expected total return really is expected to
+     * drift down in price — so clamping {@code mu_price} at zero would silently truncate exactly
+     * the case the netting was built to show. What is <em>not</em> legitimate is a yield above
+     * {@link #MAX_PLAUSIBLE_YIELD}, which in practice means a stale dividend rate against a
+     * collapsed price, or a field Yahoo has shipped on a different scale. That is rejected here and
+     * logged, and the row falls back to its gross figure flagged as a fallback rather than being
+     * priced off a number nobody believes.
+     *
+     * <p>A class that nets no yield ({@code GILT}, {@code COMMODITY}) short-circuits: looking one up
+     * would only invite a log line about a number that was never going to be used.
+     */
+    /**
+     * The same resolution for a single symbol, for the two paths that price one row at a time.
+     *
+     * <p>One primary-key lookup against the fundamentals cache — deliberately not the four windows
+     * of daily bars {@code loadDailyVols} needs, which is why those are passed in as parameters and
+     * this is not. Reading it here rather than threading it through the browser keeps the guard in
+     * {@link #yieldFor(Map, String, AssetClass)} as the single place a yield is validated, and
+     * keeps a modelling parameter off the query string.
+     */
+    private VolForecast.Yield yieldFor(String symbol, AssetClass assetClass) {
+        if (fundamentals == null || assetClass == null || !assetClass.appliesYield()) {
+            return VolForecast.Yield.NONE;
+        }
+        return yieldFor(fundamentals.loadForwardYields(Set.of(symbol)), symbol, assetClass);
+    }
+
+    private VolForecast.Yield yieldFor(Map<String, BigDecimal> yields, String symbol,
+                                       AssetClass assetClass) {
+        if (assetClass == null || !assetClass.appliesYield()) return VolForecast.Yield.NONE;
+        BigDecimal y = yields.get(symbol);
+        if (y == null) return VolForecast.Yield.NONE;
+        if (y.signum() < 0 || y.compareTo(MAX_PLAUSIBLE_YIELD) > 0) {
+            log.warn("Open orders: implausible forward yield {} for {} — pricing at the class's "
+                    + "gross drift instead", y, symbol);
+            return VolForecast.Yield.NONE;
+        }
+        return VolForecast.Yield.of(y);
+    }
+
     private Map<String, VolForecast.Inputs> loadDailyVols(Set<String> tickers) {
         LocalDate to = LocalDate.now();
         LocalDate from = to.minusDays(VOL_LOOKBACK_DAYS);

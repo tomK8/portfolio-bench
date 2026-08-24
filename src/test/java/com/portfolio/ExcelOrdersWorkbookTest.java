@@ -145,16 +145,18 @@ class ExcelOrdersWorkbookTest {
                 .withHorizonTouch(new VolForecast.Touch(90, new BigDecimal("0.01296727"),
                         new BigDecimal("0.3064"), VolForecast.Source.BLEND, new BigDecimal("-0.15"),
                         new BigDecimal("0.8800"), new BigDecimal("0.8600"), new BigDecimal("0.9000"),
-                        AssetClass.EQUITY.dailyDrift(), new BigDecimal("0.000153"),
+                        AssetClass.EQUITY.dailyTotalReturn(), new BigDecimal("0.000153"),
+                        AssetClass.EQUITY.dailyTotalReturn(), BigDecimal.ZERO, false,
                         new BigDecimal("0.01296727"), 0, BigDecimal.ZERO), null);
 
         try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(
                 new ExcelReportWriter().ordersWorkbook(List.of(drifted))))) {
             Row row = wb.getSheet("Open Orders").getRow(1);
             // 1e-6, not exact: the row carries the per-session figure the model actually consumed,
-            // rounded to 10 dp, so annualising it back lands at 0.0599999904 — 6.00% once the cell
-            // format is applied. The per-session number is the one that has to be faithful.
-            assertEquals(0.06, row.getCell(21).getNumericCellValue(), 1e-6,
+            // rounded to 10 dp, so annualising it back lands at 0.0799999956 — 8.00% once the cell
+            // format is applied. The per-session number is the one that has to be faithful. This
+            // fixture nets no yield, so mu_price is the class's gross figure.
+            assertEquals(0.08, row.getCell(21).getNumericCellValue(), 1e-6,
                     "the per-session drift, stated back in the year it was quoted in");
             assertTrue(row.getCell(21).getCellStyle().getDataFormatString().contains("%"));
         }

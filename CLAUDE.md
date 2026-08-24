@@ -622,7 +622,9 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   `GET /orders/touch?current=&limit=&rv10=&rv20=&rv30=&rv250=&sessions=` →
   `OpenOrdersService.touchEstimate`. It takes the row's four RV windows rather than one σ **because
   a new horizon re-blends the forecast rather than rescaling a fixed number by √N** — and rather
-  than a symbol, which keeps it pure arithmetic (no re-parse, no FX call, no DB read) and keeps the
+  than a symbol, which keeps it near-pure arithmetic (no re-parse, no FX call; one primary-key read
+  for the dividend yield, a deliberate exception that keeps the plausibility guard in a single place
+  rather than mirrored into the browser, and keeps a modelling parameter off the query string) and keeps the
   first-passage maths in **one** implementation instead of mirroring `erfc` into `dashboard.js`.
   Debounced 250ms with a per-cell `_ordSeq` latch (typing "1", "12", "120" fires three requests; a
   slow early one landing last would otherwise repaint a horizon the box no longer shows — the same
@@ -700,32 +702,83 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   driftless bounds would be a range around a different question. With drift on, `P(5d)` no longer
   equals `2·Φ(−|σ→lim|)` by construction — σ→lim is a distance, not a probability — which is one
   more reason the default is off.
-- **`domain/AssetClass` — drift is per class, never per ticker.** `EQUITY` 6%/yr, `ETF` 6%/yr,
-  `GILT` 0, `COMMODITY` 0, `UNKNOWN` 0; `dailyDrift()` divides by 252, the same clock the vol
-  scaling assumes (σ√N), so drift and diffusion are measured against one calendar. A per-name
-  expected return would be a forecast of that name wearing a parameter's clothing; a class figure is
-  a modelling convention. The drift is consumed as a **log** drift — a caller meaning 6% as an
-  arithmetic total return would want `μ − σ²/2` (≈1.3%/yr at a 1%/day σ, not nothing) — stated in
-  the javadoc rather than silently applied, since the correction is only right if the input was
-  arithmetic and this input is a convention.
-  `Instruments.assetClassOf` resolves it: `isBond` → `GILT`, bond funds (VGOV/IGLT/GLTY) → `GILT`
-  (a gilt in an ETF wrapper is still a gilt), bullion ETCs → `COMMODITY`, everything else →
-  `EQUITY`. **`ETF` is declared but never produced**: it carries the same 6% as `EQUITY`, so
+- **`domain/AssetClass` — the class figure is a *total return*, and the model needs a *price*
+  drift.** `EQUITY` 8%/yr, `ETF` 8%/yr, `GILT` 0, `COMMODITY` 0, `UNKNOWN` 0. That figure is not
+  what the first passage consumes; two conversions happen in `VolForecast.touch`, in this order:
+  `mu_price = dailyTotalReturn() − forwardYield/252`, then `ν = mu_price − σ_eff²/2`.
+  **The first conversion is the load-bearing one.** A resting limit is touched by *price*, not by
+  price plus reinvested dividends, and `PriceStats` deliberately measures σ off `close` rather than
+  `adj_close` ("not total-return figures"). Feeding a total return in as the drift put the two legs
+  of the same formula on different bases and over-drifted every dividend payer. It is not a uniform
+  error that cancels: the dispersion inside "equity" runs ~7pp between an accumulating tracker and a
+  high-yielding REIT like PHP, so a single assumed yield would just be the old scalar with a smaller
+  constant on it. **The yield is therefore per symbol** — resolved by `OpenOrdersService` and passed
+  in as a `VolForecast.Yield`, so the *class* figure stays a modelling convention while the netting
+  gets the per-name dispersion that is the whole point. A per-name expected *return* would still be
+  a forecast of that name wearing a parameter's clothing; a per-name yield is a published fact.
+  `dailyTotalReturn()` divides by 252, and so does the yield, the same clock the vol scaling assumes
+  (σ√N) — drift, yield and diffusion on one calendar.
+  **`appliesYield()` is false for every zero-return class**, and that is arithmetic rather than
+  tidiness: a gilt starts at zero, so any subtraction hands it a *negative* drift it never asked
+  for, and a non-zero μ would also drop it off the driftless branch (`probability()` branches on
+  `mu.signum() != 0`). Netting is likewise skipped entirely when `useDrift` is off — μ_total is
+  already ZERO there, so subtracting would manufacture drift out of a model the reader switched off.
+  **A negative `mu_price` is never clamped.** A name yielding more than its class's total return
+  really is expected to drift down in price, and a floor would silently truncate exactly the case
+  the netting exists to reveal. The guard is on the *input* instead:
+  `OpenOrdersService.MAX_PLAUSIBLE_YIELD` (0.15) rejects a stale dividend rate over a collapsed
+  price, or a value shipped percent-scaled into a field the codebase reads as a fraction, and logs
+  it — the row falls back to its gross figure flagged as a fallback.
+  `Instruments.assetClassOf` resolves the class: `isBond` → `GILT`, bond funds (VGOV/IGLT/GLTY) →
+  `GILT` (a gilt in an ETF wrapper is still a gilt), bullion ETCs → `COMMODITY`, everything else →
+  `EQUITY`. **`ETF` is declared but never produced**: it carries the same 8% as `EQUITY`, so
   detecting it would need a maintained fund-ticker list whose only possible effect is the label on a
   calibration line — a list that can only ever be wrong and never right. Bond and bullion wrappers
   *are* detected, because for those the underlying changes the number.
-  `InstrumentsTest.everyZeroSectorOverrideInSectorsPropertiesIsAlsoZeroDrift` reads
-  `sectors.properties` and fails if a symbol overridden there to `COMMODITIES`/`FIXED_INCOME` would
-  carry an equity's drift — two lists of the same judgement is how they drift apart.
+  Two tests guard the classification from opposite directions, because one alone leaves a hole:
+  `everyZeroSectorOverrideInSectorsPropertiesIsAlsoZeroDrift` walks `sectors.properties` into
+  `Instruments`, and `bullionEtcsInInstrumentsAreAllZeroDrift` pins the bullion set itself — **SGLN
+  is the case only the second reaches**, being the gold ETC actually held and absent from
+  `sectors.properties` (as are IGLN/PHAU/SSLN/PHSP/PHAG/PHPD/PHPT; only PHGP/GBS/SGBX are overridden
+  there). Zero drift is correct for all of them, but holding one of the eight would put it in the
+  allocation view's `UNCLASSIFIED` strip.
+
+- **The yield source — derived, because Yahoo publishes no forward yield.**
+  `FundamentalsRepository.loadForwardYields(Set<String>)` reads `dividendRate ÷ price` from
+  `fundamentals_snapshot`, falling back to the trailing `dividendYield`. `dividendRate` is the
+  *indicated annual* dividend — declared and forward-looking — so the quotient responds the right
+  way to a moving quote: the numerator is sticky, so a price that halves doubles the yield and
+  halves the price drift. The divisor is the **stored** price from the same fetch, not a live quote:
+  both come from one Yahoo response and are therefore in one currency, whereas dividing a
+  listing-currency dividend by an order-currency quote would be a silent FX error. The cost is that
+  the yield tracks the ~4h fundamentals refresh rather than the tick, well inside the rate at which
+  yields move. **The two fields are not always in the same units**: Yahoo prices a London listing in
+  `GBp` (pence) but quotes its dividend rate in pounds, so the raw quotient is 100× too small for
+  every `.L` name — LGEN read 0.076% against a real 7.71%, LMP 0.067% against 6.53%. The price is
+  shifted with `movePointLeft(2)` on the same `"GBp"` test the rest of the app uses. Note the
+  plausibility bound could never have caught this: the error runs *small*, so an under-netted drift
+  looks entirely ordinary, and it lands on precisely the high-yield UK names the netting exists for.
+  Live check after the fix: LGEN nets to a 0.37%/yr price drift, LSEG 6.21%, NVDA 7.52% — under one
+  flat 6% they were identical. **A symbol with no usable yield is absent from the map, never present as zero** — the
+  caller has to tell "pays nothing" from "we don't know", and Yahoo publishes no distribution yield
+  for any fund held here, so the second case is the common one. It is a targeted read rather than
+  `loadAll()`: that one scans the whole table (~100 rows) and deserializes four JSON columns per
+  row, three of them irrelevant here, and `/orders` re-fetches on every tab click.
 - **Calibration record.** Every priced order writes one line per snapshot to a dedicated logger
   (`com.portfolio.calibration.touch` → `~/log/portfolio-bench-touch-calibration.log`, monthly
   rolling, 36 kept, `additivity=false` so it stays out of the app log). The question it exists to
   answer — did orders shown at P=60% fill about 60% of the time? — can only be asked months later,
   and only against the model that produced the number, so each line carries the inputs as well as
-  the output: `broker symbol ref side limit current entered expiry sessions fromExpiry sigmaEff
-  decay volSource assetClass drifted mu rv10 rv20 rv30 rv250 p pLow pHigh` — `drifted`/`mu` are per
-  line, so snapshots taken either side of a switch flip stay analysable together, as `key=value` pairs (a later analysis is a
-  grep and a split, not a parser). The **probe path deliberately writes nothing** — a hypothetical
+  the output: `broker symbol ref side limit current entered expiry sessions fromExpiry
+  sigmaEffDiffusive sigmaEff decay volSource assetClass driftUsed muTotal fwdYield yieldFallback
+  muPrice nuUsed eventCount eventVarAdded eventCoverage rv10 rv20 rv30 rv250 p pLow pHigh` —
+  `driftUsed` is per line, so snapshots taken either side of a switch flip stay analysable together,
+  as `key=value` pairs (a later analysis is a grep and a split, not a parser). **The drift is three
+  numbers and a flag, not one**: collapsed into a single figure, an over-optimistic probability
+  cannot be attributed months later between a wrong vol forecast, a wrong return assumption and a
+  yield that silently failed to resolve. `yieldFallback` is what separates an accumulating fund
+  (genuinely zero, correctly full drift) from a name whose yield never resolved (also zero, wrongly
+  full drift) — identical arithmetic, and nothing else tells them apart. The **probe path deliberately writes nothing** — a hypothetical
   in the record is indistinguishable from a real order that never filled. `src/test/resources/
   logback-test.xml` sets that logger to OFF for the same reason: a suite pricing fabricated orders
   would file fabricated records among the real ones.

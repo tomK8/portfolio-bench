@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -17,6 +18,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Persistent cache for the per-holding fundamentals snapshot — one row per internal symbol.
@@ -230,6 +232,74 @@ public class FundamentalsRepository {
     private static BigDecimal readDecimal(ResultSet rs, int idx) throws java.sql.SQLException {
         double d = rs.getDouble(idx);
         return rs.wasNull() ? null : BigDecimal.valueOf(d);
+    }
+
+    /**
+     * Forward dividend yields for the given symbols, as annual fractions ({@code 0.0234} = 2.34%).
+     * A symbol with no usable yield is <b>absent from the map</b> rather than present as zero —
+     * the caller needs to tell "pays nothing" from "we don't know", and collapsing them here would
+     * throw away the only signal that separates an accumulating fund from a failed fetch.
+     *
+     * <p><b>Why not {@code loadAll()}.</b> That one scans the whole table (~100 rows) and Jackson-
+     * deserializes four JSON columns per row, three of which — labels, sector weights, fund top-10
+     * holdings — are irrelevant here. The open-orders panel re-fetches on every tab click, so this
+     * reads only the requested symbols and parses only {@code extra_json}.
+     *
+     * <p><b>Yield is derived, because Yahoo publishes no forward yield.</b> Of the three dividend
+     * fields captured from {@code summaryDetail}, {@code dividendRate} is the indicated annual
+     * dividend — a declared, forward-looking figure — so {@code dividendRate ÷ price} is a forward
+     * yield in the usual retail sense, and it responds the right way to a moving quote: the
+     * numerator is sticky, so a price that halves doubles the yield. Trailing {@code dividendYield}
+     * is the fallback, since its numerator is dividends already paid.
+     *
+     * <p>The divisor is the <b>stored</b> price from the same fetch, not a live quote. Both come
+     * from one Yahoo response and are therefore guaranteed to be in one currency; dividing a
+     * listing-currency dividend by an order-currency quote would be a silent FX error. The cost is
+     * that the yield tracks the fundamentals refresh (~4h) rather than the tick, which is well
+     * inside the rate at which yields actually move.
+     */
+    public Map<String, BigDecimal> loadForwardYields(Set<String> symbols) {
+        Map<String, BigDecimal> out = new HashMap<>();
+        if (symbols == null || symbols.isEmpty() || !connections.dbExists()) return out;
+        String placeholders = String.join(",", java.util.Collections.nCopies(symbols.size(), "?"));
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT internal_symbol, price, extra_json, currency FROM fundamentals_snapshot "
+                             + "WHERE internal_symbol IN (" + placeholders + ")")) {
+            int i = 1;
+            for (String sym : symbols) ps.setString(i++, sym);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, BigDecimal> extra = parseExtra(rs.getString(3));
+                    BigDecimal yield = forwardYield(extra, readDecimal(rs, 2), rs.getString(4));
+                    if (yield != null) out.put(rs.getString(1), yield);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not load forward dividend yields", e);
+        }
+        return out;
+    }
+
+    /**
+     * {@code dividendRate ÷ price}, falling back to the trailing yield. Null when neither exists.
+     *
+     * <p><b>The two fields are not always in the same units, and the mismatch is silent.</b> Yahoo
+     * quotes a London listing's price in {@code GBp} (pence) but its dividend rate in pounds, so
+     * dividing them raw makes a UK yield 100× too small — LGEN came out at 0.076% against a real
+     * 7.71%, LMP at 0.067% against 6.53%. That is the wrong direction for a plausibility bound to
+     * catch (an under-netted drift looks entirely ordinary), and it hits precisely the high-yield
+     * names the netting exists for. The price is therefore shifted to pounds first, the same
+     * {@code "GBp"} test the rest of the app uses.
+     */
+    private static BigDecimal forwardYield(Map<String, BigDecimal> extra, BigDecimal price,
+                                           String currency) {
+        BigDecimal rate = extra.get("dividendRate");
+        if (rate != null && price != null && price.signum() > 0) {
+            BigDecimal inRateUnits = "GBp".equals(currency) ? price.movePointLeft(2) : price;
+            return rate.divide(inRateUnits, 10, RoundingMode.HALF_UP);
+        }
+        return extra.get("dividendYield");
     }
 
     public record Cached(QuoteSummary quote, Instant fetchedAt) {}

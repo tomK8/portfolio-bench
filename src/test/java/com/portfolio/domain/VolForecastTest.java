@@ -165,7 +165,7 @@ class VolForecastTest {
         Touch buyOff = VolForecast.touch(in, dec("100"), dec("90"), 250, Config.DEFAULT, AssetClass.EQUITY);
         Touch buyOn = VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON, AssetClass.EQUITY);
         assertTrue(buyOn.drifted());
-        assertEquals(AssetClass.EQUITY.dailyDrift(), buyOn.drift());
+        assertEquals(AssetClass.EQUITY.dailyTotalReturn(), buyOn.drift());
         assertTrue(buyOn.probability().compareTo(buyOff.probability()) < 0,
                 "6%/yr of drift walks an equity away from a limit below it");
 
@@ -174,7 +174,7 @@ class VolForecastTest {
         assertTrue(sellOn.probability().compareTo(sellOff.probability()) > 0, "and toward one above it");
 
         // An ETF carries the equity drift by construction — the two are the same number today.
-        assertEquals(AssetClass.EQUITY.dailyDrift(), AssetClass.ETF.dailyDrift());
+        assertEquals(AssetClass.EQUITY.dailyTotalReturn(), AssetClass.ETF.dailyTotalReturn());
         assertEquals(buyOn.probability(),
                 VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON, AssetClass.ETF).probability());
 
@@ -195,7 +195,7 @@ class VolForecastTest {
         Inputs in = inputs("0.015", "0.015", "0.015", "0.015");
         Touch t = VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON, AssetClass.EQUITY);
 
-        BigDecimal mu = AssetClass.EQUITY.dailyDrift();
+        BigDecimal mu = AssetClass.EQUITY.dailyTotalReturn();
         BigDecimal sigma = t.sigmaEff();
         BigDecimal expectedNu = BigDecimal.valueOf(
                 mu.doubleValue() - sigma.doubleValue() * sigma.doubleValue() / 2.0);
@@ -328,7 +328,7 @@ class VolForecastTest {
         assertTrue(t.eventAdjusted());
         assertTrue(t.drifted());
         double sigma = t.sigmaEff().doubleValue();
-        assertEquals(AssetClass.EQUITY.dailyDrift().doubleValue() - sigma * sigma / 2.0,
+        assertEquals(AssetClass.EQUITY.dailyTotalReturn().doubleValue() - sigma * sigma / 2.0,
                 t.logDrift().doubleValue(), 1e-12);
     }
 
@@ -439,5 +439,160 @@ class VolForecastTest {
         assertEquals(90, new Config(20, 0, false, false, false).gtcHorizonSessions());
         assertEquals(20.0, Config.of(null, null).halfLifeDays());
         assertEquals(45, Config.of(null, 45).gtcHorizonSessions());
+    }
+
+    // ---- dividend yield netted off the drift --------------------------------
+
+    private static final Inputs YIELD_IN = inputs("0.010", "0.012", "0.014", "0.013");
+    private static final BigDecimal FROM = dec("100");
+    private static final BigDecimal BUY_LIMIT = dec("90");
+
+    private static VolForecast.Yield divYield(String annual) {
+        return VolForecast.Yield.of(dec(annual));
+    }
+
+    @Test
+    void withDriftOffTheYieldIsNeverSubtracted() {
+        // The one way this change could have altered a number the reader had switched the model
+        // off for. muTotal is already ZERO with the flag down, so netting would manufacture a
+        // *negative* drift out of nothing and quietly move every driftless probability.
+        for (String y : new String[]{"0.00", "0.03", "0.09", "0.15"}) {
+            Touch off = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, CFG,
+                    AssetClass.EQUITY, divYield(y));
+            Touch bare = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, CFG, AssetClass.EQUITY);
+            assertEquals(bare.probability().doubleValue(), off.probability().doubleValue(), 1e-10,
+                    "driftless probability must not move with a yield of " + y);
+            assertEquals(0, off.drift().signum());
+            assertEquals(0, off.muTotal().signum());
+            assertEquals(0, off.forwardYield().signum(), "nothing was netted, so nothing is reported");
+            assertFalse(off.yieldFallback());
+        }
+    }
+
+    @Test
+    void aZeroYieldLeavesTheClassFigureExactlyWhereItWas() {
+        // The refactor-moved-no-maths pin: at yield 0 the netted path must reproduce the plain
+        // drifted first passage driven by the class's own figure, to 1e-10.
+        Touch netted = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.00"));
+        Touch gross = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON, AssetClass.EQUITY);
+
+        assertEquals(gross.probability().doubleValue(), netted.probability().doubleValue(), 1e-10);
+        assertEquals(AssetClass.EQUITY.dailyTotalReturn(), netted.drift());
+        assertEquals(AssetClass.EQUITY.dailyTotalReturn(), netted.muTotal());
+        assertEquals(0, netted.forwardYield().signum());
+
+        // ...and that figure is the explicit formula, not merely self-consistent.
+        BigDecimal nu = VolForecast.logDrift(netted.drift(), netted.sigmaEff());
+        assertEquals(PriceStats.touchProbabilityDrifted(FROM, BUY_LIMIT, netted.sigmaEff(), 250, nu),
+                netted.probability());
+    }
+
+    @Test
+    void theYieldComesOffOnTheSameSessionClockAsTheDrift() {
+        Touch t = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.03"));
+        // mu_price = 8%/yr − 3%/yr = 5%/yr, per session.
+        assertEquals(0.05 / 252.0, t.drift().doubleValue(), 1e-9);
+        assertEquals(AssetClass.EQUITY.dailyTotalReturn(), t.muTotal(), "the gross figure survives");
+        assertEquals(dec("0.03"), t.forwardYield());
+        assertFalse(t.yieldFallback());
+        assertEquals(0.03 / 252.0, VolForecast.perSessionYield(dec("0.03")).doubleValue(), 1e-9);
+    }
+
+    @Test
+    void aHighYielderGetsANegativePriceDriftAndItIsNotClamped() {
+        // A name yielding more than its class's total return really is expected to drift *down* in
+        // price. Flooring that at zero would silently truncate the case the netting exists to show.
+        Touch t = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.10"));
+        assertTrue(t.drift().signum() < 0, "mu_price should be negative, was " + t.drift());
+        assertEquals(-0.02 / 252.0, t.drift().doubleValue(), 1e-9);
+        assertTrue(t.drifted(), "a negative drift is still a drift — it must not fall to driftless");
+
+        // And it does the physically right thing: a downward drift makes a buy limit *below* the
+        // market more likely to be touched, not less.
+        Touch flat = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.08"));
+        assertTrue(t.probability().compareTo(flat.probability()) > 0);
+    }
+
+    @Test
+    void nettingATotalReturnToZeroDropsBackToTheDriftlessBranch() {
+        // mu_price lands exactly on zero. The branch tests the consumed drift, so this must take
+        // the driftless path — the two are identical there, and it avoids the exp(2vb/s^2) term.
+        Touch t = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.08"));
+        assertEquals(0, t.drift().signum());
+        assertFalse(t.drifted());
+        assertEquals(0, t.logDrift().signum(), "a zero mu must not acquire a variance drag");
+        assertEquals(VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, CFG, AssetClass.EQUITY)
+                .probability(), t.probability());
+    }
+
+    @Test
+    void theZeroDriftClassesIgnoreAYieldEntirely() {
+        // Gilts and bullion start at zero. Subtracting anything would invert their drift, and a
+        // non-zero mu would also drop them off the driftless branch they belong on.
+        for (AssetClass ac : new AssetClass[]{AssetClass.GILT, AssetClass.COMMODITY, AssetClass.UNKNOWN}) {
+            Touch t = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON, ac, divYield("0.05"));
+            assertEquals(0, t.drift().signum(), ac + " must stay at zero drift");
+            assertEquals(0, t.forwardYield().signum(), ac + " must report no yield netted");
+            assertFalse(t.yieldFallback(), ac + " did not fall back — it never applies a yield");
+            assertFalse(t.drifted());
+            assertEquals(VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, CFG, ac).probability(),
+                    t.probability(), ac + " must price identically to the driftless model");
+        }
+    }
+
+    @Test
+    void anUnresolvedYieldIsFlaggedRatherThanPassedOffAsAZero() {
+        // An accumulating fund genuinely yields nothing; a name whose yield failed to resolve is
+        // also priced at zero. Identical arithmetic, and only the flag separates them afterwards.
+        Touch resolved = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.00"));
+        Touch missing = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON,
+                AssetClass.EQUITY, VolForecast.Yield.NONE);
+
+        assertEquals(resolved.probability(), missing.probability(), "same number...");
+        assertFalse(resolved.yieldFallback());
+        assertTrue(missing.yieldFallback(), "...but the record says which it was");
+
+        // The convenience overload is the fallback case by definition.
+        assertTrue(VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON, AssetClass.EQUITY)
+                .yieldFallback());
+        assertEquals(VolForecast.Yield.NONE, new VolForecast.Yield(null, true));
+        assertTrue(VolForecast.Yield.of(null).fallback(), "nothing to resolve is a fallback");
+    }
+
+    @Test
+    void aYieldRaisesTheOddsOfABuyLimitAndLowersThoseOfASellLimit() {
+        // The sign has to follow the barrier's side. Netting a yield lowers the drift, so the
+        // market is *less* likely to climb to a sell limit above it and *more* likely to fall to a
+        // buy limit below it. A drag applied to |b| would move both the same way.
+        Touch buyGross = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.00"));
+        Touch buyNet = VolForecast.touch(YIELD_IN, FROM, BUY_LIMIT, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.05"));
+        assertTrue(buyNet.probability().compareTo(buyGross.probability()) > 0);
+
+        BigDecimal sellLimit = dec("110");
+        Touch sellGross = VolForecast.touch(YIELD_IN, FROM, sellLimit, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.00"));
+        Touch sellNet = VolForecast.touch(YIELD_IN, FROM, sellLimit, 250, DRIFT_ON,
+                AssetClass.EQUITY, divYield("0.05"));
+        assertTrue(sellNet.probability().compareTo(sellGross.probability()) < 0);
+    }
+
+    @Test
+    void theRangeEndsTakeTheSameNettedDriftAsTheHeadline() {
+        // A netted headline bracketed by gross bounds would be a range around a different question.
+        Touch t = VolForecast.touch(inputs("0.008", "0.012", "0.020", "0.013"),
+                FROM, BUY_LIMIT, 250, DRIFT_ON, AssetClass.EQUITY, divYield("0.05"));
+        Touch gross = VolForecast.touch(inputs("0.008", "0.012", "0.020", "0.013"),
+                FROM, BUY_LIMIT, 250, DRIFT_ON, AssetClass.EQUITY, divYield("0.00"));
+        assertTrue(t.hasRange());
+        assertTrue(t.probabilityLow().compareTo(gross.probabilityLow()) > 0);
+        assertTrue(t.probabilityHigh().compareTo(gross.probabilityHigh()) > 0);
     }
 }

@@ -29,6 +29,12 @@
         function attachSort(table) {
             var ths = Array.from(table.querySelectorAll('thead th[data-sort]'));
             var sortCol = -1, sortAsc = true;
+            // A marker already present means a re-render restored the user's ordering (see
+            // restoreOrdersSort). Seed the toggle state from it, or the next click on that same
+            // column would restart at ascending instead of flipping to descending.
+            ths.forEach(function (h, i) {
+                if (h.dataset.sortDir) { sortCol = i; sortAsc = h.dataset.sortDir === 'asc'; }
+            });
             ths.forEach(function (th, idx) {
                 th.addEventListener('click', function () {
                     var type = th.dataset.sort;
@@ -110,7 +116,35 @@
         }());
         // ────────────────────────────────────────────────────────────────────────
 
+        // ── Open-orders sort, remembered across re-renders ──────────────────────
+        // The orders fragment is swapped wholesale — on every tab click and on both model
+        // checkboxes (drift, earnings variance) — which throws away the <thead> the sort marker
+        // lives on, so the rebuilt table came back in the server's default broker order. Ticking
+        // or unticking a checkbox is a request to re-price the numbers, never to re-order the
+        // rows. The state is held in JS for the page session precisely because the DOM it used to
+        // live in is what the swap destroys.
+        var ordersSort = null;
+
+        document.body.addEventListener('click', function (e) {
+            var th = e.target.closest && e.target.closest('#orders-table thead th[data-sort]');
+            if (!th) return;   // bubbled past attachSort's own handler, so the marker is already set
+            var ths = Array.from(th.closest('thead').querySelectorAll('th[data-sort]'));
+            ordersSort = th.dataset.sortDir ? {idx: ths.indexOf(th), dir: th.dataset.sortDir} : null;
+        });
+
+        // Put the marker back on the rebuilt thead and re-sort — before attachSort reads it, so
+        // the seeded toggle state and the rendered order agree.
+        function restoreOrdersSort() {
+            var table = document.getElementById('orders-table');
+            if (!ordersSort || !table) return;    // nothing stored, or no open orders to sort
+            var th = Array.from(table.querySelectorAll('thead th[data-sort]'))[ordersSort.idx];
+            if (!th) return;
+            th.dataset.sortDir = ordersSort.dir;
+            reapplyActiveSort(table);
+        }
+
         document.body.addEventListener('htmx:afterSettle', function () {
+            restoreOrdersSort();
             ['#portfolio-result', '#portfolio-cash-result', '#orders-result'].forEach(function (sel) {
                 document.querySelectorAll(sel + ' table').forEach(function (table) {
                     if (!table.dataset.sortAttached) {

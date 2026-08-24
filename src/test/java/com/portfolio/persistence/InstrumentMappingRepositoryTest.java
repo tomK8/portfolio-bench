@@ -93,4 +93,22 @@ class InstrumentMappingRepositoryTest {
         assertTrue(repo.listTickerMappings().isEmpty());
         assertTrue(repo.listAliases().isEmpty());
     }
+
+    /**
+     * The keyword is stored in the same canonical form the parsers reduce a broker description to,
+     * so punctuation cannot make a saved mapping unmatchable — it did, and the save reported
+     * success while the row it was meant to fix stayed blank.
+     */
+    @Test
+    void punctuationIsStrippedFromKeywordsOnSaveAndOnRead(@TempDir Path dir) {
+        InstrumentMappingRepository repo = repo(dir);
+        repo.saveAlias("Legal & General Group PLC", "LGEN", "Legal & General Group PLC");
+
+        assertEquals(Map.of("legal general group plc", "LGEN"), repo.loadAliases());
+        assertEquals("legal general group plc",
+                InstrumentMappingRepository.normaliseKeyword("Legal & General Group PLC"));
+
+        repo.deleteAlias("legal   &   general group plc");
+        assertTrue(repo.loadAliases().isEmpty(), "delete normalises the key the same way save does");
+    }
 }

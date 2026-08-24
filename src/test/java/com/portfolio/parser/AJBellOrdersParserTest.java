@@ -115,4 +115,25 @@ class AJBellOrdersParserTest {
         var p = new AJBellOrdersParser(() -> Map.of("relx", "REL2"));
         assertEquals("REL2", p.symbolOrName("RELX PLC"));
     }
+
+    @Test
+    void anAliasMatchesANamePunctuatedDifferently() {
+        // The saved keyword carries no punctuation (the dashboard suggests it that way); the
+        // broker's name does. Matching the raw lowercased name meant the mapping saved, reported
+        // success and never fired — every "&"/"."/"-" instrument was un-mappable from the UI.
+        AJBellOrdersParser p = new AJBellOrdersParser(
+                () -> Map.of("legal general group plc", "LGEN"));
+
+        assertEquals("LGEN", p.symbolFor("Legal & General Group PLC"));
+        assertEquals("LGEN", p.symbolOrName("Legal & General Group PLC"),
+                "a matched name resolves to the symbol, so the row can price");
+    }
+
+    @Test
+    void anUnmatchedNameStillFallsThroughToItself() {
+        AJBellOrdersParser p = new AJBellOrdersParser(() -> Map.of("something else", "XXX"));
+        assertNull(p.symbolFor("Legal & General Group PLC"));
+        assertEquals("Legal & General Group PLC", p.symbolOrName("Legal & General Group PLC"),
+                "an unmapped description is passed through as the symbol — the cue to map it");
+    }
 }

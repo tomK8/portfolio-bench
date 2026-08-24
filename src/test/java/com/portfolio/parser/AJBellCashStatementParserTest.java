@@ -174,4 +174,38 @@ class AJBellCashStatementParserTest {
                 new AJBellCashStatementParser().parse(file).get(0).symbol());
     }
 
+
+    /**
+     * The same punctuation trap the orders parser had: the keyword is stored stripped of
+     * punctuation, so it has to be tested against the description in the same form. "Smith &amp;
+     * Nephew" is used rather than Legal &amp; General because the latter has a committed
+     * SYMBOL_RULE, which would mask the alias path being tested here.
+     */
+    @Test
+    void aUserAliasMatchesADescriptionPunctuatedDifferently(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("cashstatements.csv");
+        Files.writeString(file, """
+                "Date","Description","Reference","Settlement date","Receipt (GBP)","Payment (GBP)","Balance (GBP)"
+                "14/08/2026","Purchase 100 Smith & Nephew PLC ORD USD0.20","44626SN01","18/08/2026","0","-1200.00","1,000.00"
+                """);
+
+        var mapped = new AJBellCashStatementParser(() -> java.util.Map.of("smith nephew plc", "SN."));
+        assertEquals("SN.", mapped.parse(file).get(0).symbol());
+    }
+
+    /** Committed regex rules still read punctuation — they are matched on the raw name, not the key. */
+    @Test
+    void committedRulesStillSeePunctuation(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("cashstatements.csv");
+        Files.writeString(file, """
+                "Date","Description","Reference","Settlement date","Receipt (GBP)","Payment (GBP)","Balance (GBP)"
+                "14/08/2026","Purchase 100 B.A.E. SYSTEMS PLC ORD GBP0.025","44626BA01","18/08/2026","0","-1200.00","1,000.00"
+                "14/08/2026","Purchase 100 LEGAL & GENERAL GROUP PLC ORD GBP0.025","44626LG01","18/08/2026","0","-1200.00","1,000.00"
+                """);
+
+        // The export is newest-first and the parser reverses it, so assert on the set, not the order.
+        var symbols = new AJBellCashStatementParser().parse(file).stream()
+                .map(t -> t.symbol()).collect(java.util.stream.Collectors.toSet());
+        assertEquals(java.util.Set.of("BA.", "LGEN"), symbols);
+    }
 }

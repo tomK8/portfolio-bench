@@ -1137,7 +1137,9 @@ public class OpenOrdersService {
      */
     static String suggestKeyword(String name) {
         if (name == null) return "";
-        String[] words = name.toLowerCase().replaceAll("[^a-z0-9 ]", " ").trim().split("\\s+");
+        // Instruments.matchKey is the form the keyword is stored in and the form the parsers reduce
+        // a description to, so a suggestion built any other way could save and never match.
+        String[] words = Instruments.matchKey(name).split(" ");
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < Math.min(KEYWORD_WORDS, words.length); i++) {
             if (words[i].isEmpty()) continue;

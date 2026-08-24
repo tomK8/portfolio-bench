@@ -1,5 +1,6 @@
 package com.portfolio.persistence;
 
+import com.portfolio.domain.Instruments;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -151,9 +152,18 @@ public class InstrumentMappingRepository {
         if (!connections.dbExists()) return out;
         try (Connection conn = connections.open();
              Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(
-                     "SELECT keyword, symbol FROM instrument_aliases ORDER BY LENGTH(keyword) DESC")) {
-            while (rs.next()) out.put(rs.getString(1), rs.getString(2));
+             ResultSet rs = st.executeQuery("SELECT keyword, symbol FROM instrument_aliases")) {
+            // Normalised on the way out as well as in, so a row stored before the keyword form was
+            // pinned down still matches, and re-sorted longest-first on the *normalised* key: the
+            // parsers take the first hit, so a specific phrase has to be offered before a shorter
+            // one that also matches.
+            List<String[]> rows = new ArrayList<>();
+            while (rs.next()) {
+                String key = normaliseKeyword(rs.getString(1));
+                if (!key.isEmpty()) rows.add(new String[]{key, rs.getString(2)});
+            }
+            rows.sort((a, b) -> Integer.compare(b[0].length(), a[0].length()));
+            for (String[] row : rows) out.putIfAbsent(row[0], row[1]);
         } catch (Exception e) {
             log.warn("Could not read instrument_aliases — broker names will fall back to the built-in rules", e);
         }
@@ -214,8 +224,14 @@ public class InstrumentMappingRepository {
         return s == null ? "" : s.trim().toUpperCase();
     }
 
+    /**
+     * The stored form of a match keyword — {@link Instruments#matchKey}, which is also what the
+     * parsers reduce a broker description to before testing it. One definition on both sides is
+     * the whole requirement: they diverged over punctuation once, and the mapping saved fine and
+     * simply never matched.
+     */
     public static String normaliseKeyword(String s) {
-        return s == null ? "" : s.trim().toLowerCase().replaceAll("\\s+", " ");
+        return Instruments.matchKey(s);
     }
 
     /** One symbol → Yahoo ticker row. {@code verifiedAt} is null when saved without a live check. */

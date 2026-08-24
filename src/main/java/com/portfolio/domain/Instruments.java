@@ -66,4 +66,25 @@ public final class Instruments {
         return securityId != null
                 && (securityId.contains("%") || securityId.toUpperCase().startsWith("GILT"));
     }
+
+    /**
+     * The canonical form of a broker's instrument description for keyword matching: lowercase,
+     * with every run of non-alphanumerics collapsed to a single space.
+     *
+     * <p><b>Both sides of the comparison must go through this</b>, which is the whole point of it
+     * living here rather than in either parser. The dashboard suggests a match phrase by stripping
+     * punctuation out of the name, so a save of "Legal &amp; General Group PLC" stored the keyword
+     * {@code legal general group plc} — while the parsers tested it against the raw lowercased name
+     * {@code "legal & general group plc"}, which does not contain it. The mapping saved, reported
+     * success, and could never fire; every instrument whose name carries an ampersand, a hyphen or
+     * a dot was un-mappable from the dashboard (2026-08-24).
+     *
+     * <p>Normalising rather than preserving punctuation is also what lets one keyword span the
+     * brokers, which is the reason {@code instrument_aliases} is a single table: the same
+     * instrument reaches the orders export and the cash statement punctuated differently.
+     */
+    public static String matchKey(String description) {
+        if (description == null) return "";
+        return description.toLowerCase().replaceAll("[^a-z0-9]+", " ").trim();
+    }
 }

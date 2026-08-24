@@ -12,6 +12,7 @@ import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
+import com.portfolio.persistence.InstrumentMappingRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
@@ -354,8 +355,10 @@ class OpenOrdersServiceTest {
         IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
         seedPrices(history, intraday, "WMT", "USD", 110.0, 115.40);
         EarningsCalendarRepository calendar = new EarningsCalendarRepository(connections);
-        // A print 20 calendar days out, and a fully-fetched calendar around it.
-        LocalDate print = LocalDate.now().plusDays(20);
+        // A print ~20 calendar days out, and a fully-fetched calendar around it. Nudged onto a
+        // weekday because seedCalendar writes no weekend rows — a fixed offset made the test fail
+        // on whichever days of the week put now()+20 on a Saturday or Sunday.
+        LocalDate print = nextWeekday(LocalDate.now().plusDays(20));
         seedCalendar(calendar, LocalDate.now(), LocalDate.now().plusDays(140), print, "WMT");
 
         OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir), List.of(),
@@ -776,6 +779,15 @@ class OpenOrdersServiceTest {
      * earnings row on {@code print}. The fetch bookkeeping is the point: an unfetched date is a date
      * on which every symbol looks free of events, which is why coverage is tracked separately.
      */
+    /** The date itself when it is a trading weekday, else the following Monday. */
+    private static LocalDate nextWeekday(LocalDate d) {
+        while (d.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                || d.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+            d = d.plusDays(1);
+        }
+        return d;
+    }
+
     private static void seedCalendar(EarningsCalendarRepository repo, LocalDate from, LocalDate to,
                                      LocalDate print, String symbol) {
         for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
@@ -1008,6 +1020,36 @@ class OpenOrdersServiceTest {
         assertEquals("Xtrackers MSCI World Health Care ETF 1C GBP", u.name());
         assertEquals("xtrackers msci world health", u.suggestedKeyword());
         assertEquals(".L", u.tickerSuffix(), "a sterling order completes the ticker box for London");
+    }
+
+    /**
+     * The end-to-end contract the panel's mapping form rests on: whatever keyword the panel
+     * suggests, saved as the repository stores it, must actually match the name it was suggested
+     * for. It did not for any punctuated name — "Legal &amp; General Group PLC" suggested
+     * "legal general group plc", which the parser tested against the raw lowercased name and never
+     * found. The save reported success and the row stayed blank (2026-08-24).
+     */
+    @Test
+    void aSuggestedKeywordAlwaysMatchesTheNameItWasSuggestedFor(@TempDir Path dir) throws Exception {
+        for (String name : List.of("Legal & General Group PLC",
+                                   "Xtrackers MSCI World Health Care ETF 1C GBP",
+                                   "B.A.E. Systems PLC",
+                                   "Smith & Nephew PLC",
+                                   "Coca-Cola HBC AG")) {
+            String stored = InstrumentMappingRepository.normaliseKeyword(
+                    OpenOrdersService.suggestKeyword(name));
+            assertFalse(stored.isBlank(), "no keyword suggested for " + name);
+
+            Path f = dir.resolve("activeorders.csv");
+            Files.writeString(f, """
+                    "Investment","Reference","Type","Order type","Quantity","Amount","Price","Date entered","Expiry date","Status"
+                    "%s","44626X1","Buy","Limit","100","4568.50","4565p","14/08/2026","30/10/2026","In progress"
+                    """.formatted(name));
+
+            List<OpenOrder> parsed = new AJBellOrdersParser(() -> Map.of(stored, "SYM")).parse(f);
+            assertEquals("SYM", parsed.get(0).symbol(),
+                    "keyword \"" + stored + "\" was suggested for \"" + name + "\" but does not match it");
+        }
     }
 
     /** A mapped symbol that has simply never priced needs only the ticker half. */

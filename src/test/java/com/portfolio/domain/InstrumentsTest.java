@@ -95,4 +95,29 @@ class InstrumentsTest {
                             + Instruments.assetClassOf(symbol) + " — add it to Instruments");
         }
     }
+
+    @Test
+    void matchKeyCollapsesPunctuationSoAKeywordMatchesAPunctuatedName() {
+        // The regression this exists for: the dashboard suggested "legal general group plc" for
+        // "Legal & General Group PLC", stored it, and the parsers tested it against the raw
+        // lowercased name — which does not contain it. Both sides go through here now.
+        assertEquals("legal general group plc", Instruments.matchKey("Legal & General Group PLC"));
+        assertTrue(Instruments.matchKey("Legal & General Group PLC")
+                .contains(Instruments.matchKey("Legal & General Group PLC")));
+        assertTrue(Instruments.matchKey("Legal & General Group PLC").contains("legal general"));
+
+        assertEquals("b a e systems plc", Instruments.matchKey("B.A.E. Systems PLC"));
+        assertEquals("smith nephew plc", Instruments.matchKey("Smith  &  Nephew   PLC"));
+        assertEquals("", Instruments.matchKey(null));
+        assertEquals("", Instruments.matchKey("  &&  "));
+    }
+
+    @Test
+    void matchKeyIsIdempotent() {
+        // Keywords are normalised on save and again on read; a second pass must not change them.
+        for (String s : new String[]{"Legal & General Group PLC", "iShares Physical Gold ETC GBP",
+                "HICL Infrastructure PLC Ord", "3M Co."}) {
+            assertEquals(Instruments.matchKey(s), Instruments.matchKey(Instruments.matchKey(s)));
+        }
+    }
 }

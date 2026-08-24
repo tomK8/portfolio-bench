@@ -28,7 +28,22 @@ class WatchlistRowServiceTest {
     @TempDir
     Path dbDir;
 
-    private static final LocalDate YESTERDAY = LocalDate.now().minusDays(1);
+    /**
+     * The two most recent trading weekdays. {@code PriceStats} discards weekend-dated bars as
+     * phantom gilt-scraper rows, so a fixture anchored on plain {@code now()} / {@code now()-1}
+     * loses one of its two closes — and with it the current price — on the days of the week that
+     * put either date on a Saturday or Sunday.
+     */
+    private static final LocalDate TODAY = weekdayOnOrBefore(LocalDate.now());
+    private static final LocalDate YESTERDAY = weekdayOnOrBefore(TODAY.minusDays(1));
+
+    private static LocalDate weekdayOnOrBefore(LocalDate d) {
+        while (d.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                || d.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+            d = d.minusDays(1);
+        }
+        return d;
+    }
 
     private static PriceBar bar(String sym, LocalDate date, double close) {
         return new PriceBar(sym, date, null, null, null, close, close, 1.0, null, "GBP");
@@ -41,7 +56,7 @@ class WatchlistRowServiceTest {
         var wlRepo = new WatchlistRepository(cf, kv);
         var priceRepo = new PriceHistoryRepository(cf);
         priceRepo.savePriceBars(List.of(bar("AAPL", YESTERDAY, 100.0),
-                bar("AAPL", LocalDate.now(), 110.0)));
+                bar("AAPL", TODAY, 110.0)));
         setup.accept(wlRepo);
         return new WatchlistService(wlRepo, priceRepo, new IntradayPriceRepository(cf),
                 new FundamentalsRepository(cf), new CashTransactionRepository(cf, kv),

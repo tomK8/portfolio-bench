@@ -1,5 +1,6 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.Instruments;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.TransactionType;
@@ -118,8 +119,11 @@ public class AJBellCashStatementParser implements CashTransactionParser {
         if (bondId != null) return bondId;
 
         // User-added aliases first, so a keyword entered on the dashboard also overrides a
-        // committed rule that turns out to match the wrong instrument.
-        String lower = name.toLowerCase();
+        // committed rule that turns out to match the wrong instrument. Matched on the canonical
+        // form of the description (Instruments.matchKey), the same one the keyword was stored in,
+        // so punctuation in the name can't stop it firing. SYMBOL_RULES below stay on the raw
+        // uppercased name — those are regexes that deliberately read punctuation ("B.A.E SYSTEMS").
+        String lower = Instruments.matchKey(name);
         Map<String, String> aliases = aliasSource.get();
         if (aliases != null) {
             for (Map.Entry<String, String> e : aliases.entrySet()) {

@@ -1,5 +1,6 @@
 package com.portfolio.parser;
 
+import com.portfolio.domain.Instruments;
 import com.portfolio.domain.model.OpenOrder;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -76,10 +77,16 @@ public class AJBellOrdersParser implements OrderParser {
         this.aliasSource = aliasSource == null ? Map::of : aliasSource;
     }
 
-    /** Internal symbol for an AJ Bell investment name, or null when unmapped. */
+    /**
+     * Internal symbol for an AJ Bell investment name, or null when unmapped.
+     *
+     * <p>Matched on {@link Instruments#matchKey} rather than on the raw lowercased name, so
+     * punctuation in the description cannot stop a keyword firing — see that method for the
+     * ampersand case that made every such instrument un-mappable from the dashboard.
+     */
     String symbolFor(String investmentName) {
         if (investmentName == null) return null;
-        String lower = investmentName.toLowerCase();
+        String lower = Instruments.matchKey(investmentName);
         Map<String, String> aliases = aliasSource.get();
         if (aliases != null) {
             for (Map.Entry<String, String> e : aliases.entrySet()) {

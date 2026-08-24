@@ -831,6 +831,18 @@ estimated prices still sort numerically). No parser registration in `PortfolioGa
 pipeline is independent of the holdings/cash pipelines (and the II sniff keeps them from
 cross-matching).
 
+**The chosen sort survives a re-render**, which matters because both model checkboxes swap the
+whole fragment: ticking or unticking drift / earnings variance is a request to re-price the
+numbers, never to re-order the rows, and the table used to come back in the server's default
+broker order. The state can't live in the DOM — the `<thead>` carrying `data-sort-dir` is exactly
+what the swap destroys — so `dashboard.js` keeps `ordersSort` (`{idx, dir}`) for the page session,
+captured by a **body-delegated** header click (it bubbles past `attachSort`'s own handler, so the
+marker is already written by the time it reads it) and re-applied by `restoreOrdersSort()` at the
+head of the `htmx:afterSettle` handler, *before* the sort is re-attached. `attachSort` **seeds its
+`sortCol`/`sortAsc` closure from any marker it finds** — without that, the first click on the
+restored column would restart at ascending instead of flipping to descending. Same mechanism
+covers the tab-click re-fetch, so leaving the panel and coming back keeps the ordering too.
+
 **Excel download.** The panel's "Download Excel" button (`POST /orders/export`) calls
 `OpenOrdersService.export()`, which re-parses (so it's always current) and writes a single-sheet
 `Open Orders-YYYYMMDD.xlsx` to the **output dir (~/Documents)** — same place the portfolio exports

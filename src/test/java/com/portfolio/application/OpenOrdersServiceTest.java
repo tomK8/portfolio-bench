@@ -12,6 +12,7 @@ import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
+import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.InstrumentMappingRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
@@ -255,6 +256,89 @@ class OpenOrdersServiceTest {
         assertEquals(goldOff, goldOn, "bullion has no drift — switching the model on is a no-op");
     }
 
+    /** An order file + seeded prices + a fundamentals row, for the yield-netting cases below. */
+    private OpenOrdersService serviceWithYield(Path dir, String symbol, String rate, String price)
+            throws Exception {
+        Files.writeString(dir.resolve("2bc3405a-877c-4bf3-ac16-8dcb5303b89a.csv"), """
+                Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status
+                19/08/2026 16:52,27726IDT248,BUY/LIMIT,%s,A Company,50,n/a,"$5,000.00",PENDING
+                """.formatted(symbol));
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        PriceHistoryRepository history = new PriceHistoryRepository(connections);
+        IntradayPriceRepository intraday = new IntradayPriceRepository(connections);
+        seedPrices(history, intraday, symbol, "USD", 110.0, 115.40);
+
+        FundamentalsRepository fundamentals = new FundamentalsRepository(connections);
+        if (rate != null) {
+            fundamentals.save(symbol, new com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary(
+                    symbol, "USD", new BigDecimal(price), null, null, null, null, null, null, null,
+                    null, Map.of("dividendRate", new BigDecimal(rate)),
+                    Map.of(), Map.of(), List.of(), false), java.time.Instant.now());
+        }
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                intraday, history, new YahooTickerMap(), new KeyValueStore(dir.resolve("db")),
+                tickers -> { }, sym -> { }, null, fundamentals);
+        service.setUseDrift(true);
+        return service;
+    }
+
+    @Test
+    void theDividendYieldIsNettedOffTheDriftPerSymbol(@TempDir Path dir) throws Exception {
+        // $5.00 declared against a $100 quote = a 5% yield, so the price drift is 8% − 5% = 3%.
+        OpenOrdersService service = serviceWithYield(dir, "PEP", "5.00", "100");
+        OpenOrder o = find(service.load().orders(), "PEP");
+        assertEquals(0.03, o.driftAnnual().doubleValue(), 1e-6,
+                "the class's 8% total return less the instrument's own 5% yield");
+    }
+
+    @Test
+    void anImplausibleYieldIsRejectedAndTheRowFallsBackToTheGrossFigure(@TempDir Path dir)
+            throws Exception {
+        // A stale dividend rate against a collapsed price — $20 declared on a $100 quote reads as
+        // 20%/yr. The guard is on the *input*: a genuine high yielder is allowed to produce a
+        // negative drift, but a figure this far out is a data error and is not believed.
+        OpenOrdersService service = serviceWithYield(dir, "PEP", "20.00", "100");
+        OpenOrder o = find(service.load().orders(), "PEP");
+        assertEquals(0.08, o.driftAnnual().doubleValue(), 1e-6,
+                "rejected yields leave the gross class figure, not a negative drift");
+    }
+
+    @Test
+    void aGenuinelyHighYieldIsAllowedThroughToANegativeDrift(@TempDir Path dir) throws Exception {
+        // 12% is inside the plausibility bound, so it stands and mu_price goes negative. This is
+        // the case a clamp would have silently truncated.
+        OpenOrdersService service = serviceWithYield(dir, "PEP", "12.00", "100");
+        OpenOrder o = find(service.load().orders(), "PEP");
+        assertEquals(-0.04, o.driftAnnual().doubleValue(), 1e-6);
+    }
+
+    @Test
+    void withNoFundamentalsRowTheRowKeepsItsClassFigure(@TempDir Path dir) throws Exception {
+        OpenOrdersService service = serviceWithYield(dir, "PEP", null, null);
+        OpenOrder o = find(service.load().orders(), "PEP");
+        assertEquals(0.08, o.driftAnnual().doubleValue(), 1e-6, "degrades to gross, never to zero");
+    }
+
+    @Test
+    void theProbeAndThePnBoxNetTheSameYieldAsTheTable(@TempDir Path dir) throws Exception {
+        // The three surfaces read one stored setting; they must also read one yield, or the box
+        // would re-price a row onto a different drift than the row beside it.
+        OpenOrdersService service = serviceWithYield(dir, "PEP", "5.00", "100");
+        OpenOrder o = find(service.load().orders(), "PEP");
+        VolForecast.Inputs vols = new VolForecast.Inputs(o.dailyVol10(), o.dailyVol20(),
+                o.dailyVol30(), o.dailyVol250());
+
+        assertEquals(o.touchProbHorizon(),
+                service.touchEstimate(o.currentPrice(), o.price(), vols, o.horizonSessions(),
+                        null, "PEP").probability(),
+                "the P(N) box nets the same yield");
+        assertEquals(o.touchProbHorizon(),
+                service.probe("PEP", o.price(), "Buy", o.horizonSessions())
+                        .hypothetical().touchProbHorizon(),
+                "and so does the pre-trade probe");
+    }
+
     @Test
     void theDriftSettingIsStoredAndEverySurfaceReadsIt(@TempDir Path dir) throws Exception {
         // The point of storing it server-side rather than holding it in the browser: one switch,
@@ -285,8 +369,10 @@ class OpenOrdersServiceTest {
         assertTrue(on.touchProbHorizon().compareTo(off.touchProbHorizon()) < 0,
                 "the table follows the setting with no query param: " + on.touchProbHorizon()
                         + " vs " + off.touchProbHorizon());
-        assertEquals(0, on.driftPerSession().compareTo(AssetClass.EQUITY.dailyDrift()));
-        assertEquals(0.06, on.driftAnnual().doubleValue(), 1e-6);
+        // No fundamentals repository is wired into this fixture, so no yield resolves and the row
+        // is priced at the class's gross total return — the documented degradation.
+        assertEquals(0, on.driftPerSession().compareTo(AssetClass.EQUITY.dailyTotalReturn()));
+        assertEquals(0.08, on.driftAnnual().doubleValue(), 1e-6);
 
         // The probe, the re-price box and the report's own echo all resolve the same setting.
         assertEquals(on.touchProbHorizon(),
@@ -304,7 +390,7 @@ class OpenOrdersServiceTest {
         try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
                 Files.newInputStream(Path.of(export.files().get(0))))) {
             var row = wb.getSheet("Open Orders").getRow(1);
-            assertEquals(0.06, row.getCell(21).getNumericCellValue(), 1e-6, "Drift (annual)");
+            assertEquals(0.08, row.getCell(21).getNumericCellValue(), 1e-6, "Drift (annual)");
         }
 
         service.setUseDrift(false);

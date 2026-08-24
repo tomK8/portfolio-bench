@@ -54,10 +54,14 @@ public record OpenOrder(
                                 // contribution, and nothing else records it.
         int eventCount,         // scheduled prints found inside horizonSessions
         BigDecimal eventVariance, // Σ move² folded into the horizon's total variance
-        BigDecimal driftPerSession, // log drift per session the first passage applied; ZERO on the
-                                // driftless model. Carried for the same reason sigmaEff is: the
-                                // probability beside it is only judgeable against the model that
-                                // produced it, and *which* model that was is part of the model.
+        BigDecimal driftPerSession, // mu_price: the *arithmetic* drift per session the model was given
+                                // — the asset class's total return with the instrument's forward
+                                // dividend yield already netted off. ZERO on the driftless model.
+                                // Not the log drift: the Ito correction nu = mu - sigma^2/2 is
+                                // horizon-dependent, so it is applied inside VolForecast.touch and
+                                // is not what lands here. Carried for the same reason sigmaEff is:
+                                // the probability beside it is only judgeable against the model
+                                // that produced it, and *which* model that was is part of it.
         BigDecimal sigmaToLimit,// signed distance current→limit in 5-session σ units, ln(limit/current)
                                 // ÷ (sigma_eff(5)×√5). null when price/current/vol unavailable.
         BigDecimal touchProb5d, // probability the market touches the limit within 5 sessions

@@ -38,11 +38,24 @@ import java.util.List;
  * So {@code σ_h = sigma_eff·√N} is strictly increasing in {@code N} even when the blend is pulling
  * {@code sigma_eff} <em>down</em> — P(touch) never goes backwards as the horizon lengthens.
  *
- * <p><b>Drift, when it is switched on, is Itô-corrected here.</b> An asset class carries an
- * expected <em>arithmetic</em> return (equities 6%/yr); the first passage consumes a <em>log</em>
- * drift, so {@link #touch} applies {@code ν = μ − σ_eff²/2} before calling it. Because σ_eff
- * depends on the horizon, so does ν — the same class produces a different log drift at 5 sessions
- * and at 250.
+ * <p><b>Drift, when it is switched on, is netted and then Itô-corrected here.</b> Two conversions,
+ * in this order, and both matter:
+ * <pre>
+ *   mu_price = assetClass.dailyTotalReturn() − forwardYield/252   (total return → price drift)
+ *   nu       = mu_price − sigma_eff²/2                            (arithmetic → log drift)
+ * </pre>
+ * The first exists because the first passage is over a <em>price</em> path while an asset class
+ * carries a <em>total</em> return: a resting limit is touched by price, not by price plus
+ * reinvested dividends, and {@code PriceStats} deliberately measures σ off dividend-excluded
+ * closes. Without it the drift leg and the diffusion leg sit on different bases and every dividend
+ * payer is over-drifted. The second exists because the barrier algebra is written in log space.
+ * Because σ_eff depends on the horizon, so does ν — the same class produces a different log drift
+ * at 5 sessions and at 250.
+ *
+ * <p>The yield is resolved <em>per symbol</em> by the caller and passed in as a {@link Yield}; the
+ * class-level figure it is subtracted from stays a modelling convention. That split is deliberate:
+ * the dispersion of yields inside "equity" is what the netting is for, but an expected return per
+ * name would be a forecast wearing a parameter's clothing.
  *
  * <p><b>Everything routes through {@link #resolve}.</b> The first-passage call site takes whatever
  * {@code sigma_eff} comes back and asks no questions, so a later implied-vol or event-variance
@@ -156,6 +169,37 @@ public final class VolForecast {
     }
 
     /**
+     * The forward dividend yield netted off an asset class's total return to reach the price drift,
+     * with the one bit of provenance that cannot be recovered from the number itself.
+     *
+     * <p><b>{@code fallback} is not redundant with a zero {@code annual}.</b> An accumulating fund
+     * genuinely yields nothing and correctly keeps the full drift; a name whose yield we could not
+     * obtain is also priced at zero, and wrongly keeps it. Both are {@code 0.00} in the arithmetic
+     * and only this flag separates them afterwards — which matters because Yahoo publishes no
+     * distribution yield for any fund held here, so the second case is the common one.
+     *
+     * <p>The value arrives already validated: the caller owns the "is this a plausible yield"
+     * question because rejecting one has to be logged, and this class is framework-free.
+     *
+     * @param annual   forward yield as an annual fraction ({@code 0.0234} = 2.34%), never null.
+     * @param fallback true when {@code annual} is a substituted zero rather than a resolved figure.
+     */
+    public record Yield(BigDecimal annual, boolean fallback) {
+
+        /** Nothing resolved — priced at zero drift-offset and flagged as such. */
+        public static final Yield NONE = new Yield(BigDecimal.ZERO, true);
+
+        public Yield {
+            if (annual == null) annual = BigDecimal.ZERO;
+        }
+
+        /** A yield that was actually resolved for the instrument. */
+        public static Yield of(BigDecimal annual) {
+            return annual == null ? NONE : new Yield(annual, false);
+        }
+    }
+
+    /**
      * A resolved {@code sigma_eff}, with the provenance a calibration record needs.
      *
      * @param sigmaEffDiffusive σ_eff before any event variance was folded in — kept so a record
@@ -195,6 +239,18 @@ public final class VolForecast {
                          * different ν at 5 sessions and at 250. ZERO on the driftless branch.
                          */
                         BigDecimal logDrift,
+                        /**
+                         * The class's gross expected <em>total</em> return per session, before the
+                         * dividend yield was netted off. Kept beside {@link #drift} so a
+                         * calibration record can attribute a miss between the vol estimate, the
+                         * return assumption and the yield — three inputs that are indistinguishable
+                         * once collapsed into one number. ZERO when drift is off.
+                         */
+                        BigDecimal muTotal,
+                        /** The forward yield subtracted, as an annual fraction. ZERO when none applied. */
+                        BigDecimal forwardYield,
+                        /** True when {@link #forwardYield} is a substituted zero, not a resolved figure. */
+                        boolean yieldFallback,
                         /** σ_eff before event variance — equal to {@link #sigmaEff} when none applied. */
                         BigDecimal sigmaEffDiffusive,
                         /** Scheduled events found inside the horizon. */
@@ -211,12 +267,14 @@ public final class VolForecast {
                                       Source source, BigDecimal sigmaToLimit, BigDecimal probability,
                                       BigDecimal low, BigDecimal high) {
             return new Touch(sessions, sigmaEff, decay, source, sigmaToLimit, probability, low, high,
-                    BigDecimal.ZERO, BigDecimal.ZERO, sigmaEff, 0, BigDecimal.ZERO);
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
+                    sigmaEff, 0, BigDecimal.ZERO);
         }
 
         public static Touch none(int sessions) {
             return new Touch(sessions, null, null, Source.NONE, null, null, null, null,
-                    BigDecimal.ZERO, BigDecimal.ZERO, null, 0, BigDecimal.ZERO);
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
+                    null, 0, BigDecimal.ZERO);
         }
 
         /** True when the calendar contributed variance to this figure. */
@@ -357,6 +415,19 @@ public final class VolForecast {
     }
 
     /**
+     * Price the touch for an instrument of the given asset class, with no dividend yield resolved.
+     *
+     * <p>Equivalent to passing {@link Yield#NONE}: the class's full total return is used as the
+     * price drift and the result is flagged {@code yieldFallback}. Correct for the zero-drift
+     * classes, and an over-drift for anything that pays a dividend — which is why the enriched path
+     * always supplies a {@link Yield}.
+     */
+    public static Touch touch(Inputs in, BigDecimal current, BigDecimal limit,
+                              int sessions, Config cfg, AssetClass assetClass) {
+        return touch(in, current, limit, sessions, cfg, assetClass, Yield.NONE);
+    }
+
+    /**
      * Price the touch of {@code limit} from {@code current} over {@code sessions}, for an
      * instrument of the given asset class.
      *
@@ -382,14 +453,20 @@ public final class VolForecast {
      * driftless bounds would be a range around a different question.
      */
     public static Touch touch(Inputs in, BigDecimal current, BigDecimal limit,
-                              int sessions, Config cfg, AssetClass assetClass) {
+                              int sessions, Config cfg, AssetClass assetClass, Yield yield) {
         Config c = cfg == null ? Config.DEFAULT : cfg;
         int n = Math.max(1, sessions);
         Forecast f = resolve(in, n, c);
         if (f.sigmaEff() == null) return Touch.none(n);
 
         AssetClass ac = assetClass == null ? AssetClass.UNKNOWN : assetClass;
-        BigDecimal mu = c.useDrift() ? ac.dailyDrift() : BigDecimal.ZERO;
+        Yield y = yield == null ? Yield.NONE : yield;
+        BigDecimal muTotal = c.useDrift() ? ac.dailyTotalReturn() : BigDecimal.ZERO;
+        // Netting only ever happens on the drifted branch. With the flag off muTotal is already
+        // ZERO, and subtracting a yield from it would manufacture a negative drift out of a model
+        // the reader has switched off — the one way this change could alter a driftless number.
+        boolean nets = c.useDrift() && ac.appliesYield();
+        BigDecimal mu = nets ? muTotal.subtract(perSessionYield(y.annual())) : muTotal;
 
         BigDecimal sigmaToLimit = PriceStats.sigmaDistance(current, limit, f.sigmaEff(), n);
         BigDecimal p = probability(current, limit, f.sigmaEff(), n, mu, sigmaToLimit);
@@ -400,6 +477,7 @@ public final class VolForecast {
         BigDecimal b = probability(current, limit, positiveOrNull(in.rv30()), n, mu, null);
         return new Touch(n, f.sigmaEff(), f.decay(), f.source(), sigmaToLimit, p,
                 min(a, b), max(a, b), mu, logDrift(mu, f.sigmaEff()),
+                muTotal, nets ? y.annual() : BigDecimal.ZERO, nets && y.fallback(),
                 f.sigmaEffDiffusive(), f.eventCount(), f.eventVariance());
     }
 
@@ -436,6 +514,18 @@ public final class VolForecast {
         if (sigma == null) return mu;
         double s = sigma.doubleValue();
         return BigDecimal.valueOf(mu.doubleValue() - s * s / 2.0).setScale(12, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * An annual dividend yield expressed per trading session — divided by the same
+     * {@link AssetClass#SESSIONS_PER_YEAR} the total return and the {@code σ√N} scaling use, so all
+     * three terms are on one clock. Null or zero yields exactly zero, so a name with no dividend is
+     * left alone rather than nudged by a rounding artefact.
+     */
+    static BigDecimal perSessionYield(BigDecimal annualYield) {
+        if (annualYield == null || annualYield.signum() == 0) return BigDecimal.ZERO;
+        return BigDecimal.valueOf(annualYield.doubleValue() / AssetClass.SESSIONS_PER_YEAR)
+                .setScale(10, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal positiveOrNull(BigDecimal v) {

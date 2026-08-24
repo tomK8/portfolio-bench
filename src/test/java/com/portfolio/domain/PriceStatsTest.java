@@ -237,7 +237,7 @@ class PriceStatsTest {
     // ---- drifted first passage ---------------------------------------------
 
     private static final BigDecimal EQUITY_MU =
-            AssetClass.EQUITY.dailyDrift();     // 0.06/yr ÷ 252 ≈ 0.000238 per session
+            AssetClass.EQUITY.dailyTotalReturn();     // 0.08/yr ÷ 252 ≈ 0.000317 per session
 
     @Test
     void driftedFirstPassage_reducesToTheDriftlessFormulaExactlyAtZeroLogDrift() {

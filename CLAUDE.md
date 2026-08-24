@@ -1087,8 +1087,22 @@ costs when missed:
 The alias pool is deliberately **one table, not one per broker** — AJ Bell's orders export and its
 cash statement describe the same instrument in near-identical words, so a single keyword
 ("xtrackers msci world health") fixes the Symbol column *and* keeps the ledger row from stranding
-when the trade settles. Matching is lowercase `contains`, longest keyword first (a specific phrase
-must beat a shorter one that also matches).
+when the trade settles.
+
+Matching is a `contains` test, longest keyword first (a specific phrase must beat a shorter one
+that also matches) — but **both sides go through `Instruments.matchKey` first**, and that is
+load-bearing rather than incidental. It lowercases and collapses every run of non-alphanumerics to
+a single space, and it is used in all four places an alias is touched: `suggestKeyword` builds the
+panel's suggestion with it, `InstrumentMappingRepository` stores keywords in it (and normalises on
+read too, so rows written before this still match), and both AJ Bell parsers reduce the description
+to it before the test. They disagreed once, and the failure mode is the bad one: the panel suggests
+a phrase with the punctuation stripped, so saving "Legal & General Group PLC" stored
+`legal general group plc` while the parsers tested it against the raw `legal & general group plc`
+— which does not contain it. The save wrote both rows, reported success, and the order stayed
+unpriced; every name carrying an `&`, a `-` or a `.` was un-mappable from the dashboard in a way
+that looked like it had worked (2026-08-24). The cash statement's committed `SYMBOL_RULES` stay on
+the **raw uppercased** name — those are regexes that deliberately read punctuation
+(`B\.?\s*A\.?\s*E\.?\s*SYSTEMS`).
 
 ## Live tab: sessions, market state and the Day Δ baseline
 

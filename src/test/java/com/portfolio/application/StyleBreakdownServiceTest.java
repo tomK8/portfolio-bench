@@ -8,6 +8,7 @@ import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.domain.model.TransactionType;
 import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.DividendHistoryRepository;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
@@ -53,6 +54,22 @@ class StyleBreakdownServiceTest {
         return new StyleBreakdownService(alloc, new FundamentalsRepository(cf),
                 new StyleClassifier(),
                 new FundamentalsWarmer(symbols -> { }))
+                .breakdown();
+    }
+
+    /** The same block, with the derived-yield fallback wired in. */
+    private StyleBreakdown breakdownWithDividendHistory() {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
+        KeyValueStore kv = new KeyValueStore(dbDir);
+        YahooTickerMap tickers = new YahooTickerMap();
+        AllocationService alloc = new AllocationService(
+                new CashTransactionRepository(cf, kv), new PriceHistoryRepository(cf),
+                NO_FX, tickers, kv);
+        DividendYieldService yields = new DividendYieldService(
+                new DividendHistoryRepository(cf), new PriceHistoryRepository(cf), tickers);
+        return new StyleBreakdownService(alloc, new FundamentalsRepository(cf),
+                new StyleClassifier(), new FundamentalsWarmer(symbols -> { }),
+                yields, FundamentalsWarmer.disabled())
                 .breakdown();
     }
 
@@ -145,6 +162,80 @@ class StyleBreakdownServiceTest {
     }
 
     // ---- fixtures ---------------------------------------------------------------------------
+
+    /**
+     * The HICL case, end to end. Yahoo's {@code summaryDetail} for HICL.L carries no
+     * {@code dividendYield} and no {@code dividendRate} — a successful fetch that returns almost
+     * nothing — so the trust scored into VALUE and its £10,270 sat outside the income tile with no
+     * warning. Its payment history says otherwise, and the chart feed already ships it.
+     */
+    @Test
+    void aTrustWithNoPublishedYieldBecomesAnIncomeHoldingFromItsPaymentHistory() {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
+        CashTransactionRepository cash = new CashTransactionRepository(cf, new KeyValueStore(dbDir));
+        cash.saveII(List.of(
+                contribution("2024-01-01", 20_000),
+                trade("2024-01-02", "HICL", 7_300, -10_270)));
+        new PriceHistoryRepository(cf).savePriceBars(List.of(bar("HICL", "140.0")));
+        // A real fetch, no dividend fields at all — exactly what Yahoo returns for this listing.
+        new FundamentalsRepository(cf).save("HICL", quoteWithoutDividend("HICL"), Instant.now());
+
+        // HICL's real cadence, anchored on today so the test cannot rot: four payments last year,
+        // but only three inside the trailing twelve months — the July payment dropped out before
+        // its replacement went ex, which is exactly what made a plain TTM sum read 4.48%.
+        DividendHistoryRepository div = new DividendHistoryRepository(cf);
+        div.saveDividends("HICL", List.of(
+                payment(642, "2.06"), payment(537, "2.06"), payment(460, "2.07"),
+                payment(390, "2.08"),
+                payment(271, "2.09"), payment(173, "2.09"), payment(89, "2.09")), "GBp");
+        div.markFullScan("HICL", LocalDate.now().minusYears(30), 7);
+
+        StyleBreakdown.Income inc = breakdownWithDividendHistory().income();
+
+        StyleBreakdown.IncomeContributor row = inc.equity().contributors().stream()
+                .filter(c -> "HICL".equals(c.symbol())).findFirst().orElse(null);
+        assertNotNull(row, "a 6% trust belongs in the income tile");
+        // 8.35p over a 140p close = 5.96%. Units cancel; no FX and no pence conversion involved.
+        assertEquals(0, new BigDecimal("0.059643").compareTo(round6(row.dividendYield())));
+        assertTrue(row.yieldSource().startsWith("Derived"), row.yieldSource());
+        assertTrue(row.yieldSource().contains("4 payments"), row.yieldSource());
+        assertTrue(row.yieldSource().contains("clipped"), row.yieldSource());
+    }
+
+    /** Without a scan marker the same history is not trusted: absent must not read as zero. */
+    @Test
+    void anUnscannedSymbolIsLeftAloneRatherThanBookedAtZero() {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
+        CashTransactionRepository cash = new CashTransactionRepository(cf, new KeyValueStore(dbDir));
+        cash.saveII(List.of(
+                contribution("2024-01-01", 20_000),
+                trade("2024-01-02", "HICL", 7_300, -10_270)));
+        new PriceHistoryRepository(cf).savePriceBars(List.of(bar("HICL", "140.0")));
+        new FundamentalsRepository(cf).save("HICL", quoteWithoutDividend("HICL"), Instant.now());
+        // Payments stored, but no full-window scan recorded — the nightly incremental case.
+        new DividendHistoryRepository(cf).saveDividends("HICL",
+                List.of(payment(89, "2.09")), "GBp");
+
+        StyleBreakdown.Income inc = breakdownWithDividendHistory().income();
+        assertTrue(inc.equity().contributors().stream()
+                .noneMatch(c -> "HICL".equals(c.symbol())));
+    }
+
+    /** A payment {@code daysAgo} before today, so the trailing windows stay put as time passes. */
+    private static com.portfolio.domain.DividendYield.Payment payment(int daysAgo, String amount) {
+        return new com.portfolio.domain.DividendYield.Payment(
+                LocalDate.now().minusDays(daysAgo), new BigDecimal(amount));
+    }
+
+    /** A real quote with enough to score both axes, but no dividend field of any kind. */
+    private static QuoteSummary quoteWithoutDividend(String symbol) {
+        return new QuoteSummary(symbol, "GBp", null, null,
+                new BigDecimal("10"), new BigDecimal("13"), null, null, null, null, null,
+                Map.of("priceToSalesTrailing12Months", new BigDecimal("1.5"),
+                        "revenueGrowth", new BigDecimal("0.03"),
+                        "earningsGrowth", new BigDecimal("0.03")),
+                Map.of(), false);
+    }
 
     private static CashTransaction trade(String date, String symbol, double qty, double amountGbp) {
         return new CashTransaction(date, Account.II, TransactionType.TRANSACTION, symbol,

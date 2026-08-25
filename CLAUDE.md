@@ -43,7 +43,8 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   reconstruction for the cash-ledger view), `Irr` (the app's only XIRR solver) +
   `PositionIrr` (per-position flows/episodes behind the cash-ledger's Annualised return
   column — see "Annualised return"), `Instruments.isBond` (single home of the
-  bond/gilt predicate), `VolForecast` (the horizon-matched volatility forecast behind the
+  bond/gilt predicate), `DividendYield` (a trailing yield derived from a name's own payment
+  history — see "Derived dividend yields"), `VolForecast` (the horizon-matched volatility forecast behind the
   open-orders touch probabilities — see "Open orders"), `AssetClass` (the per-class expected
   drift that forecast's drifted branch uses). `domain.model`: `Holding` (Builder; many nullable fields),
   `AggHolding`, `CashTransaction`, `Account` + `TransactionType` enums, `PriceBar`,
@@ -58,7 +59,9 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   (cash-ledger-derived view), `ManualPositionService` (hand-entered accounts — see below),
   `ExportExcelService`, `DividendService`,
   `ContributionService` (timeline for the Contributions chart), `PortfolioValueService`
-  (timeline for the Value-over-time chart), `ImportCashService` (composes
+  (timeline for the Value-over-time chart), `DividendYieldService` (the one
+  resolver of a derived yield, shared by the income overlay and the open-orders drift netting),
+  `ImportCashService` (composes
   `List<CashImporter>`), `PriceFetchJob` + `IntradayPriceFetchJob` (share
   `PriceFetchSupport`).
 - `web` — `DashboardController` (thin; `@ExceptionHandler(IllegalStateException)` renders
@@ -360,6 +363,9 @@ To convert native → GBP, **divide** by the rate.
   feeds the cash-ledger view's CASH rows and the holdings view's reconciliation panel),
   `earliestTransactionDate(Account)` (anchors Roth's seed), `distinctTradedSymbols`.
 - `PriceHistoryRepository` — `price_history` (daily OHLCV).
+- `DividendHistoryRepository` — `dividend_history` (one row per `(symbol, ex_date)`, keyed on the
+  **Yahoo ticker** like `price_history`) + `dividend_scan` (per-symbol "full window read" marker).
+  See "Derived dividend yields". Reads and writes both degrade — it rides on a background job.
 - `IntradayPriceRepository` — `price_intraday` (1-min closes). `loadLatestIntradayPrices` is a bulk
   query, not N round-trips.
 - `FxRateRepository` — `fx_rates` (one row per `(currency, date)`, rate in the app-wide
@@ -790,7 +796,18 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   plausibility bound could never have caught this: the error runs *small*, so an under-netted drift
   looks entirely ordinary, and it lands on precisely the high-yield UK names the netting exists for.
   Live check after the fix: LGEN nets to a 0.37%/yr price drift, LSEG 6.21%, NVDA 7.52% — under one
-  flat 6% they were identical. **A symbol with no usable yield is absent from the map, never present as zero** — the
+  flat 6% they were identical. **When Yahoo publishes neither field, the yield falls back to one derived
+  from the name's own payment history** (`DividendYieldService`, below) — `OpenOrdersService.forwardYields`
+  merges the two, published first. The order matters: `dividendRate ÷ price` is the *indicated* annual
+  dividend, declared and forward-looking, while a derived figure is necessarily trailing, so preferring
+  the derived one would swap a forecast for a record of the past on every name that has both. The
+  fallback only fills genuine holes. HICL is the live case — a ~6% infrastructure trust that published
+  nothing, so it took the full 8% `EQUITY` drift with `fwdYield=0 yieldFallback=true`, and now nets
+  5.96%. **A second, quieter gain: `yieldFallback` finally means what its doc claims.** It exists to
+  separate an accumulating fund (genuinely zero, correctly full drift) from a name whose yield never
+  resolved (also zero, wrongly full drift) — but before this *both* printed `true`. A scanned
+  non-payer now resolves an explicit zero, so TSLA/NFLX/SNPS report `fwdYield=0 yieldFallback=false`
+  and only a genuinely unknown name still flags. **A symbol with no usable yield is absent from the map, never present as zero** — the
   caller has to tell "pays nothing" from "we don't know", and Yahoo publishes no distribution yield
   for any fund held here, so the second case is the common one. It is a targeted read rather than
   `loadAll()`: that one scans the whole table (~100 rows) and deserializes four JSON columns per
@@ -1238,6 +1255,60 @@ unpriced; every name carrying an `&`, a `-` or a `.` was un-mappable from the da
 that looked like it had worked (2026-08-24). The cash statement's committed `SYMBOL_RULES` stay on
 the **raw uppercased** name — those are regexes that deliberately read punctuation
 (`B\.?\s*A\.?\s*E\.?\s*SYSTEMS`).
+
+### Derived dividend yields
+
+`YahooPriceFetcher.fetchSeries` returns a `DailySeries(bars, dividends)` — the dividend events were
+**always parsed** (`applyAdjustments` needs them to re-derive `adj_close`) and then thrown away.
+Surfacing them costs **zero extra HTTP** and is the only free source of a yield for an instrument
+whose `summaryDetail` publishes none. Same bargain `GiltPriceFetcher.Snapshot` strikes carrying a
+SEDOL map beside its bars; `fetch(...)` still returns bars alone, so no existing caller changed.
+
+**Units cancel, which is the whole reason this is safe.** Amounts are per share on the *same
+split-adjusted basis as the `close` column*, so a yield taken against a stored close is a ratio of
+two figures from one response — no FX, no split unwinding, and crucially no `GBp`-pence shift. That
+is precisely the trap that makes `dividendRate ÷ price` 100× too small for a London listing.
+
+**Two tables, and the second is the load-bearing one.** `dividend_history` holds the payments;
+`dividend_scan` records that a symbol's **full** window has been read. Without that bookkeeping an
+absent symbol is ambiguous in exactly the way that matters — an accumulating ETF that genuinely
+distributes nothing is indistinguishable from a name nobody has fetched, and booking either as zero
+understates portfolio income with nothing on screen to say why. Same three-state discipline as
+`earnings_calendar_fetch` and the sector block's `AWAITING_DATA` / `NO_SECTOR` split. **Only a
+full-window fetch may mark a scan**: `runFullRebuild`, `fetchSingle(symbol, years)` and the
+first-ever backfill do; the nightly incremental run covers the gap since the last stored bar and sees
+no dividends on almost every night, so a marker from there would libel every payer as an accumulator.
+It still *upserts* what it finds, so a newly-declared dividend lands the same night.
+
+**The estimator is a trailing-twelve-month sum, widened only when the window clipped** —
+`domain/DividendYield`, framework-free and unit-tested. Measured against all 41 held names that
+publish a `dividendYield`, a TTM sum reproduces Yahoo's own figure to a **mean absolute error of
+0.06pp** (worst 0.51pp) — that field *is* a trailing yield. Its one failure mode is clipping: when a
+payment slips, the window holds three quarterly payments instead of four and reads ~25% light. HICL
+scored 4.48% against a real 5.96% for exactly that reason.
+
+**The fix is not to infer a payment frequency and annualise the latest amount**, and that was
+measured rather than assumed. Inferring frequency from the median gap between ex-dates misreads an
+unequal interim/final payer as quarterly, and ×4 then reports **LGEN at 15.01% against a real
+7.60%** — a doubling, in the flattering direction; mean error degrades 0.06pp → 0.34pp, worst case
+→ 7.41pp. Instead the window widens to hold **`k` payments, where `k` is the larger of this year's
+and last year's payment count** — the name's own cadence read off its own record, nothing guessed.
+When payments are regular the counts agree and this *is* the TTM sum. Across the same 41 names it is
+**identical to TTM on every one**, and HICL is the only holding in the portfolio where it moves at
+all. Strictly dominant, so it ships. `Result.windowWidened` surfaces the clip rather than hiding it.
+
+**Absent is never zero.** `DividendYield.derive` returns null when there is no price, and
+`DividendYieldService.yieldsFor` omits any symbol with no scan marker, so a caller can always tell
+"pays nothing" from "we don't know". A payer that stopped more than two years ago yields zero — a
+figure off an older payment would describe an instrument that no longer distributes. Bonds are
+skipped: a gilt's running yield comes from the coupon in its own id, which is exact.
+
+**It self-heals, so no manual step is needed.** `StyleBreakdownService` hands its unscanned held
+symbols to a second `FundamentalsWarmer` instance (`dividendWarmer` bean, label + cooldown reused,
+distinct fetcher) which calls `PriceFetchJob.fetchSingle` on a background daemon thread. **The render
+never waits** — the yield appears on the next load, the same bargain the sector block and the
+open-orders quote warmer strike. Loading Allocation → Breakdown once backfilled 54 symbols / 2,552
+payments unattended. `POST /rebuild-prices` does the same in one shot.
 
 ## Live tab: sessions, market state and the Day Δ baseline
 
@@ -1846,6 +1917,26 @@ measure. Inferring "expensive therefore growth" would convert an absence of data
 so they get their own three buckets and the gap stays visible. `threeYearEarningsGrowth` is
 deliberately **not stored** — its scale (fraction or percent, inverted or not) is unverifiable
 when no value has ever been observed.
+
+**A holding that publishes no yield now derives one from its own payment history.** Yahoo's
+`summaryDetail` returns a near-empty payload for some listings — HICL.L, a London infrastructure
+trust paying ~6%, has no sector, no `dividendYield` and no `dividendRate` — so `isIncome(null)` was
+false and £10,220 sat in the Value row with no warning of any kind. The chart endpoint the price job
+*already calls* ships that instrument's full ex-date/amount stream, so the yield costs **zero extra
+HTTP**: see "Derived dividend yields" under Price history. `StyleBreakdownService` prefers Yahoo's
+published figure and falls back to the derived one, carrying an `IncomeContributor.yieldSource`
+("Yahoo published yield" / "Derived — 4 payments to 2026-05-28 (trailing year clipped one …)") that
+the income modal renders beside the number as a muted `derived` marker plus a hover. HICL now reports
+**5.96%**.
+
+**Funds are credited too, and the "lower bound" caveat is gone.** Every fund used to be excluded from
+both yields because Yahoo publishes no distribution yield for any held here. With payment history the
+distributing ones resolve real figures (EQQQ 0.24%, SPX5 0.91%) and — the part that matters — the
+accumulating ones resolve a **genuine zero** rather than being assumed to pay nothing. A fund still
+does **not** join the income *group*: that stays the scored equities plus fixed income, and a tracker
+paying 0.9% is not an income holding. It contributes only to `annualIncomeGbp` / `yieldOnTotal`, so
+`yieldOnIncomeHoldings` is unmoved (4.23% → 4.26%, the change being HICL) while `yieldOnTotal` runs
+2.00% → 2.10%. The bridge still closes to the penny.
 
 **Income is an overlay, not a fifth bucket** — the same relationship the AI/Tech tile has to the
 sector table. Income names already sit in whichever cell they scored into (mostly Value, but BP.

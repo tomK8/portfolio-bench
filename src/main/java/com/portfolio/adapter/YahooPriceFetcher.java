@@ -53,6 +53,26 @@ public class YahooPriceFetcher {
 
     /** Daily bars for {@code [start, end]} inclusive; empty list on persistent failure (logged). */
     public List<PriceBar> fetch(String yahooTicker, LocalDate start, LocalDate end) {
+        return fetchSeries(yahooTicker, start, end).bars();
+    }
+
+    /**
+     * Daily bars <em>and</em> the dividend events Yahoo ships in the same response.
+     *
+     * <p>The events were always parsed — {@link #applyAdjustments} needs them to re-derive
+     * {@code adj_close} — and then thrown away. Surfacing them costs <b>zero extra HTTP</b> and is
+     * the only free source of a dividend yield for an instrument whose {@code summaryDetail} comes
+     * back without one: HICL.L, a 6% infrastructure trust, publishes neither {@code dividendYield}
+     * nor {@code dividendRate} there, so the income overlay had nothing to read. Same bargain
+     * {@code GiltPriceFetcher.Snapshot} strikes when it carries a SEDOL map beside its bars.
+     *
+     * <p>Amounts are per share on the <b>same split-adjusted basis as the close column</b> (the
+     * invariant {@link #applyAdjustments} already relies on), so a yield taken against a stored
+     * {@code close} needs no split unwinding, no unit shift and no FX — it is a ratio of two
+     * figures from one response. That is what keeps it clear of the {@code GBp}-pence trap that
+     * makes {@code dividendRate ÷ price} 100× too small for a London listing.
+     */
+    public DailySeries fetchSeries(String yahooTicker, LocalDate start, LocalDate end) {
         long p1 = start.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         long p2 = end.plusDays(1).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         String url = String.format(CHART_URL, urlTicker(yahooTicker), p1, p2);
@@ -60,13 +80,24 @@ public class YahooPriceFetcher {
         String body = get(url);
         if (body == null) {
             log.warn("Yahoo fetch failed for {}", yahooTicker);
-            return List.of();
+            return DailySeries.empty();
         }
         try {
-            return parse(yahooTicker, body);
+            return parseSeries(yahooTicker, body);
         } catch (Exception e) {
             log.warn("Yahoo parse failed for {}", yahooTicker, e);
-            return List.of();
+            return DailySeries.empty();
+        }
+    }
+
+    /** One cash dividend as Yahoo reports it: ex-date, per-share amount, listing currency. */
+    public record DividendEvent(LocalDate exDate, BigDecimal amount, String currency) {
+    }
+
+    /** Daily bars plus the dividend events from the same chart response. */
+    public record DailySeries(List<PriceBar> bars, List<DividendEvent> dividends) {
+        static DailySeries empty() {
+            return new DailySeries(List.of(), List.of());
         }
     }
 
@@ -189,8 +220,12 @@ public class YahooPriceFetcher {
     }
 
     List<PriceBar> parse(String ticker, String json) throws Exception {   // package-private for tests
+        return parseSeries(ticker, json).bars();
+    }
+
+    DailySeries parseSeries(String ticker, String json) throws Exception {  // package-private for tests
         JsonNode result = mapper.readTree(json).path("chart").path("result");
-        if (!result.isArray() || result.isEmpty()) return List.of();
+        if (!result.isArray() || result.isEmpty()) return DailySeries.empty();
         JsonNode r = result.get(0);
 
         String currency = r.path("meta").path("currency").asText(null);
@@ -217,14 +252,25 @@ public class YahooPriceFetcher {
             bars.add(new PriceBar(ticker, date, num(open, i), num(high, i),
                     num(low, i), c, c, 1.0, volume, currency));
         }
-        if (bars.isEmpty()) return bars;
+        if (bars.isEmpty()) return DailySeries.empty();
 
         JsonNode eventsNode = r.path("events");
         List<CorporateEvent> dividends = parseDividends(eventsNode);
         List<SplitEvent> splits = parseSplits(eventsNode);
-        if (dividends.isEmpty() && splits.isEmpty()) return bars;
+        List<DividendEvent> paid = toDividendEvents(dividends, currency);
+        if (dividends.isEmpty() && splits.isEmpty()) return new DailySeries(bars, paid);
 
-        return applyAdjustments(bars, dividends, splits);
+        return new DailySeries(applyAdjustments(bars, dividends, splits), paid);
+    }
+
+    /** The internal event stream, re-expressed for callers that want the cash, not the factor. */
+    private static List<DividendEvent> toDividendEvents(List<CorporateEvent> events, String currency) {
+        List<DividendEvent> out = new ArrayList<>();
+        for (CorporateEvent e : events) {
+            out.add(new DividendEvent(e.date(), BigDecimal.valueOf(e.amount()), currency));
+        }
+        out.sort(java.util.Comparator.comparing(DividendEvent::exDate));
+        return List.copyOf(out);
     }
 
     /**

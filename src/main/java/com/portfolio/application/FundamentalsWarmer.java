@@ -46,9 +46,16 @@ public class FundamentalsWarmer {
 
     private final Consumer<Collection<String>> fetcher;
     private final Map<String, Instant> lastWarmed = new ConcurrentHashMap<>();
+    /** What is being warmed, for the log line only — the cooldown machinery is identical. */
+    private final String label;
 
     public FundamentalsWarmer(Consumer<Collection<String>> fetcher) {
+        this(fetcher, "fundamentals");
+    }
+
+    public FundamentalsWarmer(Consumer<Collection<String>> fetcher, String label) {
         this.fetcher = fetcher;
+        this.label = label;
     }
 
     /**
@@ -70,11 +77,11 @@ public class FundamentalsWarmer {
             }
         }
         if (due.isEmpty()) return List.of();
-        log.info("Warming fundamentals for un-placed held symbol(s): {}", due);
+        log.info("Warming {} for un-placed held symbol(s): {}", label, due);
         try {
             fetcher.accept(due);
         } catch (RuntimeException e) {
-            log.warn("Fundamentals warm failed for {}", due, e);
+            log.warn("{} warm failed for {}", label, due, e);
         }
         return List.copyOf(due);
     }

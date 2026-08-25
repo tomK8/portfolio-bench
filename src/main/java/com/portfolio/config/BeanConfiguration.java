@@ -27,6 +27,7 @@ import com.portfolio.domain.EventMoves;
 import com.portfolio.domain.IndustryGroups;
 import com.portfolio.domain.SectorClassifier;
 import com.portfolio.domain.StyleClassifier;
+import com.portfolio.persistence.DividendHistoryRepository;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.FxRateRepository;
@@ -41,6 +42,7 @@ import com.portfolio.port.EarningsCalendarFeed;
 import com.portfolio.port.EarningsCalendarProvider;
 import com.portfolio.port.FxRateProvider;
 import com.portfolio.port.HistoricalFxRateProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -177,6 +179,7 @@ public class BeanConfiguration {
                                                EarningsCalendarRepository earningsCalendarRepository,
                                                EarningsCalendarService earningsCalendarService,
                                                FundamentalsRepository fundamentalsRepository,
+                                               DividendYieldService dividendYieldService,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -204,7 +207,11 @@ public class BeanConfiguration {
                 // drift the first passage actually wants. Read-only and already populated by
                 // FundamentalsFetchJob for every held name — a symbol it has never seen prices at
                 // the gross figure and says so, rather than blocking the panel on a fetch.
-                fundamentalsRepository);
+                fundamentalsRepository,
+                // ...and the fallback for a name that publishes no dividend figure at all, derived
+                // from its own payment history. HICL.L is the live case: without this it nets
+                // nothing off an 8% class drift despite paying ~6%.
+                dividendYieldService);
     }
 
     /**
@@ -425,9 +432,43 @@ public class BeanConfiguration {
     public StyleBreakdownService styleBreakdownService(AllocationService allocationService,
                                                        FundamentalsRepository fundamentalsRepository,
                                                        StyleClassifier styleClassifier,
-                                                       FundamentalsWarmer fundamentalsWarmer) {
+                                                       FundamentalsWarmer fundamentalsWarmer,
+                                                       DividendYieldService dividendYieldService,
+                                                       @Qualifier("dividendWarmer")
+                                                       FundamentalsWarmer dividendWarmer) {
         return new StyleBreakdownService(allocationService, fundamentalsRepository, styleClassifier,
-                fundamentalsWarmer);
+                fundamentalsWarmer, dividendYieldService, dividendWarmer);
+    }
+
+    @Bean
+    public DividendHistoryRepository dividendHistoryRepository(JdbcConnectionFactory connections) {
+        return new DividendHistoryRepository(connections);
+    }
+
+    @Bean
+    public DividendYieldService dividendYieldService(DividendHistoryRepository dividendHistoryRepository,
+                                                     PriceHistoryRepository priceHistoryRepository,
+                                                     YahooTickerMap yahooTickerMap) {
+        return new DividendYieldService(dividendHistoryRepository, priceHistoryRepository,
+                yahooTickerMap);
+    }
+
+    /**
+     * Backfills the full price window — and therefore the dividend stream that rides with it — for
+     * held symbols whose payment history has never been read end to end. Same cooldown machinery
+     * as {@link #fundamentalsWarmer}, a separate instance because it calls a different fetcher and
+     * must not share that one's per-symbol cooldown.
+     */
+    @Bean("dividendWarmer")
+    public FundamentalsWarmer dividendWarmer(PriceFetchJob priceFetchJob) {
+        ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "dividend-warm");
+            t.setDaemon(true);
+            return t;
+        });
+        return new FundamentalsWarmer(symbols -> exec.submit(() -> {
+            for (String s : symbols) priceFetchJob.fetchSingle(s);
+        }), "dividend history");
     }
 
     @Bean
@@ -568,9 +609,10 @@ public class BeanConfiguration {
                                        PriceHistoryRepository priceHistoryRepository,
                                        YahooPriceFetcher yahooPriceFetcher,
                                        YahooTickerMap yahooTickerMap,
-                                       KeyValueStore keyValueStore) {
+                                       KeyValueStore keyValueStore,
+                                       DividendHistoryRepository dividendHistoryRepository) {
         return new PriceFetchJob(cashTransactionRepository, priceHistoryRepository,
-                yahooPriceFetcher, yahooTickerMap, keyValueStore);
+                yahooPriceFetcher, yahooTickerMap, keyValueStore, dividendHistoryRepository);
     }
 
     @Bean

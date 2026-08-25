@@ -2138,9 +2138,16 @@
                 + '<td>' + fmtMoney(parseFloat(sec.annualIncomeGbp || 0)) + '</td>'
                 + '<td class="lbl"></td></tr>';
             list.forEach(function (c) {
+                // Where the yield came from travels with it: a figure derived from the name's own
+                // payment history is a different kind of claim from one Yahoo publishes, and a
+                // reader has to be able to tell which they are looking at.
+                var src = c.yieldSource || '';
+                var derived = src.indexOf('Derived') === 0;
                 html += '<tr><td class="lbl">' + escapeHtml(c.symbol) + '</td>'
                     + '<td>' + fmtMoney(parseFloat(c.gbp)) + '</td>'
-                    + '<td>' + fmtPct(c.dividendYield) + '</td>'
+                    + '<td' + (src ? ' title="' + escapeHtml(src) + '"' : '') + '>'
+                    + fmtPct(c.dividendYield)
+                    + (derived ? ' <span class="yield-derived">derived</span>' : '') + '</td>'
                     + '<td>' + (c.annualIncomeGbp == null
                         ? '<span class="muted">not counted</span>'
                         : fmtMoney(parseFloat(c.annualIncomeGbp))) + '</td>'

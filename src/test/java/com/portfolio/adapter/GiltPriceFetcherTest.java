@@ -24,7 +24,8 @@ class GiltPriceFetcherTest {
                 Path.of("src/test/resources/hl-gilts-sample.html"),
                 StandardCharsets.UTF_8);
 
-        List<IntradayBar> bars = new GiltPriceFetcher().parse(html, TS);
+        GiltPriceFetcher.Snapshot snapshot = new GiltPriceFetcher().parse(html, TS);
+        List<IntradayBar> bars = snapshot.bars();
 
         Map<String, IntradayBar> bySym = bars.stream().collect(Collectors.toMap(IntradayBar::symbol, b -> b));
         assertEquals(5, bars.size(), () -> "parsed: " + bySym.keySet());
@@ -42,6 +43,12 @@ class GiltPriceFetcherTest {
         assertEquals("GBP", one.currency());
         assertEquals(TS, one.ts());
         assertNull(one.volume());
+
+        // The SEDOL rides along out of the same name cell. It is the only identifier a broker
+        // that names a gilt by a code of its own (II's "T30") shares with this page.
+        assertEquals(5, snapshot.sedolToSymbol().size());
+        assertEquals("GILT 0.875% 2033", snapshot.sedolToSymbol().get("TEST033"));
+        assertEquals("GILT 3.25% 2044", snapshot.sedolToSymbol().get("TEST044"));
     }
 
     @Test
@@ -57,9 +64,11 @@ class GiltPriceFetcherTest {
                 <tr><td>Treasury 3.25% 22/01/2044 GBP | GB00Y | Y</td><td>3.250</td><td>22 January 2044</td><td>75.010</td></tr>
                 </table>""";
 
-        List<IntradayBar> bars = new GiltPriceFetcher().parse(html, TS);
+        GiltPriceFetcher.Snapshot snapshot = new GiltPriceFetcher().parse(html, TS);
 
-        assertEquals(1, bars.size());
-        assertEquals("GILT 3.25% 2044", bars.get(0).symbol());
+        assertEquals(1, snapshot.bars().size());
+        assertEquals("GILT 3.25% 2044", snapshot.bars().get(0).symbol());
+        assertEquals(Map.of(), snapshot.sedolToSymbol(),
+                "a name cell whose tail is not a 7-character SEDOL contributes no mapping");
     }
 }

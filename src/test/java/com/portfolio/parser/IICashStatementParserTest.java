@@ -146,4 +146,54 @@ class IICashStatementParserTest {
                         || ex.getMessage().contains("Running-balance mismatch"),
                 "expected balance mismatch message, got: " + ex.getMessage());
     }
+
+    // ---- Gilts ----------------------------------------------------------------
+
+    /** A gilt buy and its coupon, both keyed by II's own code with a SEDOL beside it. */
+    private Path giltFixture() throws Exception {
+        String csv = "Date,Settlement Date,Symbol,Sedol,Quantity,Price,Description,Reference,Debit,Credit,Running Balance\n"
+                + "22/10/2025,22/10/2025,T30,BSQNRD0,n/a,n/a,Div 5000 HIS MAJESTYS TREASURY,REFG2,n/a,£109.38,£652.89\n"
+                + "21/10/2025,23/10/2025,T30,BSQNRD0,5000,£0.9951,5000 HIS MAJE4LN STK30          .99 S Date 23/10/25,REFG1,\"£4,975.50\",n/a,£543.51\n"
+                + "20/10/2025,20/10/2025,n/a,n/a,n/a,n/a,Trf from elsewhere,n/a,n/a,\"£5,519.01\",\"£5,519.01\"\n";
+        Path file = tempDir.resolve("00000000-0000-0000-0000-000000000097.csv");
+        Files.writeString(file, csv);
+        return file;
+    }
+
+    @Test
+    void giltIsReKeyedFromItsSedol() throws Exception {
+        // "T30" is II's own code and its description ("5000 HIS MAJE4LN STK30") carries neither
+        // coupon nor maturity, so the SEDOL is the only thing in the file that identifies the
+        // instrument. Stored under T30 the position joined no gilt quote and the cash-ledger view
+        // dropped it from the totals (2026-08-25).
+        List<CashTransaction> rows = new IICashStatementParser(
+                FX, () -> Map.of("BSQNRD0", "GILT 4.375% 2030")).parse(giltFixture());
+
+        CashTransaction txn = findRow(rows, "2025-10-21", "TRANSACTION", "GILT 4.375% 2030");
+        assertEquals(5000, txn.quantity(), 1e-9, "quantity is £ nominal");
+        assertEquals(-4975.50, txn.amount(), 1e-9);
+        assertTrue(rows.stream().noneMatch(r -> r.symbol().equals("T30")),
+                "no row may keep II's code once the SEDOL has resolved");
+    }
+
+    @Test
+    void giltCouponIsReKeyedTooSoTheDividendFifoSeesIt() throws Exception {
+        // A coupon arrives as an ordinary Div row under the same code. Left as T30 it would be
+        // attributed to a position that, by then, is filed under the gilt id.
+        List<CashTransaction> rows = new IICashStatementParser(
+                FX, () -> Map.of("BSQNRD0", "GILT 4.375% 2030")).parse(giltFixture());
+
+        CashTransaction coupon = findRow(rows, "2025-10-22", "DIVIDEND", "GILT 4.375% 2030");
+        assertEquals(109.38, coupon.amount(), 1e-9);
+    }
+
+    @Test
+    void unknownSedolLeavesTheBrokerCodeAlone() throws Exception {
+        // An unresolved gilt is a missing price, which the unpriced-symbols panel surfaces. A
+        // guessed id would be a wrong one: Instruments.isBond switches the whole position onto
+        // the per-£100-nominal value formula.
+        List<CashTransaction> rows = new IICashStatementParser(FX, Map::of).parse(giltFixture());
+
+        assertEquals(5000, findRow(rows, "2025-10-21", "TRANSACTION", "T30").quantity(), 1e-9);
+    }
 }

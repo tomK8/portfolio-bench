@@ -18,6 +18,7 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -40,6 +41,17 @@ import java.util.regex.Pattern;
  * <p>After processing each row the cumulative balance is checked against the
  * file's {@code Running Balance} column; a mismatch greater than 1p / 1c aborts
  * the import with a {@link ParseException}.
+ *
+ * <p><b>Gilts are re-keyed from the row's SEDOL.</b> II names a gilt by a code of its own —
+ * {@code T30} for the 4.375% 2030 — and its description ({@code "20000 HIS MAJE4LN STK30"})
+ * carries neither coupon nor maturity, so nothing in the file except the SEDOL identifies the
+ * instrument. Stored under {@code T30} the position joined no gilt quote, was valued per share
+ * rather than per £100 nominal, and the cash-ledger view dropped it from the totals (2026-08-25).
+ * The mapping comes from {@code giltSedols} — the {@code gilt_sedols} KV entry that
+ * {@code GiltPriceFetchJob} publishes off HL's page — so it needs no maintenance and no extra
+ * fetch. It is applied to every row type, not just trades: a coupon payment arrives as a
+ * {@code Div} row keyed by the same {@code T30}, and the dividend FIFO has to see it against the
+ * position it belongs to.
  */
 public class IICashStatementParser implements CashTransactionParser {
 
@@ -56,6 +68,7 @@ public class IICashStatementParser implements CashTransactionParser {
 
     private static final String COL_DATE = "Date";
     private static final String COL_SYMBOL = "Symbol";
+    private static final String COL_SEDOL = "Sedol";
     private static final String COL_QTY = "Quantity";
     private static final String COL_PRICE = "Price";
     private static final String COL_DESC = "Description";
@@ -85,9 +98,22 @@ public class IICashStatementParser implements CashTransactionParser {
     private static final double CROSS_CCY_TOLERANCE = 0.05;  // 5% — FX charge + commission ceiling
 
     private final HistoricalFxRateProvider fxProvider;
+    private final Supplier<Map<String, String>> giltSedols;
 
+    /** No SEDOL mapping — gilts keep II's own code. */
     public IICashStatementParser(HistoricalFxRateProvider fxProvider) {
+        this(fxProvider, Map::of);
+    }
+
+    /**
+     * @param giltSedols SEDOL → {@code "GILT {coupon}% {year}"}, read once per parse. Empty is
+     *                   fine: a gilt then stores under II's code exactly as it did before, which
+     *                   is a missing price rather than a wrong one.
+     */
+    public IICashStatementParser(HistoricalFxRateProvider fxProvider,
+                                 Supplier<Map<String, String>> giltSedols) {
         this.fxProvider = fxProvider;
+        this.giltSedols = giltSedols;
     }
 
     @Override
@@ -124,6 +150,7 @@ public class IICashStatementParser implements CashTransactionParser {
 
         String fileCcy = raw.fileCcy();
         Map<String, Map<LocalDate, BigDecimal>> fxByCcy = fetchFxSeries(rows, fileCcy);
+        Map<String, String> sedols = giltSedols.get();
 
         List<CashTransaction> result = new ArrayList<>();
         double running = rows.get(0).balance() - rows.get(0).net();
@@ -138,7 +165,7 @@ public class IICashStatementParser implements CashTransactionParser {
                         running, row.net(), expected, row.balance()));
             }
             running = row.balance();
-            result.addAll(classify(row, fileCcy, fxByCcy));
+            result.addAll(classify(row, fileCcy, fxByCcy, sedols));
         }
         return result;
     }
@@ -146,7 +173,8 @@ public class IICashStatementParser implements CashTransactionParser {
     // ---- Row classification -------------------------------------------------
 
     private List<CashTransaction> classify(RawRow row, String fileCcy,
-                                           Map<String, Map<LocalDate, BigDecimal>> fxByCcy)
+                                           Map<String, Map<LocalDate, BigDecimal>> fxByCcy,
+                                           Map<String, String> sedols)
             throws ParseException {
         String desc = row.description();
         double fxToGbp = fxToGbp(fileCcy, row.date(), fxByCcy);
@@ -158,7 +186,7 @@ public class IICashStatementParser implements CashTransactionParser {
                     row.net(), fileCcy, fxToGbp, row.balance(), desc));
         }
         if (PAT_DIVIDEND.matcher(desc).matches()) {
-            return List.of(make(isoDate, TransactionType.DIVIDEND, row.symbol(), 0.0,
+            return List.of(make(isoDate, TransactionType.DIVIDEND, symbolOf(row, sedols), 0.0,
                     row.net(), fileCcy, fxToGbp, row.balance(), desc));
         }
         if (PAT_INTEREST.matcher(desc).matches()) {
@@ -176,7 +204,7 @@ public class IICashStatementParser implements CashTransactionParser {
 
         Matcher trade = PAT_TRADE.matcher(desc);
         if (trade.matches() && !row.symbol().isEmpty()) {
-            return splitTrade(row, fileCcy, fxByCcy, fxToGbp);
+            return splitTrade(row, fileCcy, fxByCcy, fxToGbp, sedols);
         }
 
         log.warn("[II cash {}] Unclassified row, defaulting to CONTRIBUTION: {}", fileCcy, desc);
@@ -187,7 +215,8 @@ public class IICashStatementParser implements CashTransactionParser {
     /** TRANSACTION (gross, in file ccy) + CHARGE (commission/FX markup, in file ccy). */
     private List<CashTransaction> splitTrade(RawRow row, String fileCcy,
                                              Map<String, Map<LocalDate, BigDecimal>> fxByCcy,
-                                             double fxToGbp) throws ParseException {
+                                             double fxToGbp, Map<String, String> sedols)
+            throws ParseException {
         double qty = row.qty();
         double nativePrice = row.price();
         double rowAbsAmount = Math.abs(row.net());
@@ -202,7 +231,7 @@ public class IICashStatementParser implements CashTransactionParser {
         double markup = row.net() - grossFileCcy;
 
         String isoDate = row.date().toString();
-        String symbol = row.symbol();
+        String symbol = symbolOf(row, sedols);
         String desc = row.description();
 
         CashTransaction tx = new CashTransaction(
@@ -217,6 +246,18 @@ public class IICashStatementParser implements CashTransactionParser {
                 row.balance(), row.balance() / fxToGbp,
                 desc + " [commission+FX]");
         return List.of(tx, charge);
+    }
+
+    /**
+     * The ledger symbol for a row: the canonical gilt id when the row's SEDOL is a known gilt,
+     * else II's own code verbatim. The SEDOL is the join key rather than the code because the
+     * code is II's alone — {@code T30} means nothing to any price feed — while the SEDOL is the
+     * instrument's public identifier and is what HL's gilt page publishes beside its price.
+     */
+    private static String symbolOf(RawRow row, Map<String, String> sedols) {
+        if (sedols.isEmpty() || row.sedol().isEmpty()) return row.symbol();
+        String giltId = sedols.get(row.sedol().toUpperCase());
+        return giltId != null ? giltId : row.symbol();
     }
 
     // ---- Listing-currency detection ----------------------------------------
@@ -309,6 +350,7 @@ public class IICashStatementParser implements CashTransactionParser {
                 if (dateStr == null) continue;
                 LocalDate date = LocalDate.parse(dateStr, DDMMYYYY);
                 String symbol = naBlank(r.get(COL_SYMBOL));
+                String sedol = r.isMapped(COL_SEDOL) ? naBlank(r.get(COL_SEDOL)) : "";
                 Double qty = parseAmount(r.get(COL_QTY));
                 Double price = parseAmount(r.get(COL_PRICE));
                 String desc = r.get(COL_DESC).trim();
@@ -323,7 +365,7 @@ public class IICashStatementParser implements CashTransactionParser {
                     throw new ParseException("Missing Running Balance at " + date + " '" + desc + "'");
                 }
                 double net = (credit == null ? 0 : credit) - (debit == null ? 0 : debit);
-                rows.add(new RawRow(date, symbol, qty == null ? 0 : qty,
+                rows.add(new RawRow(date, symbol, sedol, qty == null ? 0 : qty,
                         price == null ? 0 : price, desc, net, balance));
             }
         }
@@ -376,7 +418,7 @@ public class IICashStatementParser implements CashTransactionParser {
                 description);
     }
 
-    private record RawRow(LocalDate date, String symbol, double qty, double price,
+    private record RawRow(LocalDate date, String symbol, String sedol, double qty, double price,
                           String description, double net, double balance) {
     }
 

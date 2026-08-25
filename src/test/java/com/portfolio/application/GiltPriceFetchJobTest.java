@@ -5,6 +5,7 @@ import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -15,6 +16,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -31,21 +33,32 @@ class GiltPriceFetchJobTest {
     /** Returns one canned bar stamped at whatever instant the test asks for. */
     private static class FakeFetcher extends GiltPriceFetcher {
         private final Instant ts;
+        private final Map<String, String> sedols;
 
         FakeFetcher(Instant ts) {
+            this(ts, Map.of("BSQNRD0", SYMBOL));
+        }
+
+        FakeFetcher(Instant ts, Map<String, String> sedols) {
             this.ts = ts;
+            this.sedols = sedols;
         }
 
         @Override
-        public List<IntradayBar> fetch() {
-            return List.of(new IntradayBar(SYMBOL, ts, 97.21, null, "GBP"));
+        public Snapshot fetch() {
+            return new Snapshot(List.of(new IntradayBar(SYMBOL, ts, 97.21, null, "GBP")), sedols);
         }
     }
 
     private List<PriceBar> runAt(Instant ts) {
+        return runAt(new FakeFetcher(ts));
+    }
+
+    private List<PriceBar> runAt(FakeFetcher fetcher) {
         JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
         PriceHistoryRepository prices = new PriceHistoryRepository(cf);
-        new GiltPriceFetchJob(new FakeFetcher(ts), new IntradayPriceRepository(cf), prices).run();
+        new GiltPriceFetchJob(fetcher, new IntradayPriceRepository(cf), prices,
+                new KeyValueStore(dbDir)).run();
         return prices.getPriceHistory(SYMBOL, LocalDate.parse("2000-01-01"), LocalDate.parse("2100-01-01"));
     }
 
@@ -104,5 +117,27 @@ class GiltPriceFetchJobTest {
         new GiltPriceFetchJob(new FakeFetcher(londonNoon("2026-07-04")), intraday,
                 new PriceHistoryRepository(cf)).run();
         assertFalse(intraday.loadLatestIntradayPrices(List.of(SYMBOL)).isEmpty());
+    }
+
+    // ---- SEDOL map -------------------------------------------------------------
+
+    @Test
+    void publishesTheSedolMappingTheCashParserNeeds() {
+        runAt(londonNoon("2026-07-03"));
+
+        assertEquals(Map.of("BSQNRD0", SYMBOL),
+                new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.SEDOL_MAP_KEY));
+    }
+
+    @Test
+    void aMaturedGiltKeepsItsMappingAfterItDropsOffThePage() {
+        // A gilt disappears from HL's table the day it matures. Replacing the stored map would
+        // silently un-resolve a cash statement that is still perfectly importable, so the merge
+        // only ever adds.
+        runAt(new FakeFetcher(londonNoon("2026-07-03"), Map.of("OLDGILT", "GILT 1% 2024")));
+        runAt(new FakeFetcher(londonNoon("2026-07-06"), Map.of("BSQNRD0", SYMBOL)));
+
+        assertEquals(Map.of("OLDGILT", "GILT 1% 2024", "BSQNRD0", SYMBOL),
+                new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.SEDOL_MAP_KEY));
     }
 }

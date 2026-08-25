@@ -70,19 +70,27 @@ public class AllocationService {
     }
 
     /**
-     * Today's composition plus the cash detail behind it — the per-{@code (account, currency)}
-     * balances the replay already tracks and otherwise discards.
+     * Today's composition plus the two things behind it the replay already tracks and otherwise
+     * discards: the per-{@code (account, currency)} cash balances, and the held quantity per
+     * symbol.
      *
      * <p>Kept off {@link AllocationPoint} deliberately: that record is serialised ~550 times by
-     * {@code GET /allocation}, and hanging a map off every point would bloat the chart payload for
-     * data only the sector drill-down needs.
+     * {@code GET /allocation}, and hanging two maps off every point would bloat the chart payload
+     * for data only the drill-downs need.
+     *
+     * <p>The quantities exist for the style block's fixed-income yield. A gilt's annual coupon is
+     * {@code nominal × coupon} exactly — no price and no FX — and its running yield then falls out
+     * as {@code income ÷ value}, which is {@code coupon ÷ (price/100)} computed against the very
+     * price this replay valued the position at. Re-reading a price from the repositories would be
+     * a second valuation path that could disagree with the number printed beside it.
      *
      * @return the current snapshot, or {@code null} when the ledger is empty
      */
     public CurrentSnapshot currentSnapshot() {
         Replay r = replay(false);
         if (r.points().isEmpty()) return null;
-        return new CurrentSnapshot(r.points().get(r.points().size() - 1), r.cashGbpByAccountCcy());
+        return new CurrentSnapshot(r.points().get(r.points().size() - 1),
+                r.cashGbpByAccountCcy(), r.quantityBySymbol());
     }
 
     /**
@@ -103,7 +111,7 @@ public class AllocationService {
 
     private Replay replay(boolean weeklySamples) {
         List<CashTransaction> txs = cashRepo.loadAllTransactions();
-        if (txs.isEmpty()) return new Replay(List.of(), Map.of());
+        if (txs.isEmpty()) return new Replay(List.of(), Map.of(), Map.of());
 
         LocalDate start = LocalDate.parse(txs.get(0).transactionDate());
         LocalDate today = LocalDate.now();
@@ -153,7 +161,7 @@ public class AllocationService {
         if (points.isEmpty() || !points.get(points.size() - 1).date().equals(today.toString())) {
             points.add(snapshot(today, qty, cashByAcctCcy, prices, fx));
         }
-        return new Replay(points, cashDetailGbp(cashByAcctCcy, today, fx));
+        return new Replay(points, cashDetailGbp(cashByAcctCcy, today, fx), heldQuantities(qty));
     }
 
     /**
@@ -173,6 +181,18 @@ public class AllocationService {
             if (g != null && g.signum() != 0) {
                 out.put(e.getKey(), g.setScale(2, RoundingMode.HALF_UP));
             }
+        }
+        return out;
+    }
+
+    /**
+     * Open positions only, matching {@link #snapshot}'s own {@code signum() <= 0} filter — a
+     * symbol sold out sits in the replay map at zero and is not a holding.
+     */
+    private static Map<String, BigDecimal> heldQuantities(Map<String, BigDecimal> qty) {
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> e : qty.entrySet()) {
+            if (e.getValue().signum() > 0) out.put(e.getKey(), e.getValue());
         }
         return out;
     }
@@ -315,13 +335,19 @@ public class AllocationService {
     }
 
     /**
-     * Today's point plus the cash detail behind its {@code cashGbp}, keyed
-     * {@code "<Account.dbValue()>|<CCY>"} (e.g. {@code "AJBell|GBP"}).
+     * Today's point plus the two details behind it: cash keyed
+     * {@code "<Account.dbValue()>|<CCY>"} (e.g. {@code "AJBell|GBP"}), and the held quantity per
+     * internal symbol — nominal for a bond, shares for anything else, in the same units every
+     * {@code qty × price / 100} valuation in the codebase assumes.
      */
-    public record CurrentSnapshot(AllocationPoint point, Map<String, BigDecimal> cashGbpByAccountCcy) {
+    public record CurrentSnapshot(AllocationPoint point,
+                                  Map<String, BigDecimal> cashGbpByAccountCcy,
+                                  Map<String, BigDecimal> quantityBySymbol) {
     }
 
-    /** Internal replay result — the samples plus the final cash detail, which the points drop. */
-    private record Replay(List<AllocationPoint> points, Map<String, BigDecimal> cashGbpByAccountCcy) {
+    /** Internal replay result — the samples plus the two details the points drop. */
+    private record Replay(List<AllocationPoint> points,
+                          Map<String, BigDecimal> cashGbpByAccountCcy,
+                          Map<String, BigDecimal> quantityBySymbol) {
     }
 }

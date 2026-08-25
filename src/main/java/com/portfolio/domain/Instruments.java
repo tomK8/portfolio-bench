@@ -1,5 +1,7 @@
 package com.portfolio.domain;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -35,6 +37,15 @@ public final class Instruments {
     /** The id shape {@link #giltId} produces, for re-canonicalising strings already stored. */
     private static final Pattern GILT_ID =
             Pattern.compile("GILT\\s+(\\d+(?:\\.\\d+)?)%\\s+(\\d{4})", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * The coupon marker {@link #couponOf} reads. Deliberately looser than {@link #GILT_ID} — it
+     * matches the same {@code %} that {@link #isBond} accepts as evidence of a bond, so any id the
+     * predicate calls a bond can have its coupon read.
+     */
+    private static final Pattern COUPON = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*%");
+
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
 
     private Instruments() {
     }
@@ -108,6 +119,31 @@ public final class Instruments {
         Matcher m = GILT_ID.matcher(securityId.trim());
         if (!m.matches()) return securityId;
         return giltId(m.group(1), Integer.parseInt(m.group(2)));
+    }
+
+    /**
+     * The annual coupon embedded in a bond id, as a <b>fraction</b> — {@code "GILT 4.75% 2038"}
+     * → {@code 0.0475}. Returns null when the id carries no readable coupon.
+     *
+     * <p>Reading a coupon and <em>building</em> an id are different concerns, which is why this
+     * sits beside {@link #giltId} rather than contradicting its javadoc: {@code giltId} refuses to
+     * expose a coupon helper because a caller could then assemble the join key and forget to
+     * canonicalise it. Nothing here produces an id. What it produces is the numerator of a gilt's
+     * running yield, and having that in one place matters for the same reason {@link #isBond} does
+     * — the alternative is the regex living in every service that needs an income figure.
+     *
+     * <p>A zero coupon is a real answer ({@code BigDecimal.ZERO}), not a missing one: a strip
+     * genuinely pays nothing, and a caller must be able to tell that from an unparseable id.
+     */
+    public static BigDecimal couponOf(String securityId) {
+        if (securityId == null) return null;
+        Matcher m = COUPON.matcher(securityId);
+        if (!m.find()) return null;
+        try {
+            return new BigDecimal(m.group(1)).divide(HUNDRED, 6, RoundingMode.HALF_UP);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** {@code "4.50"} → {@code "4.5"}; {@code "3.000"} → {@code "3"}; {@code "0.875"} unchanged. */

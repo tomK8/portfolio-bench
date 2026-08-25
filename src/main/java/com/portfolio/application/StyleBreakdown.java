@@ -64,22 +64,58 @@ public record StyleBreakdown(
      * sit in whichever style bucket they scored into (mostly Value, but a cheap grower like BP is
      * in Value+Growth), so adding this to the table would double-count them.
      *
-     * @param portfolioYield value-weighted dividend yield across everything scored, as a fraction
-     * @param fundsExcluded  whether any fund was left out of the yield — Yahoo publishes no
-     *                       distribution yield for the funds held here, so the figure is a
-     *                       <b>lower bound</b> on the portfolio's real income and says so
+     * <p><b>Two yields, because one is misreadable.</b> A single "portfolio yield" is either a
+     * strong-looking number over a base most of the portfolio is not in, or a weak-looking one that
+     * understates what the income holdings actually pay — and nothing on screen says which. So both
+     * ship, each with its denominator named beside it:
+     * <ul>
+     *   <li>{@code yieldOnIncomeHoldings} = {@code incomeAnnualGbp ÷ gbp} — a true yield on the
+     *       basket the tile is about, and exactly what {@link #fixedIncome} and {@link #equity}
+     *       sum to.</li>
+     *   <li>{@code yieldOnTotal} = {@code annualIncomeGbp ÷ totalGbp} — everything the portfolio
+     *       pays over everything it holds, cash and funds included.</li>
+     * </ul>
+     * The two numerators differ, so {@code otherAnnualIncomeGbp} carries the bridge: what the
+     * holdings <i>below</i> the income bar pay. {@code incomeAnnualGbp + otherAnnualIncomeGbp =
+     * annualIncomeGbp}, printed in the drill-down so all three figures reconcile on screen rather
+     * than looking like an inconsistency.
+     *
+     * @param gbp            value of every income holding — the yielding equities <b>plus all
+     *                       fixed income</b>, which is an income holding structurally rather than
+     *                       by clearing the yield bar
+     * @param fundsExcluded  whether any fund was left out of the income — Yahoo publishes no
+     *                       distribution yield for the funds held here, so both figures are a
+     *                       <b>lower bound</b> on the portfolio's real income and say so
      */
     public record Income(BigDecimal gbp,
                          BigDecimal pctOfTotal,
                          BigDecimal pctOfInvested,
-                         BigDecimal portfolioYield,
+                         BigDecimal yieldOnIncomeHoldings,
+                         BigDecimal yieldOnTotal,
+                         BigDecimal incomeAnnualGbp,
                          BigDecimal annualIncomeGbp,
+                         BigDecimal otherAnnualIncomeGbp,
                          boolean fundsExcluded,
-                         List<IncomeContributor> contributors) {
+                         Section fixedIncome,
+                         Section equity) {
     }
 
+    /**
+     * One half of the income holdings, for the drill-down. Kept as two sections rather than one
+     * flat list because they answer different questions and are not comparable: a gilt's running
+     * yield is contractual and its capital is pulling to par, while an equity's is a policy the
+     * company can cut tomorrow.
+     */
+    public record Section(String label, BigDecimal gbp, BigDecimal annualIncomeGbp,
+                          BigDecimal yield, List<IncomeContributor> contributors) {
+    }
+
+    /**
+     * @param note why this holding contributes no income despite counting as an income holding —
+     *             a bond fund with no published distribution yield, say. Null when it does.
+     */
     public record IncomeContributor(String symbol, BigDecimal gbp, BigDecimal dividendYield,
-                                    BigDecimal annualIncomeGbp, String bucket) {
+                                    BigDecimal annualIncomeGbp, String bucket, String note) {
     }
 
     /**

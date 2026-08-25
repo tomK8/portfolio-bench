@@ -124,11 +124,15 @@ public class StyleClassifier {
         Metrics m = p.metrics() == null ? Metrics.empty() : p.metrics();
 
         if (Instruments.isBond(p.symbol())) {
-            return structural(StyleBucket.FIXED_INCOME, gbp, m);
+            return fixedIncome(p.symbol(), gbp, p.quantity(), m);
         }
         StyleBucket override = overrides.get(symbol);
         if (override != null) {
-            return structural(override, gbp, m);
+            // A bond fund overridden here is fixed income too, and gets the same income treatment
+            // as a directly-held gilt — it just has no coupon in its symbol to derive one from.
+            return override == StyleBucket.FIXED_INCOME
+                    ? fixedIncome(p.symbol(), gbp, p.quantity(), m)
+                    : structural(override, gbp, m);
         }
         if (p.fund()) {
             return fund(gbp, m);
@@ -214,6 +218,43 @@ public class StyleClassifier {
                 List.copyOf(notes), List.of(), null, false, null);
     }
 
+    /**
+     * Fixed income, with its <b>running yield</b> — the one bucket that is an income holding by
+     * construction rather than by clearing {@link #isIncome}. A gilt is what the income allocation
+     * <i>is</i>; excluding it because a low-coupon line yields under the equity bar would have hidden
+     * a third of the book from a tile whose whole job is to say how much of the portfolio pays.
+     * (It does mean a deep-discount holding like {@code GILT 0.875% 2033}, bought for pull-to-par
+     * rather than income, drags the basket yield down — which is a true thing to show, not a flaw.)
+     *
+     * <p>The yield is derived, never fetched: {@code nominal × coupon ÷ value}. Both inputs are
+     * exact — the coupon is in the id and the nominal is in the ledger — so this needs no price and
+     * no FX, and because {@code value} came from the caller's own replay the quotient is precisely
+     * {@code coupon ÷ (clean price / 100)} against the price the position was valued at. A second
+     * price lookup could disagree with the number printed beside it.
+     *
+     * <p>Yahoo's distribution yield is the fallback for a bond <i>fund</i>, which has no coupon in
+     * its symbol. With neither, the position still counts as an income holding — its value is real
+     * — but contributes nothing to the income figure, and the null yield is what tells the caller
+     * to say so rather than book a silent zero.
+     */
+    private Classification fixedIncome(String symbol, BigDecimal gbp, BigDecimal quantity, Metrics m) {
+        BigDecimal coupon = Instruments.couponOf(symbol);
+        if (coupon != null && quantity != null && gbp.signum() > 0) {
+            BigDecimal yield = quantity.multiply(coupon, MC).divide(gbp, MC);
+            return new Classification(StyleBucket.FIXED_INCOME, scaled(gbp), null, null,
+                    List.of("Coupon " + pct(coupon) + " on nominal"), List.of(), yield, true, null);
+        }
+        if (m.dividendYield() != null) {
+            return new Classification(StyleBucket.FIXED_INCOME, scaled(gbp), null, null,
+                    List.of("Published distribution yield"), List.of(),
+                    m.dividendYield(), true, null);
+        }
+        return new Classification(StyleBucket.FIXED_INCOME, scaled(gbp), null, null,
+                List.of(), List.of(), null, true,
+                "No coupon in the id and no published distribution yield — counted as an income "
+                        + "holding by value, but its income is not in the total");
+    }
+
     private Classification structural(StyleBucket bucket, BigDecimal gbp, Metrics m) {
         return new Classification(bucket, scaled(gbp), null, null, List.of(), List.of(),
                 m.dividendYield(), false, null);
@@ -271,6 +312,11 @@ public class StyleClassifier {
     private static BigDecimal firstPositive(BigDecimal... vs) {
         for (BigDecimal v : vs) if (positive(v)) return v;
         return null;
+    }
+
+    /** {@code 0.0475} → {@code "4.75%"}, trailing zeros trimmed. */
+    private static String pct(BigDecimal fraction) {
+        return fraction.multiply(new BigDecimal("100")).stripTrailingZeros().toPlainString() + "%";
     }
 
     private static String trim(BigDecimal v) {
@@ -331,8 +377,17 @@ public class StyleClassifier {
     /**
      * One position to score. {@code fund} comes from the caller (the sector block's own test —
      * a non-empty cached {@code sectorWeights}), because only the repository layer knows it.
+     *
+     * <p>{@code quantity} is the held units in the same convention the rest of the codebase uses —
+     * <b>nominal</b> for a bond, shares otherwise. Only fixed income reads it, to turn a coupon
+     * into an income figure, so everything else may leave it null via the four-argument form.
      */
-    public record Position(String symbol, BigDecimal gbp, Metrics metrics, boolean fund) {
+    public record Position(String symbol, BigDecimal gbp, Metrics metrics, boolean fund,
+                           BigDecimal quantity) {
+
+        public Position(String symbol, BigDecimal gbp, Metrics metrics, boolean fund) {
+            this(symbol, gbp, metrics, fund, null);
+        }
     }
 
     /**
@@ -438,7 +493,8 @@ public class StyleClassifier {
      * @param valueFlags  which value tests it passed — for funds, its published multiples instead
      * @param growthFlags which growth tests it passed
      * @param dividendYield the yield used for the income overlay, as a fraction
-     * @param income      whether it clears the income bar; cuts across every bucket
+     * @param income      whether this counts as an income holding — clearing the yield bar for an
+     *                    equity, structurally true for fixed income. Cuts across every bucket
      * @param note        why it could not be scored, when {@code bucket} is UNKNOWN
      */
     public record Classification(StyleBucket bucket, BigDecimal gbp,

@@ -6,6 +6,7 @@ import com.portfolio.domain.StyleClassifier.Position;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -18,9 +19,13 @@ class StyleClassifierTest {
 
     /** The shipped defaults, so the tests exercise the thresholds the app actually runs with. */
     private static StyleClassifier classifier() {
+        return new StyleClassifier(props());
+    }
+
+    private static Properties props() {
         Properties p = new Properties();
         p.setProperty("override.PHGP", "NON_EQUITY");
-        return new StyleClassifier(p);
+        return p;
     }
 
     private static BigDecimal d(String v) {
@@ -223,6 +228,79 @@ class StyleClassifierTest {
     }
 
     // ---- resolution order ----------------------------------------------------------------
+
+    @Test
+    void giltIncomeIsNominalTimesCouponAndItsYieldIsRunning() {
+        // GILT 4.75% 2038: £100,000 nominal, clean price 95.24 -> £95,240 of value. The coupon
+        // pays £4,750/yr on the nominal, so the running yield is 4750/95240 = 4.987%, i.e.
+        // 4.75 / 0.9524 -- the coupon over the price the position was valued at.
+        Classification c = classifier().classify(new Position(
+                "GILT 4.75% 2038", d("95240"), Metrics.empty(), false, d("100000")));
+        assertEquals(StyleBucket.FIXED_INCOME, c.bucket());
+        assertTrue(c.income());
+        assertEquals(0, d("0.049874").compareTo(c.dividendYield().setScale(6, RoundingMode.HALF_UP)));
+        // The caller recovers the income by multiplying back, so that round-trip must be exact
+        // enough to print: value x yield has to come back to nominal x coupon.
+        assertEquals(0, d("4750.00").compareTo(
+                d("95240").multiply(c.dividendYield()).setScale(2, RoundingMode.HALF_UP)));
+    }
+
+    @Test
+    void aLowCouponGiltIsStillAnIncomeHoldingAtItsRealYield() {
+        // GILT 0.875% 2033 at 77.13: bought for pull-to-par, not income. It counts in the income
+        // holdings by value -- fixed income IS the income allocation -- but at the 1.13% it truly
+        // yields, so the basket yield tells the truth rather than being flattered by exclusion.
+        Classification c = classifier().classify(new Position(
+                "GILT 0.875% 2033", d("154260"), Metrics.empty(), false, d("200000")));
+        assertTrue(c.income());
+        assertEquals(0, d("0.011344").compareTo(c.dividendYield().setScale(6, RoundingMode.HALF_UP)));
+    }
+
+    @Test
+    void fixedIncomeWithNoDerivableYieldStillCountsButReportsNoIncome() {
+        // A bond fund overridden to FIXED_INCOME has no coupon in its symbol. Its value is real,
+        // so it belongs in the income holdings; its income is unknown, and a null is what makes
+        // the caller say so instead of booking a silent zero.
+        Properties p = props();
+        p.setProperty("override.VGOV", "FIXED_INCOME");
+        Classification c = new StyleClassifier(p).classify(new Position(
+                "VGOV", d("10000"), Metrics.empty(), false, d("500")));
+        assertEquals(StyleBucket.FIXED_INCOME, c.bucket());
+        assertTrue(c.income());
+        assertNull(c.dividendYield());
+        assertNotNull(c.note());
+    }
+
+    @Test
+    void aBondFundFallsBackToItsPublishedDistributionYield() {
+        Properties p = props();
+        p.setProperty("override.VGOV", "FIXED_INCOME");
+        Classification c = new StyleClassifier(p).classify(new Position(
+                "VGOV", d("10000"), m().divYield("0.041").build(), false, d("500")));
+        assertTrue(c.income());
+        assertEquals(0, d("0.041").compareTo(c.dividendYield()));
+    }
+
+    @Test
+    void giltWithNoQuantityHasNoYieldToDerive() {
+        // Guards the caller contract: the nominal comes from the ledger replay, and without it
+        // there is no income figure -- a coupon alone cannot say how much is held.
+        Classification c = classifier().classify(new Position(
+                "GILT 4.75% 2038", d("95240"), Metrics.empty(), false));
+        assertTrue(c.income());
+        assertNull(c.dividendYield());
+    }
+
+    @Test
+    void bullionIsStructuralButNotIncome() {
+        // Only fixed income is an income holding structurally. A bullion ETC pays nothing, and
+        // routing every structural bucket through the same "counts as income" rule would put
+        // gold in a tile about what the portfolio pays.
+        Classification c = classifier().classify(new Position(
+                "PHGP", d("6643"), Metrics.empty(), false));
+        assertEquals(StyleBucket.NON_EQUITY, c.bucket());
+        assertFalse(c.income());
+    }
 
     @Test
     void bondsAreFixedIncomeWhateverTheMetricsSay() {

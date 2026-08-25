@@ -1918,10 +1918,17 @@
                 bindOnce(document.getElementById('style-detail-modal'), 'click', function (ev) {
                     if (ev.target.id === 'style-detail-modal') closeStyleDetail();
                 });
+                bindOnce(document.getElementById('style-income-tile'), 'click', openIncomeDetail);
+                bindOnce(document.getElementById('income-detail-close'), 'click', closeIncomeDetail);
+                bindOnce(document.getElementById('income-detail-modal'), 'click', function (ev) {
+                    if (ev.target.id === 'income-detail-modal') closeIncomeDetail();
+                });
                 if (!styleEscBound) {
                     styleEscBound = true;
                     document.addEventListener('keydown', function (ev) {
-                        if (ev.key === 'Escape') closeStyleDetail();
+                        if (ev.key !== 'Escape') return;
+                        closeStyleDetail();
+                        closeIncomeDetail();
                     });
                 }
                 renderStyles();
@@ -1955,10 +1962,17 @@
             renderStyleQuadrant(d);
             renderStyleDonut(rows);
             renderStyleTable(d, rows);
-            renderStyleIncomeContributors(d);
             renderStyleUnknown(d);
         }
 
+        /**
+         * The headline income figure and the two yields under it.
+         *
+         * A single "portfolio yield" was misreadable in both directions: over the income base it
+         * looked like the whole portfolio paid 7%, over the whole portfolio it looked like the
+         * income holdings barely paid at all. So each percentage now states its own denominator,
+         * and the drill-down carries the bridge between the two numerators.
+         */
         function renderStyleIncomeTile(d) {
             var inc = d.income || {};
             var gbp = parseFloat(inc.gbp || 0);
@@ -1967,9 +1981,9 @@
             document.getElementById('style-income-sub').textContent =
                 fmtPct(pct) + (styleBasis === 'invested' ? ' of invested' : ' of total');
 
-            var y = inc.portfolioYield;
-            var line = '<b>Portfolio yield ' + fmtPct(y) + '</b>'
-                + ' · ' + fmtMoney(parseFloat(inc.annualIncomeGbp || 0)) + ' a year at current rates';
+            var line = '<b>Portfolio yield</b> — ' + fmtPct(inc.yieldOnIncomeHoldings)
+                + ' on income holdings · ' + fmtPct(inc.yieldOnTotal) + ' on total portfolio · '
+                + fmtMoney(parseFloat(inc.annualIncomeGbp || 0)) + '/yr at current rates';
             if (inc.fundsExcluded) {
                 line += '<br><span class="muted">Lower bound — funds pay distributions Yahoo '
                     + 'does not publish, so they are in neither the income nor the yield base.</span>';
@@ -2076,25 +2090,68 @@
             return r.bucket === 'UNKNOWN' ? 'not scored — see below' : 'structural';
         }
 
-        function renderStyleIncomeContributors(d) {
-            var list = (d.income || {}).contributors || [];
-            var wrap = document.getElementById('style-income-detail');
-            if (!list.length) { wrap.style.display = 'none'; return; }
-            wrap.style.display = '';
-            document.getElementById('style-income-detail-head').innerHTML =
-                'Every holding yielding at or above the income threshold, largest annual income '
-                + 'first. These names already sit in their own style bucket in the table above — '
-                + 'income is an <b>overlay</b>, so this list is not a fifth bucket to add on.';
+        /**
+         * Drill-down on the income tile: the headline split into its two halves.
+         *
+         * Fixed income and equities are kept as separate sections rather than one ranked list
+         * because they are not the same kind of promise — a gilt's running yield is contractual
+         * and its capital is pulling to par, while a dividend is a policy that can be cut. Mixing
+         * them into one table would invite reading a 4.99% gilt and a 4.6% bank as the same thing.
+         */
+        function openIncomeDetail() {
+            if (!styleData) return;
+            var inc = styleData.income || {};
+            var pct = styleBasis === 'invested' ? inc.pctOfInvested : inc.pctOfTotal;
+            document.getElementById('income-detail-sub').textContent =
+                fmtMoney(parseFloat(inc.gbp || 0)) + '  ·  ' + fmtPct(pct)
+                + (styleBasis === 'invested' ? ' of invested' : ' of total')
+                + '  ·  ' + fmtMoney(parseFloat(inc.incomeAnnualGbp || 0)) + '/yr';
+
             var html = '<tr><th class="lbl">Holding</th><th>Value</th><th>Yield</th>'
                 + '<th>Income/yr</th><th class="lbl">Style</th></tr>';
+            html += incomeSection(inc.fixedIncome) + incomeSection(inc.equity);
+            document.getElementById('income-detail-table').innerHTML = html;
+
+            // The bridge. The two percentages on the tile have different numerators, so without
+            // this the £/yr figure looks inconsistent with the yield beside it.
+            var other = parseFloat(inc.otherAnnualIncomeGbp || 0);
+            var note = fmtMoney(parseFloat(inc.annualIncomeGbp || 0)) + '/yr portfolio income = '
+                + fmtMoney(parseFloat(inc.incomeAnnualGbp || 0)) + ' from the income holdings above'
+                + ' + ' + fmtMoney(other) + ' from holdings below the income bar.'
+                + ' The tile\'s ' + fmtPct(inc.yieldOnIncomeHoldings) + ' divides the first by '
+                + fmtMoney(parseFloat(inc.gbp || 0)) + '; its ' + fmtPct(inc.yieldOnTotal)
+                + ' divides the total by the whole portfolio, cash and funds included.';
+            if (inc.fundsExcluded) {
+                note += ' Funds pay distributions Yahoo does not publish, so both are a lower bound.';
+            }
+            document.getElementById('income-detail-note').textContent = note;
+            document.getElementById('income-detail-modal').classList.add('open');
+        }
+
+        function incomeSection(sec) {
+            if (!sec) return '';
+            var list = sec.contributors || [];
+            if (!list.length) return '';
+            var html = '<tr class="income-section"><td class="lbl">' + escapeHtml(sec.label) + '</td>'
+                + '<td>' + fmtMoney(parseFloat(sec.gbp || 0)) + '</td>'
+                + '<td>' + fmtPct(sec.yield) + '</td>'
+                + '<td>' + fmtMoney(parseFloat(sec.annualIncomeGbp || 0)) + '</td>'
+                + '<td class="lbl"></td></tr>';
             list.forEach(function (c) {
                 html += '<tr><td class="lbl">' + escapeHtml(c.symbol) + '</td>'
                     + '<td>' + fmtMoney(parseFloat(c.gbp)) + '</td>'
                     + '<td>' + fmtPct(c.dividendYield) + '</td>'
-                    + '<td>' + fmtMoney(parseFloat(c.annualIncomeGbp || 0)) + '</td>'
-                    + '<td class="lbl muted">' + escapeHtml(c.bucket || '') + '</td></tr>';
+                    + '<td>' + (c.annualIncomeGbp == null
+                        ? '<span class="muted">not counted</span>'
+                        : fmtMoney(parseFloat(c.annualIncomeGbp))) + '</td>'
+                    + '<td class="lbl muted">' + escapeHtml(c.note || c.bucket || '') + '</td></tr>';
             });
-            document.getElementById('style-income-table').innerHTML = html;
+            return html;
+        }
+
+        function closeIncomeDetail() {
+            var m = document.getElementById('income-detail-modal');
+            if (m) m.classList.remove('open');
         }
 
         /**

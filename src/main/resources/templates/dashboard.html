@@ -1099,6 +1099,19 @@
             margin-top: 0.35rem;
         }
 
+        /* The income tile is a drill-down, so it has to look like one — the style rows and the
+           doughnut segments beside it already are. */
+        .returns-stat.income-tile { cursor: pointer; }
+        .returns-stat.income-tile:hover { background: #eef4fb; }
+
+        /* Section headers inside the income drill-down carry the subtotal, so they are a data row
+           with emphasis rather than a heading — hence a table row and not a <caption>. */
+        #income-detail-table tr.income-section td {
+            font-weight: 600;
+            border-top: 1px solid #ccc;
+            padding-top: 0.5rem;
+        }
+
         #style-table tr.style-clickable { cursor: pointer; }
         #style-table tr.style-clickable:hover { background: #eef4fb; }
         #style-table tr.style-structural td { color: #777; }
@@ -1116,6 +1129,8 @@
         html[data-theme="dark"] .style-cell .style-cell-label { color: #9fb0c0; }
         html[data-theme="dark"] .style-cell .style-cell-sub { color: #8b9aa8; }
         html[data-theme="dark"] #style-table tr.style-clickable:hover { background: #23303d; }
+        html[data-theme="dark"] .returns-stat.income-tile:hover { background: #23303d; }
+        html[data-theme="dark"] #income-detail-table tr.income-section td { border-top-color: #44525f; }
 
         .whatif-summary {
             display: flex;
@@ -1728,8 +1743,9 @@
             <b>Style is a 2×2, not a spectrum.</b> A holding can be cheap <i>and</i> growing (a
             cheap compounder) or neither, and collapsing that onto one value↔growth line forces a
             third of the book into whichever end it happens to sit nearer. <b>Income cuts across
-            all four cells</b> — it is an overlay like the AI/Tech tile below, not a fifth bucket,
-            so it must not be added to the table. Funds sit outside the 2×2 entirely: Yahoo
+            all four cells and the fixed-income row too</b> — it is an overlay like the AI/Tech tile
+            below, not a fifth bucket, so it must not be added to the table. Click the income tile
+            for the split into gilts and equities. Funds sit outside the 2×2 entirely: Yahoo
             publishes their aggregate price multiples but not their earnings growth, so there is
             no growth axis to score and inferring one would turn missing data into a finding.
         </p>
@@ -1739,7 +1755,8 @@
         <div class="sector-layout" id="style-body" style="display:none;">
             <div class="sector-side">
                 <div class="returns-stats" style="margin: 0;">
-                    <div class="returns-stat">
+                    <div class="returns-stat income-tile" id="style-income-tile"
+                         title="Click for the split into fixed income and equities">
                         <span class="label">Income holdings (cross-cutting)</span>
                         <span class="value" id="style-income-value">—</span>
                         <span class="sub" id="style-income-sub"></span>
@@ -1762,11 +1779,22 @@
             <table class="swing-tbl" id="style-table"></table>
         </div>
         <div id="style-unknown"></div>
-        <details id="style-income-detail" style="display:none; margin-top: 0.6rem;">
-            <summary class="muted">What makes up the income figure</summary>
-            <p class="muted sector-note" id="style-income-detail-head"></p>
-            <div class="full-bleed"><table class="swing-tbl" id="style-income-table"></table></div>
-        </details>
+
+        <!-- Drill-down on the income tile. Replaced the inline "What makes up the income figure"
+             block rather than joining it: two places listing the same holdings is one more than
+             anybody reads, and the split into fixed income vs equities is what the tile now needs
+             to explain. -->
+        <div id="income-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+            <div class="modal-box" style="max-width: 720px;">
+                <h3>Income holdings</h3>
+                <div id="income-detail-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;"></div>
+                <table class="swing-tbl" id="income-detail-table"></table>
+                <p class="muted sector-note" id="income-detail-note" style="margin-top: 0.6rem;"></p>
+                <div class="modal-actions">
+                    <button id="income-detail-close" type="button">Close</button>
+                </div>
+            </div>
+        </div>
 
         <div id="style-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
             <div class="modal-box" style="max-width: 720px;">

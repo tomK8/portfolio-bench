@@ -26,8 +26,6 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Runs the "what if next year played out like {@code [from..to]}" scenario over today's
@@ -55,7 +53,6 @@ public class HistoricalScenarioService {
 
     private static final Logger log = LoggerFactory.getLogger(HistoricalScenarioService.class);
     private static final BigDecimal HUNDRED = new BigDecimal("100");
-    private static final Pattern COUPON_PATTERN = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*%");
 
     /** KV key under which per-symbol substitute overrides are stored (newline-separated "SYM=REPLACEMENT"). */
     public static final String SUBSTITUTES_KEY = "whatif_substitutes";
@@ -192,14 +189,7 @@ public class HistoricalScenarioService {
      * present or parseable.
      */
     static BigDecimal extractCoupon(String symbol) {
-        if (symbol == null) return null;
-        Matcher m = COUPON_PATTERN.matcher(symbol);
-        if (!m.find()) return null;
-        try {
-            return new BigDecimal(m.group(1)).divide(HUNDRED, 6, RoundingMode.HALF_UP);
-        } catch (NumberFormatException e) {
-            return null;
-        }
+        return Instruments.couponOf(symbol);
     }
 
     private static BigDecimal pctToFraction(BigDecimal pct) {

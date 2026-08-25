@@ -76,11 +76,18 @@ public class StyleBreakdownService {
         List<StyleBreakdown.Contributor> unknown = new ArrayList<>();
         // Unscored only because no metrics have been fetched yet — warmed at the end of the pass.
         Set<String> awaitingData = new LinkedHashSet<>();
-        List<StyleBreakdown.IncomeContributor> incomeRows = new ArrayList<>();
+        List<StyleBreakdown.IncomeContributor> bondRows = new ArrayList<>();
+        List<StyleBreakdown.IncomeContributor> equityRows = new ArrayList<>();
+        // Fixed income with no derivable coupon or distribution yield: its value is in the tile,
+        // its income is not, and that has to be said rather than booked as a silent zero.
+        List<String> incomeUnknown = new ArrayList<>();
 
         BigDecimal incomeGbp = BigDecimal.ZERO;
+        BigDecimal bondGbp = BigDecimal.ZERO;
+        BigDecimal bondIncome = BigDecimal.ZERO;
+        BigDecimal equityIncomeGbp = BigDecimal.ZERO;
+        BigDecimal equityIncome = BigDecimal.ZERO;
         BigDecimal annualIncome = BigDecimal.ZERO;
-        BigDecimal yieldBase = BigDecimal.ZERO;
         boolean fundsExcludedFromYield = false;
 
         for (Map.Entry<String, BigDecimal> e : point.symbolGbp().entrySet()) {
@@ -91,7 +98,8 @@ public class StyleBreakdownService {
             QuoteSummary quote = quoteFor(cache, symbol);
             boolean fund = quote != null && !quote.sectorWeights().isEmpty();
             StyleClassifier.Classification c = classifier.classify(
-                    new StyleClassifier.Position(symbol, gbp, metricsOf(quote), fund));
+                    new StyleClassifier.Position(symbol, gbp, metricsOf(quote), fund,
+                            snapshot.quantityBySymbol().get(symbol)));
 
             total.merge(c.bucket(), c.gbp(), BigDecimal::add);
             members.computeIfAbsent(c.bucket(), k -> new ArrayList<>())
@@ -109,20 +117,34 @@ public class StyleBreakdownService {
             }
 
             // Income overlay. A fund's distribution yield is not published by Yahoo for anything
-            // held here, so funds contribute to neither the numerator nor the denominator — the
-            // resulting portfolio yield is a lower bound, flagged as such rather than diluted by
-            // pretending the funds yield zero.
-            if (fund) {
+            // held here, so an equity fund contributes to neither figure — the yields are a lower
+            // bound, flagged as such rather than diluted by pretending the funds yield zero. A
+            // *bond* fund is exempt: it reaches this loop as FIXED_INCOME via a style.properties
+            // override, not through the fund branch, and is an income holding whatever Yahoo says.
+            boolean bond = c.bucket() == StyleBucket.FIXED_INCOME;
+            if (fund && !bond) {
                 fundsExcludedFromYield = true;
-            } else if (c.dividendYield() != null) {
-                yieldBase = yieldBase.add(gbp);
-                annualIncome = annualIncome.add(gbp.multiply(c.dividendYield(), MC));
-                if (c.income()) {
-                    incomeGbp = incomeGbp.add(gbp);
-                    incomeRows.add(new StyleBreakdown.IncomeContributor(
-                            symbol, c.gbp(), c.dividendYield(),
-                            scaled(gbp.multiply(c.dividendYield(), MC)), c.bucket().label()));
-                }
+                continue;
+            }
+            BigDecimal positionIncome = c.dividendYield() == null
+                    ? null : gbp.multiply(c.dividendYield(), MC);
+            if (positionIncome != null) annualIncome = annualIncome.add(positionIncome);
+            if (!c.income()) continue;
+
+            // An income holding: the yielding equities, plus all fixed income structurally.
+            incomeGbp = incomeGbp.add(gbp);
+            StyleBreakdown.IncomeContributor row = new StyleBreakdown.IncomeContributor(
+                    symbol, c.gbp(), c.dividendYield(), scaled(positionIncome),
+                    c.bucket().label(), positionIncome == null ? c.note() : null);
+            if (bond) {
+                bondGbp = bondGbp.add(gbp);
+                bondRows.add(row);
+                if (positionIncome == null) incomeUnknown.add(symbol);
+                else bondIncome = bondIncome.add(positionIncome);
+            } else {
+                equityIncomeGbp = equityIncomeGbp.add(gbp);
+                equityRows.add(row);
+                equityIncome = equityIncome.add(positionIncome);
             }
         }
 
@@ -166,14 +188,27 @@ public class StyleBreakdownService {
         warmer.warm(awaitingData);
         if (fundsExcludedFromYield) {
             warnings.add("Funds are excluded from the income figures: Yahoo publishes no "
-                    + "distribution yield for them. The portfolio yield shown is a lower bound.");
+                    + "distribution yield for them. Both yields shown are a lower bound.");
         }
-        incomeRows.sort(Comparator.comparing(StyleBreakdown.IncomeContributor::annualIncomeGbp).reversed());
+        if (!incomeUnknown.isEmpty()) {
+            warnings.add("No coupon or distribution yield could be derived for "
+                    + String.join(", ", incomeUnknown) + " — counted in the income holdings by "
+                    + "value, but contributing nothing to the income figure.");
+        }
+        sortByIncome(bondRows);
+        sortByIncome(equityRows);
 
+        BigDecimal incomeAnnual = bondIncome.add(equityIncome);
         StyleBreakdown.Income income = new StyleBreakdown.Income(
                 scaled(incomeGbp), fraction(incomeGbp, totalGbp), fraction(incomeGbp, investedGbp),
-                fraction(annualIncome, yieldBase), scaled(annualIncome),
-                fundsExcludedFromYield, List.copyOf(incomeRows));
+                fraction(incomeAnnual, incomeGbp), fraction(annualIncome, totalGbp),
+                scaled(incomeAnnual), scaled(annualIncome),
+                scaled(annualIncome.subtract(incomeAnnual)), fundsExcludedFromYield,
+                new StyleBreakdown.Section(StyleBucket.FIXED_INCOME.label(), scaled(bondGbp),
+                        scaled(bondIncome), fraction(bondIncome, bondGbp), List.copyOf(bondRows)),
+                new StyleBreakdown.Section("Equities", scaled(equityIncomeGbp),
+                        scaled(equityIncome), fraction(equityIncome, equityIncomeGbp),
+                        List.copyOf(equityRows)));
 
         BigDecimal v = total.getOrDefault(StyleBucket.VALUE, BigDecimal.ZERO);
         BigDecimal g = total.getOrDefault(StyleBucket.GROWTH, BigDecimal.ZERO);
@@ -230,6 +265,12 @@ public class StyleBreakdownService {
         return List.copyOf(out);
     }
 
+    /** Largest annual income first; an unknown-income row sorts last rather than as a zero. */
+    private static void sortByIncome(List<StyleBreakdown.IncomeContributor> rows) {
+        rows.sort(Comparator.comparing(StyleBreakdown.IncomeContributor::annualIncomeGbp,
+                Comparator.nullsLast(Comparator.reverseOrder())));
+    }
+
     private static QuoteSummary quoteFor(Map<String, FundamentalsRepository.Cached> cache, String symbol) {
         FundamentalsRepository.Cached c = cache.get(symbol);
         return c == null ? null : c.quote();
@@ -238,8 +279,12 @@ public class StyleBreakdownService {
     private static StyleBreakdown empty(List<String> warnings) {
         return new StyleBreakdown(null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 List.of(),
-                new StyleBreakdown.Income(BigDecimal.ZERO, null, null, null, BigDecimal.ZERO,
-                        false, List.of()),
+                new StyleBreakdown.Income(BigDecimal.ZERO, null, null, null, null,
+                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
+                        new StyleBreakdown.Section(StyleBucket.FIXED_INCOME.label(),
+                                BigDecimal.ZERO, BigDecimal.ZERO, null, List.of()),
+                        new StyleBreakdown.Section("Equities",
+                                BigDecimal.ZERO, BigDecimal.ZERO, null, List.of())),
                 new StyleBreakdown.Quadrant(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                         BigDecimal.ZERO, BigDecimal.ZERO),
                 List.of(), warnings);

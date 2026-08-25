@@ -1806,16 +1806,52 @@ when no value has ever been observed.
 
 **Income is an overlay, not a fifth bucket** — the same relationship the AI/Tech tile has to the
 sector table. Income names already sit in whichever cell they scored into (mostly Value, but BP.
-and LGEN are in Value+Growth), so **the tile must never be added to the table**. `portfolioYield`
-is value-weighted over scored non-fund holdings and is a **lower bound**: funds pay distributions
-Yahoo does not publish, so they are in neither the numerator nor the base, and a warning says so.
+and LGEN are in Value+Growth), so **the tile must never be added to the table**. It now spans the
+**Fixed Income row too**, which is the one bucket that is an income holding *structurally* rather
+than by clearing the yield bar: a gilt is what the income allocation **is**, and gating it on the
+2.5% equity bar would have dropped `GILT 0.875% 2033` (£154k, bought for pull-to-par) out of a tile
+whose entire job is to say how much of the book pays. Income holdings run £201k → **£501k** (38.5%
+of total) as a result, and the basket yield honestly reflects the low-coupon line dragging it down.
+
+**The gilt running yield is derived, never fetched: `nominal × coupon ÷ value`.** Both inputs are
+exact — the coupon is in the id (`Instruments.couponOf`, a fraction: `"GILT 4.75% 2038"` → 0.0475)
+and the nominal is in the ledger — so it needs **no price lookup and no FX**, and because `value`
+came from the caller's own replay the quotient is precisely `coupon ÷ (clean price / 100)` against
+the price the position was valued at. A second price read would be a second valuation path that
+could disagree with the number printed beside it. Live: 4.98% / 4.49% / 1.13% on the three held
+gilts, £8,750/yr of coupon. The nominal reaches the classifier because
+**`AllocationService.CurrentSnapshot` now carries `quantityBySymbol`** — kept off `AllocationPoint`
+for exactly the reason `cashGbpByAccountCcy` is (that record is serialised ~550× by
+`GET /allocation`). `Instruments.couponOf` is the single home of coupon-reading;
+`HistoricalScenarioService.extractCoupon` delegates to it. Note reading a coupon and *building* an
+id are different concerns — `giltId` still refuses to expose a trimming helper, because a caller
+could then assemble the join key and forget to canonicalise it.
+
+**Fixed income with no derivable yield counts by value and says so.** A bond fund overridden to
+`FIXED_INCOME` (VGOV) has no coupon in its symbol, so it falls back to Yahoo's distribution yield;
+with neither, the position is still an income holding — its value is real — but contributes
+**null, never zero**, to the income figure and is named in a warning. A silent zero would
+understate the portfolio yield with nothing on screen to say why.
+
+**Two yields, because one is misreadable.** A single "portfolio yield" is either a strong-looking
+number over a base most of the portfolio is not in, or a weak-looking one that understates what
+the income holdings pay — and nothing said which. Both now ship with their denominators named:
+`yieldOnIncomeHoldings` (= `incomeAnnualGbp ÷ income.gbp`, what the basket actually yields) and
+`yieldOnTotal` (= `annualIncomeGbp ÷ totalGbp`, everything paid over everything held, cash and
+funds included). **Their numerators differ**, so `otherAnnualIncomeGbp` carries the bridge — what
+the holdings *below* the income bar pay — and `incomeAnnualGbp + otherAnnualIncomeGbp =
+annualIncomeGbp` is printed in the drill-down so all three figures reconcile on screen rather than
+looking like an inconsistency. Both remain a **lower bound**: funds pay distributions Yahoo does
+not publish, so they are in neither numerator. `StyleBreakdownServiceTest` pins the two
+denominators and the bridge closing.
 
 **`resources/style.properties`** holds only *judgements* — thresholds, weights, and `override.*`
 for instruments no multiple can describe (mirroring `sectors.properties`: PHGP/GBS/SGBX bullion →
 `NON_EQUITY`, VGOV → `FIXED_INCOME`). No per-symbol multiples, no as-of dates, nothing that drifts.
 
 **UI**: basis toggle (% of total / % of invested, both computed server-side so it toggles without
-a refetch), an income tile with the yield and annual figure, the **2×2 grid** (`.style-quadrant`,
+a refetch), an income tile carrying both yields ("Portfolio yield — 4.2% on income holdings · 1.8%
+on total portfolio · £23,424/yr"), the **2×2 grid** (`.style-quadrant`,
 left column cheap / top row growing), a doughnut, and a table whose Basis column separates
 "scored on both axes" from "structural" and "not scored — see below". Clicking a table row, a
 doughnut segment **or a quadrant cell** opens `#style-detail-modal` listing every holding in that
@@ -1825,6 +1861,15 @@ toggle replaces its innerHTML. The block lives in its own **`#style-block`** con
 that id to `panelLoadFailed`/`clearPanelError`, so a styles failure cannot destroy the sector
 doughnut or the allocation canvases below it; `loadBreakdownSubview` now drives **three**
 independent latches.
+
+Clicking the **income tile** opens `#income-detail-modal`: the headline split into a Fixed-income
+section and an Equities section, each with its own subtotal row and yield, plus the bridge
+sentence. They are two sections rather than one ranked list because they are not the same kind of
+promise — a gilt's running yield is contractual and its capital is pulling to par, while a dividend
+is a policy that can be cut, and one merged table invites reading a 4.99% gilt and a 4.6% bank as
+the same thing. This **replaced** the inline `<details>` "What makes up the income figure" block
+rather than joining it: two places listing the same holdings is one more than anybody reads. The
+shared document-level Escape handler closes both style modals.
 
 ## Sector & AI/Tech breakdown
 

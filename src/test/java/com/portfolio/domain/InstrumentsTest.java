@@ -3,11 +3,13 @@ package com.portfolio.domain;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -208,5 +210,38 @@ class InstrumentsTest {
             String once = Instruments.canonicalGiltId(s);
             assertEquals(once, Instruments.canonicalGiltId(once));
         }
+    }
+
+    // ---- couponOf --------------------------------------------------------------------------
+
+    @Test
+    void couponOfReadsTheRateOutOfAGiltId() {
+        assertEquals(0, new BigDecimal("0.0475").compareTo(Instruments.couponOf("GILT 4.75% 2038")));
+        assertEquals(0, new BigDecimal("0.04").compareTo(Instruments.couponOf("GILT 4% 2030")));
+        assertEquals(0, new BigDecimal("0.00875").compareTo(Instruments.couponOf("GILT 0.875% 2033")));
+    }
+
+    @Test
+    void couponOfReadsEveryIdIsBondAccepts() {
+        // The predicate's whole point is that anything carrying a % is a bond, including the
+        // un-normalised broker spellings. A coupon this class calls a bond must be readable.
+        for (String id : List.of("GILT 4.50% 2028", "TREASURY 3.25 % 2044", "gilt 1% 2024")) {
+            assertTrue(Instruments.isBond(id), id);
+            assertNotNull(Instruments.couponOf(id), id);
+        }
+    }
+
+    @Test
+    void aZeroCouponIsAnAnswerNotAnAbsence() {
+        // A strip pays nothing, which is a fact. Returning null would make it indistinguishable
+        // from an id whose coupon could not be read, and those want different handling.
+        assertEquals(0, BigDecimal.ZERO.compareTo(Instruments.couponOf("GILT 0% 2027")));
+    }
+
+    @Test
+    void couponOfIsNullWhenThereIsNoCoupon() {
+        assertNull(Instruments.couponOf("MSFT"));
+        assertNull(Instruments.couponOf("VGOV"));
+        assertNull(Instruments.couponOf(null));
     }
 }

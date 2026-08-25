@@ -36,6 +36,51 @@ class SectorClassifierTest {
     // ---- resolution order ---------------------------------------------------
 
     @Test
+    void everyBullionEtcInInstrumentsIsCommoditiesWithNoOverride() {
+        // The classifier under test has only PHGP configured, which is the point: SGLN and the
+        // other nine must be placed by Instruments alone. SGLN is the gold actually held, and it
+        // spent its life in the red "excluded from every sector" strip because this file's
+        // wrapper list and Instruments' were two different lists (2026-08-25).
+        for (String symbol : Instruments.bullionEtcs()) {
+            Classification c = classifier().classify(Position.direct(symbol, gbp("1000"), null));
+            assertEquals(0, gbp("1000").compareTo(bucket(c, SectorBucket.COMMODITIES)),
+                    symbol + " should be commodities");
+            assertEquals(0, BigDecimal.ZERO.compareTo(bucket(c, SectorBucket.UNCLASSIFIED)),
+                    symbol + " should not be unclassified");
+        }
+    }
+
+    @Test
+    void everyBondFundInInstrumentsIsFixedIncomeWithNoOverride() {
+        for (String symbol : Instruments.bondFunds()) {
+            Classification c = classifier().classify(Position.direct(symbol, gbp("1000"), null));
+            assertEquals(0, gbp("1000").compareTo(bucket(c, SectorBucket.FIXED_INCOME)),
+                    symbol + " should be fixed income");
+        }
+    }
+
+    @Test
+    void aBullionEtcIsNotSentThroughFundLookThrough() {
+        // Ordering guard. The asset-class step has to come before look-through, or a wrapper that
+        // happened to publish sector weights would be decomposed into equity sectors it does not
+        // hold — the whole point is that the underlying is metal.
+        Classification c = classifier().classify(new Position(
+                "SGLN", gbp("1000"), null, Map.of("technology", new BigDecimal("1.0")), List.of()));
+        assertEquals(0, gbp("1000").compareTo(bucket(c, SectorBucket.COMMODITIES)));
+        assertEquals(0, BigDecimal.ZERO.compareTo(bucket(c, SectorBucket.TECH_AI)));
+    }
+
+    @Test
+    void anOverrideStillBeatsTheAssetClass() {
+        // The escape hatch has to keep working: a hand-placed symbol wins over the wrapper set.
+        SectorClassifier c = new SectorClassifier(
+                Map.of("SGLN", SectorBucket.FIXED_INCOME), AI_TECH);
+        assertEquals(0, gbp("1000").compareTo(bucket(
+                c.classify(Position.direct("SGLN", gbp("1000"), null)),
+                SectorBucket.FIXED_INCOME)));
+    }
+
+    @Test
     void giltsAreFixedIncomeWithoutAnyConfiguration() {
         Classification c = classifier().classify(
                 Position.direct("GILT 0.875% 2033", gbp("154840.00"), null));

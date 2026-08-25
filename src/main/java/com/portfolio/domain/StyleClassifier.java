@@ -115,8 +115,15 @@ public class StyleClassifier {
     }
 
     /**
-     * Scores one position. Resolution order: bond → override → fund → equity 2×2, so gilts need no
-     * configuration and a hand-placed instrument beats the feed.
+     * Scores one position. Resolution order: bond → override → wrapper asset class → fund →
+     * equity 2×2, so gilts need no configuration and a hand-placed instrument beats the feed.
+     *
+     * <p>The asset-class step defers to {@link Instruments#assetClassOf} for the wrappers whose
+     * <em>underlying</em> decides the bucket — bullion has no earnings, sales or yield to score,
+     * and a gilt ETF is fixed income. It exists so that set lives in one place: SGLN was in
+     * {@link Instruments}' bullion list but not in {@code style.properties}, so the gold actually
+     * held was reported as unscoreable — a data gap to go and fix rather than the deliberate
+     * holding it is. See {@code SectorClassifier.classify} for the same reasoning.
      */
     public Classification classify(Position p) {
         String symbol = normalise(p.symbol());
@@ -133,6 +140,19 @@ public class StyleClassifier {
             return override == StyleBucket.FIXED_INCOME
                     ? fixedIncome(p.symbol(), gbp, p.quantity(), m)
                     : structural(override, gbp, m);
+        }
+        switch (Instruments.assetClassOf(p.symbol())) {
+            // Bullion: no earnings, no sales, no yield. Every axis abstains, and that is a
+            // property of the asset rather than a gap in the data.
+            case COMMODITY -> {
+                return structural(StyleBucket.NON_EQUITY, gbp, m);
+            }
+            // A gilt in an ETF wrapper is still a gilt, and gets the same income treatment as a
+            // directly-held one — it just has no coupon in its symbol to derive a yield from.
+            case GILT -> {
+                return fixedIncome(p.symbol(), gbp, p.quantity(), m);
+            }
+            default -> { }
         }
         if (p.fund()) {
             return fund(gbp, m);

@@ -1985,7 +1985,14 @@ invested.
   `≥` with the name-coverage %.
 - **`resources/sectors.properties`** holds only *judgements*, nothing that drifts: `override.*`
   as a per-position escape hatch, and `aitech.include` (GOOG/GOOGL/META/AMZN/NFLX + TSLA/BABA;
-  V/MA and LSEG/REL deliberately excluded). No weights, no as-of dates. **Bullion ETCs and gilt
+  V/MA and LSEG/REL deliberately excluded). No weights, no as-of dates. The one live `override.*`
+  is **HICL** → `UTILITIES_INFRA`: a London closed-end infrastructure trust is neither an operating
+  company with a GICS sector nor an ETF that discloses its composition, so Yahoo returns no
+  `summaryProfile` sector *and* no `topHoldings` weightings and the feed and look-through both come
+  up empty. That is exactly what the escape hatch is for — the judgement is about what the trust
+  owns (PPP/PFI projects, utilities, transport), which no source will ever return, and it does not
+  drift. `SectorClassifierTest.hiclIsInfrastructureFromTheShippedProperties` pins it through the
+  no-arg constructor so the properties entry itself is under test. **Bullion ETCs and gilt
   funds are deliberately absent and must not be re-added** — `Instruments` owns those sets and the
   classifier defers to it. `InstrumentsTest.neitherPropertiesFileRedeclaresAWrapperInstrumentsKnows`
   fails the build if an `override.*` line reappears for a symbol `assetClassOf` already places,

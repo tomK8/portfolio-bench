@@ -71,6 +71,18 @@ class SectorClassifierTest {
     }
 
     @Test
+    void hiclIsInfrastructureFromTheShippedProperties() {
+        // The no-arg constructor, so this pins the actual sectors.properties entry rather than a
+        // map the test built. A London investment trust has no Yahoo sector and no disclosed
+        // composition, so without the override it sits in the red "excluded from every sector"
+        // strip — the case override.* exists for, since no feed will ever supply it.
+        Classification c = new SectorClassifier().classify(
+                Position.direct("HICL", gbp("10190.80"), null));
+        assertEquals(0, gbp("10190.80").compareTo(bucket(c, SectorBucket.UTILITIES_INFRA)));
+        assertEquals(0, BigDecimal.ZERO.compareTo(bucket(c, SectorBucket.UNCLASSIFIED)));
+    }
+
+    @Test
     void anOverrideStillBeatsTheAssetClass() {
         // The escape hatch has to keep working: a hand-placed symbol wins over the wrapper set.
         SectorClassifier c = new SectorClassifier(

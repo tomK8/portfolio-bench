@@ -22,6 +22,12 @@ import java.util.regex.Pattern;
  * Currency per row is inferred from the Market Value column prefix ($ → USD, £ → GBP).
  * GBP-priced securities may show price in pence; Market Value and Book Cost are always in pounds.
  * Average price paid = Book Cost / Qty.
+ * <p>
+ * A gilt is filed under the canonical {@code "GILT {coupon}% {year}"} id derived from its Name
+ * rather than under II's own code — see {@link #securityIdFor}. Note II quotes a gilt <b>per £1
+ * nominal</b> ({@code £0.9951} against a quantity of {@code 20,000}) where AJ Bell quotes per
+ * £100; nothing here has to reconcile that, because the exported Market Value is used directly
+ * and the Price column is never read.
  */
 public class IISippParser implements AccountParser {
 
@@ -32,6 +38,7 @@ public class IISippParser implements AccountParser {
             Pattern.CASE_INSENSITIVE);
 
     private static final String COL_SYMBOL = "Symbol";
+    private static final String COL_NAME = "Name";
     private static final String COL_QTY = "Qty";
     private static final String COL_MARKET_VALUE = "Market Value";
     private static final String COL_BOOK_COST = "Book Cost";
@@ -39,6 +46,21 @@ public class IISippParser implements AccountParser {
     static String normaliseSecurityId(String rawId) {
         if (rawId == null) return null;
         return rawId.trim().toUpperCase();
+    }
+
+    /**
+     * The internal id for a row: II's own ticker, except for a gilt, which takes the canonical
+     * {@code "GILT {coupon}% {year}"} form derived from the Name column.
+     *
+     * <p>II's ticker for a gilt is a short code of its own ({@code T30} for the 4.375% 2030) that
+     * no price feed knows and that {@code Instruments.isBond} cannot recognise — so the position
+     * was valued per share instead of per £100 nominal, joined no gilt quote, and the cash-ledger
+     * view dropped it from the totals altogether (2026-08-25). The name carries the coupon and
+     * maturity, so the canonical id is derivable with no mapping to maintain.
+     */
+    static String securityIdFor(String symbol, String name) {
+        String giltId = IIInstruments.giltIdFromName(name);
+        return giltId != null ? giltId : normaliseSecurityId(symbol);
     }
 
     @Override
@@ -94,7 +116,9 @@ public class IISippParser implements AccountParser {
                         ? bookCost.divide(qty, 10, RoundingMode.HALF_UP)
                         : null;
 
-                holdings.add(Holding.builder(normaliseSecurityId(symbol), qty, currency, ACCOUNT_SOURCE)
+                String name = record.isSet(COL_NAME) ? record.get(COL_NAME).trim() : "";
+
+                holdings.add(Holding.builder(securityIdFor(symbol, name), qty, currency, ACCOUNT_SOURCE)
                         .avgPricePaid(avgPrice)
                         .currentMarketValue(mktVal)
                         .build());

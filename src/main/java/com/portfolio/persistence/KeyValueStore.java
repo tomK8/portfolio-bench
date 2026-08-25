@@ -8,7 +8,9 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -97,6 +99,41 @@ public class KeyValueStore {
         try {
             Files.createDirectories(dir);
             Files.writeString(dir.resolve(key + ".txt"), String.join("\n", values));
+        } catch (IOException e) {
+            log.warn("Could not write setting {}", key, e);
+        }
+    }
+
+    /**
+     * Newline-separated {@code key=value} lines. Insertion-ordered, blanks and lines with no
+     * {@code =} dropped, first {@code =} wins so a value may contain one (a gilt id does not, but
+     * the next map stored here might). Returns an empty map if the file is missing.
+     */
+    public Map<String, String> getStringMap(String key) {
+        Path file = dir.resolve(key + ".txt");
+        if (!Files.exists(file)) return Map.of();
+        try {
+            Map<String, String> out = new LinkedHashMap<>();
+            for (String line : Files.readAllLines(file)) {
+                int eq = line.indexOf('=');
+                if (eq <= 0) continue;
+                String k = line.substring(0, eq).trim();
+                String v = line.substring(eq + 1).trim();
+                if (!k.isEmpty() && !v.isEmpty()) out.put(k, v);
+            }
+            return out;
+        } catch (IOException e) {
+            log.warn("Could not read setting {}", key, e);
+            return Map.of();
+        }
+    }
+
+    public void putStringMap(String key, Map<String, String> values) {
+        try {
+            Files.createDirectories(dir);
+            StringBuilder sb = new StringBuilder();
+            values.forEach((k, v) -> sb.append(k).append('=').append(v).append('\n'));
+            Files.writeString(dir.resolve(key + ".txt"), sb.toString());
         } catch (IOException e) {
             log.warn("Could not write setting {}", key, e);
         }

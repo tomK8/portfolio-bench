@@ -392,6 +392,10 @@ To convert native → GBP, **divide** by the rate.
   - `orders_use_drift` — the app-wide drift switch for the open-orders touch model
     (`true`/`false`; absent = the shipped driftless default). Written by the checkbox on the Open
     orders panel, read by `OpenOrdersService.effectiveConfig` — see "Open orders".
+  - `gilt_sedols` — SEDOL → `GILT {coupon}% {year}`, `key=value` lines, merged on every
+    `GiltPriceFetchJob` tick. Read by `IiCashImporter`; see "Gilt SEDOLs" under Price history.
+    (`getStringMap`/`putStringMap` split on the **first** `=` only — a gilt id contains a space
+    and a `%`, and splitting on whitespace would mangle it.)
   - `held_symbols` — newline-separated set of currently-held symbols, written by
     `SyncPortfolioService` after each `/sync`. Unioned with the cash-ledger symbol set in
     `PriceFetchSupport.tickersToFetch` so freshly bought names get an intraday quote before
@@ -440,10 +444,37 @@ it reported the position as unpriced and **dropped it from the totals** (2026-08
 `GILT 1.00% 2024` and `GILT 5.00% 2025` carry the same defect and were only ever invisible because
 both matured before anyone read a total that was missing them. Building the whole id there rather
 than exposing a coupon-trimming helper is deliberate: a caller cannot then assemble the string
-correctly and forget to canonicalise it. The four writers are `AJBellSippParser.extractBondId`
+correctly and forget to canonicalise it. The six writers are `AJBellSippParser.extractBondId`
 (holdings CSV), `AJBellCashStatementParser.tryExtractGiltId` (all three description shapes),
-`GiltPriceFetcher` (HL) and `TradewebGiltPriceParser` — **never concatenate `"GILT " + coupon`
-anywhere else.**
+`IIInstruments.giltIdFromName` (both II parsers that see a name), `IICashStatementParser` (via
+the SEDOL map, below), `GiltPriceFetcher` (HL) and `TradewebGiltPriceParser` — **never concatenate
+`"GILT " + coupon` anywhere else.**
+
+**II names a gilt three ways and only one of them carries a coupon**, which is why its two paths
+differ. The holdings export writes `UNITED KINGDOM 4.375 07/03/2030` — coupon as a bare decimal,
+*no `%` sign at all* — while the order export and the website write `4 3/8% TREASURY GILT
+07/03/2030`, the eighths a gilt is actually quoted in; `parser/IIInstruments.giltIdFromName`
+reads both and is the only place either shape is decoded. The **cash statement carries neither**:
+its description is `20000 HIS MAJE4LN STK30` and its symbol is II's own code, `T30`. Nothing in
+that file identifies the instrument except the **SEDOL** (`BSQNRD0`), so that is what
+`IICashStatementParser` joins on — see "Gilt SEDOLs" under Price history for where the map comes
+from. A `giltIdFromName` match requires a gilt marker (`UNITED KINGDOM` / `TREASURY` / `GILT`)
+**and** a maturity date **and** a plausible coupon: half a gilt id is worse than none, because
+`Instruments.isBond` switches the whole position onto the per-£100-nominal value formula on the
+strength of it. An unresolved gilt keeps the broker's code — a missing price, which the
+unpriced-symbols panel surfaces, rather than a wrong one.
+
+Unconverted, `T30` was the 2026-08-24 failure again in a new place: no feed knows the code, so
+the cash-ledger view dropped a £19,902 position from the totals outright, and had it priced it
+would have used the per-share formula against a per-£100 quote (2026-08-25). The two stored ledger
+rows were re-keyed in place; a re-import of the same file now dedups against them, since the
+canonical id is part of the II dedup key `(date, type, symbol, amount, currency)`.
+
+**II's price column is per £1 nominal, AJ Bell's is per £100.** II exports the 4.375% 2030 at
+`£0.9951` against a `20,000` quantity, AJ Bell exports its gilts at `76.76` against `200,000` —
+both `Market Value` figures are right, and `IISippParser` uses the exported value rather than
+`qty × price`, so nothing has to reconcile the two conventions. Only the *feed* price matters for
+the RT column, and that is HL's, always per £100.
 
 `persistence/GiltSymbolMigration` re-keys rows written before that, run from the
 `CashTransactionRepository` and `PriceHistoryRepository` constructors (the ledger has no re-import
@@ -1094,6 +1125,8 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
   Hourly + startup. Symbols are `"GILT {coupon}% {year}"` (no Yahoo ticker map; HL's
   zero-padded coupons "4.750" are trimmed to the broker form "4.75"). Currency `"GBP"`.
   Rides the intraday job's prune for retention. `GiltPriceFetcher` sends a browser UA.
+  Each tick also publishes the page's **SEDOL → gilt-id map** to the `gilt_sedols` KV entry
+  (see "Gilt SEDOLs" below).
   Each tick also **upserts** today's row into `price_history` so the daily series
   self-accumulates even when the app isn't running all day — last-write-wins. **That rollup is
   weekday-only** (`GiltPriceFetchJob.isTradingDay`, keyed off each bar's own timestamp so a tick
@@ -1118,6 +1151,16 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
   not today's). **Never clobbers**: if a target name already exists, appends `_2`, `_3`, ...
   Tradeweb files are manually sourced and irreplaceable, so `REPLACE_EXISTING` is forbidden
   here.
+
+**Gilt SEDOLs.** `GiltPriceFetcher.Snapshot` carries a `sedolToSymbol` map beside its bars —
+HL's name cell reads `Treasury 4.375% 07/03/2030 GBP | GB00BSQNRD01 | BSQNRD0`, so the SEDOL comes
+out of the response the job **already makes hourly**, at zero extra HTTP. `GiltPriceFetchJob`
+merges it into the `gilt_sedols` KV entry (73 gilts currently) and `IiCashImporter` reads it on
+every import, which is what lets `IICashStatementParser` recognise a gilt in a file that names it
+only by a broker code. It is **merged, never replaced**: a gilt drops off HL's page the day it
+matures, and a cash statement from before then is still importable. The alternative — a committed
+`T30 = GILT 4.375% 2030` table — would need an edit for every gilt ever bought and could only ever
+be wrong, never right; the mapping is a published fact and a free source publishes it.
 
 **Gilt price history sources:** two independent feeds writing the same table via the same
 upsert. Either can fill or overwrite the other's day. The intraday rollup gives continuous

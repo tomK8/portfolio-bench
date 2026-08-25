@@ -519,9 +519,12 @@ public class BeanConfiguration {
     @Bean
     public IiCashImporter iiCashImporter(JdbcConnectionFactory jdbcConnectionFactory,
                                          CashTransactionRepository cashTransactionRepository,
-                                         HistoricalFxRateProvider historicalFxRateProvider) {
+                                         HistoricalFxRateProvider historicalFxRateProvider,
+                                         KeyValueStore keyValueStore) {
+        // Read on every import rather than captured: GiltPriceFetchJob refreshes the map hourly.
         return new IiCashImporter(jdbcConnectionFactory.dbDir(),
-                cashTransactionRepository, historicalFxRateProvider);
+                cashTransactionRepository, historicalFxRateProvider,
+                () -> keyValueStore.getStringMap(GiltPriceFetchJob.SEDOL_MAP_KEY));
     }
 
     @Bean
@@ -636,8 +639,10 @@ public class BeanConfiguration {
     @Bean
     public GiltPriceFetchJob giltPriceFetchJob(GiltPriceFetcher giltPriceFetcher,
                                                IntradayPriceRepository intradayPriceRepository,
-                                               PriceHistoryRepository priceHistoryRepository) {
-        return new GiltPriceFetchJob(giltPriceFetcher, intradayPriceRepository, priceHistoryRepository);
+                                               PriceHistoryRepository priceHistoryRepository,
+                                               KeyValueStore keyValueStore) {
+        return new GiltPriceFetchJob(giltPriceFetcher, intradayPriceRepository,
+                priceHistoryRepository, keyValueStore);
     }
 
     @Bean

@@ -5,6 +5,7 @@ import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -28,6 +30,12 @@ import java.util.Map;
  * {@link IntradayPriceFetchJob}, which prunes shared rows from {@code price_intraday} after
  * each of its ticks.
  *
+ * <p>Each tick also publishes the page's SEDOL → gilt-id mapping to the {@code gilt_sedols} KV
+ * entry, which is what lets {@code IICashStatementParser} recognise a gilt in a cash statement
+ * that names it only by a broker code and a SEDOL. The map is <b>merged</b>, never replaced: a
+ * gilt drops off HL's page the day it matures, and a cash file re-imported after that must still
+ * resolve. It costs no extra HTTP — the SEDOLs are in the response this job already makes.
+ *
  * <p>Each tick also <em>upserts</em> today's row in {@code price_history} (one row per gilt) so
  * the daily series accumulates from intraday data even when the app isn't running all day —
  * last-write-wins, and the manual Tradeweb batch import can overwrite either with authoritative
@@ -40,24 +48,52 @@ public class GiltPriceFetchJob {
     private static final Logger log = LoggerFactory.getLogger(GiltPriceFetchJob.class);
     private static final ZoneId LONDON = ZoneId.of("Europe/London");
 
+    /** KV entry holding the merged SEDOL → {@code "GILT {coupon}% {year}"} mapping. */
+    public static final String SEDOL_MAP_KEY = "gilt_sedols";
+
     private final GiltPriceFetcher fetcher;
     private final IntradayPriceRepository intradayRepo;
     private final PriceHistoryRepository priceHistoryRepo;
+    private final KeyValueStore kv;
 
     public GiltPriceFetchJob(GiltPriceFetcher fetcher, IntradayPriceRepository intradayRepo,
                              PriceHistoryRepository priceHistoryRepo) {
+        this(fetcher, intradayRepo, priceHistoryRepo, null);
+    }
+
+    /** @param kv where the SEDOL map is published; null means "don't publish it". */
+    public GiltPriceFetchJob(GiltPriceFetcher fetcher, IntradayPriceRepository intradayRepo,
+                             PriceHistoryRepository priceHistoryRepo, KeyValueStore kv) {
         this.fetcher = fetcher;
         this.intradayRepo = intradayRepo;
         this.priceHistoryRepo = priceHistoryRepo;
+        this.kv = kv;
     }
 
     public void run() {
-        List<IntradayBar> bars = fetcher.fetch();
+        GiltPriceFetcher.Snapshot snapshot = fetcher.fetch();
+        List<IntradayBar> bars = snapshot.bars();
         List<IntradayBar> changed = dropUnchangedSameDay(bars);
         int saved = intradayRepo.saveIntradayBars(changed);
         int rolled = priceHistoryRepo.upsertPriceBars(toDailyBars(bars));
-        log.info("Gilt prices — {} fetched, {} unchanged today, {} new intraday, {} daily upsert",
-                bars.size(), bars.size() - changed.size(), saved, rolled);
+        int sedols = publishSedols(snapshot.sedolToSymbol());
+        log.info("Gilt prices — {} fetched, {} unchanged today, {} new intraday, {} daily upsert, "
+                        + "{} SEDOLs known",
+                bars.size(), bars.size() - changed.size(), saved, rolled, sedols);
+    }
+
+    /**
+     * Merges this scrape's SEDOLs into the stored map and returns the resulting size. A matured
+     * gilt stops appearing on the page, so entries are only ever added or updated — dropping one
+     * would silently un-resolve a cash statement that is still importable.
+     */
+    private int publishSedols(Map<String, String> scraped) {
+        if (kv == null) return 0;
+        Map<String, String> merged = new LinkedHashMap<>(kv.getStringMap(SEDOL_MAP_KEY));
+        if (scraped.isEmpty() || merged.entrySet().containsAll(scraped.entrySet())) return merged.size();
+        merged.putAll(scraped);
+        kv.putStringMap(SEDOL_MAP_KEY, merged);
+        return merged.size();
     }
 
     /**

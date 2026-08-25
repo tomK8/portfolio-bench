@@ -59,4 +59,21 @@ class KeyValueStoreTest {
         kv.putStringSet("symbols", java.util.List.of("NVDA", "WMT"));
         assertEquals(java.util.Set.of("NVDA", "WMT"), kv.getStringSet("symbols"));
     }
+
+    @Test
+    void stringMapRoundTripsAndSkipsMalformedLines() throws Exception {
+        // The values here are gilt ids, which carry spaces and a '%' — a line format that split
+        // on whitespace would mangle them, so the split is on the first '=' only.
+        KeyValueStore kv = new KeyValueStore(dir);
+        kv.putStringMap("gilt_sedols", new java.util.LinkedHashMap<>(java.util.Map.of(
+                "BSQNRD0", "GILT 4.375% 2030")));
+        assertEquals(java.util.Map.of("BSQNRD0", "GILT 4.375% 2030"), kv.getStringMap("gilt_sedols"));
+
+        Files.writeString(dir.resolve("gilt_sedols.txt"),
+                "BSQNRD0=GILT 4.375% 2030\n\nno-equals-sign\n=orphan value\nEMPTY=\n");
+        assertEquals(java.util.Map.of("BSQNRD0", "GILT 4.375% 2030"), kv.getStringMap("gilt_sedols"),
+                "a half-written line is dropped, not read as a mapping");
+
+        assertEquals(java.util.Map.of(), kv.getStringMap("never_written"));
+    }
 }

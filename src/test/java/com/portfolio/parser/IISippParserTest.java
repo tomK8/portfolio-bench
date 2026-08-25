@@ -50,6 +50,23 @@ class IISippParserTest {
         assertEquals("BRK.B", IISippParser.normaliseSecurityId("BRK.B"));
     }
 
+    // --- securityIdFor() ---
+
+    @Test
+    void giltTakesTheCanonicalIdFromItsName() {
+        // II's own code for the 4.375% 2030 is "T30", which no price feed knows and which
+        // Instruments.isBond cannot recognise — so the position priced per share instead of per
+        // £100 nominal and the cash-ledger view dropped it. The name carries what's needed.
+        assertEquals("GILT 4.375% 2030",
+                IISippParser.securityIdFor("T30", "UNITED KINGDOM 4.375 07/03/2030"));
+    }
+
+    @Test
+    void equityKeepsItsTicker() {
+        assertEquals("GOOGL", IISippParser.securityIdFor("GOOGL", "Alphabet Inc Class A"));
+        assertEquals("SEMI", IISippParser.securityIdFor("SEMI", ""));
+    }
+
     // --- parse() with real file ---
 
     @Test
@@ -74,6 +91,14 @@ class IISippParserTest {
                 .filter(h -> h.getSecurityId().equals("GOOGL"))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Expected a GOOGL holding"));
+
+        // The gilt row is filed under the id the gilt price feed writes, not under II's "T30".
+        Holding gilt = holdings.stream()
+                .filter(h -> h.getSecurityId().equals("GILT 4.375% 2030"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Expected the gilt under its canonical id"));
+        assertEquals(new BigDecimal("20000"), gilt.getQuantity(), "quantity is £ nominal");
+        assertEquals(new BigDecimal("19902.00"), gilt.getCurrentMarketValue());
 
         // All holdings have positive quantity, avgPricePaid, and currentMarketValue
         holdings.forEach(h -> {

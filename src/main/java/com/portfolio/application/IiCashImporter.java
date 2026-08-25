@@ -9,6 +9,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * II SIPP UUID-named CSVs. Multiple files (one per currency); each becomes its own result row
@@ -26,8 +28,19 @@ public class IiCashImporter extends AbstractCashImporter {
 
     public IiCashImporter(Path archiveDir, CashTransactionRepository repo,
                           HistoricalFxRateProvider fxProvider) {
+        this(archiveDir, repo, fxProvider, Map::of);
+    }
+
+    /**
+     * @param giltSedols SEDOL → canonical gilt id, published by {@code GiltPriceFetchJob}. II
+     *                   names a gilt by a code of its own and its description carries no coupon,
+     *                   so the SEDOL is the only thing in the file that identifies one.
+     */
+    public IiCashImporter(Path archiveDir, CashTransactionRepository repo,
+                          HistoricalFxRateProvider fxProvider,
+                          Supplier<Map<String, String>> giltSedols) {
         super(archiveDir, repo);
-        this.parser = new IICashStatementParser(fxProvider);
+        this.parser = new IICashStatementParser(fxProvider, giltSedols);
     }
 
     @Override

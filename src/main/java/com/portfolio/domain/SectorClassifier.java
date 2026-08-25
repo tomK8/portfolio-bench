@@ -88,9 +88,24 @@ public class SectorClassifier {
     /**
      * Splits one position's GBP value across buckets and computes its AI/Tech share.
      *
-     * <p>Resolution order: bond → override → fund look-through → Yahoo sector → unclassified.
-     * Bonds come first so gilts need no configuration, and the override beats the feed so an
-     * instrument Yahoo has no sector for (a bullion ETC) can still be placed.
+     * <p>Resolution order: bond → override → wrapper asset class → fund look-through → Yahoo
+     * sector → unclassified. Bonds come first so gilts need no configuration, and the override
+     * beats everything below it so a position can always be placed by hand.
+     *
+     * <p><b>The asset-class step is what stops this file needing maintenance.</b> A bullion ETC
+     * has no Yahoo sector and never will, and a gilt ETF's equity sector-weightings would be
+     * meaningless if it published any — so both used to need an {@code override.*} line, and
+     * {@link Instruments} already knew about them. It listed eleven bullion ETCs and three bond
+     * funds; {@code sectors.properties} listed three and one. SGLN — the gold ETC actually held —
+     * was among the eight in the gap, and sat in the red "excluded from every sector" strip
+     * looking like a data failure when it is simply gold (2026-08-25). Buying any of the other
+     * seven would have done the same. Deferring to {@link Instruments#assetClassOf} makes the
+     * wrapper sets a single list rather than two partial ones, so a symbol added there is placed
+     * everywhere at once.
+     *
+     * <p>Only the two classes that <em>are</em> a bucket are consulted. {@code EQUITY} is the
+     * catch-all {@code assetClassOf} returns for anything it does not recognise, so acting on it
+     * would mean overriding the feed with a default — the opposite of what this step is for.
      */
     public Classification classify(Position p) {
         String symbol = normalise(p.symbol());
@@ -103,11 +118,24 @@ public class SectorClassifier {
         if (override != null) {
             return single(override, gbp, symbol);
         }
+        SectorBucket wrapper = wrapperBucket(p.symbol());
+        if (wrapper != null) {
+            return single(wrapper, gbp, symbol);
+        }
         if (p.fundWeights() != null && !p.fundWeights().isEmpty()) {
             return lookThrough(symbol, gbp, p.fundWeights(), p.fundHoldings());
         }
         SectorBucket bucket = SectorBucket.fromYahooSector(p.yahooSector());
         return single(bucket == null ? SectorBucket.UNCLASSIFIED : bucket, gbp, symbol);
+    }
+
+    /** The bucket a wrapper's underlying dictates, or null when the feed should decide. */
+    private static SectorBucket wrapperBucket(String securityId) {
+        return switch (Instruments.assetClassOf(securityId)) {
+            case COMMODITY -> SectorBucket.COMMODITIES;
+            case GILT -> SectorBucket.FIXED_INCOME;
+            default -> null;
+        };
     }
 
     private Classification single(SectorBucket bucket, BigDecimal gbp, String symbol) {

@@ -292,6 +292,38 @@ class StyleClassifierTest {
     }
 
     @Test
+    void everyBullionEtcIsNonEquityWithNoOverride() {
+        // classifier() configures PHGP only. SGLN, the gold actually held, was in Instruments'
+        // bullion list but not in style.properties, so it was reported as unscoreable — a data
+        // gap to go and fix rather than the deliberate holding it is (2026-08-25).
+        for (String symbol : Instruments.bullionEtcs()) {
+            Classification c = classifier().classify(new Position(
+                    symbol, d("6643"), Metrics.empty(), false));
+            assertEquals(StyleBucket.NON_EQUITY, c.bucket(), symbol);
+            assertFalse(c.income(), symbol + " pays nothing and must not be an income holding");
+        }
+    }
+
+    @Test
+    void everyBondFundIsFixedIncomeWithNoOverride() {
+        for (String symbol : Instruments.bondFunds()) {
+            Classification c = classifier().classify(new Position(
+                    symbol, d("10000"), Metrics.empty(), false));
+            assertEquals(StyleBucket.FIXED_INCOME, c.bucket(), symbol);
+            assertTrue(c.income(), symbol + " is fixed income and so an income holding");
+        }
+    }
+
+    @Test
+    void aBullionEtcIsNotScoredAsAFund() {
+        // Ordering guard: the asset-class step precedes the fund branch, so a metal ETC with an
+        // aggregate P/E published against it is still bullion rather than a value fund.
+        Classification c = classifier().classify(new Position(
+                "SGLN", d("6643"), m().fund("12", "1.2", "1.1").build(), true));
+        assertEquals(StyleBucket.NON_EQUITY, c.bucket());
+    }
+
+    @Test
     void bullionIsStructuralButNotIncome() {
         // Only fixed income is an income holding structurally. A bullion ETC pays nothing, and
         // routing every structural bucket through the same "counts as income" rule would put

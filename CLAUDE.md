@@ -735,13 +735,13 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   detecting it would need a maintained fund-ticker list whose only possible effect is the label on a
   calibration line — a list that can only ever be wrong and never right. Bond and bullion wrappers
   *are* detected, because for those the underlying changes the number.
-  Two tests guard the classification from opposite directions, because one alone leaves a hole:
-  `everyZeroSectorOverrideInSectorsPropertiesIsAlsoZeroDrift` walks `sectors.properties` into
-  `Instruments`, and `bullionEtcsInInstrumentsAreAllZeroDrift` pins the bullion set itself — **SGLN
-  is the case only the second reaches**, being the gold ETC actually held and absent from
-  `sectors.properties` (as are IGLN/PHAU/SSLN/PHSP/PHAG/PHPD/PHPT; only PHGP/GBS/SGBX are overridden
-  there). Zero drift is correct for all of them, but holding one of the eight would put it in the
-  allocation view's `UNCLASSIFIED` strip.
+  `bullionEtcsInInstrumentsAreAllZeroDrift` pins the bullion set itself. **`Instruments` is now the
+  only home of those sets**: the allocation view's two classifiers used to keep partial copies in
+  `sectors.properties` / `style.properties` (three of eleven bullion ETCs, one of three bond
+  funds), and the warning this paragraph carried — that holding one of the eight in the gap would
+  drop it into the `UNCLASSIFIED` strip — is exactly what happened to SGLN. Both classifiers now
+  defer to `assetClassOf`, and a guard test fails the build if an `override.*` line reappears for
+  a symbol it already places. See "Sector & AI/Tech breakdown".
 
 - **The yield source — derived, because Yahoo publishes no forward yield.**
   `FundamentalsRepository.loadForwardYields(Set<String>)` reads `dividendRate ÷ price` from
@@ -1846,8 +1846,11 @@ not publish, so they are in neither numerator. `StyleBreakdownServiceTest` pins 
 denominators and the bridge closing.
 
 **`resources/style.properties`** holds only *judgements* — thresholds, weights, and `override.*`
-for instruments no multiple can describe (mirroring `sectors.properties`: PHGP/GBS/SGBX bullion →
-`NON_EQUITY`, VGOV → `FIXED_INCOME`). No per-symbol multiples, no as-of dates, nothing that drifts.
+as a per-position escape hatch. No per-symbol multiples, no as-of dates, nothing that drifts.
+Bullion ETCs and gilt funds are **not** listed: `StyleClassifier` defers to
+`Instruments.assetClassOf` (`COMMODITY` → `NON_EQUITY`, `GILT` → `FIXED_INCOME`, the latter
+routed through the same `fixedIncome()` path a directly-held gilt takes), so the wrapper sets have
+one home — see the sector block's note for what the second copy cost.
 
 **UI**: basis toggle (% of total / % of invested, both computed server-side so it toggles without
 a refetch), an income tile carrying both yields ("Portfolio yield — 4.2% on income holdings · 1.8%
@@ -1906,9 +1909,25 @@ invested.
   Currently Discretionary £53,446 (4.2% of total; £27,175 direct + £26,271 via funds) and Staples
   £32,296 (2.5%; £17,470 + £14,825).
 - **`domain.SectorClassifier`** (framework-free, unit-tested). Resolution order:
-  `Instruments.isBond` → `override.<SYMBOL>` → **fund look-through** → Yahoo sector →
-  `UNCLASSIFIED`. Anything unclassifiable is surfaced by name in an amber strip, never absorbed
-  into a neighbouring bucket (same discipline as Attribution's `excluded`).
+  `Instruments.isBond` → `override.<SYMBOL>` → **wrapper asset class** → **fund look-through** →
+  Yahoo sector → `UNCLASSIFIED`. Anything unclassifiable is surfaced by name in an amber strip,
+  never absorbed into a neighbouring bucket (same discipline as Attribution's `excluded`).
+
+  **The wrapper-asset-class step is what stops `sectors.properties` needing maintenance.** A
+  bullion ETC has no Yahoo sector and never will, and a gilt ETF's equity sector-weightings would
+  be meaningless if it published any — so both used to need an `override.*` line, duplicating a
+  judgement `Instruments` already held. It listed **eleven** bullion ETCs and three bond funds;
+  `sectors.properties` listed three and one. **SGLN — the gold ETC actually held — was among the
+  eight in the gap**, sitting in the red "excluded from every sector" strip as though the feed had
+  failed, when it is simply gold (2026-08-25); buying any of the other seven would have done the
+  same, and CLAUDE.md had predicted exactly this two sections down. Both classifiers now defer to
+  `Instruments.assetClassOf` (`COMMODITY` → `COMMODITIES`, `GILT` → `FIXED_INCOME`), so the
+  wrapper sets are **one list rather than two partial ones** and a new metal ETC added to
+  `Instruments` is placed in both blocks with no properties edit. Only those two classes are
+  consulted: `EQUITY` is the catch-all `assetClassOf` returns for anything unrecognised, so acting
+  on it would mean overriding the feed with a default. **The step sits after the override** (the
+  escape hatch still wins) **and before look-through** — a wrapper that did publish sector weights
+  must not be decomposed into equity sectors it does not hold.
 - **"Unclassified" is three states, not one** — and only the last is a finding. A held name has no
   sector until `fundamentals_snapshot` has a row for it, and that cache is filled by
   `FundamentalsFetchJob` on a **4-hour** `fixedDelay` over the `held_symbols` set, so anything
@@ -1965,8 +1984,12 @@ invested.
   a genuine **lower bound**; Yahoo names only the top 10 (~46% of EQQQ), so the UI renders it as
   `≥` with the name-coverage %.
 - **`resources/sectors.properties`** holds only *judgements*, nothing that drifts: `override.*`
-  for bullion ETCs Yahoo has no sector for, and `aitech.include` (GOOG/GOOGL/META/AMZN/NFLX +
-  TSLA/BABA; V/MA and LSEG/REL deliberately excluded). No weights, no as-of dates.
+  as a per-position escape hatch, and `aitech.include` (GOOG/GOOGL/META/AMZN/NFLX + TSLA/BABA;
+  V/MA and LSEG/REL deliberately excluded). No weights, no as-of dates. **Bullion ETCs and gilt
+  funds are deliberately absent and must not be re-added** — `Instruments` owns those sets and the
+  classifier defers to it. `InstrumentsTest.neitherPropertiesFileRedeclaresAWrapperInstrumentsKnows`
+  fails the build if an `override.*` line reappears for a symbol `assetClassOf` already places,
+  since a shadowing copy is exactly how SGLN went missing.
 - **UI**: basis toggle (% of total / % of invested, both computed server-side so it toggles
   without a refetch), AI/Tech tile showing the **bridge** (Technology sector + AI names filed in
   other sectors), doughnut, table with a **direct / via-fund** column keeping the inferred part

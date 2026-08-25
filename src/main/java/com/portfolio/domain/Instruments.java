@@ -51,6 +51,19 @@ public final class Instruments {
     }
 
     /**
+     * The wrapper sets, for the tests that pin every member through the classifiers. Package-
+     * private rather than public: they are a guard against these lists being duplicated into a
+     * properties file, so exposing them for general use would defeat the point.
+     */
+    static Set<String> bullionEtcs() {
+        return BULLION_ETCS;
+    }
+
+    static Set<String> bondFunds() {
+        return BOND_FUNDS;
+    }
+
+    /**
      * The instrument's asset class, for the drift term in the open-orders touch model. Resolution
      * order: direct bond → bond fund → bullion ETC → equity.
      *

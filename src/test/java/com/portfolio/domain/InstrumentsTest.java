@@ -115,22 +115,26 @@ class InstrumentsTest {
     }
 
     @Test
-    void everyZeroSectorOverrideInSectorsPropertiesIsAlsoZeroDrift() throws Exception {
-        // Two lists of the same judgement is how they drift apart. sectors.properties is where a
-        // bullion ETC or a gilt fund gets declared for the allocation view; if one is added there
-        // and forgotten in Instruments, it would silently start carrying an equity's drift.
-        Properties p = new Properties();
-        try (InputStream in = InstrumentsTest.class.getResourceAsStream("/sectors.properties")) {
-            p.load(in);
-        }
-        for (String key : p.stringPropertyNames()) {
-            if (!key.startsWith("override.")) continue;
-            String bucket = p.getProperty(key).trim();
-            if (!bucket.equals("COMMODITIES") && !bucket.equals("FIXED_INCOME")) continue;
-            String symbol = key.substring("override.".length());
-            assertEquals(0.0, Instruments.assetClassOf(symbol).annualTotalReturn(),
-                    symbol + " is " + bucket + " in sectors.properties but carries drift as "
-                            + Instruments.assetClassOf(symbol) + " — add it to Instruments");
+    void neitherPropertiesFileRedeclaresAWrapperInstrumentsKnows() {
+        // Replaces a guard that walked sectors.properties into Instruments. That direction is
+        // now empty by design: the wrapper sets have one home, and the classifiers defer to
+        // assetClassOf. What has to be guarded is the copy coming back — an override re-added
+        // here would shadow Instruments silently, which is exactly how SGLN went missing.
+        for (String file : List.of("/sectors.properties", "/style.properties")) {
+            Properties p = new Properties();
+            try (InputStream in = InstrumentsTest.class.getResourceAsStream(file)) {
+                assertNotNull(in, file + " should be on the classpath");
+                p.load(in);
+            } catch (java.io.IOException e) {
+                throw new AssertionError(e);
+            }
+            for (String key : p.stringPropertyNames()) {
+                if (!key.startsWith("override.")) continue;
+                String symbol = key.substring("override.".length()).trim().toUpperCase();
+                assertEquals(AssetClass.EQUITY, Instruments.assetClassOf(symbol),
+                        file + " overrides " + symbol + ", which Instruments already classifies "
+                                + "as a wrapper — delete the line rather than keeping two lists");
+            }
         }
     }
 

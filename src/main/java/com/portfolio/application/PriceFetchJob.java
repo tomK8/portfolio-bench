@@ -2,14 +2,17 @@ package com.portfolio.application;
 
 import com.portfolio.adapter.YahooPriceFetcher;
 import com.portfolio.adapter.YahooTickerMap;
+import com.portfolio.domain.DividendYield;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.DividendHistoryRepository;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
@@ -35,14 +38,47 @@ public class PriceFetchJob {
     private final YahooPriceFetcher fetcher;
     private final YahooTickerMap tickers;
     private final KeyValueStore kv;
+    /** Null in tests that only exercise price writes; every dividend write is guarded. */
+    private final DividendHistoryRepository divRepo;
 
     public PriceFetchJob(CashTransactionRepository cashRepo, PriceHistoryRepository priceRepo,
                          YahooPriceFetcher fetcher, YahooTickerMap tickers, KeyValueStore kv) {
+        this(cashRepo, priceRepo, fetcher, tickers, kv, null);
+    }
+
+    public PriceFetchJob(CashTransactionRepository cashRepo, PriceHistoryRepository priceRepo,
+                         YahooPriceFetcher fetcher, YahooTickerMap tickers, KeyValueStore kv,
+                         DividendHistoryRepository divRepo) {
         this.cashRepo = cashRepo;
         this.priceRepo = priceRepo;
         this.fetcher = fetcher;
         this.tickers = tickers;
         this.kv = kv;
+        this.divRepo = divRepo;
+    }
+
+    /**
+     * Persists the dividend events that rode along with a price fetch.
+     *
+     * <p>{@code fullWindow} is the whole point: only a fetch that asked for a symbol's entire
+     * history may record a scan marker, because only then does "no dividends" mean the instrument
+     * pays none. The nightly incremental run covers the gap since the last stored bar and sees no
+     * dividends on almost every night, so a marker from there would libel every payer as an
+     * accumulator. It still writes what it finds, so a newly-declared dividend lands the same night.
+     */
+    private void captureDividends(String ticker, YahooPriceFetcher.DailySeries series,
+                                  LocalDate windowStart, boolean fullWindow) {
+        if (divRepo == null || series == null) return;
+        List<DividendYield.Payment> payments = new ArrayList<>();
+        String currency = null;
+        for (YahooPriceFetcher.DividendEvent e : series.dividends()) {
+            payments.add(new DividendYield.Payment(e.exDate(), e.amount()));
+            if (currency == null) currency = e.currency();
+        }
+        if (!payments.isEmpty()) divRepo.saveDividends(ticker, payments, currency);
+        if (fullWindow && !series.bars().isEmpty()) {
+            divRepo.markFullScan(ticker, windowStart, payments.size());
+        }
     }
 
     public void run() {
@@ -62,8 +98,12 @@ public class PriceFetchJob {
                 log.info("Skipped {} — already up to date", ticker);
                 continue;
             }
-            List<PriceBar> bars = fetcher.fetch(ticker, from, today);
+            YahooPriceFetcher.DailySeries series = fetcher.fetchSeries(ticker, from, today);
+            List<PriceBar> bars = series.bars();
             int touched = priceRepo.upsertPriceBars(bars);
+            // A first-ever fetch spans the whole lookback, so its empty dividend list is evidence;
+            // an incremental one covers days, so it may only add to what is already stored.
+            captureDividends(ticker, series, from, latest == null);
             log.info("Fetched {} rows for {} ({} written)", bars.size(), ticker, touched);
             // Only on the first-ever fetch for a ticker: an empty response means the ticker is
             // wrong, and a populated one still deserves a note if we reached it by identity.
@@ -103,8 +143,10 @@ public class PriceFetchJob {
             // total-return math at the start of the timeline.
             LocalDate earliest = priceRepo.getEarliestPriceDate(ticker);
             LocalDate from = (earliest != null && earliest.isBefore(defaultFrom)) ? earliest : defaultFrom;
-            List<PriceBar> bars = fetcher.fetch(ticker, from, today);
+            YahooPriceFetcher.DailySeries series = fetcher.fetchSeries(ticker, from, today);
+            List<PriceBar> bars = series.bars();
             int touched = priceRepo.upsertPriceBars(bars);
+            captureDividends(ticker, series, from, true);
             log.info("Rebuild: {} from {} → {} rows ({} written)", ticker, from, bars.size(), touched);
             if (!bars.isEmpty()) refreshed++;
             PriceFetchSupport.sleep(THROTTLE_MS);
@@ -158,8 +200,11 @@ public class PriceFetchJob {
         }
         String ticker = tickers.tickerFor(symbol);
         LocalDate today = LocalDate.now();
-        List<PriceBar> bars = fetcher.fetch(ticker, today.minusYears(lookbackYears), today);
+        LocalDate from = today.minusYears(lookbackYears);
+        YahooPriceFetcher.DailySeries series = fetcher.fetchSeries(ticker, from, today);
+        List<PriceBar> bars = series.bars();
         int touched = priceRepo.upsertPriceBars(bars);
+        captureDividends(ticker, series, from, true);
         log.info("fetchSingle {} → {}: {} rows ({} written)", symbol, ticker, bars.size(), touched);
         if (bars.isEmpty() && priceRepo.getLatestPriceDate(ticker) == null) {
             PriceFetchSupport.warnNoPriceData(log, symbol, ticker);

@@ -115,7 +115,8 @@ public record StyleBreakdown(
      *             a bond fund with no published distribution yield, say. Null when it does.
      */
     public record IncomeContributor(String symbol, BigDecimal gbp, BigDecimal dividendYield,
-                                    BigDecimal annualIncomeGbp, String bucket, String note) {
+                                    BigDecimal annualIncomeGbp, String bucket, String note,
+                                    String yieldSource) {
     }
 
     /**

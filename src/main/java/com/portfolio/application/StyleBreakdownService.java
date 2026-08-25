@@ -44,15 +44,30 @@ public class StyleBreakdownService {
     private final FundamentalsRepository fundamentalsRepo;
     private final StyleClassifier classifier;
     private final FundamentalsWarmer warmer;
+    /** Null where a caller has no price/dividend store — every use is guarded. */
+    private final DividendYieldService dividendYields;
+    private final FundamentalsWarmer dividendWarmer;
 
     public StyleBreakdownService(AllocationService allocationService,
                                  FundamentalsRepository fundamentalsRepo,
                                  StyleClassifier classifier,
                                  FundamentalsWarmer warmer) {
+        this(allocationService, fundamentalsRepo, classifier, warmer, null,
+                FundamentalsWarmer.disabled());
+    }
+
+    public StyleBreakdownService(AllocationService allocationService,
+                                 FundamentalsRepository fundamentalsRepo,
+                                 StyleClassifier classifier,
+                                 FundamentalsWarmer warmer,
+                                 DividendYieldService dividendYields,
+                                 FundamentalsWarmer dividendWarmer) {
         this.allocationService = allocationService;
         this.fundamentalsRepo = fundamentalsRepo;
         this.classifier = classifier;
         this.warmer = warmer;
+        this.dividendYields = dividendYields;
+        this.dividendWarmer = dividendWarmer == null ? FundamentalsWarmer.disabled() : dividendWarmer;
     }
 
     public StyleBreakdown breakdown() {
@@ -64,6 +79,13 @@ public class StyleBreakdownService {
             return empty(warnings);
         }
         AllocationPoint point = snapshot.point();
+
+        // Yields derived from each name's own payment history, for the instruments Yahoo's
+        // summaryDetail says nothing about. HICL.L — a 6% infrastructure trust — publishes neither
+        // dividendYield nor dividendRate there, so before this the income overlay read it as a
+        // non-payer and filed £10,270 under Value with no warning at all.
+        Map<String, DividendYieldService.Derived> derived = dividendYields == null
+                ? Map.of() : dividendYields.yieldsFor(point.symbolGbp().keySet());
 
         Map<String, FundamentalsRepository.Cached> cache = fundamentalsRepo.loadAll();
         if (cache.isEmpty()) {
@@ -97,8 +119,10 @@ public class StyleBreakdownService {
 
             QuoteSummary quote = quoteFor(cache, symbol);
             boolean fund = quote != null && !quote.sectorWeights().isEmpty();
+            DividendYieldService.Derived derivedYield = derived.get(symbol);
             StyleClassifier.Classification c = classifier.classify(
-                    new StyleClassifier.Position(symbol, gbp, metricsOf(quote), fund,
+                    new StyleClassifier.Position(symbol, gbp,
+                            metricsOf(quote, derivedYield), fund,
                             snapshot.quantityBySymbol().get(symbol)));
 
             total.merge(c.bucket(), c.gbp(), BigDecimal::add);
@@ -122,20 +146,29 @@ public class StyleBreakdownService {
             // *bond* fund is exempt: it reaches this loop as FIXED_INCOME via a style.properties
             // override, not through the fund branch, and is an income holding whatever Yahoo says.
             boolean bond = c.bucket() == StyleBucket.FIXED_INCOME;
-            if (fund && !bond) {
+            // A fund's distribution yield is now derivable from its own payment history, so a
+            // distributing ETF contributes to the portfolio-wide figure instead of being assumed
+            // to pay nothing. It still does not join the income *group*: that is the scored
+            // equities plus fixed income, and a tracker paying 0.9% is not an income holding.
+            // An accumulating fund derives a real zero and is correctly no longer a caveat.
+            BigDecimal fundYield = fund && !bond && derivedYield != null ? derivedYield.yield() : null;
+            if (fund && !bond && fundYield == null) {
                 fundsExcludedFromYield = true;
                 continue;
             }
-            BigDecimal positionIncome = c.dividendYield() == null
-                    ? null : gbp.multiply(c.dividendYield(), MC);
+            BigDecimal effectiveYield = fund && !bond ? fundYield : c.dividendYield();
+            BigDecimal positionIncome = effectiveYield == null
+                    ? null : gbp.multiply(effectiveYield, MC);
             if (positionIncome != null) annualIncome = annualIncome.add(positionIncome);
+            if (fund && !bond) continue;      // in the total, not in the income group
             if (!c.income()) continue;
 
             // An income holding: the yielding equities, plus all fixed income structurally.
             incomeGbp = incomeGbp.add(gbp);
             StyleBreakdown.IncomeContributor row = new StyleBreakdown.IncomeContributor(
                     symbol, c.gbp(), c.dividendYield(), scaled(positionIncome),
-                    c.bucket().label(), positionIncome == null ? c.note() : null);
+                    c.bucket().label(), positionIncome == null ? c.note() : null,
+                    yieldSource(quote, derivedYield));
             if (bond) {
                 bondGbp = bondGbp.add(gbp);
                 bondRows.add(row);
@@ -186,9 +219,16 @@ public class StyleBreakdownService {
         }
         // Fire-and-forget, shared with the sector block so a newly bought name is fetched once.
         warmer.warm(awaitingData);
+        // A symbol whose payment history has never been read in full cannot be told apart from one
+        // that pays nothing, so it is warmed rather than assumed. Separate warmer from the one
+        // above: this backfills price history, not fundamentals.
+        if (dividendYields != null) {
+            dividendWarmer.warm(dividendYields.unscanned(point.symbolGbp().keySet()));
+        }
         if (fundsExcludedFromYield) {
-            warnings.add("Funds are excluded from the income figures: Yahoo publishes no "
-                    + "distribution yield for them. Both yields shown are a lower bound.");
+            warnings.add("Some funds are excluded from the income figures — no distribution yield "
+                    + "is published for them and none could be derived from their payment history. "
+                    + "Both yields shown are a lower bound.");
         }
         if (!incomeUnknown.isEmpty()) {
             warnings.add("No coupon or distribution yield could be derived for "
@@ -226,12 +266,19 @@ public class StyleBreakdownService {
      * Unpacks the cached quote into the classifier's input. Keeps every Yahoo field name confined
      * to this one method, so the domain class stays ignorant of where its numbers came from.
      */
-    private static StyleClassifier.Metrics metricsOf(QuoteSummary q) {
-        if (q == null) return StyleClassifier.Metrics.empty();
+    private static StyleClassifier.Metrics metricsOf(QuoteSummary q,
+                                                    DividendYieldService.Derived derived) {
+        BigDecimal fallback = derived == null ? null : derived.yield();
+        if (q == null) {
+            // No cached quote, but a payment history can still say what it yields.
+            return fallback == null ? StyleClassifier.Metrics.empty()
+                    : new StyleClassifier.Metrics(null, null, fallback, null, null, null, null,
+                            null, null, null, null, null, null);
+        }
         Map<String, BigDecimal> x = q.extra();
         return new StyleClassifier.Metrics(
                 q.trailingPe(), q.forwardPe(),
-                x.get("dividendYield"),
+                x.get("dividendYield") != null ? x.get("dividendYield") : fallback,
                 x.get("enterpriseToEbitda"),
                 x.get("priceToSalesTrailing12Months"),
                 x.get("revenueGrowth"),
@@ -242,6 +289,16 @@ public class StyleBreakdownService {
                 x.get("fundPriceToEarnings"),
                 x.get("fundPriceToBook"),
                 x.get("fundPriceToSales"));
+    }
+
+    /**
+     * Where the yield on a row came from, so a reader can argue with it. Yahoo's own figure wins
+     * when it exists; a derived one names its evidence ("4 payments to 2026-05-28").
+     */
+    private static String yieldSource(QuoteSummary q, DividendYieldService.Derived derived) {
+        if (q != null && q.extra().get("dividendYield") != null) return "Yahoo published yield";
+        if (derived != null) return "Derived — " + derived.explain();
+        return null;
     }
 
     /** Value flags first, then growth, each tagged so the popup can tell them apart. */

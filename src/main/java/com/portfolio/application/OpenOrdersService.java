@@ -222,6 +222,8 @@ public class OpenOrdersService {
      */
     private final OrderEventVariance eventVariance;
     private final FundamentalsRepository fundamentals;
+    /** Fallback yield source for names Yahoo publishes no dividend figure for; may be null. */
+    private final DividendYieldService dividendYields;
     private final Map<String, Instant> lastWarmed = new ConcurrentHashMap<>();
 
     public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
@@ -299,6 +301,28 @@ public class OpenOrdersService {
                              KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
                              Consumer<String> historyWarmer, OrderEventVariance eventVariance,
                              FundamentalsRepository fundamentals) {
+        this(fileLocator, parsers, fxRateProvider, excelReportWriter, outputDir, intraday, history,
+                tickerMap, kv, quoteWarmer, historyWarmer, eventVariance, fundamentals, null);
+    }
+
+    /**
+     * @param dividendYields fallback yield source for instruments whose {@code summaryDetail}
+     *                       publishes neither {@code dividendYield} nor {@code dividendRate}, of
+     *                       which HICL.L — a ~6% infrastructure trust — is the live case. Without
+     *                       it such a row nets nothing off its class's 8% total return and is
+     *                       over-drifted by the full yield, which is precisely the per-name
+     *                       dispersion the netting exists to capture. Null degrades to the
+     *                       fundamentals cache alone.
+     */
+    public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
+                             FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
+                             Path outputDir, IntradayPriceRepository intraday,
+                             PriceHistoryRepository history, YahooTickerMap tickerMap,
+                             KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
+                             Consumer<String> historyWarmer, OrderEventVariance eventVariance,
+                             FundamentalsRepository fundamentals,
+                             DividendYieldService dividendYields) {
+        this.dividendYields = dividendYields;
         this.fundamentals = fundamentals;
         this.eventVariance = eventVariance;
         this.fileLocator = fileLocator;
@@ -1073,12 +1097,37 @@ public class OpenOrdersService {
      * and is flagged, never its probability.
      */
     private Map<String, BigDecimal> loadForwardYields(List<OpenOrder> orders) {
-        if (fundamentals == null) return Map.of();
         Set<String> symbols = new LinkedHashSet<>();
         for (OpenOrder o : orders) {
             if (o.symbol() != null && !o.symbol().isBlank()) symbols.add(o.symbol());
         }
-        return fundamentals.loadForwardYields(symbols);
+        return forwardYields(symbols);
+    }
+
+    /**
+     * The yield map for a set of symbols: Yahoo's published figure where there is one, otherwise
+     * one derived from the name's own payment history.
+     *
+     * <p><b>Published wins, and the order matters.</b> {@code dividendRate ÷ price} is the
+     * <em>indicated</em> annual dividend — declared and forward-looking — while a derived figure is
+     * necessarily trailing, so preferring the derived one would trade a forecast for a record of
+     * the past on every name that has both. The fallback only fills genuine holes: instruments
+     * where {@code summaryDetail} comes back with no dividend fields at all.
+     */
+    private Map<String, BigDecimal> forwardYields(Set<String> symbols) {
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        if (fundamentals != null) out.putAll(fundamentals.loadForwardYields(symbols));
+        if (dividendYields != null) {
+            Set<String> gaps = new LinkedHashSet<>();
+            for (String s : symbols) if (!out.containsKey(s)) gaps.add(s);
+            if (!gaps.isEmpty()) {
+                for (Map.Entry<String, DividendYieldService.Derived> e
+                        : dividendYields.yieldsFor(gaps).entrySet()) {
+                    out.put(e.getKey(), e.getValue().yield());
+                }
+            }
+        }
+        return out;
     }
 
     /**
@@ -1106,10 +1155,8 @@ public class OpenOrdersService {
      * keeps a modelling parameter off the query string.
      */
     private VolForecast.Yield yieldFor(String symbol, AssetClass assetClass) {
-        if (fundamentals == null || assetClass == null || !assetClass.appliesYield()) {
-            return VolForecast.Yield.NONE;
-        }
-        return yieldFor(fundamentals.loadForwardYields(Set.of(symbol)), symbol, assetClass);
+        if (assetClass == null || !assetClass.appliesYield()) return VolForecast.Yield.NONE;
+        return yieldFor(forwardYields(Set.of(symbol)), symbol, assetClass);
     }
 
     private VolForecast.Yield yieldFor(Map<String, BigDecimal> yields, String symbol,

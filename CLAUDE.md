@@ -307,6 +307,7 @@ no `System.out` in production code.
 | Order touch re-price  | `GET /orders/touch`        | `OpenOrdersService.touchEstimate` (re-blends σ at the new N) |
 | Drift switch (stored) | `POST /orders/drift`       | `OpenOrdersService.setUseDrift` |
 | Pre-trade limit probe | `GET /orders/probe`        | `OpenOrdersService.probe` |
+| Order annotation      | `POST /orders/note`        | `OrderHistoryRepository.saveNote` |
 | Open orders → Excel   | `POST /orders/export`      | `OpenOrdersService.export` (→ ~/Documents) |
 | Export Excel          | `POST /export`             | `ExportExcelService`      |
 | Import cash statement | `POST /import-cash`        | `ImportCashService`       |
@@ -849,6 +850,58 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   disagree. Excel gains `Horizon (sessions)`, `Horizon from` (expiry / GTC default), `P(touch
   horizon)`, `P(low)`, `P(high)`, `σ eff` and `Vol source`; the export re-parses, so an on-screen
   edit stays a what-if rather than state.
+- **Annotations, and the orders a broker has stopped listing.** A free-text **Note** column on
+  every row, and a collapsed **Closed orders** block at the foot of the panel — the Open-orders
+  counterpart to the Journal tab's `trade_notes`, and the reason the orders pipeline now persists
+  anything at all (it was a pure disk read before). `persistence/OrderHistoryRepository` owns both:
+  one `order_history` table holding **every order the tool has seen**, live ones included, with
+  `closed_at` marking the ones that have gone.
+  - **Live orders are in the table on purpose.** An annotation has to be attachable the moment an
+    order is placed and still be there after it fills, so the row must predate the closing. Writing
+    history only when an order disappears would leave the note nowhere to live until then and
+    nowhere to come from afterwards.
+  - **`OpenOrder.identity()` is the key**, and it is the broker's own reference whenever the export
+    carries one (AJ Bell and II both do; **Citi exports none**, so a Roth order falls back to a
+    composite of broker + symbol + side + qty + price + date entered). The reference is the right
+    identity *because* a broker issues a new one when you modify an order: the modified order is a
+    different order, the note you wrote stays attached to the version that was actually cancelled,
+    and the two can be read against each other — which is the whole point of keeping the history.
+    The Roth composite has the same property by construction. Broker is always in the key, so two
+    brokers cannot collide on a reference of the same shape; `stripTrailingZeros` means a quantity
+    restated as `10.00` is not a new order.
+  - **An order closes by absence as much as by status.** A broker either restates it with a
+    terminal status (Dealt / Cancelled / Executed / Expired — all four spellings appear on the live
+    book) or simply stops listing it. `record` treats both the same. It is called **per broker and
+    only from inside the parse `try`**: absence is meaningful only when the file actually parsed,
+    and a broker whose export failed must not have its orders closed by the absence of rows nobody
+    read. The **unfiltered** parse is passed in, not the open subset — an order restated as "Dealt"
+    would otherwise look like a disappearance and lose the status that says what happened to it.
+    An order the broker restates as open again is **reopened**, so it never sits in the history
+    block and the table at once.
+  - **A re-parse never touches the note.** The `ON CONFLICT` update lists status, price, quantity,
+    amount and `last_seen` and deliberately omits `note` and `first_seen`: the text belongs to the
+    user, not the export. `saveNote` likewise only ever UPDATEs — an annotation is *about* an order
+    the tool has seen, so a key it does not know is rejected rather than inserted as a bare row
+    with no broker and no price (the realistic cause is a stale tab whose order has been pruned).
+  - **Retention is 31 days from `closed_at`, and applies to closed rows only.** An order resting
+    for months is not history and is never pruned — pruning it would delete a live annotation.
+    Later imports do not refresh an already-closed row's date, so the clock runs from when the
+    order actually went rather than from the last time anything was read. `prune` runs inside
+    `load()` because this panel is the only writer and so the only thing that can leave the table
+    growing. On the **first** run every terminal row in the exports is filed as closed *today* —
+    there is no record of when they really went, so that cohort's month starts from the first load.
+  - The history rides on the **same payload** as the table (`OrdersReport.history`) rather than a
+    second endpoint: capped at a month it is small, and the panel renders it collapsed with no
+    extra round trip. Notes ride alongside as `OrdersReport.notes` keyed by identity, deliberately
+    **off `OpenOrder`** — that record already carries thirty-odd broker and model fields, and this
+    keeps the parsers and every `with*` enrichment untouched by a feature none of them are part of.
+  - **UI**: the Note cell is a borderless `<input>` that shows its border on hover and focus, saved
+    on blur (and on Enter, which blurs) against the value it was rendered with, so tabbing through
+    a row of notes writes nothing. Both handlers are delegated from `document.body` — the fragment
+    is htmx-swapped on every tab click. An `<input>` is already excluded from the row click that
+    opens the price popup, so typing a note cannot open a chart. Closed rows carry an editable note
+    too: same input, same endpoint, no second code path.
+
 - **The volatility forecast — `domain/VolForecast`.** The single resolution point for σ_eff, and the
   reason the touch columns are not scaled by a trailing window. Realized vol mean-reverts, so
   pricing a 90-session horizon off the last 90 sessions reads a name fresh from a violent fortnight

@@ -243,6 +243,8 @@
                 <th data-sort="num">Amount £</th>
                 <th class="txt" data-sort="text">Date entered</th>
                 <th class="txt" data-sort="text">Expiry</th>
+                <th class="txt" data-sort="text"
+                    title="Your note on this order. Saved as you leave the box, against the broker's own order reference — so when you modify an order the broker issues a new reference, the note stays with the version that was actually cancelled and both can be compared in the history below.">Note</th>
             </tr>
             </thead>
             <tbody>
@@ -299,6 +301,15 @@
                 <td class="txt" th:text="${o.dateEntered != null ? o.dateEntered.toString() : '—'}">—</td>
                 <td class="txt"
                     th:text="${o.expiry != null ? o.expiry.toString() : (o.duration != null ? o.duration : '—')}">—</td>
+                <!--
+                  An <input> is already excluded from the row's click handler (it lists input,
+                  button, a, select, label), so typing a note cannot open the price popup.
+                -->
+                <td class="txt order-note-cell">
+                    <input class="order-note" type="text" placeholder="add a note…"
+                           th:attr="data-order-key=${o.identity()}"
+                           th:value="${orders.noteFor(o)}"/>
+                </td>
             </tr>
             </tbody>
         </table>
@@ -379,6 +390,57 @@
             GBP) is folded into the order value.
         </p>
     </div>
+
+    <!--
+      Closed orders: what a broker has stopped listing as open, either by restating it with a
+      terminal status or by dropping it from the export. Collapsed by default and carried in the
+      same payload as the table above — a month's worth is small, so it costs no second request.
+    -->
+    <details class="order-history" th:if="${!#lists.isEmpty(orders.history)}">
+        <summary>
+            Closed orders
+            <span class="muted" th:text="'(' + ${#lists.size(orders.history)} + ')'">(0)</span>
+        </summary>
+        <p class="muted" style="font-size: 0.82rem; margin: 0.5rem 0;">
+            Orders that have filled, been cancelled, or been replaced by a modified version — kept
+            with their notes for <b>31 days</b> after they closed, then deleted. A broker issues a
+            new reference when you modify an order, so the version you replaced keeps its own note
+            and you can read it against the one above.
+        </p>
+        <table class="swing-tbl">
+            <thead>
+            <tr>
+                <th class="txt">Closed</th>
+                <th class="txt">Broker</th>
+                <th class="txt">Security</th>
+                <th class="txt">Side</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th class="txt">Entered</th>
+                <th class="txt">Status</th>
+                <th class="txt">Note</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="h : ${orders.history}">
+                <td class="txt" th:text="${h.closedAt}">—</td>
+                <td class="txt" th:text="${h.broker}">—</td>
+                <td class="txt" th:text="${h.display()}">—</td>
+                <td class="txt"
+                    th:classappend="${h.side != null ? (#strings.equalsIgnoreCase(h.side, 'Buy') ? 'val-pos' : (#strings.equalsIgnoreCase(h.side, 'Sell') ? 'val-neg' : '')) : ''}"
+                    th:text="${h.side != null ? h.side : '—'}">—</td>
+                <td th:text="${h.quantity != null ? #numbers.formatDecimal(h.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:text="${h.price != null ? #numbers.formatDecimal(h.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td class="txt" th:text="${h.dateEntered != null ? h.dateEntered : '—'}">—</td>
+                <td class="txt" th:text="${h.status != null ? h.status : '—'}">—</td>
+                <td class="txt order-note-cell">
+                    <input class="order-note" type="text" placeholder="add a note…"
+                           th:attr="data-order-key=${h.orderKey}" th:value="${h.note}"/>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </details>
 
     <div th:replace="~{fragments/mappings :: list}"></div>
 

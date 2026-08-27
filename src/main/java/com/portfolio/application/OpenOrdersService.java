@@ -15,6 +15,7 @@ import com.portfolio.parser.OrderParser;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.KeyValueStore;
+import com.portfolio.persistence.OrderHistoryRepository;
 import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.port.FxRateProvider;
 import org.slf4j.Logger;
@@ -211,6 +212,7 @@ public class OpenOrdersService {
     private final Path outputDir;
     private final IntradayPriceRepository intraday;
     private final PriceHistoryRepository history;
+    private final OrderHistoryRepository orderHistory;
     private final YahooTickerMap tickerMap;
     private final KeyValueStore kv;
     private final Consumer<Collection<String>> quoteWarmer;
@@ -322,6 +324,28 @@ public class OpenOrdersService {
                              Consumer<String> historyWarmer, OrderEventVariance eventVariance,
                              FundamentalsRepository fundamentals,
                              DividendYieldService dividendYields) {
+        this(fileLocator, parsers, fxRateProvider, excelReportWriter, outputDir, intraday, history,
+                tickerMap, kv, quoteWarmer, historyWarmer, eventVariance, fundamentals,
+                dividendYields, null);
+    }
+
+    /**
+     * @param orderHistory store for the annotation on each order and for the orders a broker has
+     *                     stopped listing. Null degrades to a panel with no Note column and no
+     *                     history block — the same bargain {@code kv}, {@code eventVariance} and
+     *                     {@code fundamentals} take, and for the same reason: bookkeeping must
+     *                     never be the difference between a panel that renders and one that fails.
+     */
+    public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
+                             FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
+                             Path outputDir, IntradayPriceRepository intraday,
+                             PriceHistoryRepository history, YahooTickerMap tickerMap,
+                             KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
+                             Consumer<String> historyWarmer, OrderEventVariance eventVariance,
+                             FundamentalsRepository fundamentals,
+                             DividendYieldService dividendYields,
+                             OrderHistoryRepository orderHistory) {
+        this.orderHistory = orderHistory;
         this.dividendYields = dividendYields;
         this.fundamentals = fundamentals;
         this.eventVariance = eventVariance;
@@ -406,6 +430,14 @@ public class OpenOrdersService {
     }
 
     /** The panel's default view: the stored forecast setting, calibration records written. */
+    /**
+     * Saves one order's annotation. False when the key names no order this tool has recorded, or
+     * when no history store is wired — the caller reports it rather than the panel failing.
+     */
+    public boolean saveNote(String orderKey, String note) {
+        return orderHistory != null && orderHistory.saveNote(orderKey, note);
+    }
+
     public OrdersReport load() {
         return load(effectiveConfig(null, null, null));
     }
@@ -420,6 +452,7 @@ public class OpenOrdersService {
         List<OpenOrder> orders = new ArrayList<>();
         List<String> sources = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
+        LocalDate today = LocalDate.now();
 
         Map<String, BigDecimal> rates = Map.of();
         try {
@@ -441,15 +474,24 @@ public class OpenOrdersService {
             if (file.isEmpty()) continue;
 
             try {
+                List<OpenOrder> parsed = parser.parse(file.get());
                 List<OpenOrder> open = new ArrayList<>();
-                for (OpenOrder o : parser.parse(file.get())) {
-                    if (isOpen(o.status())) open.add(o.withAmountGbp(toGbp(o.amount(), o.currency(), rates)));
+                Set<String> openKeys = new LinkedHashSet<>();
+                for (OpenOrder o : parsed) {
+                    if (!isOpen(o.status())) continue;
+                    open.add(o.withAmountGbp(toGbp(o.amount(), o.currency(), rates)));
+                    openKeys.add(o.identity());
                 }
                 open.sort(Comparator
                         .comparing(OpenOrder::dateEntered, Comparator.nullsLast(Comparator.reverseOrder()))
                         .thenComparing(o -> displayKey(o), Comparator.nullsLast(Comparator.naturalOrder())));
                 orders.addAll(open);
                 sources.add(parser.sourceName() + " — " + file.get().getFileName());
+                // Recorded per broker, and only from inside the try — a broker whose export failed
+                // to parse must not have its orders closed by the absence of rows nobody read.
+                // The unfiltered `parsed` list is passed on purpose: an order restated as "Dealt"
+                // has to keep that status rather than look like a disappearance.
+                if (orderHistory != null) orderHistory.record(parser.sourceName(), parsed, openKeys, today);
             } catch (Exception e) {
                 warnings.add(parser.sourceName() + ": failed to parse " + file.get().getFileName()
                         + " (" + e.getMessage() + ")");
@@ -461,9 +503,14 @@ public class OpenOrdersService {
         Quotes quotes = enrichWithCurrentPrice(orders, rates, cfg, true);
         warnings.addAll(quotes.warnings());
         warmLaggingQuotes(quotes.warm());
+        // Retention runs here rather than on a scheduler: this panel is the only thing that writes
+        // the table, so it is also the only thing that can leave it growing.
+        if (orderHistory != null) orderHistory.prune(today);
         return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
                 unmappedInstruments(orders), quotes.notes(), quotes.asOf(), chartableSymbols(orders),
-                cfg);
+                cfg,
+                orderHistory == null ? Map.of() : orderHistory.notes(),
+                orderHistory == null ? List.of() : orderHistory.closed());
     }
 
     /**
@@ -1389,12 +1436,31 @@ public class OpenOrdersService {
      *               the numbers beside it don't reflect. Same convention as {@code GET /swing}
      *               echoing its effective {@code SwingConfig}.
      */
+    /**
+     * @param notes   annotation per {@link OpenOrder#identity()}. Kept off {@code OpenOrder} — that
+     *                record already carries thirty-odd broker and model fields, and a note is
+     *                neither; it also means the parsers and every {@code with*} enrichment stay
+     *                untouched by a feature none of them are part of.
+     * @param history closed orders, newest first — the ones a broker has stopped listing as open.
+     *                Shipped with the same payload rather than behind a second endpoint: it is
+     *                capped at a month by construction, so it is small, and the panel can render
+     *                it collapsed with no extra round trip.
+     */
     public record OrdersReport(List<OpenOrder> orders, List<String> sources,
                                List<String> warnings, boolean empty,
                                List<UnmappedInstrument> unmapped,
                                Map<String, String> priceNotes, String quotesAsOf,
                                Set<String> chartableSymbols,
-                               VolForecast.Config config) {
+                               VolForecast.Config config,
+                               Map<String, String> notes,
+                               List<OrderHistoryRepository.HistoricalOrder> history) {
+
+        /** This order's annotation, or empty — what the editable Note cell is filled with. */
+        public String noteFor(OpenOrder o) {
+            if (o == null) return "";
+            String n = notes.get(o.identity());
+            return n == null ? "" : n;
+        }
 
         /**
          * Whether clicking this row can open the price popup. Only a symbol that resolves to a

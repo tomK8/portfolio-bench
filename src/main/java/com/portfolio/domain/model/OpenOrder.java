@@ -93,6 +93,35 @@ public record OpenOrder(
      * a sell's — biasing both toward a false flag. {@link #ESTIMATE_TOLERANCE} (0.5%) sits well above
      * that fee on any realistic order size.
      */
+    /**
+     * A stable key for this order across re-parses of the broker's export — what an annotation
+     * hangs on, and what says whether an order in today's file is the one that was in yesterday's.
+     *
+     * <p>The broker reference is used whenever the export carries one (AJ Bell and II both do). It
+     * is the right identity precisely <em>because</em> a broker issues a new reference when an
+     * order is modified: a modified order is a different order, its old annotation stays attached
+     * to the version that was actually cancelled, and the two can be compared — which is the whole
+     * point of keeping the history.
+     *
+     * <p><b>Citi exports no reference</b>, so a Roth order falls back to a composite of the fields
+     * that describe the order itself. That composite has the same property by construction:
+     * change the price, the quantity or the side and it is a different key, because at the broker
+     * it is a different order. Date entered is included so the same limit re-placed later is not
+     * mistaken for the original. Broker is always in the key, so two brokers cannot collide on a
+     * reference of the same shape.
+     */
+    public String identity() {
+        if (reference != null && !reference.isBlank()) {
+            return broker + "|" + reference.trim();
+        }
+        return String.join("|", broker,
+                symbol == null ? "" : symbol,
+                side == null ? "" : side,
+                quantity == null ? "" : quantity.stripTrailingZeros().toPlainString(),
+                price == null ? "" : price.stripTrailingZeros().toPlainString(),
+                dateEntered == null ? "" : dateEntered.toString());
+    }
+
     public boolean throughLimit() {
         if (price == null || currentPrice == null || side == null || price.signum() == 0) return false;
         // An extended-hours quote can sit through the limit all morning without the order being

@@ -194,6 +194,47 @@
             syncLedgerExpandAll();
         });
 
+        // ── Open-orders annotations ─────────────────────────────────────────────
+        // Delegated from document.body because the orders fragment is htmx-swapped on every tab
+        // click and on both model checkboxes — anything bound inside it would be lost on the first
+        // swap and stacked on every re-bind. Saved on blur rather than per keystroke: a note is a
+        // sentence, not a filter.
+        document.body.addEventListener('focusout', function (e) {
+            var input = e.target;
+            if (!input.classList || !input.classList.contains('order-note')) return;
+            var key = input.dataset.orderKey;
+            if (!key) return;
+            var value = input.value.trim();
+            // The value it was rendered with is the baseline, so tabbing through a row full of
+            // notes writes nothing. Updated after a successful save so a second blur is also quiet.
+            if (value === (input.dataset.saved != null ? input.dataset.saved
+                                                       : (input.defaultValue || ''))) return;
+            input.classList.remove('order-note-saved', 'order-note-failed');
+            mpPost('/orders/note', {orderKey: key, note: value})
+                .then(function (res) {
+                    if (res.ok) {
+                        input.dataset.saved = value;
+                        input.classList.add('order-note-saved');
+                        setTimeout(function () { input.classList.remove('order-note-saved'); }, 1200);
+                    } else {
+                        input.classList.add('order-note-failed');
+                        input.title = res.message || 'Not saved';
+                    }
+                })
+                .catch(function (err) {
+                    input.classList.add('order-note-failed');
+                    input.title = String(err.message || err);
+                });
+        });
+
+        // Enter commits without waiting for focus to move, which is what a one-line field implies.
+        document.body.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter' || !e.target.classList
+                || !e.target.classList.contains('order-note')) return;
+            e.preventDefault();
+            e.target.blur();
+        });
+
         // ── Cash-ledger grouping: expand / collapse ─────────────────────────────
         // Groups render collapsed from the server and open on click. Both handlers are delegated
         // from document.body because the whole table is htmx-swapped on every re-sync — anything

@@ -493,9 +493,28 @@ public class CashTransactionRepository {
     }
 
     /**
-     * II flow. Rows arrive with native running balance from the file's Running Balance column.
-     * Dedup key is (date, type, symbol, amount, currency) — the currency component keeps the
-     * GBP and USD per-currency ledgers isolated within the shared {@code account='II'}.
+     * II flow. Rows arrive oldest-first with the native running balance from the file's Running
+     * Balance column. Dedup key is (date, type, symbol, amount, currency) — the currency component
+     * keeps the GBP and USD per-currency ledgers isolated within the shared {@code account='II'}.
+     *
+     * <p><b>A matched row has its stored balance refreshed rather than being skipped outright</b>,
+     * the same rule {@link #saveAjBell} already applies and for the same reason: II back-dates rows
+     * into a day that has already been imported, which shifts the Running Balance of everything at
+     * or after it. On 2026-08-25 a gilt purchase was imported while that day's interest credit had
+     * not yet posted, so the purchase stored a balance of £691.93; the interest arrived in a later
+     * export, was inserted <em>after</em> it, and the purchase's balance should have become £718.38
+     * but stayed stale. Identity is the row, never its position — so re-importing must carry the
+     * file's newer balance onto rows it already holds.
+     *
+     * <p><b>It also records the file's newest balance per {@code (account, currency)}</b>, which is
+     * what {@link #latestCashBalances()} then reports. That is the fix for the half of the problem
+     * an UPDATE cannot reach: with the interest credit inserted after the purchase, the newest row
+     * <em>by rowid</em> is the older row <em>in ledger order</em>, and no ordering over
+     * {@code (transaction_date, rowid)} can tell them apart — rowid records when we imported a row,
+     * not where it sits in the day. The file already knows: it is newest-first, so its first data
+     * row is the account's balance. Storing that removes the guess. Left unfixed it reported II
+     * holding £20,631.74 of cash against a real £718.38, overstating the whole portfolio by the
+     * £19,913.36 the gilt had been bought with (2026-08-27).
      */
     public int saveII(List<CashTransaction> rows) {
         if (rows.isEmpty()) return 0;
@@ -512,22 +531,89 @@ public class CashTransactionRepository {
             }
 
             int inserted = 0;
-            try (PreparedStatement ps = conn.prepareStatement(INSERT_SQL)) {
+            int refreshed = 0;
+            try (PreparedStatement ps = conn.prepareStatement(INSERT_SQL);
+                 PreparedStatement upd = conn.prepareStatement(
+                         "UPDATE cash_transactions SET cash_balance = ?, cash_balance_gbp = ? " +
+                                 "WHERE account = 'II' AND transaction_date = ? AND type = ? " +
+                                 "AND symbol = ? AND amount = ? AND currency = ? " +
+                                 "AND (cash_balance_gbp IS NOT ?)")) {
                 for (CashTransaction t : rows) {
                     String key = iiKey(t.transactionDate(), t.type().name(), t.symbol(),
                             t.amount(), t.currency());
-                    if (existingKeys.contains(key)) continue;
+                    if (existingKeys.contains(key)) {
+                        if (t.cashBalanceGbp() == null) continue;
+                        setNullableDouble(upd, 1, t.cashBalance());
+                        setNullableDouble(upd, 2, t.cashBalanceGbp());
+                        upd.setString(3, t.transactionDate());
+                        upd.setString(4, t.type().name());
+                        upd.setString(5, t.symbol());
+                        upd.setDouble(6, t.amount());
+                        upd.setString(7, t.currency());
+                        setNullableDouble(upd, 8, t.cashBalanceGbp());
+                        refreshed += upd.executeUpdate();
+                        continue;
+                    }
                     bindCashRow(ps, t);
                     ps.executeUpdate();
                     inserted++;
                 }
             }
-            log.info("Cash transactions [II]: {} inserted, {} already present (skipped)",
-                    inserted, rows.size() - inserted);
+            recordLatestBalances(Account.II, rows);
+            log.info("Cash transactions [II]: {} inserted, {} balance-refreshed, {} unchanged",
+                    inserted, refreshed, rows.size() - inserted - refreshed);
             return inserted;
         } catch (Exception e) {
             throw new IllegalStateException("Could not save II cash transactions", e);
         }
+    }
+
+    /**
+     * Remembers the closing balance the import's own file asserts, per {@code (account, currency)},
+     * so {@link #latestCashBalances()} need not infer which stored row is the day's last.
+     *
+     * <p>Rows arrive oldest-first, so the last row carrying a balance in each currency is the one
+     * the file listed first — the account's current balance. Held in the {@link KeyValueStore}
+     * rather than a column because it is a fact about the account, not about any row: exactly one
+     * value per {@code (account, currency)}, replaced wholesale by each import.
+     */
+    void recordLatestBalances(Account account, List<CashTransaction> rows) {
+        if (settings == null) return;
+        Map<String, CashTransaction> newestByCcy = new LinkedHashMap<>();
+        for (CashTransaction t : rows) {
+            if (t.cashBalanceGbp() == null) continue;
+            newestByCcy.put(t.currency(), t);
+        }
+        for (Map.Entry<String, CashTransaction> e : newestByCcy.entrySet()) {
+            CashTransaction t = e.getValue();
+            settings.putBigDecimal(latestBalanceKey(account, e.getKey(), "gbp"),
+                    BigDecimal.valueOf(t.cashBalanceGbp()));
+            settings.putBigDecimal(latestBalanceKey(account, e.getKey(), "native"),
+                    BigDecimal.valueOf(t.cashBalance() == null ? t.cashBalanceGbp() : t.cashBalance()));
+        }
+    }
+
+    private static String latestBalanceKey(Account account, String currency, String leg) {
+        return "cash_balance_" + account.dbValue() + "_" + currency + "_" + leg;
+    }
+
+    /**
+     * The balance an importer recorded straight from its file, or null when none has been.
+     * Preferred over any stored row because it needs no inference about which row is a day's last.
+     */
+    private CashBalance assertedBalance(String accountDbValue, String currency) {
+        if (settings == null) return null;
+        Account account;
+        try {
+            account = Account.fromDbValue(accountDbValue);
+        } catch (IllegalArgumentException unknown) {
+            return null;
+        }
+        BigDecimal gbp = settings.getBigDecimal(latestBalanceKey(account, currency, "gbp"), null);
+        if (gbp == null) return null;
+        BigDecimal nativeAmt = settings.getBigDecimal(
+                latestBalanceKey(account, currency, "native"), gbp);
+        return new CashBalance(accountDbValue, currency, nativeAmt.doubleValue(), gbp.doubleValue());
     }
 
     /**
@@ -962,6 +1048,14 @@ public class CashTransactionRepository {
             }
         } catch (Exception e) {
             log.warn("Could not load latest cash balances", e);
+        }
+        // An importer that read a closing balance out of its own file wins over the row scan
+        // above, which can only order by (transaction_date, rowid) and so cannot tell a
+        // back-dated row from a later one inside the same day. See saveII.
+        for (String key : new ArrayList<>(latestByKey.keySet())) {
+            String[] parts = key.split("\\|", 2);
+            CashBalance asserted = assertedBalance(parts[0], parts[1]);
+            if (asserted != null) latestByKey.put(key, asserted);
         }
         return new ArrayList<>(latestByKey.values());
     }

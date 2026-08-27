@@ -7,6 +7,7 @@ import com.portfolio.domain.grouping.HoldingGroupKey;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.persistence.FundamentalsRepository;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -17,8 +18,14 @@ import java.util.Map;
  * the two panels cannot disagree about what a holding is.
  *
  * <p>It lives in {@code application} rather than beside the other key types in {@code
- * domain.grouping} because it is the one that needs data off disk. The cache is read once per
- * grouped render and handed in, so the resolver itself stays a lookup.
+ * domain.grouping} because it is the one that needs data off disk. The cache is handed in
+ * already loaded (see {@link SectorGroupKeyProvider}), so the resolver itself stays a lookup.
+ *
+ * <p><b>{@link #groupFor(String, BigDecimal)} is the shared core, and the {@code keyFor} overrides
+ * are adapters.</b> Two tables group by sector — Cash ledger and Live — over two different row
+ * types, and a symbol's sector is a property of the symbol, not of whichever table is showing it.
+ * A second classification path would be free to disagree with the first about what EQQQ is, which
+ * is exactly the failure the "one classifier" rule elsewhere in the app exists to prevent.
  *
  * <h2>A fund spanning sectors gets its own group, not its largest one</h2>
  * The classifier's answer for a fund is a <i>split</i> — EQQQ is 57.8% technology, not a
@@ -37,7 +44,7 @@ import java.util.Map;
  * unplaceable at all. {@link SectorBreakdownService} handles cash outside the classify loop for
  * the same reason.
  */
-public final class SectorGroupKey implements HoldingGroupKey {
+public final class SectorGroupKey implements HoldingGroupKey<AggHolding> {
 
     private static final String CASH_SYMBOL = "CASH";
     private static final String MULTI_FUND_ID = "MULTI_SECTOR_FUND";
@@ -53,14 +60,21 @@ public final class SectorGroupKey implements HoldingGroupKey {
 
     @Override
     public Group keyFor(AggHolding holding) {
-        String symbol = holding.securityId();
+        return groupFor(holding.securityId(), holding.marketValueGbp());
+    }
+
+    /**
+     * The sector group for one position, given its symbol and GBP value. The value only matters
+     * because fund look-through splits it — the bucket that comes back is the same whatever it is.
+     */
+    public Group groupFor(String symbol, BigDecimal gbp) {
         if (CASH_SYMBOL.equalsIgnoreCase(symbol)) {
             return Group.of(SectorBucket.CASH.name(), SectorBucket.CASH.label());
         }
 
         QuoteSummary quote = quoteFor(symbol);
         SectorClassifier.Classification c = classifier.classify(new SectorClassifier.Position(
-                symbol, holding.marketValueGbp(),
+                symbol, gbp,
                 quote == null ? null : quote.labels().get("sector"),
                 quote == null ? Map.of() : quote.sectorWeights(),
                 constituentsOf(quote)));

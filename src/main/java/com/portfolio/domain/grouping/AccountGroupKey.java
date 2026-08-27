@@ -28,7 +28,7 @@ import java.util.Locale;
  * to tell apart — the live book already carries both orderings. Sorting makes the key a property
  * of the set.
  */
-public final class AccountGroupKey implements HoldingGroupKey {
+public final class AccountGroupKey implements HoldingGroupKey<AggHolding> {
 
     private static final String UNATTRIBUTED_ID = "no-account";
     /** " + " rather than a comma: the label is a set of accounts, not the raw Sources cell. */

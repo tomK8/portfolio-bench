@@ -1,12 +1,10 @@
 package com.portfolio.application;
 
-import com.portfolio.domain.SectorClassifier;
 import com.portfolio.domain.grouping.AccountGroupKey;
 import com.portfolio.domain.grouping.HoldingGroup;
 import com.portfolio.domain.grouping.HoldingGroupKey;
 import com.portfolio.domain.grouping.HoldingGrouper;
 import com.portfolio.domain.model.AggHolding;
-import com.portfolio.persistence.FundamentalsRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,21 +19,18 @@ import java.util.List;
  * percentages and the expand/collapse are all written against the abstraction, so the currency
  * and permanent/rotation splits that are wanted next need no change to any of them.
  *
- * <p>The sector key is the one that costs anything: it reads {@code fundamentals_snapshot} once
- * per grouped render. That read is skipped entirely for the keys that do not need it, which is
- * why the cache is loaded inside the {@code SECTOR} branch rather than in the constructor.
+ * <p>The sector key is the one that costs anything — it needs {@code fundamentals_snapshot} —
+ * so it comes from {@link SectorGroupKeyProvider}, which holds the loaded cache behind a short
+ * TTL and is shared with the Live tab. The keys that need no data off disk never touch it.
  */
 public class LedgerGroupingService {
 
     private static final Logger log = LoggerFactory.getLogger(LedgerGroupingService.class);
 
-    private final SectorClassifier classifier;
-    private final FundamentalsRepository fundamentalsRepo;
+    private final SectorGroupKeyProvider sectorKeys;
 
-    public LedgerGroupingService(SectorClassifier classifier,
-                                 FundamentalsRepository fundamentalsRepo) {
-        this.classifier = classifier;
-        this.fundamentalsRepo = fundamentalsRepo;
+    public LedgerGroupingService(SectorGroupKeyProvider sectorKeys) {
+        this.sectorKeys = sectorKeys;
     }
 
     /** The dropdown's options, in the order they are offered. */
@@ -89,9 +84,9 @@ public class LedgerGroupingService {
         return HoldingGrouper.group(holdings, keyFor(by));
     }
 
-    private HoldingGroupKey keyFor(GroupBy by) {
+    private HoldingGroupKey<AggHolding> keyFor(GroupBy by) {
         return switch (by) {
-            case SECTOR -> new SectorGroupKey(classifier, fundamentalsRepo.loadAll());
+            case SECTOR -> sectorKeys.get();
             case ACCOUNT -> new AccountGroupKey();
             case NONE -> throw new IllegalArgumentException("NONE has no resolver");
         };

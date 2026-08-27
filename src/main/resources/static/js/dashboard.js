@@ -5585,7 +5585,12 @@
         // pulse + age counter reflect actual data movement, not the SSE heartbeat.
         var liveState = {
             source: null, lastValues: {}, lastChangeAt: 0,
-            ageTimer: null, sortAttached: false, clickAttached: false
+            ageTimer: null, sortAttached: false, clickAttached: false,
+            // Grouping is a client-side choice over data every snapshot already carries.
+            // `expanded` has to live here rather than in the DOM: a frame arrives every 15s and
+            // rebuilds nothing but still re-orders rows, and a user who opened a group does not
+            // expect it to shut on the next tick.
+            grouping: 'none', expanded: {}, lastGroups: []
         };
 
         function setupLive() {
@@ -5597,12 +5602,39 @@
             if (!liveState.clickAttached) {
                 liveState.clickAttached = true;
                 // Delegated from the tbody: rows are created, patched and re-ordered on every SSE
-                // frame, so a per-row listener would be duplicated or lost. Opens the same price
-                // popup the Watchlist tab uses — the position need not be on the watchlist.
+                // frame, so a per-row listener would be duplicated or lost. A member row opens the
+                // same price popup the Watchlist tab uses (the position need not be on the
+                // watchlist); a group header toggles instead, since it names no single symbol.
                 document.querySelector('#live-table tbody').addEventListener('click', function (e) {
                     var tr = e.target.closest('tr');
-                    if (tr && tr.dataset.symbol) openSymbolModal(tr.dataset.symbol);
+                    if (!tr) return;
+                    if (tr.dataset.groupHead) {
+                        toggleLiveGroup(tr.dataset.groupHead, !liveState.expanded[tr.dataset.groupHead]);
+                        return;
+                    }
+                    if (tr.dataset.symbol) openSymbolModal(tr.dataset.symbol);
                 });
+                var sel = document.getElementById('live-group-by');
+                if (sel) {
+                    // Repaints from the snapshot already in hand rather than waiting up to 15s
+                    // for the next SSE frame — the grouping is a rendering choice over data the
+                    // client already has.
+                    sel.addEventListener('change', function () {
+                        liveState.grouping = sel.value;
+                        applyLiveRows(liveState.lastRows || [], liveState.lastGroups || []);
+                    });
+                    liveState.grouping = sel.value;
+                }
+                var expandBtn = document.getElementById('live-expand-all');
+                if (expandBtn) {
+                    expandBtn.addEventListener('click', function () {
+                        var expand = expandBtn.dataset.action !== 'collapse';
+                        (liveState.lastGroups || []).forEach(function (g) {
+                            liveState.expanded[g.id] = expand;
+                        });
+                        applyLiveRows(liveState.lastRows || [], liveState.lastGroups || []);
+                    });
+                }
             }
             // Initial JSON fetch paints something before the first SSE frame arrives.
             fetch('/live')
@@ -5677,7 +5709,9 @@
         function applyLiveSnapshot(snap) {
             if (!snap) return false;
             applyLiveTotals(snap.totals);
-            var changed = applyLiveRows(snap.rows || []);
+            liveState.lastGroups = snap.groups || [];
+            liveState.lastRows = snap.rows || [];
+            var changed = applyLiveRows(liveState.lastRows, liveState.lastGroups);
             var upd = document.getElementById('live-updated');
             if (snap.latestPriceAt && upd) {
                 upd.textContent = 'latest quote ' + new Date(snap.latestPriceAt).toLocaleTimeString();
@@ -5711,15 +5745,24 @@
             }
         }
 
-        function applyLiveRows(rows) {
+        function applyLiveRows(rows, groups) {
             var tbody = document.querySelector('#live-table tbody');
             if (!tbody) return;
             // If the user clicked a column header, respect their sort and don't re-order
             // existing rows on each snapshot — they can click again to re-sort.
             var userSorted = !!document.querySelector('#live-table thead th[data-sort-dir]');
+            groups = groups || [];
+            var grouped = liveState.grouping === 'sector' && groups.length > 0;
+            // Selected on [data-symbol] rather than 'tr': group headers are rows of the same
+            // tbody, and keying them by an undefined symbol would collapse them all onto one
+            // entry and then delete every one of them as unseen.
             var existing = {};
-            Array.from(tbody.querySelectorAll('tr')).forEach(function (tr) {
+            Array.from(tbody.querySelectorAll('tr[data-symbol]')).forEach(function (tr) {
                 existing[tr.dataset.symbol] = tr;
+            });
+            var groupOf = {};
+            groups.forEach(function (g) {
+                (g.symbols || []).forEach(function (sym) { groupOf[sym] = g.id; });
             });
             var seen = {};
             var prevByKey = liveState.lastValues;
@@ -5742,15 +5785,155 @@
                     existing[row.symbol] = tr;
                 }
                 if (renderLiveRow(tr, row, prevByKey, nextByKey)) changedAny = true;
-                if (!userSorted && !isNew) tbody.appendChild(tr);
+                applyLiveMembership(tr, grouped ? groupOf[row.symbol] : null);
+                if (!userSorted && !isNew && !grouped) tbody.appendChild(tr);
             });
             Object.keys(existing).forEach(function (sym) {
                 if (!seen[sym]) existing[sym].remove();
             });
+            if (renderLiveGroups(tbody, grouped ? groups : [], existing, userSorted,
+                                 prevByKey, nextByKey)) changedAny = true;
+            syncLiveExpandAll();
             liveState.lastValues = nextByKey;
             // First snapshot has no baseline, so we can't claim "changed". Subsequent
             // snapshots: changed = any cell value moved.
             return hasPrev && changedAny;
+        }
+
+        // Marks a row as a member of a group (or as a plain row again when grouping is off) and
+        // applies the group's current open/shut state. Driven from liveState.expanded rather than
+        // from the row's own class, so a frame landing mid-session can't reopen what the user shut.
+        function applyLiveMembership(tr, groupId) {
+            if (!groupId) {
+                delete tr.dataset.groupOf;
+                tr.classList.remove('group-member', 'collapsed');
+                return;
+            }
+            tr.dataset.groupOf = groupId;
+            tr.classList.add('group-member');
+            tr.classList.toggle('collapsed', !liveState.expanded[groupId]);
+        }
+
+        // Header rows are patched in place like the member rows, so a group's Day Δ flashes on a
+        // real move instead of being torn down and rebuilt every 15 seconds. Passing [] removes
+        // them, which is how switching back to None works.
+        function renderLiveGroups(tbody, groups, memberRows, userSorted, prevByKey, nextByKey) {
+            var heads = {};
+            Array.from(tbody.querySelectorAll('tr.group-header')).forEach(function (tr) {
+                heads[tr.dataset.groupHead] = tr;
+            });
+            var changed = false;
+            var seen = {};
+            groups.forEach(function (g) {
+                seen[g.id] = true;
+                var tr = heads[g.id];
+                if (!tr) {
+                    tr = document.createElement('tr');
+                    tr.className = 'group-header';
+                    tr.dataset.groupHead = g.id;
+                    for (var i = 0; i < 14; i++) tr.appendChild(document.createElement('td'));
+                    tr.cells[0].className = 'txt group-label';
+                    tr.cells[12].className = 'txt';
+                    tr.cells[13].className = 'txt';
+                    tbody.appendChild(tr);
+                    heads[g.id] = tr;
+                }
+                if (renderLiveGroupRow(tr, g, prevByKey, nextByKey)) changed = true;
+            });
+            Object.keys(heads).forEach(function (id) {
+                if (!seen[id]) heads[id].remove();
+            });
+            // Re-append header-then-members in the server's order (value desc). Skipped once the
+            // user has sorted a column — sortBody has already arranged the same blocks their way,
+            // and re-appending here would undo it on the next tick.
+            if (!userSorted) {
+                groups.forEach(function (g) {
+                    tbody.appendChild(heads[g.id]);
+                    (g.symbols || []).forEach(function (sym) {
+                        if (memberRows[sym]) tbody.appendChild(memberRows[sym]);
+                    });
+                });
+            }
+            return changed;
+        }
+
+        function renderLiveGroupRow(tr, g, prevByKey, nextByKey) {
+            var changed = false;
+            setGroupLabelCell(tr.cells[0], g);
+            tr.classList.toggle('group-residual', !!g.residual);
+            tr.classList.toggle('expanded', !!liveState.expanded[g.id]);
+            tr.title = g.note || '';
+            var nPct = numOrNull(g.dayChangePct);
+            var nDay = numOrNull(g.dayChangeGbp);
+            var nPos = numOrNull(g.positionGbp);
+            var key = 'grp|' + g.id + '|';
+            if (setNumericCell(tr.cells[4], key + 'pct', nPct, nPct == null ? '—' : fmtLivePct(nPct), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[4], nPct);
+            tr.cells[4].title = nPct == null ? '' :
+                'Weighted: total day move divided by what the group was worth at the previous ' +
+                'close — not the average of the member percentages.';
+            if (setNumericCell(tr.cells[5], key + 'day', nDay, nDay == null ? '—' : (nDay >= 0 ? '+' : '−') + fmtLiveNum(Math.abs(nDay), 2), prevByKey, nextByKey)) changed = true;
+            applyDeltaClass(tr.cells[5], nDay);
+            [[6, 'd5', g.change5dPct], [7, 'd10', g.change10dPct], [8, 'd30', g.monthChangePct],
+             [9, 'm3', g.change3mPct], [10, 'm6', g.change6mPct]].forEach(function (t) {
+                var cell = tr.cells[t[0]], n = numOrNull(t[2]);
+                if (setNumericCell(cell, key + t[1], n, n == null ? '—' : fmtLivePct(n), prevByKey, nextByKey)) changed = true;
+                applyDeltaClass(cell, n);
+                cell.title = n == null ? '' :
+                    'Value-weighted price change of the group over this window, using today\'s ' +
+                    'quantities — not a realised portfolio return (see Attribution for that).';
+            });
+            if (setNumericCell(tr.cells[11], key + 'pos', nPos, nPos == null ? '—' : fmtLiveNum(nPos, 2), prevByKey, nextByKey)) changed = true;
+            // The stalest member's quote, not the freshest: a summary line is only as current as
+            // the least current thing under it, and the newest would hide the lagging feed.
+            renderQuoteTs(tr.cells[13], g.priceTs, 'UNKNOWN');
+            if (g.priceTs) {
+                tr.cells[13].title = 'Oldest quote in this group' +
+                    (g.stalestSymbol ? ' (' + g.stalestSymbol + ')' : '') +
+                    ' — the group is only as fresh as its stalest member.';
+            }
+            return changed;
+        }
+
+        function setGroupLabelCell(td, g) {
+            if (!td.querySelector('.group-caret')) {
+                td.textContent = '';
+                td.appendChild(document.createElement('span')).className = 'group-caret';
+                td.appendChild(document.createElement('span')).className = 'group-name';
+                td.appendChild(document.createElement('span')).className = 'group-count';
+                td.appendChild(document.createElement('span')).className = 'group-note-flag';
+            }
+            td.querySelector('.group-caret').textContent = '\u25B6';
+            td.querySelector('.group-name').textContent = g.label;
+            td.querySelector('.group-count').textContent = '(' + (g.symbols || []).length + ')';
+            td.querySelector('.group-note-flag').textContent = g.note ? '\u24D8' : '';
+            td.dataset.sortValue = String(g.label || '').toLowerCase();
+        }
+
+        // Toggling touches the DOM directly rather than repainting the whole table: an SSE frame
+        // may be mid-flight, and a repaint would drop any flash animation currently playing.
+        function toggleLiveGroup(id, expand) {
+            liveState.expanded[id] = expand;
+            var tbody = document.querySelector('#live-table tbody');
+            if (!tbody) return;
+            var head = tbody.querySelector('tr[data-group-head="' + id + '"]');
+            if (head) head.classList.toggle('expanded', expand);
+            Array.from(tbody.querySelectorAll('tr.group-member')).forEach(function (tr) {
+                if (tr.dataset.groupOf === id) tr.classList.toggle('collapsed', !expand);
+            });
+            syncLiveExpandAll();
+        }
+
+        function syncLiveExpandAll() {
+            var btn = document.getElementById('live-expand-all');
+            if (!btn) return;
+            var groups = (liveState.grouping === 'sector' && liveState.lastGroups) || [];
+            btn.hidden = groups.length === 0;
+            var allOpen = groups.length > 0 && groups.every(function (g) {
+                return !!liveState.expanded[g.id];
+            });
+            btn.textContent = allOpen ? 'Collapse all' : 'Expand all';
+            btn.dataset.action = allOpen ? 'collapse' : 'expand';
         }
 
         function renderLiveRow(tr, row, prevByKey, nextByKey) {

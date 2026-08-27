@@ -501,6 +501,11 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public AssetTransferService assetTransferService(CashTransactionRepository cashTransactionRepository) {
+        return new AssetTransferService(cashTransactionRepository);
+    }
+
+    @Bean
     public SectorGroupKeyProvider sectorGroupKeyProvider(SectorClassifier sectorClassifier,
                                                          FundamentalsRepository fundamentalsRepository) {
         return new SectorGroupKeyProvider(sectorClassifier, fundamentalsRepository);

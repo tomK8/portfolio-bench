@@ -1690,6 +1690,7 @@
     <button class="tab" data-panel="panel-watchlist" type="button">Watchlist</button>
     <button class="tab" data-panel="panel-earnings" type="button">Earnings</button>
     <button class="tab" data-panel="panel-manual" type="button">Manual positions</button>
+    <button class="tab" data-panel="panel-transfers" type="button">Transfers</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -3176,6 +3177,47 @@
     <div id="ea-warnings" style="margin-top: 0.5rem;"></div>
     <div id="ea-days" style="margin-top: 0.6rem;"></div>
     <div id="ea-source" class="muted" style="font-size: 0.78rem; margin-top: 0.6rem;"></div>
+</section>
+
+<section class="tab-panel" id="panel-transfers">
+    <p class="muted" style="margin-top: 0">
+        <b>In-specie transfers</b> — the same shares moving from one account to another, with
+        nothing sold, nothing bought and no cash moving anywhere. No broker export announces this:
+        a cash statement cannot (no cash moves, so no row appears in it), and the holdings files
+        show it only after the fact, as a position that has vanished from one export and turned up
+        in another. So the cash ledger goes on reporting the position at the old account
+        indefinitely — right about what you hold, wrong about where. This is the missing input.
+    </p>
+    <p class="muted" style="margin-top: 0.4rem; font-size: 0.82rem;">
+        The <b>cost basis moves with the shares</b>, and it is read off the ledger rather than
+        typed: the amount written on each leg is the source account's own surviving FIFO cost, so
+        your total cost — and therefore your gain — is exactly what it was before. Using market
+        value instead would rewrite the cost basis and destroy the gain. Two rows are written, one
+        per account, in a single transaction; neither touches cash. <b>The whole position moves</b>
+        — partial transfers are not offered.
+    </p>
+    <p class="muted" style="margin-top: 0.4rem; font-size: 0.82rem;">
+        Record it <b>the day you initiate it</b>, not when it lands. The ledger then says the
+        destination straight away, and until the shares actually arrive the
+        <b>Reconcile</b> tab reports the position as present in the ledger and missing from the
+        destination's export — which is exactly the signal that it is still in flight.
+    </p>
+
+    <div id="tr-warnings" style="margin-top: 0.5rem;"></div>
+
+    <h3 style="margin-top: 1rem; font-size: 1rem;">Move a position</h3>
+    <div class="benchmark-controls">
+        <label>From: <select id="tr-from"></select></label>
+        <label>Position: <select id="tr-symbol"></select></label>
+        <label>To: <select id="tr-to"></select></label>
+        <label>Date: <input id="tr-date" type="date"/></label>
+        <button id="tr-save" type="button">Record transfer</button>
+        <span id="tr-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+    <p class="muted" id="tr-preview" style="margin-top: 0.5rem; font-size: 0.85rem;"></p>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Recorded transfers</h3>
+    <div id="tr-recorded" style="margin-top: 0.4rem;"></div>
 </section>
 
 <section class="tab-panel" id="panel-manual">

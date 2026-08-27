@@ -645,6 +645,7 @@
             if (panelId === 'panel-range') setupRange();
             if (panelId === 'panel-earnings') setupEarnings();
             if (panelId === 'panel-manual') setupManualPositions();
+            if (panelId === 'panel-transfers') setupTransfers();
             if (panelId === 'panel-period') setupPeriodDiff();
             if (panelId === 'panel-recon') loadReconciliation();
             if (panelId === 'panel-attribution') setupAttribution();
@@ -9721,6 +9722,166 @@
                         + '</tr>';
                 }).join('')
                 + '</tbody></table>';
+        }
+
+        // ── In-specie transfers ─────────────────────────────────────────────────
+        // Reuses the manual-positions helpers (mpVal/mpPost/mpNum/mpMoney) rather than growing a
+        // parallel set: both screens are the same shape — a form that writes ledger rows and a
+        // table that lists what it wrote.
+        var trInit = false, trReport = null;
+
+        function setupTransfers() {
+            if (trInit) return;
+            trInit = true;
+            var d = document.getElementById('tr-date');
+            if (d && !d.value) d.value = new Date().toISOString().slice(0, 10);
+
+            // Changing the source re-filters the positions, since only what that account actually
+            // holds can move out of it.
+            bindOnce(document.getElementById('tr-from'), 'change', renderTransferPositions);
+            bindOnce(document.getElementById('tr-symbol'), 'change', renderTransferPreview);
+            bindOnce(document.getElementById('tr-to'), 'change', renderTransferPreview);
+
+            bindOnce(document.getElementById('tr-save'), 'click', function () {
+                var status = document.getElementById('tr-status');
+                var symbol = mpVal('tr-symbol');
+                if (!symbol) {
+                    status.textContent = 'Nothing to transfer from that account.';
+                    status.style.color = '#c0392b';
+                    return;
+                }
+                status.textContent = 'Recording…';
+                status.style.color = '';
+                mpPost('/transfers/record', {
+                    date: mpVal('tr-date'), from: mpVal('tr-from'),
+                    to: mpVal('tr-to'), symbol: symbol
+                }).then(function (res) {
+                    status.textContent = res.message;
+                    status.style.color = res.ok ? '#2ca02c' : '#c0392b';
+                    if (res.ok) loadTransfers();
+                }).catch(function (err) {
+                    status.textContent = String(err.message || err);
+                    status.style.color = '#c0392b';
+                });
+            });
+
+            // Delegated: the recorded table is replaced on every reload.
+            bindOnce(document.getElementById('tr-recorded'), 'click', function (ev) {
+                var btn = ev.target.closest('button[data-out]');
+                if (!btn) return;
+                if (!window.confirm('Undo this transfer? The position goes back to where it was.')) return;
+                mpPost('/transfers/delete', {outRowid: btn.dataset.out, inRowid: btn.dataset.in})
+                    .then(loadTransfers)
+                    .catch(function (err) { window.alert(String(err.message || err)); });
+            });
+
+            loadTransfers();
+        }
+
+        function loadTransfers() {
+            clearPanelError('panel-transfers');
+            return fetch('/transfers')
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(renderTransfers)
+                .catch(function (err) {
+                    // Latch stays set: the retry re-runs the fetch, and re-running setup would
+                    // stack a second set of handlers on the form.
+                    panelLoadFailed('panel-transfers', err, loadTransfers);
+                });
+        }
+
+        function renderTransfers(report) {
+            trReport = report;
+            var accounts = report.accounts || [];
+            ['tr-from', 'tr-to'].forEach(function (id) {
+                var sel = document.getElementById(id);
+                if (!sel) return;
+                var keep = sel.value;
+                sel.innerHTML = accounts.map(function (a) {
+                    return '<option value="' + escapeHtml(a.dbValue) + '">' + escapeHtml(a.label) + '</option>';
+                }).join('');
+                if (keep) sel.value = keep;
+            });
+            // Both selects would otherwise land on the first account and the form would open
+            // reading "choose two different accounts" — a complaint about a state the user did
+            // not choose. Nudge the destination off the source once, on first paint only.
+            var from = document.getElementById('tr-from'), to = document.getElementById('tr-to');
+            if (from && to && from.value === to.value) {
+                var other = accounts.filter(function (a) { return a.dbValue !== from.value; })[0];
+                if (other) to.value = other.dbValue;
+            }
+            renderTransferPositions();
+            renderTransferRecorded();
+        }
+
+        function renderTransferPositions() {
+            var sel = document.getElementById('tr-symbol');
+            if (!sel || !trReport) return;
+            var from = mpVal('tr-from');
+            var held = (trReport.transferable || []).filter(function (p) {
+                return p.accountDbValue === from;
+            });
+            var keep = sel.value;
+            sel.innerHTML = held.length
+                ? held.map(function (p) {
+                    return '<option value="' + escapeHtml(p.symbol) + '">' + escapeHtml(p.symbol)
+                        + ' · ' + p.quantity + ' sh</option>';
+                  }).join('')
+                : '<option value="">— nothing held here —</option>';
+            if (keep && held.some(function (p) { return p.symbol === keep; })) sel.value = keep;
+            renderTransferPreview();
+        }
+
+        // States exactly what will be written before it is written. The cost figure is the whole
+        // reason the screen can be trusted: it is the ledger's own FIFO cost for that position, so
+        // the reader can see that the move carries the basis rather than re-pricing it.
+        function renderTransferPreview() {
+            var box = document.getElementById('tr-preview');
+            if (!box || !trReport) return;
+            var from = mpVal('tr-from'), to = mpVal('tr-to'), symbol = mpVal('tr-symbol');
+            var p = (trReport.transferable || []).find(function (x) {
+                return x.accountDbValue === from && x.symbol === symbol;
+            });
+            if (!p) { box.textContent = ''; return; }
+            if (from === to) {
+                box.innerHTML = '<span style="color:#c0392b">Choose two different accounts.</span>';
+                return;
+            }
+            var toLabel = (trReport.accounts || []).filter(function (a) { return a.dbValue === to; })
+                .map(function (a) { return a.label; })[0] || to;
+            box.innerHTML = 'Will move <b>' + escapeHtml(p.quantity) + ' ' + escapeHtml(p.symbol)
+                + '</b> from ' + escapeHtml(p.accountLabel) + ' to ' + escapeHtml(toLabel)
+                + ', carrying <b>£' + mpMoney(p.costGbp) + '</b> of cost basis. '
+                + 'No cash moves and your gain does not change.';
+        }
+
+        function renderTransferRecorded() {
+            var box = document.getElementById('tr-recorded');
+            var list = (trReport && trReport.recorded) || [];
+            if (!list.length) {
+                box.innerHTML = '<p class="muted">None recorded yet.</p>';
+                return;
+            }
+            var rows = list.map(function (t) {
+                // A lone leg means a position left one account and arrived nowhere. Flagged
+                // rather than hidden, and not offered an undo, since undoing takes a pair.
+                var broken = !t.paired;
+                return '<tr' + (broken ? ' class="order-through"' : '') + '>'
+                    + '<td class="txt">' + escapeHtml(t.date) + '</td>'
+                    + '<td class="txt">' + escapeHtml(t.symbol) + '</td>'
+                    + '<td>' + escapeHtml(t.quantity) + '</td>'
+                    + '<td class="txt">' + escapeHtml(t.fromLabel || '—') + '</td>'
+                    + '<td class="txt">' + escapeHtml(t.toLabel || '—') + '</td>'
+                    + '<td>' + mpMoney(t.costGbp) + '</td>'
+                    + '<td class="txt">' + (broken
+                        ? '<span title="Only one leg is stored — the position left an account and arrived nowhere.">incomplete</span>'
+                        : '<button type="button" data-out="' + t.outRowid + '" data-in="' + t.inRowid + '">Undo</button>')
+                    + '</td></tr>';
+            }).join('');
+            box.innerHTML = '<table class="swing-tbl"><thead><tr>'
+                + '<th>Date</th><th>Symbol</th><th>Shares</th><th>From</th><th>To</th>'
+                + '<th title="cost basis carried with the shares — not cash, not market value">Cost £</th>'
+                + '<th></th></tr></thead><tbody>' + rows + '</tbody></table>';
         }
 
         function mpNum(v, dp) {

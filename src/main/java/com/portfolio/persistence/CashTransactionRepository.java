@@ -456,13 +456,20 @@ public class CashTransactionRepository {
      * Recomputes the account's derived running balances as {@code anchor} plus the running sum of
      * amounts in chain order, and returns the closing balance. Needed after adopting a
      * re-partitioned fill group, whose rows are appended at the tail and so land out of sequence.
+     *
+     * <p>{@code TRANSFER} amounts are excluded from the sum. Their magnitude is a cost basis moving
+     * with shares, not cash — counting it would step the account's balance by tens of thousands of
+     * pounds that never moved, and the error would then propagate to every later row in the chain.
+     * {@link #latestCashBalances()} skips them for the same reason, so neither the derived chain
+     * nor the reported balance can be set by a row that moves no money.
      */
     private static double rebuildBalanceChain(Connection conn, Account account, double anchor)
             throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
                 "WITH ordered AS (" +
                         "  SELECT rowid AS rid, " +
-                        "         ? + SUM(amount) OVER (ORDER BY transaction_date, rowid) AS bal " +
+                        "         ? + SUM(CASE WHEN type = 'TRANSFER' THEN 0 ELSE amount END) " +
+                        "               OVER (ORDER BY transaction_date, rowid) AS bal " +
                         "    FROM cash_transactions WHERE account = ?) " +
                         "UPDATE cash_transactions " +
                         "   SET cash_balance = (SELECT bal FROM ordered WHERE rid = cash_transactions.rowid), " +
@@ -612,6 +619,122 @@ public class CashTransactionRepository {
         }
     }
 
+    /**
+     * Write both legs of an in-specie transfer in one transaction — the position leaving one
+     * account and arriving at another, with no cash moving anywhere.
+     *
+     * <p><b>Both legs or neither.</b> Every consumer of a {@code TRANSFER} row assumes its pair
+     * exists: the whole-ledger replays skip the pair precisely because it cancels, and a lone leg
+     * would make the portfolio gain or lose a position outright. One transaction is what makes
+     * that assumption safe to hold.
+     *
+     * <p><b>No balance-chain rebuild, and none needed.</b> A transfer moves no cash, and both
+     * {@link #latestCashBalances()} and the chain rebuild exclude the type, so no stored balance
+     * is affected by inserting one — however far back it is dated. That is the payoff for keeping
+     * the amount out of the cash model rather than pairing it with offsetting cash rows.
+     *
+     * <p>The legs carry a zero {@code cash_balance}, which is a placeholder rather than a claim:
+     * {@code cash_balance_gbp} is part of the primary key, and a null there would make two
+     * identical transfers distinct to SQLite and silently insert the position twice. Nothing reads
+     * the value — both queries that could are filtered on the type.
+     *
+     * @throws IllegalStateException if the pair is already stored, or the write fails
+     */
+    public void saveTransfer(CashTransaction out, CashTransaction in) {
+        if (out.account() == in.account()) {
+            throw new IllegalArgumentException("A transfer must move between two different accounts");
+        }
+        try (Connection conn = connections.open()) {
+            boolean autoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                try (PreparedStatement ps = conn.prepareStatement(INSERT_SQL)) {
+                    bindCashRow(ps, out);
+                    ps.addBatch();
+                    bindCashRow(ps, in);
+                    ps.addBatch();
+                    ps.executeBatch();
+                }
+                conn.commit();
+                log.info("Stored transfer of {} {} from {} to {} on {} (cost basis {})",
+                        out.quantity(), out.symbol(), out.account().dbValue(),
+                        in.account().dbValue(), out.transactionDate(), out.amountGbp());
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(autoCommit);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not record the transfer: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Every stored {@code TRANSFER} row, newest first, carrying its {@code rowid} so a recorded
+     * transfer can be undone from the screen that wrote it.
+     */
+    public List<LedgerRow> loadTransferRows() {
+        List<LedgerRow> rows = new ArrayList<>();
+        if (!connections.dbExists()) return rows;
+        try (Connection conn = connections.open();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT rowid, " + COLUMNS + " FROM cash_transactions " +
+                             "WHERE type = 'TRANSFER' ORDER BY transaction_date DESC, rowid DESC")) {
+            while (rs.next()) {
+                CashTransaction t = mapCashRow(rs, 1);
+                if (t != null) rows.add(new LedgerRow(rs.getLong(1), t));
+            }
+        } catch (Exception e) {
+            log.warn("Could not load transfer rows", e);
+        }
+        return rows;
+    }
+
+    /**
+     * Delete both legs of a recorded transfer, by rowid, in one transaction.
+     *
+     * <p>Unlike {@link #deleteManualRow}, this is <b>not</b> restricted to manual accounts, and it
+     * is safe not to be: a {@code TRANSFER} row exists in no broker export, so no import can
+     * re-create it or collide with it — the thing that makes deleting an imported row pointless.
+     * The type is asserted in the statement so this can only ever remove rows this tool wrote.
+     *
+     * @return true when both legs were removed
+     */
+    public boolean deleteTransfer(long outRowid, long inRowid) {
+        try (Connection conn = connections.open()) {
+            boolean autoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                int deleted;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "DELETE FROM cash_transactions WHERE rowid IN (?, ?) AND type = 'TRANSFER'")) {
+                    ps.setLong(1, outRowid);
+                    ps.setLong(2, inRowid);
+                    deleted = ps.executeUpdate();
+                }
+                // Half a transfer is worse than none: it would move a position out of one account
+                // without moving it into the other. Roll back rather than leave a lone leg.
+                if (deleted != 2) {
+                    conn.rollback();
+                    log.warn("Transfer delete matched {} row(s), not 2 — rolled back", deleted);
+                    return false;
+                }
+                conn.commit();
+                return true;
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(autoCommit);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Could not delete the transfer: " + e.getMessage(), e);
+        }
+    }
+
     /** Every stored row for the manual accounts, oldest first, carrying its {@code rowid}. */
     public List<LedgerRow> loadManualRows() {
         List<LedgerRow> rows = new ArrayList<>();
@@ -712,12 +835,20 @@ public class CashTransactionRepository {
     }
 
     /**
-     * The {@code TRANSACTION} and {@code DIVIDEND} rows, oldest first — the raw material
-     * for dividend attribution. Buys/sells are returned alongside dividends so the share
-     * timeline can be reconstructed.
+     * The {@code TRANSACTION}, {@code DIVIDEND} and {@code TRANSFER} rows, oldest first — the raw
+     * material for dividend attribution and for every per-{@code (account, symbol)} lot engine.
+     * Buys/sells are returned alongside dividends so the share timeline can be reconstructed.
+     *
+     * <p>{@code TRANSFER} belongs here even though it is not a cash flow, because these consumers
+     * track lots <em>per account</em>: after an in-specie transfer the receiving account holds the
+     * shares, and without the row it would have no lots for them — its next dividend would fail to
+     * attribute and the position would still read as the losing account's. Consumers that count
+     * cash flows rather than shares are unaffected: {@code PositionIrr} admits only
+     * {@code TRANSACTION}/{@code DIVIDEND} as flows, so a transfer correctly contributes none.
      */
     public List<CashTransaction> loadDividendTransactions() {
-        return loadRows("WHERE type IN ('TRANSACTION', 'DIVIDEND')", "dividend transactions");
+        return loadRows("WHERE type IN ('TRANSACTION', 'DIVIDEND', 'TRANSFER')",
+                "dividend transactions");
     }
 
     /**
@@ -819,7 +950,7 @@ public class CashTransactionRepository {
              ResultSet rs = st.executeQuery(
                      "SELECT account, currency, cash_balance, cash_balance_gbp " +
                              "FROM cash_transactions " +
-                             "WHERE cash_balance_gbp IS NOT NULL " +
+                             "WHERE cash_balance_gbp IS NOT NULL AND type != 'TRANSFER' " +
                              "ORDER BY transaction_date, rowid")) {
             while (rs.next()) {
                 String account = rs.getString(1);
@@ -840,9 +971,11 @@ public class CashTransactionRepository {
     }
 
     /**
-     * Every symbol ever traded (buys/sells/dividends) — the price-fetch universe before
-     * gilt filtering. Excludes INTEREST/CHARGE/CONTRIBUTION rows, whose symbol is not a real
-     * instrument.
+     * Every symbol ever traded, transferred in, or paid a dividend — the price-fetch universe
+     * before gilt filtering. Excludes INTEREST/CHARGE/CONTRIBUTION rows, whose symbol is not a
+     * real instrument. {@code TRANSFER} is included so a name that only ever arrived in-specie
+     * still gets a price feed; today every such name was also bought somewhere, but relying on
+     * that would make the fetch universe quietly wrong the first time it stopped being true.
      */
     public List<String> distinctTradedSymbols() {
         List<String> symbols = new ArrayList<>();
@@ -851,7 +984,8 @@ public class CashTransactionRepository {
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
                      "SELECT DISTINCT symbol FROM cash_transactions " +
-                             "WHERE type IN ('TRANSACTION', 'DIVIDEND') ORDER BY symbol")) {
+                             "WHERE type IN ('TRANSACTION', 'DIVIDEND', 'TRANSFER') " +
+                             "ORDER BY symbol")) {
             while (rs.next()) symbols.add(rs.getString(1));
         } catch (Exception e) {
             log.warn("Could not load symbols", e);

@@ -1695,10 +1695,16 @@
 
 <section class="tab-panel active" id="panel-holdings">
     <form class="actions" hx-indicator="#spinner">
-        <label>II SIPP cash £:
+        <!--
+          II's holdings export omits the cash balance, so these two fields are the only source of
+          it for this view. Leaving one blank keeps the stored balance rather than zeroing it —
+          silently losing a four-figure balance is invisible until the totals stop reconciling,
+          whereas stating zero is one keystroke.
+        -->
+        <label title="Leave blank to keep the stored balance. Type 0 to mean zero.">II SIPP cash £:
             <input name="iiSippCash" th:value="${iiSippCash}" type="text" value="0" size="10"/>
         </label>
-        <label>$:
+        <label title="Leave blank to keep the stored balance. Type 0 to mean zero.">$:
             <input name="iiSippCashUsd" th:value="${iiSippCashUsd}" type="text" value="0" size="10"/>
         </label>
         <button hx-post="/sync" hx-target="#portfolio-result" type="submit">Aggregated Portfolio</button>

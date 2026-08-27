@@ -2494,11 +2494,21 @@ for ledger-only symbols too and reports them against zero.
 **The arithmetic afterwards**, which is what "reconciled" should mean:
 `Files RT 1,302,186.67 + GLE 6,034.47 − Roth rounding 0.52 = 1,308,220.62 = the cash-ledger total`.
 
-**A standing gotcha this turned up.** `POST /sync` and `POST /export` persist the II SIPP cash
-inputs with `defaultValue = "0"`, so **any request that omits those params silently overwrites the
-stored balances with zero**. The values live in `ii_sipp_cash_last{,_usd}.txt` and are the holdings
-view's only source of II cash, so a stray parameterless POST costs a real figure with nothing on
-screen to say so. Worth treating an absent param as "unchanged" rather than zero.
+**A standing gotcha this turned up, now fixed.** `POST /sync` and `POST /export` used to persist
+the II SIPP cash inputs with `defaultValue = "0"`, and `WebSupport.parseCash` mapped blank and
+unreadable input to `BigDecimal.ZERO` — so **any request that omitted those params silently
+overwrote the stored balances with zero**. They live in `ii_sipp_cash_last{,_usd}.txt` and are the
+holdings view's *only* source of II cash (II's holdings export omits the balance), so a stray
+parameterless POST — a form that forgets a field, a hand-run `curl`, a script hitting `/export` —
+cost a real figure with nothing on screen to say so; the only symptom was a total quietly short by
+that amount.
+
+`parseCash` now returns **null** for absent, blank *and* unreadable input, and `persistCash` reads
+those three the same way: **leave the stored balance alone and return it**. All three are
+distinguished from an explicit `0`, which is a real balance a user can state and still works.
+Clearing the box therefore no longer zeroes anything — **type `0` to mean zero** — and the label
+says so on hover. The asymmetry is deliberate: stating zero is one keystroke, while silently losing
+a four-figure balance is invisible until the totals stop reconciling.
 
 ## In-specie transfers
 

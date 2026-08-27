@@ -53,7 +53,55 @@ public class CashLedgerReconstructor {
             Set<String> accounts) {
     }
 
+    /**
+     * One reconstructed position <em>before</em> accounts are merged — what a single
+     * {@code (account, symbol)} timeline came to. Only positions with a positive quantity are
+     * returned, so an account that has sold out of a name does not appear for it.
+     *
+     * <p>{@code costGbp} is the surviving lots' remaining FIFO cost. It is the figure an in-specie
+     * transfer must carry with the shares: move that exact number and the portfolio's total cost —
+     * and therefore its gain — is unchanged by the move.
+     */
+    public record AccountPosition(
+            String securityId,
+            Account account,
+            BigDecimal quantity,
+            BigDecimal costGbp,
+            String tradeCurrency) {
+    }
+
+    /**
+     * Per-{@code (account, symbol)} positions, the intermediate step {@link #reconstruct} then
+     * merges by symbol. Exposed because two callers legitimately need the un-merged form: the
+     * transfer screen, which moves one account's holding of a symbol and needs that account's own
+     * quantity and cost, and anything asking "which account is this actually in".
+     */
+    public List<AccountPosition> reconstructByAccount(List<CashTransaction> rows) {
+        List<AccountPosition> out = new ArrayList<>();
+        for (Timeline tl : timelines(rows).values()) {
+            BigDecimal qty = tl.totalQuantity();
+            if (qty.signum() <= 0) continue;
+            out.add(new AccountPosition(tl.symbol, tl.account, qty, tl.totalCostGbp(),
+                    tl.tradeCurrency));
+        }
+        return out;
+    }
+
     public List<Position> reconstruct(List<CashTransaction> rows) {
+        Map<String, Aggregated> bySymbol = new LinkedHashMap<>();
+        for (AccountPosition p : reconstructByAccount(rows)) {
+            String key = p.securityId().toUpperCase();
+            bySymbol.computeIfAbsent(key, k -> new Aggregated(p.securityId(), p.tradeCurrency()))
+                    .add(p.quantity(), p.costGbp(), p.account());
+        }
+        List<Position> out = new ArrayList<>();
+        for (Aggregated a : bySymbol.values()) {
+            out.add(new Position(a.symbol, a.qty, a.costGbp, a.tradeCcy, a.accounts));
+        }
+        return out;
+    }
+
+    private static Map<String, Timeline> timelines(List<CashTransaction> rows) {
         Map<String, Timeline> byPosition = new LinkedHashMap<>();
         for (CashTransaction t : rows) {
             if (t.symbol() == null || t.symbol().isBlank()) continue;
@@ -61,20 +109,7 @@ public class CashLedgerReconstructor {
             byPosition.computeIfAbsent(key,
                     k -> new Timeline(t.symbol(), t.currency(), t.account())).accept(t);
         }
-        Map<String, Aggregated> bySymbol = new LinkedHashMap<>();
-        for (Timeline tl : byPosition.values()) {
-            BigDecimal qty = tl.totalQuantity();
-            if (qty.signum() <= 0) continue;
-            BigDecimal costGbp = tl.totalCostGbp();
-            String key = tl.symbol.toUpperCase();
-            bySymbol.computeIfAbsent(key, k -> new Aggregated(tl.symbol, tl.tradeCurrency))
-                    .add(qty, costGbp, tl.account);
-        }
-        List<Position> out = new ArrayList<>();
-        for (Aggregated a : bySymbol.values()) {
-            out.add(new Position(a.symbol, a.qty, a.costGbp, a.tradeCcy, a.accounts));
-        }
-        return out;
+        return byPosition;
     }
 
     private static final class Aggregated {
@@ -119,7 +154,14 @@ public class CashLedgerReconstructor {
         }
 
         void accept(CashTransaction t) {
-            if (t.type() != TransactionType.TRANSACTION) return;
+            // TRANSFER rides the same lot engine as TRANSACTION, which is why it was given the
+            // same sign convention: a positive amount takes shares (and their cost) out of the
+            // losing account's lots, a negative amount opens a lot in the gaining account's at
+            // the cost that travelled with them. Anything else would need a second lot engine
+            // that could drift from this one.
+            if (t.type() != TransactionType.TRANSACTION && t.type() != TransactionType.TRANSFER) {
+                return;
+            }
             BigDecimal qty = BigDecimal.valueOf(Math.abs(t.quantity()));
             if (t.amount() < 0) {
                 if (qty.signum() <= 0) return;

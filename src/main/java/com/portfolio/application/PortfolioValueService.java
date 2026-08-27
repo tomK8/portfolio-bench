@@ -256,6 +256,15 @@ public class PortfolioValueService {
     private static void apply(Map<String, BigDecimal> qtyBySymbol,
                               Map<String, BigDecimal> cashByAccountCcy,
                               CashTransaction t) {
+        // An in-specie transfer is inert here, and skipping the pair is not a shortcut but the
+        // only correct handling. This replay tracks quantity (and cost) *globally per symbol* and
+        // cash per (account, currency): the two legs move the same shares and the same cost in
+        // opposite directions, so they necessarily cancel in the symbol totals, while their
+        // amounts are a cost basis rather than money and must never touch cash. Processing them
+        // could only introduce error — the weighted-average cost released by the outgoing leg is
+        // taken against the *global* pool, which for a name held in several accounts is not the
+        // cost the losing account actually carried, so the pair would fail to cancel.
+        if (t.type() == TransactionType.TRANSFER) return;
         String acctCcy = t.account().dbValue() + "|" + t.currency();
         cashByAccountCcy.merge(acctCcy, BigDecimal.valueOf(t.amount()), BigDecimal::add);
         if (t.type() != TransactionType.TRANSACTION) return;
@@ -279,6 +288,15 @@ public class PortfolioValueService {
                                       Map<String, BigDecimal> costBySymbol,
                                       Map<String, BigDecimal> cashByAccountCcy,
                                       CashTransaction t) {
+        // An in-specie transfer is inert here, and skipping the pair is not a shortcut but the
+        // only correct handling. This replay tracks quantity (and cost) *globally per symbol* and
+        // cash per (account, currency): the two legs move the same shares and the same cost in
+        // opposite directions, so they necessarily cancel in the symbol totals, while their
+        // amounts are a cost basis rather than money and must never touch cash. Processing them
+        // could only introduce error — the weighted-average cost released by the outgoing leg is
+        // taken against the *global* pool, which for a name held in several accounts is not the
+        // cost the losing account actually carried, so the pair would fail to cancel.
+        if (t.type() == TransactionType.TRANSFER) return;
         String acctCcy = t.account().dbValue() + "|" + t.currency();
         cashByAccountCcy.merge(acctCcy, BigDecimal.valueOf(t.amount()), BigDecimal::add);
         if (t.type() != TransactionType.TRANSACTION) return;

@@ -1390,6 +1390,20 @@
         /* Quote-ts age: green when fresh (<5 min), amber when stale (5-30 min), grey italic
            when old. A listing whose market is CLOSED goes straight to grey — out of hours every
            quote is hours old and none of them is a problem worth flagging amber. */
+        /* Live grouping. The header rows reuse the Cash-ledger idiom (tr.group-header /
+           tr.group-member / .group-caret), so the two grouped tables look and behave alike; what
+           needs restating here is only where the Live tab's own rules would otherwise win. */
+        #live-table tbody tr.group-header > td {
+            /* Beats the market-state row tints, which are #live-table-scoped and so more specific
+               than the shared rule. A header spans several listings and has no single state. */
+            background: rgba(0, 0, 0, 0.045);
+        }
+        html[data-theme="dark"] #live-table tbody tr.group-header > td { background: rgba(255, 255, 255, 0.06); }
+        #live-table tbody tr.group-header:hover > td { background: rgba(0, 0, 0, 0.08); }
+        html[data-theme="dark"] #live-table tbody tr.group-header:hover > td { background: rgba(255, 255, 255, 0.1); }
+        /* The row click opens the price popup for a symbol; a header has none. */
+        #live-table tbody tr.group-header { cursor: pointer; }
+
         .live-ts-fresh { color: #2ca02c; }
         .live-ts-stale { color: #b8860b; }
         .live-ts-old { color: #999; font-style: italic; }
@@ -3734,6 +3748,21 @@
 
     <div class="actions">
         <button hx-post="/live/export" hx-target="#live-export-result" type="button">Download Excel</button>
+        <!--
+          Unlike the Cash-ledger dropdown, this one posts nothing: /live/stream broadcasts one
+          snapshot to every connected client, so there is no per-client selection the server could
+          take as a parameter. Every snapshot already carries its sector groups (computed once for
+          everybody, on the server, so the weighted arithmetic stays in one implementation) and
+          this select only chooses whether to draw the header rows. Sector is the only key for now;
+          a second one is a second group set on the snapshot plus an <option>.
+        -->
+        <label class="muted group-by-label">Group by
+            <select id="live-group-by">
+                <option value="none">None</option>
+                <option value="sector">Sector</option>
+            </select>
+        </label>
+        <button type="button" id="live-expand-all" class="link-button" hidden>Expand all</button>
         <span class="muted">writes the table below to <code>~/Documents</code>, priced at the moment you press it</span>
     </div>
     <div id="live-export-result"></div>

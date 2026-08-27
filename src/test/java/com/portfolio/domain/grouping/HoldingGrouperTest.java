@@ -35,7 +35,7 @@ class HoldingGrouperTest {
     }
 
     /** Files each holding under a key read off its {@code sources}, for key-agnostic assertions. */
-    private static final HoldingGroupKey BY_SOURCE = h ->
+    private static final HoldingGroupKey<AggHolding> BY_SOURCE = h ->
             HoldingGroupKey.Group.of(h.sources(), h.sources());
 
     private static void assertAmount(String expected, BigDecimal actual) {
@@ -136,7 +136,7 @@ class HoldingGrouperTest {
         List<AggHolding> holdings = List.of(
                 holding("AAA", "1000", "200", "0", "A"),
                 holding("BBB", "500", "-50", "0", "B"));
-        HoldingGroupKey placesNothing = h ->
+        HoldingGroupKey<AggHolding> placesNothing = h ->
                 HoldingGroupKey.Group.residual("UNCLASSIFIED", "Unclassified", "no idea");
 
         List<HoldingGroup> groups = HoldingGrouper.group(holdings, placesNothing);
@@ -177,7 +177,7 @@ class HoldingGrouperTest {
 
     @Test
     void groupsAreOrderedByValueWithTheResidualPinnedLast() {
-        HoldingGroupKey key = h -> switch (h.securityId()) {
+        HoldingGroupKey<AggHolding> key = h -> switch (h.securityId()) {
             case "SMALL" -> HoldingGroupKey.Group.of("SMALL", "Small");
             case "BIG" -> HoldingGroupKey.Group.of("BIG", "Big");
             default -> HoldingGroupKey.Group.residual("UNCLASSIFIED", "Unclassified", null);

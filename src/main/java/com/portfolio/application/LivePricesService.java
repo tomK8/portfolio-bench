@@ -77,6 +77,7 @@ public class LivePricesService {
     private final FxRateProvider fxRateProvider;
     private final YahooTickerMap tickerMap;
     private final MarketHoursCache marketHours;
+    private final SectorGroupKeyProvider sectorKeys;
 
     private volatile Map<String, BigDecimal> cachedRates = Map.of();
     private volatile Instant cachedRatesAt = Instant.EPOCH;
@@ -86,13 +87,15 @@ public class LivePricesService {
                              PriceHistoryRepository history,
                              FxRateProvider fxRateProvider,
                              YahooTickerMap tickerMap,
-                             MarketHoursCache marketHours) {
+                             MarketHoursCache marketHours,
+                             SectorGroupKeyProvider sectorKeys) {
         this.repo = repo;
         this.intraday = intraday;
         this.history = history;
         this.fxRateProvider = fxRateProvider;
         this.tickerMap = tickerMap;
         this.marketHours = marketHours;
+        this.sectorKeys = sectorKeys;
     }
 
     public Snapshot snapshot() {
@@ -199,7 +202,33 @@ public class LivePricesService {
                 scaleOrNull(dayChangePct, 6));
 
         return new Snapshot(outRows, totals, Instant.now(),
-                latestTs == Instant.EPOCH ? null : latestTs);
+                latestTs == Instant.EPOCH ? null : latestTs,
+                sectorGroups(outRows));
+    }
+
+    /**
+     * Sector groups for the current rows, shipped on <b>every</b> snapshot whether anyone has the
+     * Live table grouped or not.
+     *
+     * <p>That is forced by the transport, not laziness: {@code /live/stream} broadcasts one
+     * snapshot to every connected emitter, so there is no per-client selection a query parameter
+     * could carry without giving each emitter its own state. Computing it once for everybody is
+     * both simpler and cheaper than that, and it keeps the weighted arithmetic on the server —
+     * the browser only chooses whether to draw the header rows. The cost is a classification pass
+     * over ~60 rows against an in-memory map; the fundamentals cache behind it is TTL-held by
+     * {@link SectorGroupKeyProvider} precisely so this can run on a 15-second tick.
+     *
+     * <p>Degrades to no groups: a failure here must not cost the user their price table. The
+     * dropdown then simply has nothing to show, which is the same state as an empty portfolio.
+     */
+    private List<LiveGroup> sectorGroups(List<Row> rows) {
+        if (rows.isEmpty() || sectorKeys == null) return List.of();
+        try {
+            return LiveGrouper.group(rows, LiveGrouper.sectorKey(sectorKeys.get()));
+        } catch (RuntimeException e) {
+            log.warn("Live: sector grouping failed, serving ungrouped rows", e);
+            return List.of();
+        }
     }
 
     /**
@@ -323,7 +352,21 @@ public class LivePricesService {
             List<Row> rows,
             Totals totals,
             Instant generatedAt,
-            Instant latestPriceAt) {
+            Instant latestPriceAt,
+            /**
+             * Sector groups over {@code rows}, always populated (see {@code sectorGroups}). The
+             * client renders them only when its own Group-by dropdown asks for them.
+             */
+            List<LiveGroup> groups) {
+
+        /**
+         * Back-compatible form for callers with no grouping to supply — the Excel export builds
+         * its sheet from the rows alone, and a grouped spreadsheet would be worse than a flat one
+         * a reader can pivot.
+         */
+        public Snapshot(List<Row> rows, Totals totals, Instant generatedAt, Instant latestPriceAt) {
+            this(rows, totals, generatedAt, latestPriceAt, List.of());
+        }
     }
 
     public record Row(

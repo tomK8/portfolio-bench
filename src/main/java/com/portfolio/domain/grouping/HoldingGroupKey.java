@@ -1,9 +1,8 @@
 package com.portfolio.domain.grouping;
 
-import com.portfolio.domain.model.AggHolding;
-
 /**
- * Assigns each holding to exactly one group, for the Cash-ledger table's grouping dropdown.
+ * Assigns each row to exactly one group, for the grouping dropdowns on the Cash-ledger and Live
+ * tables.
  *
  * <p><b>A key type is a resolver, not a branch.</b> Everything the grouping feature does — the
  * dropdown, the header rows, the weighted percentages, the expand/collapse — is written against
@@ -12,6 +11,14 @@ import com.portfolio.domain.model.AggHolding;
  * should reach into {@link HoldingGrouper}, the fragment or {@code dashboard.js}. If a future key
  * needs a code change outside its own class, the abstraction has been broken.
  *
+ * <p><b>{@code T} is the row type, because the two tables aggregate different columns.</b> The
+ * Cash-ledger table groups {@code AggHolding}s and weights Gain % by cost; the Live table groups
+ * {@code LivePricesService.Row}s, which carry no cost basis at all and instead weight a day move
+ * and five trailing windows. Generifying the <i>key</i> rather than the aggregation is the split
+ * that matches reality: how a position is classified is genuinely shared — {@code SectorGroupKey}
+ * serves both off one {@code groupFor(symbol, gbp)} — while what a header row can honestly say is
+ * a property of the table it sits in.
+ *
  * <p><b>Exactly one group per holding</b> is the invariant the whole thing rests on. The ledger
  * table's rows are the unit of grouping, and a row is already an aggregate across accounts and
  * lots; splitting one across groups would mean the group totals no longer add back to the
@@ -19,10 +26,10 @@ import com.portfolio.domain.model.AggHolding;
  * that cannot place a holding must therefore return a group saying so — never null, and never a
  * silent drop.
  */
-public interface HoldingGroupKey {
+public interface HoldingGroupKey<T> {
 
-    /** The group this holding belongs to. Never null. */
-    Group keyFor(AggHolding holding);
+    /** The group this row belongs to. Never null. */
+    Group keyFor(T row);
 
     /**
      * One group's identity.

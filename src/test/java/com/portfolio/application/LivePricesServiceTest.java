@@ -20,6 +20,16 @@ class LivePricesServiceTest {
     @TempDir
     Path dbDir;
 
+    /**
+     * A real sector-key provider over the temp database: {@code loadAll} on a schema with no
+     * fundamentals rows returns empty, so every position groups as Unclassified — enough to
+     * exercise the grouping path in these tests without any of them being about sectors.
+     */
+    private static SectorGroupKeyProvider sectorKeys(JdbcConnectionFactory cf) {
+        return new SectorGroupKeyProvider(new com.portfolio.domain.SectorClassifier(),
+                new com.portfolio.persistence.FundamentalsRepository(cf));
+    }
+
     private LivePricesService service() {
         var cf = new JdbcConnectionFactory(dbDir);
         var kv = new KeyValueStore(dbDir);
@@ -29,7 +39,7 @@ class LivePricesServiceTest {
                 new PriceHistoryRepository(cf),
                 () -> Map.of(),
                 new YahooTickerMap(),
-                new MarketHoursCache());
+                new MarketHoursCache(), sectorKeys(cf));
     }
 
     private static PriceBar bar(String symbol, LocalDate date, double close) {
@@ -63,7 +73,7 @@ class LivePricesServiceTest {
 
         var svc = new LivePricesService(cashRepo, intraRepo,
                 new PriceHistoryRepository(cf), () -> Map.of(), new YahooTickerMap(),
-                new MarketHoursCache());
+                new MarketHoursCache(), sectorKeys(cf));
         LivePricesService.Snapshot snap = svc.snapshot();
 
         assertFalse(snap.rows().isEmpty());
@@ -89,7 +99,7 @@ class LivePricesServiceTest {
         intraRepo.saveIntradayBars(List.of(
                 new IntradayBar("AAPL", Instant.now(), 110.0, null, "GBP")));
 
-        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache(), sectorKeys(cf));
         LivePricesService.Snapshot snap = svc.snapshot();
         assertFalse(snap.rows().isEmpty());
         LivePricesService.Row row = snap.rows().get(0);
@@ -122,7 +132,7 @@ class LivePricesServiceTest {
         intraRepo.saveIntradayBars(List.of(
                 new IntradayBar("AAPL", Instant.now(), 100.0, null, "GBP")));
 
-        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache(), sectorKeys(cf));
         LivePricesService.Row row = svc.snapshot().rows().get(0);
 
         // Every window ends on the live quote, so today's move is inside all of them.
@@ -149,7 +159,7 @@ class LivePricesServiceTest {
         intraRepo.saveIntradayBars(List.of(
                 new IntradayBar("AAPL", Instant.now(), 100.0, null, "GBP")));
 
-        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache(), sectorKeys(cf));
         LivePricesService.Row row = svc.snapshot().rows().get(0);
 
         assertNotNull(row.change5dPct());
@@ -178,7 +188,7 @@ class LivePricesServiceTest {
         intraRepo.saveIntradayBars(List.of(
                 new IntradayBar("AAPL", Instant.now(), 153.4, null, "GBP")));
 
-        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+        var svc = new LivePricesService(cashRepo, intraRepo, priceRepo, () -> Map.of(), new YahooTickerMap(), new MarketHoursCache(), sectorKeys(cf));
         LivePricesService.Row row = svc.snapshot().rows().get(0);
 
         assertTrue(row.dayChangePct().doubleValue() > 1.0, "day move is +144%");
@@ -196,7 +206,7 @@ class LivePricesServiceTest {
         // No intraday bar saved
         var svc = new LivePricesService(cashRepo, new IntradayPriceRepository(cf),
                 new PriceHistoryRepository(cf), () -> Map.of(), new YahooTickerMap(),
-                new MarketHoursCache());
+                new MarketHoursCache(), sectorKeys(cf));
 
         LivePricesService.Snapshot snap = svc.snapshot();
         assertTrue(snap.rows().isEmpty(), "position without intraday price is excluded");
@@ -229,7 +239,7 @@ class LivePricesServiceTest {
                 MarketSession.REGULAR, session)));
 
         var svc = new LivePricesService(cashRepo, intraRepo, priceRepo,
-                () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+                () -> Map.of(), new YahooTickerMap(), new MarketHoursCache(), sectorKeys(cf));
         LivePricesService.Row row = svc.snapshot().rows().get(0);
 
         // 174.38 / 62.96 - 1 = +176.97%, not 174.38 / 155.51 - 1 = +12.13%.
@@ -252,7 +262,7 @@ class LivePricesServiceTest {
                 "AAPL", Instant.now(), 180.0, null, "GBP", MarketSession.PRE, today)));
 
         var svc = new LivePricesService(cashRepo, intraRepo, priceRepo,
-                () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+                () -> Map.of(), new YahooTickerMap(), new MarketHoursCache(), sectorKeys(cf));
         LivePricesService.Row row = svc.snapshot().rows().get(0);
 
         assertEquals("PRE", row.session(), "the UI has to be able to label the price");
@@ -296,7 +306,7 @@ class LivePricesServiceTest {
                 MarketSession.REGULAR, LocalDate.now().minusDays(1))));
 
         var svc = new LivePricesService(cashRepo, intraRepo, new PriceHistoryRepository(cf),
-                () -> Map.of(), new YahooTickerMap(), new MarketHoursCache());
+                () -> Map.of(), new YahooTickerMap(), new MarketHoursCache(), sectorKeys(cf));
 
         assertEquals("CLOSED", svc.snapshot().rows().get(0).marketState(),
                 "a six-hour-old quote with no published calendar reads as a shut market");

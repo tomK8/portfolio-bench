@@ -501,9 +501,14 @@ public class BeanConfiguration {
     }
 
     @Bean
-    public LedgerGroupingService ledgerGroupingService(SectorClassifier sectorClassifier,
-                                                       FundamentalsRepository fundamentalsRepository) {
-        return new LedgerGroupingService(sectorClassifier, fundamentalsRepository);
+    public SectorGroupKeyProvider sectorGroupKeyProvider(SectorClassifier sectorClassifier,
+                                                         FundamentalsRepository fundamentalsRepository) {
+        return new SectorGroupKeyProvider(sectorClassifier, fundamentalsRepository);
+    }
+
+    @Bean
+    public LedgerGroupingService ledgerGroupingService(SectorGroupKeyProvider sectorGroupKeyProvider) {
+        return new LedgerGroupingService(sectorGroupKeyProvider);
     }
 
     @Bean
@@ -522,9 +527,11 @@ public class BeanConfiguration {
                                                PriceHistoryRepository priceHistoryRepository,
                                                FxRateProvider fxRateProvider,
                                                YahooTickerMap yahooTickerMap,
-                                               MarketHoursCache marketHoursCache) {
+                                               MarketHoursCache marketHoursCache,
+                                               SectorGroupKeyProvider sectorGroupKeyProvider) {
         return new LivePricesService(cashTransactionRepository, intradayPriceRepository,
-                priceHistoryRepository, fxRateProvider, yahooTickerMap, marketHoursCache);
+                priceHistoryRepository, fxRateProvider, yahooTickerMap, marketHoursCache,
+                sectorGroupKeyProvider);
     }
 
     /**

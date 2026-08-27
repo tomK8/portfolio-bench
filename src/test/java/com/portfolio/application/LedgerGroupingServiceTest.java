@@ -17,7 +17,7 @@ class LedgerGroupingServiceTest {
 
     /** Sector is the only option that reads the repository, and these cases never select it. */
     private final LedgerGroupingService service =
-            new LedgerGroupingService(new SectorClassifier(), null);
+            new LedgerGroupingService(new SectorGroupKeyProvider(new SectorClassifier(), null));
 
     private static AggHolding held(String symbol, String sources, String valueGbp) {
         return new AggHolding(symbol, BigDecimal.ONE, null, new BigDecimal(valueGbp),

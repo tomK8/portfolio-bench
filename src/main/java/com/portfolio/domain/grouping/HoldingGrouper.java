@@ -46,7 +46,8 @@ public final class HoldingGrouper {
     private HoldingGrouper() {
     }
 
-    public static List<HoldingGroup> group(List<AggHolding> holdings, HoldingGroupKey key) {
+    public static List<HoldingGroup> group(List<AggHolding> holdings,
+                                          HoldingGroupKey<AggHolding> key) {
         Map<String, Accumulator> byId = new LinkedHashMap<>();
         for (AggHolding h : holdings) {
             HoldingGroupKey.Group g = key.keyFor(h);

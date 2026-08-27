@@ -589,15 +589,16 @@ An unsolvable rate writes **no cell**, never a zero: an empty cell reads as "not
 do not sum, and the portfolio-level money-weighted return is a different calculation over
 different flows (Performance → Returns).
 
-## Cash-ledger grouping
+## Table grouping (Cash ledger + Live)
 
-The **Group by** dropdown on Holdings → From cash ledger collapses the table into groups, each a
-header row carrying the aggregate above its (initially collapsed) members. `LedgerGroupingService`
-resolves the selection; the maths is `domain/grouping/HoldingGrouper`. Keys shipped: **None**
-(the flat table), **Sector**, **Account**.
+Two tables have a **Group by** dropdown that collapses their rows into groups, each a header row
+carrying the aggregate above its (initially collapsed) members: Holdings → **From cash ledger**
+(None / Sector / Account) and Holdings → **Live** (None / Sector). `LedgerGroupingService` resolves
+the ledger's selection; the maths is `domain/grouping/HoldingGrouper` for the ledger and
+`application/LiveGrouper` for Live.
 
-**The key is a resolver, not a branch — `domain/grouping/HoldingGroupKey`.** One method,
-`Group keyFor(AggHolding)`. The endpoint, the fragment, the header rows, the weighted percentages,
+**The key is a resolver, not a branch — `domain/grouping/HoldingGroupKey<T>`.** One method,
+`Group keyFor(T row)`. The endpoint, the fragment, the header rows, the weighted percentages,
 the sort and the expand/collapse are all written against it, so **a new way to group the book is a
 constant in `LedgerGroupingService.GroupBy` plus a resolver class and nothing else** — currency and
 a permanent/rotation label are both wanted next. The dropdown is generated from `options()`
@@ -606,6 +607,19 @@ a change outside its own class, the abstraction has been broken. The only key-sh
 `HoldingGrouper` acts on is `Group.residual()`, and that is a property the resolver *declares*
 about its own group — it pins the group last, so the unplaced never sit mid-ranking as though they
 had been classified.
+
+**`T` is the row type, because the two tables aggregate different columns.** The ledger groups
+`AggHolding`s and weights Gain % by cost; Live groups `LivePricesService.Row`s, which carry no cost
+basis anywhere and instead weight a day move and five trailing windows. Generifying the *key*
+rather than the aggregation is the split that matches reality — how a position is classified is
+genuinely shared, while what a header row can honestly say is a property of the table it sits in.
+`SectorGroupKey.groupFor(symbol, gbp)` is the shared classification core and the `keyFor` overrides
+are adapters, so a symbol cannot be one sector on one screen and another on the other.
+`SectorGroupKeyProvider` holds the loaded `fundamentals_snapshot` behind a **2-minute TTL** and is
+shared by both: `loadAll()` scans the whole table and deserialises four JSON columns per row, which
+is fine per dropdown click and absurd every 15 seconds on the Live tick. The TTL is short because
+`FundamentalsWarmer` fills gaps on a 5-minute cooldown — a longer pin would keep showing an
+Unclassified group for minutes after the sector had arrived.
 
 **Exactly one group per holding, which is what makes a collapsed table readable.** Nothing is
 dropped, so the groups' market values sum to the ungrouped total to the penny
@@ -677,9 +691,72 @@ re-sync — and the toggle matches on the group **id**, not on "next siblings un
 header", because sorting moves rows. The Expand-all/Collapse-all button hides itself when the table
 is ungrouped.
 
-**The Excel export is deliberately ungrouped** — `POST /sync-from-cash/export` re-runs `sync()` and
-writes the flat sheet, where a reader has pivot tables and a `Portfolio %` that is already a live
-formula.
+**The Excel exports are deliberately ungrouped** — `POST /sync-from-cash/export` re-runs `sync()`
+and `POST /live/export` takes a fresh `snapshot()`, both writing the flat sheet, where a reader has
+pivot tables and a `Portfolio %` that is already a live formula. `Snapshot` keeps a 4-arg
+constructor for exactly that (and for the tests), same idiom as `QuoteSummary`.
+
+### Live grouping — what differs
+
+**Every snapshot carries its sector groups whether anyone is grouping or not, and that is forced by
+the transport.** `/live/stream` broadcasts **one** snapshot to every connected emitter, so there is
+no per-client selection a query param could carry without giving each emitter its own state.
+Computing it once for everybody is cheaper than that and keeps the weighted arithmetic on the
+server; the browser only chooses whether to draw the header rows. So the Live dropdown posts
+nothing — unlike the ledger's, whose every change is a re-sync — and its options are two static
+`<option>`s rather than being generated from the enum. A second Live key is a second group set on
+the snapshot plus an `<option>`. `sectorGroups` degrades to no groups on failure: a classification
+blip must not cost the user their price table.
+
+**`LiveGroup` is a separate record from `HoldingGroup`, not a shared one with null fields.** Sharing
+would have meant a majority of nulls on both screens and no way to tell "this column has no
+group-level value" from "this table does not have this column". `LiveGroup` also carries
+`symbols` — membership rides on the group rather than a group id on every `Row`, which keeps `Row`
+(hand-built by the Excel export and its tests) unchanged and gives the browser what it needs to
+place each row under its header.
+
+**Day Δ % recovers its own denominator.** A row's previous close in GBP is exactly
+`positionGbp − dayChangeGbp`, because that is how `LivePricesService` built the change — so the
+group figure is `Σ dayΔ ÷ Σ(position − dayΔ)` with no extra field and no second valuation path.
+Same trick as the ledger recovering cost from `value − gain`. Grouping everything into one group
+reproduces the totals row's own Day Δ %, which a test pins.
+
+**The trailing windows are weighted by what each position was worth *then*** — recoverable from the
+row as `then = positionGbp ÷ (1 + pct)`, so the group is `(Σnow − Σthen) ÷ Σthen`, the value-weighted
+price change. It uses **today's quantities**, so a name bought mid-window is weighted as though held
+throughout: this is "what today's holdings did over that window", not a realised return (that needs
+dated flows — Attribution). The per-row figure has the same property, so the group is the honest
+generalisation of the column it summarises rather than a different measure wearing its name; the
+tooltip says so. A row missing a figure leaves that column's numerator **and** denominator, so
+different columns of one header can rest on different subsets — two of the four gilts have no 6-month
+history and the Fixed Income 6M cell is computed from the other two, which beats counting the
+unknown ones as flat. A growth factor ≤ 0 (a price that went to zero) is skipped rather than allowed
+to invert the group.
+
+**Quote ts on a group header is the OLDEST member's quote, not the newest**, and it names the symbol
+in its tooltip. A summary line is only as current as its stalest input: a group whose largest name
+last printed an hour ago is an hour-old number however fresh the rest is, and the newest would hide
+exactly the lagging feed worth seeing. This is the opposite of `Snapshot.latestPriceAt`, which
+answers a different question ("has anything at all come in recently"). Live confirmed it works:
+Funds — multi-sector read 13:03 (XWIS) against a 13:59 newest quote.
+
+**Header rows are patched in place, like the member rows.** A frame arrives every 15s; rebuilding
+would drop any flash animation mid-play, so group cells go through the same `setNumericCell`
+change-detection under a `grp|<id>|` key prefix. Three consequences worth knowing:
+- `applyLiveRows` collects existing rows with `tr[data-symbol]`, **not** `tr` — headers are rows of
+  the same tbody, and keying them by an undefined symbol would collapse them onto one entry and then
+  delete every one of them as unseen.
+- **Expanded state lives in `liveState.expanded`, not in the DOM.** A frame re-orders rows without
+  rebuilding them, and a user who opened a group does not expect it to shut on the next tick.
+  Toggling touches the DOM directly rather than repainting, so an in-flight flash survives.
+- Re-appending header-then-members in server order is skipped once the user has sorted a column —
+  `sortBody` has already arranged the same blocks their way, and re-appending would undo it every
+  tick.
+
+The tbody click handler branches on `dataset.groupHead` before `dataset.symbol`: a header toggles,
+a member opens the shared price popup. CSS restates the header background at `#live-table` scope
+because the market-state row tints are `#live-table`-scoped and would otherwise win — a header spans
+several listings and has no single market state.
 
 ## Open orders
 
@@ -1408,7 +1485,8 @@ payments unattended. `POST /rebuild-prices` does the same in one shot.
 
 `GET /live` + `GET /live/stream` (SSE) → `LivePricesService.snapshot()`. Per-position latest quote,
 day change, trailing 5d…6M columns and totals. `POST /live/export` writes the same table to Excel
-(see "Excel exports").
+(see "Excel exports"). A **Group by** dropdown collapses the rows by sector — see "Table grouping"
+above; the groups ride on every snapshot because the SSE stream is one broadcast for all clients.
 
 **Extended hours are stored, tagged, and opt-in.** `YahooPriceFetcher`'s intraday URL now carries
 `includePrePost=true`, so a US name has a live pre-market quote at 07:00 London instead of freezing

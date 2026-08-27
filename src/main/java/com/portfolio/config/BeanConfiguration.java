@@ -22,6 +22,7 @@ import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.InstrumentMappingRepository;
+import com.portfolio.persistence.OrderHistoryRepository;
 import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.domain.EventMoves;
 import com.portfolio.domain.IndustryGroups;
@@ -180,6 +181,7 @@ public class BeanConfiguration {
                                                EarningsCalendarService earningsCalendarService,
                                                FundamentalsRepository fundamentalsRepository,
                                                DividendYieldService dividendYieldService,
+                                               OrderHistoryRepository orderHistoryRepository,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -211,7 +213,10 @@ public class BeanConfiguration {
                 // ...and the fallback for a name that publishes no dividend figure at all, derived
                 // from its own payment history. HICL.L is the live case: without this it nets
                 // nothing off an 8% class drift despite paying ~6%.
-                dividendYieldService);
+                dividendYieldService,
+                // Annotations on each order, and the orders a broker has stopped listing. This
+                // panel is the only writer, so it is also where retention runs.
+                orderHistoryRepository);
     }
 
     /**
@@ -498,6 +503,11 @@ public class BeanConfiguration {
                                                    PriceHistoryRepository priceHistoryRepository) {
         return new SyncFromCashService(cashTransactionRepository, intradayPriceRepository,
                 fxRateProvider, yahooTickerMap, priceHistoryRepository);
+    }
+
+    @Bean
+    public OrderHistoryRepository orderHistoryRepository(JdbcConnectionFactory connections) {
+        return new OrderHistoryRepository(connections);
     }
 
     @Bean

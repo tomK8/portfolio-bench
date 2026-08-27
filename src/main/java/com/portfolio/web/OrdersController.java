@@ -7,6 +7,7 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import java.util.Map;
 import org.springframework.web.bind.annotation.ResponseBody;
 
 import java.math.BigDecimal;
@@ -44,6 +45,22 @@ public class OrdersController {
                 openOrdersService.effectiveConfig(halfLife, gtcSessions, useDrift, useEventVar)));
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/orders :: result";
+    }
+
+    /**
+     * Saves (or clears) one order's annotation.
+     *
+     * <p>Returns {@code ok:false} rather than throwing when the key is unknown — the realistic
+     * cause is a page left open whose order has since closed and been pruned, and a stale tab is
+     * not an error worth an error page.
+     */
+    @PostMapping("/orders/note")
+    @ResponseBody
+    public Map<String, Object> saveNote(@RequestParam String orderKey,
+                                        @RequestParam(required = false) String note) {
+        boolean saved = openOrdersService.saveNote(orderKey, note);
+        return Map.of("ok", saved, "message",
+                saved ? "Saved" : "That order is no longer on file — the note was not saved.");
     }
 
     /**

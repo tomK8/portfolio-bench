@@ -156,6 +156,39 @@
         html[data-theme="dark"] .irr-period, html[data-theme="dark"] .irr-flag { color: #9aa0a6; }
         .irr-footnote { max-width: 60rem; margin-top: 0.75rem; }
 
+        /* ── Open-orders annotations ─────────────────────────────────────────
+           A borderless input so a table of mostly-empty notes reads as a column of cells rather
+           than a column of boxes; the border appears on hover and focus, where it means something. */
+        .order-note {
+            width: 100%;
+            min-width: 9rem;
+            border: 1px solid transparent;
+            background: transparent;
+            font: inherit;
+            font-size: 0.85rem;
+            padding: 0.1rem 0.25rem;
+            border-radius: 3px;
+            color: inherit;
+        }
+        .order-note::placeholder { color: #bbb; font-style: italic; }
+        .order-note:hover { border-color: #d5d8dd; }
+        .order-note:focus { border-color: #4a7ebb; background: #fff; outline: none; }
+        html[data-theme="dark"] .order-note:hover { border-color: #3a3f47; }
+        html[data-theme="dark"] .order-note:focus { border-color: #7aa7dd; background: #1a1c20; }
+        html[data-theme="dark"] .order-note::placeholder { color: #5a6068; }
+        .order-note-saved { background: rgba(44, 160, 44, 0.18) !important; }
+        .order-note-failed { border-color: #c0392b !important; }
+        .order-note-cell { min-width: 10rem; }
+
+        .order-history { margin-top: 1.25rem; }
+        .order-history > summary {
+            cursor: pointer;
+            font-weight: 600;
+            padding: 0.35rem 0;
+        }
+        .order-history table { margin-top: 0.25rem; }
+
+
         /* ── Cash-ledger grouping ─────────────────────────────────────────────
            A group header is a row of the same table, not a caption above a nested one: the
            columns have to line up with the members underneath, and the sort has to be able to

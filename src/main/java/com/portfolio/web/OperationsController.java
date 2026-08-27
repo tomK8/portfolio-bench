@@ -64,8 +64,8 @@ public class OperationsController {
     }
 
     @PostMapping("/sync")
-    public String sync(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
-                       @RequestParam(name = "iiSippCashUsd", required = false, defaultValue = "0") String iiSippCashUsd,
+    public String sync(@RequestParam(name = "iiSippCash", required = false) String iiSippCash,
+                       @RequestParam(name = "iiSippCashUsd", required = false) String iiSippCashUsd,
                        Model model) {
         model.addAttribute("result", syncService.sync(
                 WebSupport.persistIiSippCash(settings, iiSippCash),
@@ -110,8 +110,8 @@ public class OperationsController {
     }
 
     @PostMapping("/export")
-    public String export(@RequestParam(name = "iiSippCash", required = false, defaultValue = "0") String iiSippCash,
-                         @RequestParam(name = "iiSippCashUsd", required = false, defaultValue = "0") String iiSippCashUsd,
+    public String export(@RequestParam(name = "iiSippCash", required = false) String iiSippCash,
+                         @RequestParam(name = "iiSippCashUsd", required = false) String iiSippCashUsd,
                          Model model) {
         model.addAttribute("export", exportService.export(
                 WebSupport.persistIiSippCash(settings, iiSippCash),

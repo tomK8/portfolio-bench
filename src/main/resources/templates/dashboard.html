@@ -156,6 +156,76 @@
         html[data-theme="dark"] .irr-period, html[data-theme="dark"] .irr-flag { color: #9aa0a6; }
         .irr-footnote { max-width: 60rem; margin-top: 0.75rem; }
 
+        /* ── Cash-ledger grouping ─────────────────────────────────────────────
+           A group header is a row of the same table, not a caption above a nested one: the
+           columns have to line up with the members underneath, and the sort has to be able to
+           order groups by the same cell it orders rows by. */
+        tr.group-header > td {
+            background: rgba(0, 0, 0, 0.045);
+            border-top: 1px solid rgba(0, 0, 0, 0.14);
+            font-weight: 600;
+            cursor: pointer;
+        }
+        html[data-theme="dark"] tr.group-header > td {
+            background: rgba(255, 255, 255, 0.06);
+            border-top-color: rgba(255, 255, 255, 0.16);
+        }
+        tr.group-header:hover > td { background: rgba(0, 0, 0, 0.08); }
+        html[data-theme="dark"] tr.group-header:hover > td { background: rgba(255, 255, 255, 0.1); }
+
+        /* The residual "couldn't place these" group is pinned last by the grouper; the amber bar
+           is the same idiom the unclassified strips elsewhere use, so it reads as a data gap
+           rather than as a sector. */
+        tr.group-header.group-residual > td:first-child {
+            box-shadow: inset 3px 0 0 #d99100;
+        }
+
+        .group-caret {
+            display: inline-block;
+            width: 0.9rem;
+            font-size: 0.62rem;
+            color: #888;
+            transition: transform 0.12s ease;
+        }
+        tr.group-header.expanded .group-caret { transform: rotate(90deg); }
+        /* Keeps the caret beside its label: a wrapped label left the triangle alone on the
+           first line, reading as a bullet rather than a control. */
+        td.group-label { white-space: nowrap; }
+        .group-count { color: #999; font-weight: 400; margin-left: 0.4rem; font-size: 0.85rem; }
+        .group-note-flag { color: #888; margin-left: 0.35rem; font-size: 0.8rem; cursor: help; }
+
+        /* Members start collapsed from the server, so the grouped table never paints its full
+           row set on the way to being collapsed. */
+        tr.group-member.collapsed { display: none; }
+        tr.group-member > td:first-child { padding-left: 1.75rem; }
+
+        /* Blank because there is no correct value, not because a number failed to arrive —
+           muted and help-cursored so the tooltip is discoverable. */
+        td.group-no-irr { color: #bbb; cursor: help; }
+        html[data-theme="dark"] td.group-no-irr { color: #666; }
+
+        /* The actions bar is a wrapping flex row, so the label and its select have to hold
+           together as one item — left to themselves they broke across two lines. */
+        .group-by-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            white-space: nowrap;
+        }
+        .link-button { white-space: nowrap; }
+
+        .link-button {
+            background: none;
+            border: none;
+            padding: 0;
+            color: #4a7ebb;
+            font: inherit;
+            font-size: 0.85rem;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        html[data-theme="dark"] .link-button { color: #7aa7dd; }
+
         .totals {
             margin-bottom: 1.5rem;
         }
@@ -3624,6 +3694,21 @@
     <form class="actions" hx-indicator="#spinner">
         <button hx-post="/sync-from-cash" hx-target="#portfolio-cash-result" type="submit">Aggregated Portfolio (from cash ledger)</button>
         <button hx-post="/sync-from-cash/export" hx-target="#cash-export-result" type="submit">Download Excel</button>
+        <!--
+          The select lives in the form but outside #portfolio-cash-result, so its value survives
+          every htmx swap and the button below re-submits whatever is chosen. Grouping is done on
+          the server (one re-sync, FX is TTL-cached) rather than in the browser, which keeps the
+          weighted Sigma-gain / Sigma-cost arithmetic in a single implementation. Options come
+          from LedgerGroupingService.GroupBy, so a new key type needs no edit here.
+        -->
+        <label class="muted group-by-label">Group by
+            <select name="groupBy" id="ledger-group-by"
+                    hx-post="/sync-from-cash" hx-target="#portfolio-cash-result"
+                    hx-trigger="change" hx-indicator="#spinner">
+                <option th:each="o : ${groupOptions}" th:value="${o.id}" th:text="${o.label}">None</option>
+            </select>
+        </label>
+        <button type="button" id="ledger-expand-all" class="link-button" hidden>Expand all</button>
         <span class="muted">positions reconstructed FIFO from <code>cash_transactions</code>, priced by latest intraday quote</span>
     </form>
     <div id="cash-export-result"></div>

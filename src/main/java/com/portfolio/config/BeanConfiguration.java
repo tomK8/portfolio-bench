@@ -501,6 +501,12 @@ public class BeanConfiguration {
     }
 
     @Bean
+    public LedgerGroupingService ledgerGroupingService(SectorClassifier sectorClassifier,
+                                                       FundamentalsRepository fundamentalsRepository) {
+        return new LedgerGroupingService(sectorClassifier, fundamentalsRepository);
+    }
+
+    @Bean
     public HistoricalScenarioService historicalScenarioService(SyncFromCashService syncFromCashService,
                                                                PriceHistoryRepository priceHistoryRepository,
                                                                HistoricalFxRateProvider historicalFxRateProvider,

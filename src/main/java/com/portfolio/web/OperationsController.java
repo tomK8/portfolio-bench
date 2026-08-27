@@ -3,9 +3,11 @@ package com.portfolio.web;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
 import com.portfolio.application.ImportGiltPricesService;
+import com.portfolio.application.LedgerGroupingService;
 import com.portfolio.application.PriceFetchJob;
 import com.portfolio.application.SyncFromCashService;
 import com.portfolio.application.SyncPortfolioService;
+import com.portfolio.application.SyncResult;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
@@ -39,6 +41,7 @@ public class OperationsController {
     private final PriceFetchJob priceFetchJob;
     private final PriceHistoryRepository priceHistoryRepository;
     private final KeyValueStore settings;
+    private final LedgerGroupingService groupingService;
 
     public OperationsController(SyncPortfolioService syncService,
                                 SyncFromCashService syncFromCashService,
@@ -47,7 +50,8 @@ public class OperationsController {
                                 ImportGiltPricesService importGiltPricesService,
                                 PriceFetchJob priceFetchJob,
                                 PriceHistoryRepository priceHistoryRepository,
-                                KeyValueStore settings) {
+                                KeyValueStore settings,
+                                LedgerGroupingService groupingService) {
         this.syncService = syncService;
         this.syncFromCashService = syncFromCashService;
         this.exportService = exportService;
@@ -56,6 +60,7 @@ public class OperationsController {
         this.priceFetchJob = priceFetchJob;
         this.priceHistoryRepository = priceHistoryRepository;
         this.settings = settings;
+        this.groupingService = groupingService;
     }
 
     @PostMapping("/sync")
@@ -69,9 +74,25 @@ public class OperationsController {
         return "fragments/portfolio :: result";
     }
 
+    /**
+     * The cash-ledger view, optionally collapsed into groups. {@code groupBy} names a
+     * {@link LedgerGroupingService.GroupBy} option; an absent or unknown value renders the flat
+     * table, so a bookmarked URL or a hand-edited request can never produce an error page.
+     *
+     * <p>Changing the dropdown re-runs {@code sync()} rather than regrouping in the browser,
+     * which is what keeps {@code Σgain ÷ Σcost} in one implementation instead of a second copy in
+     * {@code dashboard.js}. It is cheap: FX is TTL-cached behind {@code CachingFxRateProvider}
+     * and everything else the sync touches is local SQLite.
+     */
     @PostMapping("/sync-from-cash")
-    public String syncFromCash(Model model) {
-        model.addAttribute("result", syncFromCashService.sync());
+    public String syncFromCash(@RequestParam(name = "groupBy", required = false) String groupBy,
+                               Model model) {
+        SyncResult result = syncFromCashService.sync();
+        LedgerGroupingService.GroupBy by = groupingService.parse(groupBy);
+        model.addAttribute("result", result);
+        model.addAttribute("groups", groupingService.group(result.holdings(), by));
+        model.addAttribute("groupBy", by.id());
+        model.addAttribute("groupOptions", groupingService.options());
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/portfolio-ledger :: result";
     }

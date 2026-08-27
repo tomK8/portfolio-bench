@@ -115,15 +115,37 @@ public class SyncPortfolioService {
      * price + FX should produce identical numbers; any nonzero diff points at a real
      * reconciliation issue — broker rounding vs. raw ledger quantity, a missed trade, a
      * currency-resolution mismatch, or a position present only in one source.
+     *
+     * <p>A position in <b>one</b> source only is reported with zero on the other side rather than
+     * skipped, which is what makes an in-flight transfer visible: for the days a holding has left
+     * one broker and not yet reached the next it appears in neither export, and the ledger total
+     * legitimately exceeds the holdings total by exactly its value.
      */
     private List<SyncResult.AssetRecon> reconcileAssets(List<AggHolding> aggregated,
                                                         Map<String, IntradayPrice> latestBySymbol,
                                                         Map<String, BigDecimal> rates) {
         List<CashTransaction> rows = cashRepo.loadDividendTransactions();
         List<Position> positions = new CashLedgerReconstructor().reconstruct(rows);
+
+        // Price the ledger's own symbols, not only the ones the holdings files happen to name.
+        // `latestBySymbol` is keyed off the parsed holdings, so a position the ledger holds and no
+        // broker export shows had no quote here and fell straight out of the comparison — leaving
+        // the very case the panel exists for as an unexplained gap between the two totals. GLE was
+        // the live one: mid-transfer, gone from AJ Bell's export and not yet in II's, it sat in
+        // the ledger at £6,034.47 and the panel said nothing (2026-08-27).
+        Map<String, IntradayPrice> ledgerPrices = new HashMap<>(latestBySymbol);
+        Map<String, String> ledgerTickers = new LinkedHashMap<>();
+        for (Position p : positions) {
+            String upper = p.securityId().toUpperCase();
+            if (ledgerPrices.containsKey(upper) || "CASH".equals(upper)) continue;
+            ledgerTickers.put(upper, Instruments.isBond(p.securityId())
+                    ? upper : tickerMap.tickerFor(p.securityId()));
+        }
+        if (!ledgerTickers.isEmpty()) ledgerPrices.putAll(latestPricesBySymbol(ledgerTickers));
+
         Map<String, BigDecimal> ledgerRtBySymbol = new HashMap<>();
         for (Position p : positions) {
-            IntradayPrice ip = latestBySymbol.get(p.securityId().toUpperCase());
+            IntradayPrice ip = ledgerPrices.get(p.securityId().toUpperCase());
             if (ip == null) continue;
             BigDecimal v = ledgerRtGbp(p, ip, rates);
             if (v != null) ledgerRtBySymbol.put(p.securityId().toUpperCase(), v);

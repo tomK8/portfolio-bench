@@ -19,7 +19,17 @@ import java.util.regex.Pattern;
 /**
  * Parses UUID-named CSV exports (e.g. 1f072c5f-a547-4589-9003-4ee13cba7ddd.csv) for the II SIPP account.
  * <p>
- * Currency per row is inferred from the Market Value column prefix ($ → USD, £ → GBP).
+ * Currency per row is inferred from the Market Value column prefix ($ → USD, € → EUR, £ → GBP).
+ * <p>
+ * <b>The export carries two market-value columns and both are used.</b> {@code Market Value} is
+ * native ({@code €62,409.20}) and {@code Market Value £} is II's own conversion ({@code
+ * £53,496.92}); the second becomes {@code currentMarketValueGbp}, so a euro position is valued at
+ * the broker's rate rather than re-crossed here. Reading only the native column is what put BNP
+ * and RHM into the portfolio as pounds: {@code parseCurrency} knew nothing of {@code €}, defaulted
+ * to GBP, and 620 shares at €100.66 were carried as £62,409 instead of £53,497 — and the RT column,
+ * which multiplies the live euro price by the quantity and converts only when the currency says
+ * to, was wrong by the same 16.6% (2026-08-27). Nothing had exposed it before: II held only GBP
+ * and USD listings until the euro names transferred in from AJ Bell.
  * GBP-priced securities may show price in pence; Market Value and Book Cost are always in pounds.
  * Average price paid = Book Cost / Qty.
  * <p>
@@ -41,6 +51,8 @@ public class IISippParser implements AccountParser {
     private static final String COL_NAME = "Name";
     private static final String COL_QTY = "Qty";
     private static final String COL_MARKET_VALUE = "Market Value";
+    /** II's own GBP conversion of the row, present alongside the native figure. */
+    private static final String COL_MARKET_VALUE_GBP = "Market Value £";
     private static final String COL_BOOK_COST = "Book Cost";
 
     static String normaliseSecurityId(String rawId) {
@@ -110,6 +122,10 @@ public class IISippParser implements AccountParser {
                 String mktValRaw = record.get(COL_MARKET_VALUE).trim();
                 Currency currency = parseCurrency(mktValRaw);
                 BigDecimal mktVal = parseCurrencyAmount(mktValRaw);
+                // Optional so an older export without the column still parses; when it is there,
+                // it spares the aggregator an FX cross it could get wrong or fail to do at all.
+                BigDecimal mktValGbp = record.isSet(COL_MARKET_VALUE_GBP)
+                        ? parseCurrencyAmount(record.get(COL_MARKET_VALUE_GBP).trim()) : null;
 
                 BigDecimal bookCost = parseCurrencyAmount(record.get(COL_BOOK_COST).trim());
                 BigDecimal avgPrice = (bookCost != null && qty.compareTo(BigDecimal.ZERO) != 0)
@@ -121,6 +137,7 @@ public class IISippParser implements AccountParser {
                 holdings.add(Holding.builder(securityIdFor(symbol, name), qty, currency, ACCOUNT_SOURCE)
                         .avgPricePaid(avgPrice)
                         .currentMarketValue(mktVal)
+                        .currentMarketValueGbp(mktValGbp)
                         .build());
             }
         }
@@ -128,14 +145,21 @@ public class IISippParser implements AccountParser {
         return holdings;
     }
 
+    /**
+     * The listing currency, from the amount's own symbol. GBP is the fallback rather than a
+     * detection, so an unrecognised symbol reads as pounds — which is why {@code €} had to be
+     * added explicitly the moment euro listings arrived rather than being silently absorbed.
+     */
     private Currency parseCurrency(String value) {
-        if (value != null && value.startsWith("$")) return Currency.getInstance("USD");
+        if (value == null || value.isEmpty()) return Currency.getInstance("GBP");
+        if (value.startsWith("$")) return Currency.getInstance("USD");
+        if (value.startsWith("\u20AC")) return Currency.getInstance("EUR");
         return Currency.getInstance("GBP");
     }
 
     private BigDecimal parseCurrencyAmount(String value) {
         if (value == null || value.isBlank()) return null;
-        String clean = value.replaceAll("[£$,]", "").trim();
+        String clean = value.replaceAll("[\u00A3$\u20AC,]", "").trim();
         if (clean.isEmpty()) return null;
         try {
             return new BigDecimal(clean);

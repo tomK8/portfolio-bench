@@ -72,45 +72,78 @@
                 <th class="txt" data-sort="text">Sources</th>
             </tr>
             </thead>
-            <tbody>
-            <tr th:each="h : ${result.holdings}">
-                <td class="txt" th:text="${h.securityId}">SYM</td>
-                <td class="txt" th:text="${h.currencyCode}">USD</td>
-                <td th:text="${#numbers.formatDecimal(h.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>
-                <td th:classappend="${h.monthChangePct != null ? (h.monthChangePct.signum() > 0 ? 'mom-pos' : (h.monthChangePct.signum() &lt; 0 ? 'mom-neg' : '')) : ''}"
-                    th:title="${h.monthChangePct != null ? '1-month price change: ' + #numbers.formatPercent(h.monthChangePct, 1, 2) : null}"
-                    th:text="${h.latestPrice != null ? #numbers.formatDecimal(h.latestPrice, 1, 'COMMA', 4, 'POINT') : '—'}">—
-                </td>
-                <td th:text="${#numbers.formatDecimal(h.marketValueGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                <td th:text="${(result.totals.totalGbp != null and result.totals.totalGbp.signum() != 0 and h.marketValueGbp != null)
-                        ? #numbers.formatPercent(h.marketValueGbp.doubleValue() / result.totals.totalGbp.doubleValue(), 1, 2) : '—'}">—
-                </td>
-                <td th:classappend="${h.gainGbp != null ? (h.gainGbp.signum() > 0 ? 'val-pos' : (h.gainGbp.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
-                    th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
-                </td>
-                <td th:classappend="${h.gainPct != null ? (h.gainPct.signum() > 0 ? 'val-pos' : (h.gainPct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
-                    th:text="${h.gainPct != null ? #numbers.formatPercent(h.gainPct, 1, 2) : '—'}">—</td>
-                <td th:text="${#numbers.formatDecimal(h.dividendGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
-                <td th:classappend="${h.totalGainGbp != null ? (h.totalGainGbp.signum() > 0 ? 'val-pos' : (h.totalGainGbp.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
-                    th:text="${h.totalGainGbp != null ? #numbers.formatDecimal(h.totalGainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
-                </td>
-                <td th:classappend="${h.totalGainPct != null ? (h.totalGainPct.signum() > 0 ? 'val-pos' : (h.totalGainPct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
-                    th:text="${h.totalGainPct != null ? #numbers.formatPercent(h.totalGainPct, 1, 2) : '—'}">—</td>
-                <td th:with="irr=${result.irrBySymbol.get(h.securityId)},
-                             rate=${irr != null ? irr.displayReturn() : null}"
-                    th:attr="data-sort-value=${rate != null ? rate : ''}"
-                    th:classappend="${rate != null ? (rate.signum() > 0 ? 'val-pos' : (rate.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
-                    th:title="${irr != null ? irr.explain() : null}">
-                    <span th:text="${rate != null ? #numbers.formatPercent(rate, 1, 2) : '—'}">—</span><!--
-                    A period return is not the same measure as the rest of the column, so it says
-                    so on the row rather than only in the tooltip.
-                 --><span class="irr-period" th:if="${irr != null and rate != null and !irr.annualised}"
-                          th:text="${irr.episodeDays} + 'd'">0d</span><!--
-                 --><span class="irr-flag" th:if="${irr != null and rate != null and irr.reentered()}"
-                          title="Re-entered position — the rate covers the current episode only.">&#8635;</span>
-                </td>
-                <td class="txt" th:text="${h.sources}">src</td>
-            </tr>
+            <!--
+              Ungrouped: the flat table exactly as it has always been. Grouped: one header row
+              per group carrying the aggregate, followed by its members, collapsed until the
+              header is clicked. Both paths render member rows through the same `ledgerRow`
+              fragment, so they cannot drift apart on a column.
+
+              th:replace has higher precedence than th:each, so the iteration has to sit on an
+              enclosing th:block — on the same tag the fragment would be pulled in once, before
+              the loop variable exists. Same trap the unpriced-symbols guard above documents.
+            -->
+            <tbody th:if="${groups == null or groups.isEmpty()}">
+            <th:block th:each="h : ${result.holdings}">
+                <tr th:replace="~{:: ledgerRow(${h}, ${result}, null)}"></tr>
+            </th:block>
+            </tbody>
+
+            <tbody th:unless="${groups == null or groups.isEmpty()}" class="grouped">
+            <th:block th:each="g : ${groups}">
+                <tr class="group-header" th:attr="data-group-head=${g.id}"
+                    th:classappend="${g.residual} ? 'group-residual' : ''"
+                    th:title="${g.note}">
+                    <td class="txt group-label"
+                        th:attr="data-sort-value=${#strings.toLowerCase(g.label)}">
+                        <span class="group-caret" aria-hidden="true">&#9654;</span><!--
+                     --><span th:text="${g.label}">Group</span><!--
+                     --><span class="group-count" th:text="'(' + ${g.memberCount} + ')'">(0)</span><!--
+                     --><span class="group-note-flag" th:if="${g.note != null}" aria-hidden="true">&#9432;</span>
+                    </td>
+                    <!-- Ccy / Quantity / Price stay blank by design: no meaning across
+                         instruments. Adding 200,000 of gilt nominal to 40 shares of Alphabet
+                         produces a number that is not about anything. -->
+                    <td class="txt"></td>
+                    <td></td>
+                    <td></td>
+                    <td th:attr="data-sort-value=${g.marketValueGbp}"
+                        th:text="${g.marketValueGbp != null ? #numbers.formatDecimal(g.marketValueGbp, 1, 'COMMA', 2, 'POINT') : '—'}">0</td>
+                    <td th:text="${(result.totals.totalGbp != null and result.totals.totalGbp.signum() != 0 and g.marketValueGbp != null)
+                            ? #numbers.formatPercent(g.marketValueGbp.doubleValue() / result.totals.totalGbp.doubleValue(), 1, 2) : '—'}">—</td>
+                    <td th:attr="data-sort-value=${g.gainGbp}"
+                        th:classappend="${g.gainGbp != null ? (g.gainGbp.signum() > 0 ? 'val-pos' : (g.gainGbp.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                        th:text="${g.gainGbp != null ? #numbers.formatDecimal(g.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                    <!-- Weighted, never the mean of the members' percentages: a GBP 5 position up
+                         300% beside a GBP 50,000 one down 2% averages to +149%, and what the
+                         money did was minus 2%. Denominator is the group's own summed cost. -->
+                    <td th:attr="data-sort-value=${g.gainPct}"
+                        th:classappend="${g.gainPct != null ? (g.gainPct.signum() > 0 ? 'val-pos' : (g.gainPct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                        th:title="${g.gainPct != null and g.costGbp != null
+                                ? 'Weighted: total gain divided by the group cost basis of £'
+                                  + #numbers.formatDecimal(g.costGbp, 1, 'COMMA', 2, 'POINT')
+                                  + ' — not the average of the member percentages.' : null}"
+                        th:text="${g.gainPct != null ? #numbers.formatPercent(g.gainPct, 1, 2) : '—'}">—</td>
+                    <td th:attr="data-sort-value=${g.dividendGbp}"
+                        th:text="${g.dividendGbp != null ? #numbers.formatDecimal(g.dividendGbp, 1, 'COMMA', 2, 'POINT') : '—'}">0</td>
+                    <td th:attr="data-sort-value=${g.totalGainGbp}"
+                        th:classappend="${g.totalGainGbp != null ? (g.totalGainGbp.signum() > 0 ? 'val-pos' : (g.totalGainGbp.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                        th:text="${g.totalGainGbp != null ? #numbers.formatDecimal(g.totalGainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                    <td th:attr="data-sort-value=${g.totalGainPct}"
+                        th:classappend="${g.totalGainPct != null ? (g.totalGainPct.signum() > 0 ? 'val-pos' : (g.totalGainPct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                        th:title="${g.totalGainPct != null and g.costGbp != null
+                                ? 'Weighted: gain including dividends divided by the group cost basis of £'
+                                  + #numbers.formatDecimal(g.costGbp, 1, 'COMMA', 2, 'POINT') + '.' : null}"
+                        th:text="${g.totalGainPct != null ? #numbers.formatPercent(g.totalGainPct, 1, 2) : '—'}">—</td>
+                    <!-- Deliberately blank, and the tooltip says why rather than leaving it to
+                         read as a gap. See the footnote below the table. -->
+                    <td class="group-no-irr"
+                        title="No group-level annualised return. The column is an IRR over each position's own dated cash flows, and members of a group have different holding periods and different flow histories &mdash; so no weighting of their rates, by value or cost or period, means anything. The right figure is a single money-weighted IRR over the union of the group's dated flows, which needs the ledger rows rather than these aggregated ones. That is tracked separately; an approximation here would look like the rates below it and be wrong.">—</td>
+                    <td class="txt"></td>
+                </tr>
+                <th:block th:each="h : ${g.members}">
+                    <tr th:replace="~{:: ledgerRow(${h}, ${result}, ${g.id})}"></tr>
+                </th:block>
+            </th:block>
             </tbody>
         </table>
 
@@ -125,9 +158,74 @@
             shows the raw period return with its length beside it
             (<span class="irr-period">41d</span>) rather than an annualised figure.
         </p>
+
+        <p class="muted irr-footnote" th:unless="${groups == null or groups.isEmpty()}">
+            <b>Group rows</b> sum Market value, Portfolio %, Gain, Dividends and Total gain, and
+            weight <b>Gain %</b> and <b>Total gain %</b> as Σgain ÷ Σcost — the return the money in
+            the group actually earned, not the average of the member percentages, which a small
+            position with a large percentage would otherwise dominate. Quantity, Price, Ccy and
+            Sources are blank because they have no meaning across different instruments, and
+            <b>Annualised return</b> is blank because it has no <i>correct</i> group-level value:
+            members hold for different periods over different flow histories, so no weighting of
+            their IRRs is defensible. The right answer is one money-weighted IRR over the union of
+            the group's dated cash flows — a different calculation over the ledger rows rather than
+            these aggregated ones — and it is tracked as its own piece of work rather than
+            approximated here. Every holding lands in exactly one group, so the group values add
+            back to the total above.
+        </p>
     </div>
 
 </div>
+
+<!--
+  One holding row, shared by the flat table and the grouped one. It exists as a fragment so the
+  two paths cannot drift apart on a column — the grouping feature must not become a second copy
+  of the table.
+
+  `groupId` is null for a flat row and the owning group's id for a member. A member starts
+  `collapsed` (CSS display:none) rather than being hidden by script after paint, so the grouped
+  table never flashes its full row set on the way to being collapsed.
+-->
+<tr th:fragment="ledgerRow(h, result, groupId)"
+    th:classappend="${groupId != null} ? 'group-member collapsed' : ''"
+    th:attr="data-group-of=${groupId}">
+    <td class="txt" th:text="${h.securityId}">SYM</td>
+    <td class="txt" th:text="${h.currencyCode}">USD</td>
+    <td th:text="${#numbers.formatDecimal(h.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>
+    <td th:classappend="${h.monthChangePct != null ? (h.monthChangePct.signum() > 0 ? 'mom-pos' : (h.monthChangePct.signum() &lt; 0 ? 'mom-neg' : '')) : ''}"
+        th:title="${h.monthChangePct != null ? '1-month price change: ' + #numbers.formatPercent(h.monthChangePct, 1, 2) : null}"
+        th:text="${h.latestPrice != null ? #numbers.formatDecimal(h.latestPrice, 1, 'COMMA', 4, 'POINT') : '—'}">—
+    </td>
+    <td th:text="${#numbers.formatDecimal(h.marketValueGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+    <td th:text="${(result.totals.totalGbp != null and result.totals.totalGbp.signum() != 0 and h.marketValueGbp != null)
+            ? #numbers.formatPercent(h.marketValueGbp.doubleValue() / result.totals.totalGbp.doubleValue(), 1, 2) : '—'}">—
+    </td>
+    <td th:classappend="${h.gainGbp != null ? (h.gainGbp.signum() > 0 ? 'val-pos' : (h.gainGbp.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+        th:text="${h.gainGbp != null ? #numbers.formatDecimal(h.gainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
+    </td>
+    <td th:classappend="${h.gainPct != null ? (h.gainPct.signum() > 0 ? 'val-pos' : (h.gainPct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+        th:text="${h.gainPct != null ? #numbers.formatPercent(h.gainPct, 1, 2) : '—'}">—</td>
+    <td th:text="${#numbers.formatDecimal(h.dividendGbp, 1, 'COMMA', 2, 'POINT')}">0</td>
+    <td th:classappend="${h.totalGainGbp != null ? (h.totalGainGbp.signum() > 0 ? 'val-pos' : (h.totalGainGbp.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+        th:text="${h.totalGainGbp != null ? #numbers.formatDecimal(h.totalGainGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—
+    </td>
+    <td th:classappend="${h.totalGainPct != null ? (h.totalGainPct.signum() > 0 ? 'val-pos' : (h.totalGainPct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+        th:text="${h.totalGainPct != null ? #numbers.formatPercent(h.totalGainPct, 1, 2) : '—'}">—</td>
+    <td th:with="irr=${result.irrBySymbol.get(h.securityId)},
+                 rate=${irr != null ? irr.displayReturn() : null}"
+        th:attr="data-sort-value=${rate != null ? rate : ''}"
+        th:classappend="${rate != null ? (rate.signum() > 0 ? 'val-pos' : (rate.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+        th:title="${irr != null ? irr.explain() : null}">
+        <span th:text="${rate != null ? #numbers.formatPercent(rate, 1, 2) : '—'}">—</span><!--
+        A period return is not the same measure as the rest of the column, so it says
+        so on the row rather than only in the tooltip.
+     --><span class="irr-period" th:if="${irr != null and rate != null and !irr.annualised}"
+              th:text="${irr.episodeDays} + 'd'">0d</span><!--
+     --><span class="irr-flag" th:if="${irr != null and rate != null and irr.reentered()}"
+              title="Re-entered position — the rate covers the current episode only.">&#8635;</span>
+    </td>
+    <td class="txt" th:text="${h.sources}">src</td>
+</tr>
 
 </body>
 </html>

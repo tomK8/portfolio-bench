@@ -89,7 +89,8 @@ adapter and the zoom plugin, `hammer.min.js` before the zoom plugin. Dashboard t
   date) so a dead gilt feed doesn't drop gilts from the totals. Carries an **Annualised return**
   column the holdings view cannot have (see below) — it needs a flow history, not a snapshot.
   A **Download Excel** button (`POST /sync-from-cash/export`) writes
-  `Portfolio Ledger-YYYYMMDD.xlsx` to ~/Documents — see "Excel exports" below.
+  `Portfolio Ledger-YYYYMMDD.xlsx` to ~/Documents — see "Excel exports" below. A **Group by**
+  dropdown collapses the rows into expandable groups — see "Cash-ledger grouping" below.
 - **Portfolio % column** (both tables above + the Excel `Portfolio` sheet): each row's
   `marketValueGbp ÷ totals.totalGbp`. On-screen it's computed in the Thymeleaf fragment as
   double division (guarded against null/zero total — no BigDecimal divide that could throw on
@@ -298,6 +299,7 @@ no `System.out` in production code.
 |-----------------------|----------------------------|---------------------------|
 | Sync portfolio        | `POST /sync`               | `SyncPortfolioService`    |
 | Sync from cash ledger | `POST /sync-from-cash`     | `SyncFromCashService`     |
+| Sync from cash (grouped) | `POST /sync-from-cash?groupBy=` | `LedgerGroupingService` |
 | Cash ledger → Excel   | `POST /sync-from-cash/export` | `ExportExcelService.exportLedger` (→ ~/Documents) |
 | Live positions → Excel| `POST /live/export`        | `ExportExcelService.exportLive` (→ ~/Documents) |
 | Open orders           | `GET /orders`              | `OpenOrdersService`       |
@@ -586,6 +588,98 @@ An unsolvable rate writes **no cell**, never a zero: an empty cell reads as "not
 0.00% reads as "broke even". The IRR columns get no total row — rates over different flow series
 do not sum, and the portfolio-level money-weighted return is a different calculation over
 different flows (Performance → Returns).
+
+## Cash-ledger grouping
+
+The **Group by** dropdown on Holdings → From cash ledger collapses the table into groups, each a
+header row carrying the aggregate above its (initially collapsed) members. `LedgerGroupingService`
+resolves the selection; the maths is `domain/grouping/HoldingGrouper`. Keys shipped: **None**
+(the flat table), **Sector**, **Account**.
+
+**The key is a resolver, not a branch — `domain/grouping/HoldingGroupKey`.** One method,
+`Group keyFor(AggHolding)`. The endpoint, the fragment, the header rows, the weighted percentages,
+the sort and the expand/collapse are all written against it, so **a new way to group the book is a
+constant in `LedgerGroupingService.GroupBy` plus a resolver class and nothing else** — currency and
+a permanent/rotation label are both wanted next. The dropdown is generated from `options()`
+(`RootController` puts it in the model), so even the template needs no edit. If a future key needs
+a change outside its own class, the abstraction has been broken. The only key-shaped thing
+`HoldingGrouper` acts on is `Group.residual()`, and that is a property the resolver *declares*
+about its own group — it pins the group last, so the unplaced never sit mid-ranking as though they
+had been classified.
+
+**Exactly one group per holding, which is what makes a collapsed table readable.** Nothing is
+dropped, so the groups' market values sum to the ungrouped total to the penny
+(`groupValuesReconcileToTheUngroupedTotal`). A resolver that cannot place something must return a
+group saying so — never null. That invariant is what forces the two shape decisions below.
+
+**Which columns aggregate, and why the rest are blank.** Sum: Market Value, Portfolio %, Gain £,
+Dividends £, Total Gain £. Blank: Quantity, Price, Ccy, Sources, Security — no meaning across
+instruments (200,000 of gilt nominal plus 40 shares of Alphabet is not a number about anything).
+**Gain % and Total Gain % are `Σgain ÷ Σcost`, never the mean of the members' percentages**: a £5
+position up 300% beside a £50,000 one down 2% averages to +149%, and what the money did was −2%
+(pinned by `gainPctIsCostWeightedNotTheMeanOfTheMembers`). `AggHolding` carries no cost field, so
+cost is derived as `Σ(marketValue − gain)` — exact, because the ledger view builds
+`gain = value − cost`. Cost accumulates **only alongside a known gain**, so a CASH row adds value
+without diluting the group's return, and a group with no cost basis reports **null, not zero**:
+"there is no cost basis here" and "broke even" are different statements and cash is the first.
+
+**Annualised return is blank at group level and an approximation would be worse than the blank.**
+The column is an IRR over each position's own dated flows; members hold for different periods over
+different flow histories, so no weighting of their rates — by value, by cost or by period — means
+anything. The right figure is a single money-weighted IRR over the *union* of the group's dated
+flows, which is a different calculation over data the aggregated rows do not carry (it needs the
+ledger rows). That is a separate backlog item; until it exists the cell carries a tooltip saying
+why, because a plausible wrong rate in a column of right ones is the outcome worth avoiding.
+
+**Sector: a fund spanning sectors gets its own group, not its largest one.** `SectorGroupKey` uses
+the same `SectorClassifier` and `fundamentals_snapshot` cache as Allocation → Breakdown, so the two
+cannot disagree about what a holding is — but the classifier's answer for a fund is a *split*, and
+a row cannot be split without the totals ceasing to add up. Filing £212k of EQQQ (57.8% technology)
+under Technology would report a concentration that is not held and would disagree with the
+Technology row in the breakdown block, which is a genuine look-through partition. So multi-sector
+funds group together and the note points at the panel that does decompose them; a fund whose
+look-through lands wholly in one bucket (a sector ETF) is filed there like anything else.
+**Cash is placed by the key, not left to the classifier** — it has no symbol Yahoo knows, so it
+would land in the unclassified group and make the table's biggest "data gap" a balance that is not
+one (`SectorBreakdownService` sidesteps the same trap by handling cash outside its classify loop).
+Anything genuinely unplaceable lands in an explicit **Unclassified** group, flagged residual and
+still counted in every total.
+
+**Account: sorted, because `sources` order is trade history.** `AggHolding.sources()` is built from
+a `LinkedHashSet` filled in trade order, so the same pair of accounts arrives as
+`II SIPP, AJ Bell SIPP` on one position and `AJ Bell SIPP, II SIPP` on another according to which
+broker saw the first trade — **the live book carries both orderings**. Keyed as-is, one set of
+accounts would split into two groups a reader cannot tell apart, so `AccountGroupKey` sorts before
+building the key and joins with `+`. A position held across accounts forms **its own** group rather
+than being split between them: the ledger view aggregates a symbol across accounts into one row
+(one quantity, one cost basis, one IRR episode walk), so there is no per-account half to file, and
+the note says so.
+
+**Grouping is done on the server, one re-sync per dropdown change.** That keeps `Σgain ÷ Σcost` in
+a single implementation instead of a second copy in `dashboard.js` — the same reason `/orders/touch`
+re-prices server-side rather than mirroring `erfc` into the browser. It is cheap: FX is TTL-cached
+behind `CachingFxRateProvider` and the rest is local SQLite. An absent or unknown `groupBy` degrades
+to the flat table rather than throwing. The `<select>` sits in the panel's form but **outside**
+`#portfolio-cash-result`, so its value survives every htmx swap and the sync button re-submits it.
+
+**Sorting became group-aware, and that is a change to shared code.** `attachSort` and
+`reapplyActiveSort` now both delegate to one `sortBody(table, idx, type, asc)`; when the tbody
+contains `tr.group-header` it sorts the *groups* by the header's own cell and each group's members
+within their group, because sorting the rows as one flat list would strand every header away from
+what it summarises. `groupBlocks` returns null for a tbody with no headers, which is what keeps
+every other sortable table on the page behaving exactly as before. Blank header cells parse as null
+and sort last, same as a blank member cell.
+
+**Members render collapsed from the server** (`tr.group-member.collapsed`, CSS `display:none`)
+rather than being hidden by script after paint, so the grouped table never flashes its full row set.
+Both click handlers are delegated from `document.body` — the table is htmx-swapped on every
+re-sync — and the toggle matches on the group **id**, not on "next siblings until the following
+header", because sorting moves rows. The Expand-all/Collapse-all button hides itself when the table
+is ungrouped.
+
+**The Excel export is deliberately ungrouped** — `POST /sync-from-cash/export` re-runs `sync()` and
+writes the flat sheet, where a reader has pivot tables and a `Portfolio %` that is already a live
+formula.
 
 ## Open orders
 

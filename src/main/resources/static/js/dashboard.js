@@ -44,22 +44,60 @@
                         delete h.dataset.sortDir;
                     });
                     th.dataset.sortDir = sortAsc ? 'asc' : 'desc';
-                    var tbody = table.querySelector('tbody');
-                    var rows = Array.from(tbody.querySelectorAll('tr'));
-                    rows.sort(function (a, b) {
-                        var av = parseVal(a.cells[idx], type);
-                        var bv = parseVal(b.cells[idx], type);
-                        if (av === null && bv === null) return 0;
-                        if (av === null) return 1;
-                        if (bv === null) return -1;
-                        var cmp = type === 'num' ? av - bv : av < bv ? -1 : av > bv ? 1 : 0;
-                        return sortAsc ? cmp : -cmp;
-                    });
-                    rows.forEach(function (r) {
-                        tbody.appendChild(r);
-                    });
+                    sortBody(table, idx, type, sortAsc);
                 });
             });
+        }
+
+        // Ordering by one column, for a flat table or a grouped one. The Cash-ledger table gains
+        // group header rows when its "Group by" dropdown is set, and sorting the tbody as one
+        // flat list would strand every header away from the members it summarises. So a grouped
+        // table sorts its groups by the header's own cell and each group's members within their
+        // group — one column, one direction, applied at both levels. Blank header cells (the
+        // columns that have no group-level value) parse as null and sort last, exactly as a
+        // blank member cell does.
+        function sortBody(table, idx, type, asc) {
+            var tbody = table.querySelector('tbody');
+            if (!tbody) return;
+
+            function cmp(a, b) {
+                var av = parseVal(a.cells[idx], type);
+                var bv = parseVal(b.cells[idx], type);
+                if (av === null && bv === null) return 0;
+                if (av === null) return 1;
+                if (bv === null) return -1;
+                var c = type === 'num' ? av - bv : av < bv ? -1 : av > bv ? 1 : 0;
+                return asc ? c : -c;
+            }
+
+            var blocks = groupBlocks(tbody);
+            if (!blocks) {
+                var rows = Array.from(tbody.querySelectorAll('tr'));
+                rows.sort(cmp);
+                rows.forEach(function (r) { tbody.appendChild(r); });
+                return;
+            }
+            blocks.sort(function (a, b) { return cmp(a.head, b.head); });
+            blocks.forEach(function (blk) {
+                blk.members.sort(cmp);
+                tbody.appendChild(blk.head);
+                blk.members.forEach(function (m) { tbody.appendChild(m); });
+            });
+        }
+
+        // [{head, members}] for a grouped tbody, or null when there are no headers in it — which
+        // is what keeps every other sortable table on the page behaving exactly as before.
+        function groupBlocks(tbody) {
+            var current = null, blocks = [];
+            Array.from(tbody.children).forEach(function (row) {
+                if (row.classList.contains('group-header')) {
+                    current = {head: row, members: []};
+                    blocks.push(current);
+                } else if (current) {
+                    current.members.push(row);
+                }
+            });
+            return blocks.length ? blocks : null;
         }
 
         // ── JS tooltip ──────────────────────────────────────────────────────────
@@ -153,6 +191,55 @@
                     }
                 });
             });
+            syncLedgerExpandAll();
+        });
+
+        // ── Cash-ledger grouping: expand / collapse ─────────────────────────────
+        // Groups render collapsed from the server and open on click. Both handlers are delegated
+        // from document.body because the whole table is htmx-swapped on every re-sync — anything
+        // bound inside the fragment would need re-attaching after each swap, and would stack a
+        // duplicate per swap if it were re-attached naively.
+        function ledgerGroupHeaders() {
+            return Array.from(document.querySelectorAll('#portfolio-cash-result tr.group-header'));
+        }
+
+        function toggleLedgerGroup(head, expand) {
+            var id = head.dataset.groupHead;
+            head.classList.toggle('expanded', expand);
+            // Scoped to the header's own tbody and matched on the group id rather than on
+            // position, because sorting moves rows: a "next sibling until the following header"
+            // walk would break the moment a group is re-ordered.
+            Array.from(head.parentNode.querySelectorAll('tr.group-member')).forEach(function (r) {
+                if (r.dataset.groupOf === id) r.classList.toggle('collapsed', !expand);
+            });
+        }
+
+        // The button doubles as Expand all / Collapse all, and hides itself when the table is
+        // ungrouped — a control that does nothing is worse than no control.
+        function syncLedgerExpandAll() {
+            var btn = document.getElementById('ledger-expand-all');
+            if (!btn) return;
+            var heads = ledgerGroupHeaders();
+            btn.hidden = heads.length === 0;
+            var allOpen = heads.length > 0 && heads.every(function (h) {
+                return h.classList.contains('expanded');
+            });
+            btn.textContent = allOpen ? 'Collapse all' : 'Expand all';
+            btn.dataset.action = allOpen ? 'collapse' : 'expand';
+        }
+
+        document.body.addEventListener('click', function (e) {
+            if (!e.target || !e.target.closest) return;
+            if (e.target.id === 'ledger-expand-all') {
+                var expand = e.target.dataset.action !== 'collapse';
+                ledgerGroupHeaders().forEach(function (h) { toggleLedgerGroup(h, expand); });
+                syncLedgerExpandAll();
+                return;
+            }
+            var head = e.target.closest('#portfolio-cash-result tr.group-header');
+            if (!head) return;
+            toggleLedgerGroup(head, !head.classList.contains('expanded'));
+            syncLedgerExpandAll();
         });
 
         // Open orders — a cheap local disk read, so re-fetch on each activation to reflect any
@@ -3583,18 +3670,9 @@
                 }
             }
             if (sortIdx < 0) return;
-            var tbody = table.querySelector('tbody');
-            var rows = Array.from(tbody.querySelectorAll('tr'));
-            rows.sort(function (a, b) {
-                var av = parseVal(a.cells[sortIdx], sortType);
-                var bv = parseVal(b.cells[sortIdx], sortType);
-                if (av === null && bv === null) return 0;
-                if (av === null) return 1;
-                if (bv === null) return -1;
-                var cmp = sortType === 'num' ? av - bv : av < bv ? -1 : av > bv ? 1 : 0;
-                return sortAsc ? cmp : -cmp;
-            });
-            rows.forEach(function (r) { tbody.appendChild(r); });
+            // Shares sortBody with the click path, so a restored ordering is group-aware too
+            // rather than being the one place that flattens a grouped table.
+            sortBody(table, sortIdx, sortType, sortAsc);
         }
 
         function td(text, cls) {

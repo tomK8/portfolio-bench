@@ -230,7 +230,7 @@ class OpenOrdersServiceTest {
     @Test
     void driftIsAppliedPerAssetClassAndOnlyWhenAskedFor(@TempDir Path dir) {
         // End to end: the same limit, the same vol, the same horizon — the only difference is what
-        // the instrument is. An equity carries 6%/yr, a bullion ETC carries none, and with the flag
+        // the instrument is. An equity carries 8%/yr, a bullion ETC carries none, and with the flag
         // off neither carries any.
         JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
         PriceHistoryRepository history = new PriceHistoryRepository(connections);

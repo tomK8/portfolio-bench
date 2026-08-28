@@ -965,7 +965,9 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   and can't show a position the numbers beside it don't reflect (same convention as `GET /swing`
   echoing its effective `SwingConfig`). When drift is on the panel **says so where the numbers
   are** — the P(N) footnote names the model and warns that `P(5d) = 2·Φ(−|σ→lim|)` no longer holds —
-  and the Excel sheet gains a `Drift (annual)` column (6% / 0%), since which of the two models
+  and the Excel sheet gains a `Drift (annual)` column carrying the **netted per-row** drift the
+  model consumed (`driftPerSession × 252` — an 8% class figure less that name's yield, so it varies
+  row to row and is 0 for gilts and bullion), since which of the two models
   produced a probability is exactly what a reader months later cannot otherwise recover.
 - **The drift branch (`useDrift`, default false).** `VolForecast.touch` picks between two models and
   is the only place that does:

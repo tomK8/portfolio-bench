@@ -484,9 +484,11 @@ public final class VolForecast {
     /**
      * The branch itself, and the one place μ is converted to ν.
      *
-     * <p>{@code ν = μ − σ²/2}: the 6%/yr an asset class carries is an expected <em>arithmetic</em>
+     * <p>{@code ν = μ − σ²/2}: the μ arriving here — a class total return (8%/yr for equities and
+     * equity funds) net of the name's own dividend yield — is an expected <em>arithmetic</em>
      * return, while the first passage is written in log space, and the gap between them — the
-     * variance drag — is not decoration. At a 1%/day σ it is 1.26%/yr, a fifth of the figure.
+     * variance drag — is not decoration. At a 1%/day σ it is 1.26%/yr, a sixth of the gross equity
+     * figure and a far larger share of what a high-yielder is left with after netting.
      *
      * <p><b>The branch tests μ, not ν</b>, which matters in both directions. A class with μ = 0
      * (gilts, bullion) takes the driftless path and is left exactly alone rather than being handed

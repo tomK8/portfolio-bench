@@ -765,7 +765,7 @@ public class ExcelReportWriter {
             if (o.sigmaEffDiffusive() != null) setStyled(row, 19, o.sigmaEffDiffusive(), volPctStyle);
             styledCell(row, 20, dashIfNull(o.volSource()), text);
             // Annualised back up from the per-session figure the model consumed (×252), because a
-            // reader comparing this file against a policy ("we assume 6% for equities") is thinking
+            // reader comparing this file against a policy ("we assume 8% for equities") is thinking
             // in years, and 0.000238 is the same number in a unit nobody states.
             if (o.touchProbHorizon() != null) setStyled(row, 21, o.driftAnnual(), volPctStyle);
             if (o.touchProbHorizon() != null) {

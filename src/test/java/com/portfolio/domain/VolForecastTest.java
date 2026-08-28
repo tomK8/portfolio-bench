@@ -167,7 +167,7 @@ class VolForecastTest {
         assertTrue(buyOn.drifted());
         assertEquals(AssetClass.EQUITY.dailyTotalReturn(), buyOn.drift());
         assertTrue(buyOn.probability().compareTo(buyOff.probability()) < 0,
-                "6%/yr of drift walks an equity away from a limit below it");
+                "8%/yr of drift walks an equity away from a limit below it");
 
         Touch sellOn = VolForecast.touch(in, dec("100"), dec("110"), 250, DRIFT_ON, AssetClass.EQUITY);
         Touch sellOff = VolForecast.touch(in, dec("100"), dec("110"), 250, Config.DEFAULT, AssetClass.EQUITY);
@@ -190,7 +190,7 @@ class VolForecastTest {
     @Test
     void theDriftIsItoCorrectedAgainstTheHorizonsOwnSigma() {
         // μ is an expected *arithmetic* return; the first passage consumes a log drift. The gap —
-        // σ²/2, worth 1.26%/yr of a 6% figure at a 1%/day σ — is applied where the two meet, so the
+        // σ²/2, worth 1.26%/yr of an 8% figure at a 1%/day σ — is applied where the two meet, so the
         // probability must match the drifted formula fed ν, not μ.
         Inputs in = inputs("0.015", "0.015", "0.015", "0.015");
         Touch t = VolForecast.touch(in, dec("100"), dec("90"), 250, DRIFT_ON, AssetClass.EQUITY);

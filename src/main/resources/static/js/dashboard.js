@@ -70,34 +70,44 @@
                 return asc ? c : -c;
             }
 
-            var blocks = groupBlocks(tbody);
-            if (!blocks) {
+            var grouped = groupBlocks(tbody);
+            if (!grouped) {
                 var rows = Array.from(tbody.querySelectorAll('tr'));
                 rows.sort(cmp);
                 rows.forEach(function (r) { tbody.appendChild(r); });
                 return;
             }
-            blocks.sort(function (a, b) { return cmp(a.head, b.head); });
-            blocks.forEach(function (blk) {
+            // Leading rows are re-appended, not left alone: they are already out of place (a
+            // member above every header), and dropping them here is what let them sit there
+            // through every later sort.
+            grouped.leading.forEach(function (r) { tbody.appendChild(r); });
+            grouped.blocks.sort(function (a, b) { return cmp(a.head, b.head); });
+            grouped.blocks.forEach(function (blk) {
                 blk.members.sort(cmp);
                 tbody.appendChild(blk.head);
                 blk.members.forEach(function (m) { tbody.appendChild(m); });
             });
         }
 
-        // [{head, members}] for a grouped tbody, or null when there are no headers in it — which
-        // is what keeps every other sortable table on the page behaving exactly as before.
+        // {blocks: [{head, members}], leading: [rows above the first header]} for a grouped tbody,
+        // or null when there are no headers in it — which is what keeps every other sortable table
+        // on the page behaving exactly as before. `leading` should always be empty (the Cash-ledger
+        // fragment renders header-then-member, and the Live table lays itself out that way); it is
+        // returned rather than silently discarded because discarding it made a stranded row
+        // invisible to every subsequent sort, which is precisely how such a row stayed stranded.
         function groupBlocks(tbody) {
-            var current = null, blocks = [];
+            var current = null, blocks = [], leading = [];
             Array.from(tbody.children).forEach(function (row) {
                 if (row.classList.contains('group-header')) {
                     current = {head: row, members: []};
                     blocks.push(current);
                 } else if (current) {
                     current.members.push(row);
+                } else {
+                    leading.push(row);
                 }
             });
-            return blocks.length ? blocks : null;
+            return blocks.length ? {blocks: blocks, leading: leading} : null;
         }
 
         // ── JS tooltip ──────────────────────────────────────────────────────────
@@ -5885,18 +5895,55 @@
             Object.keys(heads).forEach(function (id) {
                 if (!seen[id]) heads[id].remove();
             });
-            // Re-append header-then-members in the server's order (value desc). Skipped once the
-            // user has sorted a column — sortBody has already arranged the same blocks their way,
-            // and re-appending here would undo it on the next tick.
-            if (!userSorted) {
-                groups.forEach(function (g) {
-                    tbody.appendChild(heads[g.id]);
-                    (g.symbols || []).forEach(function (sym) {
-                        if (memberRows[sym]) tbody.appendChild(memberRows[sym]);
-                    });
-                });
+            if (layoutLiveGroups(tbody, groups, heads, memberRows, userSorted) && userSorted) {
+                // The layout moved rows, so the table no longer honours the marker still sitting
+                // in its thead — re-sort rather than leave the groups in server order under a
+                // column the user sorted. A steady frame moves nothing, so this doesn't fight the
+                // "respect their sort, don't re-order on every snapshot" rule above.
+                reapplyActiveSort(document.getElementById('live-table'));
             }
             return changed;
+        }
+
+        // Header-then-members, always — and this is the only thing that puts a member row under
+        // its header. It used to be skipped once the user had sorted a column, on the grounds that
+        // sortBody had already arranged the same blocks their way; that holds for blocks sortBody
+        // can see, but headers created *after* the sort (switching Group by → Sector on an already
+        // sorted table) are appended to the end of the tbody, below every member row. Collapsed
+        // members are invisible, so the table looked right until a group was expanded and its
+        // members appeared at the top — and no later sort repaired it, because a row above the
+        // first header is not part of any block.
+        // Group and member order come from the server (value desc) while the table is unsorted,
+        // and from the current DOM once it isn't, so a relayout preserves the user's ordering.
+        // Returns true when the DOM order actually changed.
+        function layoutLiveGroups(tbody, groups, heads, memberRows, userSorted) {
+            if (!groups.length) return false;      // ungrouped: the row loop owns the order
+            var pos = {};
+            Array.from(tbody.children).forEach(function (tr, i) {
+                if (tr.dataset.groupHead) pos['h|' + tr.dataset.groupHead] = i;
+                else if (tr.dataset.symbol) pos['s|' + tr.dataset.symbol] = i;
+            });
+            function at(key) { return pos[key] == null ? Number.MAX_SAFE_INTEGER : pos[key]; }
+            var ordered = groups.slice();
+            if (userSorted) ordered.sort(function (a, b) { return at('h|' + a.id) - at('h|' + b.id); });
+            var want = [];
+            ordered.forEach(function (g) {
+                want.push(heads[g.id]);
+                var syms = (g.symbols || []).filter(function (sym) { return memberRows[sym]; });
+                if (userSorted) syms.sort(function (a, b) { return at('s|' + a) - at('s|' + b); });
+                syms.forEach(function (sym) { want.push(memberRows[sym]); });
+            });
+            // A row in no group at all is an invariant violation (LiveGrouper places everything,
+            // residual bucket included), but it is kept and placed last rather than dropped —
+            // leaving it out would make `want` shorter than the tbody forever, so the comparison
+            // below would report a move on every frame and re-sort the table every 15 seconds.
+            var cur = Array.from(tbody.children);
+            cur.forEach(function (tr) { if (want.indexOf(tr) < 0) want.push(tr); });
+            if (cur.length === want.length && want.every(function (tr, i) { return cur[i] === tr; })) {
+                return false;
+            }
+            want.forEach(function (tr) { tbody.appendChild(tr); });
+            return true;
         }
 
         function renderLiveGroupRow(tr, g, prevByKey, nextByKey) {

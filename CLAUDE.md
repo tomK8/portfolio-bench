@@ -686,7 +686,10 @@ contains `tr.group-header` it sorts the *groups* by the header's own cell and ea
 within their group, because sorting the rows as one flat list would strand every header away from
 what it summarises. `groupBlocks` returns null for a tbody with no headers, which is what keeps
 every other sortable table on the page behaving exactly as before. Blank header cells parse as null
-and sort last, same as a blank member cell.
+and sort last, same as a blank member cell. It also returns any rows sitting **above the first
+header** separately, and `sortBody` re-appends them ahead of the sorted blocks; they should never
+exist (both tables lay themselves out header-then-member), but *discarding* them is what let a
+stranded row stay stranded through every later sort — see the Live relayout below.
 
 **Members render collapsed from the server** (`tr.group-member.collapsed`, CSS `display:none`)
 rather than being hidden by script after paint, so the grouped table never flashes its full row set.
@@ -753,9 +756,24 @@ change-detection under a `grp|<id>|` key prefix. Three consequences worth knowin
 - **Expanded state lives in `liveState.expanded`, not in the DOM.** A frame re-orders rows without
   rebuilding them, and a user who opened a group does not expect it to shut on the next tick.
   Toggling touches the DOM directly rather than repainting, so an in-flight flash survives.
-- Re-appending header-then-members in server order is skipped once the user has sorted a column —
-  `sortBody` has already arranged the same blocks their way, and re-appending would undo it every
-  tick.
+- **`layoutLiveGroups` re-appends header-then-members on every frame, sorted or not**, because it
+  is the only thing that puts a member row under its header. It used to be skipped once the user
+  had sorted a column, on the grounds that `sortBody` had already arranged the same blocks their
+  way — true of blocks `sortBody` can *see*, but a header created **after** the sort is appended to
+  the end of the tbody, below every member row. Sorting a column and then switching Group by →
+  Sector did exactly that: all 13 headers landed under all 56 members. Collapsed members are
+  invisible, so the table looked right until a group was expanded and its members appeared at the
+  top of the table (2026-08-28) — and no later sort repaired it, because a row above the first
+  header belongs to no block. Group and member order come from the server (value desc) while the
+  table is unsorted and are **read back off the DOM** once it isn't, so a relayout preserves the
+  user's ordering; a steady frame therefore computes the order it already has and returns false
+  without touching the DOM, which is what keeps it from fighting the "respect their sort, don't
+  re-order on every snapshot" rule above. When it *does* move rows (a repair, or a membership
+  change) and a sort is active, `reapplyActiveSort` runs — the alternative is groups left in server
+  order under a column header still claiming to be sorted. A row in no group at all is an invariant
+  violation (`LiveGrouper` places everything, residual bucket included) but is kept and placed last
+  rather than dropped: leaving it out would make the computed order permanently shorter than the
+  tbody, so every frame would report a move and re-sort the table.
 
 The tbody click handler branches on `dataset.groupHead` before `dataset.symbol`: a header toggles,
 a member opens the shared price popup. CSS restates the header background at `#live-table` scope

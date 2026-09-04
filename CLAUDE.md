@@ -1190,10 +1190,31 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   so the row is single-currency (GBP). Statuses: "In progress" (open), "Dealt" (filled).
 - `IIOrdersParser` — UUID `.csv`, **header-sniffed** (`Submitted` + `Settlement Date` + `Status`) to
   distinguish from II holdings/cash UUID CSVs. `Type` bundles side+ordertype ("SELL/LIMIT"); currency
-  from the `Amount` £/$ prefix; no expiry. The resting **limit price isn't exported**, so it's
+  from the `Amount` £/$/**€** prefix; no expiry. The resting **limit price isn't exported**, so it's
   estimated as `amount ÷ quantity` with `priceEstimated=true` — the UI prefixes "~" and shows a
-  footnote (the ~£2.99 dealing fee, plus an FX charge in GBP on USD orders, is folded into the
+  footnote (the ~£2.99 dealing fee, plus an FX charge in GBP on non-GBP orders, is folded into the
   amount, so an exact price can't be recovered). Open = "PENDING".
+
+  **The euro was the same gap that bug #1 of the transfers section describes, in the other II
+  parser.** `IISippParser.parseCurrency`/`parseCurrencyAmount` were taught `€` when the euro names
+  transferred into II (2026-08-27); nothing propagated it here, because II carried no euro *order*
+  until a BNP sell limit on 2026-09-03. Both readings of the amount missed it independently:
+  `currency()` tested `$` and `£` only, and `decimal()` stripped `[£$,\s]`, so `"€23,171.33"` threw
+  and came back null. **The row's failure shape is worth recognising** — a null amount takes the
+  limit price with it (`amount ÷ quantity`), a null currency makes `priceInCurrency`'s target null,
+  and between them Price, Current, vs limit, σ→lim, P(5d), P(N) and both Amount columns were blank
+  **while RV10/RV30 rendered normally**, those being read off the symbol's own daily series and
+  needing no currency at all. Two live vol figures beside eight blanks reads as a broken instrument
+  or a dead feed; it was an unparsed currency symbol. Everything downstream already handled EUR
+  (`OpenOrder.currencySymbol`, `ExcelReportWriter.currencySymbolFor`, `toGbp` via the Frankfurter
+  snapshot), so the fix was contained to the parser.
+
+  **The two readings now share one `CURRENCIES` table**, since a symbol known to one but not the
+  other yields half an order — a number under no currency, or a currency with no number. An
+  unrecognised symbol resolves to **no currency**, deliberately the opposite of `IISippParser`'s
+  GBP fallback: a holdings row has II's own `Market Value £` column to fall back on, an order has
+  nothing, so a wrong currency would price the row against the wrong quote rather than leave it
+  visibly unpriced. Quantity parses through the same helper and is unaffected either way.
 - `RothOrdersParser` — Citi `Order+Status*.xlsx` (POI, `DataFormatter`). Header row located by
   scanning (metadata preamble above it). All USD + GTC (`duration` = "GTC", `expiry` null). Open =
   "Open". The order value isn't exported but the (exact) limit price is, so amount = price × qty.

@@ -13,8 +13,10 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Parses II SIPP order-history exports — UUID-named CSVs sharing the filename shape with II's
@@ -22,8 +24,9 @@ import java.util.regex.Pattern;
  *
  * <p>Header: {@code Submitted,Reference,Type,Symbol,Name,Quantity,Settlement Date,Amount,Status}.
  * {@code Type} bundles side and order type ("SELL/LIMIT"); the currency comes from the {@code Amount}
- * prefix (£/$). II does not export a per-share limit price or an expiry, so those stay null; a
- * value-based order carries {@code Quantity=n/a}, which leaves the quantity null too.
+ * prefix (£/$/€ — II holds all three). II does not export a per-share limit price or an expiry, so
+ * those stay null; a value-based order carries {@code Quantity=n/a}, which leaves the quantity
+ * null too.
  */
 public class IIOrdersParser implements OrderParser {
 
@@ -32,6 +35,31 @@ public class IIOrdersParser implements OrderParser {
             Pattern.CASE_INSENSITIVE);
     private static final DateTimeFormatter SUBMITTED = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
     private static final DateTimeFormatter DATE_ONLY = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+    /**
+     * The currency symbols II prefixes an order value with, paired with the code each denotes.
+     *
+     * <p>One table because the two readings of an amount have to agree. {@link #currency} names the
+     * currency and {@link #decimal} strips the symbol to leave a number, and a symbol known to one
+     * but not the other yields half an order: an amount nothing can convert, or a currency with no
+     * value under it. They agreed only by both being wrong until 2026-09-03, when a BNP sell limit
+     * exported as {@code "€23,171.33"} came through with a null amount <em>and</em> a null
+     * currency — and with them a null limit price, so Price, Current, vs limit, σ→lim, both touch
+     * probabilities and both Amount columns were all blank while RV10/RV30 (which read the symbol's
+     * own daily series and need no currency at all) rendered normally. That combination is what
+     * makes the gap read as a broken instrument rather than an unparsed euro sign.
+     *
+     * <p>An unrecognised symbol resolves to no currency rather than falling back to GBP, which is
+     * the opposite of {@code IISippParser.parseCurrency}'s convention and deliberate here: a
+     * holdings row has a GBP market value column to fall back on, an order has nothing, so a wrong
+     * currency would price the row against the wrong quote instead of leaving it visibly unpriced.
+     */
+    private static final String[][] CURRENCIES = {{"£", "GBP"}, {"$", "USD"}, {"€", "EUR"}};
+
+    /** Every currency symbol above, plus the thousands separator and any whitespace. */
+    private static final Pattern NUMERIC_NOISE = Pattern.compile(
+            Arrays.stream(CURRENCIES).map(c -> Pattern.quote(c[0]))
+                    .collect(Collectors.joining("|", "", "|[,\\s]")));
 
     @Override
     public String sourceName() {
@@ -123,15 +151,16 @@ public class IIOrdersParser implements OrderParser {
 
     private static String currency(String amount) {
         if (amount == null) return null;
-        if (amount.contains("$")) return "USD";
-        if (amount.contains("£")) return "GBP";
+        for (String[] c : CURRENCIES) {
+            if (amount.contains(c[0])) return c[1];
+        }
         return null;
     }
 
     private static BigDecimal decimal(String raw) {
         if (raw == null || raw.isBlank()) return null;
         try {
-            return new BigDecimal(raw.replaceAll("[£$,\\s]", ""));
+            return new BigDecimal(NUMERIC_NOISE.matcher(raw).replaceAll(""));
         } catch (NumberFormatException e) {
             return null;
         }

@@ -1,0 +1,78 @@
+# Instrument mappings
+
+
+`InstrumentMappingService` (+ `InstrumentMappingRepository`, `MappingsController`) — mappings are
+added where the gap shows up, not by editing a source file and redeploying. Two SQLite tables:
+`ticker_mappings` (symbol → Yahoo ticker, an *overlay* on the properties file — a row here wins, so
+a wrong committed mapping is correctable without a release) and `instrument_aliases` (keyword →
+symbol, above). `YahooTickerMap` takes a `Supplier<Map<String,String>>` for the overlay (so the
+adapter needs no persistence dependency), caches it, and `reload()`s after every mutation — the
+singleton's ~30 consumers pick it up with no restart. The no-arg constructor (properties only) is
+kept because ~50 tests use it.
+
+Three things happen together on save, and all three are load-bearing:
+1. **Check before saving.** `YahooPriceFetcher.probe(ticker)` — one chart call returning
+   found/reachable plus the listing's **name, currency, exchange and last close**. Those context
+   fields are the point: a mapping that resolves to *nothing* is easy to spot later (the position
+   never prices), but one that resolves to the **wrong live listing** is not — `BLND` probes as
+   "Blend Labs, Inc. · USD · NYSE · last 1.52", which is the trap made visible at entry time.
+   `request()` keeps the body on a non-200 so Yahoo's 404 ("No data found, symbol may be delisted")
+   is distinguishable from an unreachable Yahoo; only the second offers "Save anyway".
+2. **Take effect immediately** — `reload()` plus a background `PriceFetchJob.fetchSingle` on a
+   single-thread daemon executor, so the price columns fill in rather than waiting for the nightly
+   job (XWHS.L backfilled 3,662 bars in ~3s).
+3. **Repair what the gap already broke** — `CashTransactionRepository.renameSymbol` re-keys ledger
+   rows stranded under the long description, replacing the manual
+   `UPDATE cash_transactions SET symbol=…` this file used to prescribe. In-place is the only option:
+   the AJBell dedup key is `(transaction_date, type, symbol, amount_gbp)`, so leaving the old rows
+   and re-importing inserts a *second* set under the new symbol and double-counts the position. The
+   re-key is deliberately **narrow** — only stored symbols containing a space (a stranded
+   description; a ticker never has one) and not `Instruments.isBond`. Without that guard the keyword
+   "bp" would re-key the genuine `BP.` position, and a rename is not undoable from the dashboard.
+   The repaired-row count is reported in the response, never silent.
+
+**UI**: `fragments/mappings.html` holds two shared fragments — `unpriced(...)` (ticker-only editor,
+used by both sync tabs' unpriced-symbols panels) and `list` (the collapsible "All instrument
+mappings" list at the foot of Open orders: your rows with Remove buttons, then the committed
+baseline read-only). Open orders renders its own richer row (match text + symbol + ticker) from
+`OrdersReport.unmapped`, computed by `OpenOrdersService.unmappedInstruments` after enrichment:
+`needsAlias` is exactly `symbol.equals(name)` (the AJ Bell parser's fall-through contract — the
+other two brokers export a real ticker alongside a descriptive name, which never collide), else the
+symbol resolved but `getLatestPriceDate` is null, the same "never priced" test
+`SyncPortfolioService.unpricedSymbols` applies. `SyncResult.unpricedSymbols` is
+`List<UnpricedSymbol>` (symbol + ticker, `display()` for the old string) so the editor can be
+pre-filled rather than only naming the problem.
+
+All of it is driven by **one delegated listener on `document.body`** in `dashboard.js` (`mapVal` /
+`mapStatus` / `mapProbeText` / `mapPost` / `mapLoadList`) rather than per-fragment binding — these
+fragments are htmx-swapped, so anything bound inside them would need re-attaching after every swap.
+Typing a symbol completes the ticker box (`XWHS` → `XWHS.L`, suffix from the order's currency via
+`exchangeSuffix`; EUR gets nothing, it spans three exchanges) and stands down the moment the ticker
+is hand-edited. A successful save on the orders panel repaints it after 3.5s — the backfill is on a
+background thread, and repainting immediately would show the row mapped but still priceless.
+
+**`close` vs `adj_close`:** use `close` for "market value of the position on date X", `adj_close`
+for total-return calculations. **`YahooPriceFetcher` re-derives `adj_close` from the
+`events.dividends` and `events.splits` stream on every fetch** — Yahoo's bundled `adjclose`
+field is only split-adjusted (not dividend-adjusted) for many UK listings, so trusting it
+silently understates total return. The backward-walk handles both dividends and splits and
+yields a true total-return adj_close. The daily incremental run only refreshes the latest
+day, so a new dividend on a held name leaves historical `adj_close` stale — trigger
+**Rebuild adj_close** on the dashboard (or `POST /rebuild-prices`) to re-fetch the full
+window per ticker and refresh every row via `upsertPriceBars`. The gilt paths (intraday
+rollup, Tradeweb batch import) also use `upsertPriceBars`, so latest write wins for
+`(symbol, date)` — clean price feeds both `close` and `adj_close` (no total-return math
+for bonds).
+
+**Currency is stored verbatim** from Yahoo. `.L` (London) tickers report `"GBp"` (pence);
+`PortfolioAggregator.realtime` divides by 100 before producing the RT market value.
+
+**II SIPP cash field (holdings view + Excel export only):** II's holdings CSV export omits the
+cash balance, so the dashboard form supplies it as **two separate inputs** — `iiSippCash`
+(GBP) and `iiSippCashUsd` (USD). `SyncPortfolioService.combineIiCashAsGbp` converts the USD
+portion at the live FX rate it already fetched and sums into the single GBP figure that
+flows into `PortfolioMetrics` and the Excel sheet. Both inputs persist in `KeyValueStore`
+(`ii_sipp_cash_last`, `ii_sipp_cash_last_usd`). The cash-ledger view, contributions chart,
+and value-over-time chart don't use these inputs — they derive II cash from the latest
+stored `cash_balance_gbp` per `(account='II', currency)` directly.
+

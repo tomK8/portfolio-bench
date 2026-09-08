@@ -32,6 +32,13 @@ touches an order.
   `price_above`/`price_below`, NULL on rows predating them → read as 0 = disabled), so a symbol can
   be watched with no alerts at all. `both()` (the pulse) stays near-high + big-move only; the alert
   job dedups the price levels under `SYMBOL|ABOVE|date` / `SYMBOL|BELOW|date`.
+- **A row with no prices says which kind of nothing it is.** `Row.missingData` marks the absence;
+  `Row.missingReason` (from `UnresolvedSymbols`, see
+  [price-history.md](price-history.md)) is non-null only once Yahoo has actually refused the
+  ticker. Grey `(fetching…)` now genuinely means a backfill is in flight; amber `(no Yahoo data)`
+  means it never will be, and carries the candidates Yahoo's own search returned plus where to map
+  them. Adding `EQQU` used to sit at `(fetching…)` forever — the add's backfill 404'd, logged, and
+  told no one. The popup subtitle takes the same sentence.
 - **The popup is shared with the Live tab.** Its markup (`#wl-modal`) sits at **body level**, not
   inside `panel-watchlist` — a modal nested in a hidden `.tab-panel` is hidden along with it, so
   the Live row click opened a popup nobody could see. Its listeners (close/Escape/backdrop, the

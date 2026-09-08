@@ -215,6 +215,8 @@ public class OpenOrdersService {
     private final OrderHistoryRepository orderHistory;
     private final YahooTickerMap tickerMap;
     private final KeyValueStore kv;
+    /** Verdicts on symbols Yahoo has rejected — read-only here; the fetch jobs are what write them. */
+    private final UnresolvedSymbols unresolved;
     private final Consumer<Collection<String>> quoteWarmer;
     private final Consumer<String> historyWarmer;
     /**
@@ -358,6 +360,7 @@ public class OpenOrdersService {
         this.history = history;
         this.tickerMap = tickerMap;
         this.kv = kv;
+        this.unresolved = new UnresolvedSymbols(kv);
         this.quoteWarmer = quoteWarmer;
         this.historyWarmer = historyWarmer;
     }
@@ -853,6 +856,13 @@ public class OpenOrdersService {
             // in. A typo and a genuinely new instrument are indistinguishable from here, and both are
             // answered the same way: warm the feeds, name the ticker actually tried, and let the
             // reader either wait a few seconds or correct the mapping the panel already offers below.
+            // A fetch that already came back empty leaves a verdict, and once there is one the
+            // honest answer is that this ticker is wrong — not "reload in a few seconds" again.
+            // Repeating the wait is what made a mistyped symbol look like a slow one forever.
+            UnresolvedSymbols.Unresolved verdict = unresolved.get(sym);
+            if (verdict != null) {
+                return LimitProbe.unpriceable(sym, ticker, List.of(verdict.message()));
+            }
             warmHistory(sym);
             warmQuote(sym, ticker);
             return LimitProbe.unpriceable(sym, ticker, List.of(

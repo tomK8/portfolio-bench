@@ -60,7 +60,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `PriceBar`, `IntradayBar`, `IntradayPrice`.
 - `port` — `FxRateProvider`, `HistoricalFxRateProvider`, `EarningsCalendarProvider`,
   `EarningsCalendarFeed`, `AlertNotifier` (interfaces, faked in tests).
-- `adapter` — `FrankfurterFxClient`, `HoldingFileLocator`, `YahooPriceFetcher` (incl. `probe`),
+- `adapter` — `FrankfurterFxClient`, `HoldingFileLocator`, `YahooPriceFetcher` (incl. `probe` + `search`),
   `YahooQuoteSummaryFetcher`, `YahooTickerMap`, `GiltPriceFetcher` (HL),
   `TradewebGiltPriceParser`, `NasdaqEarningsFetcher`, `EdgarEarningsFetcher` + `CikRegistry`,
   `SmtpAlertNotifier`.
@@ -69,7 +69,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 - `application` — use-case orchestration; ~40 services. `PortfolioGatherer`,
   `SyncPortfolioService`, `SyncFromCashService`, `ManualPositionService`, `AssetTransferService`,
   `ExportExcelService`, `DividendService`, `AllocationService`, `PortfolioValueService`,
-  `PortfolioReturnService`, `AttributionService`, `OpenOrdersService`, `LivePricesService`,
+  `PortfolioReturnService`, `AttributionService`, `OpenOrdersService`, `LivePricesService`, `UnresolvedSymbols`,
   `WatchlistService`, the five `*AnalysisService` backtests, `PriceFetchJob` +
   `IntradayPriceFetchJob` (share `PriceFetchSupport`).
 - `web` — ~18 thin controllers (`RootController`, `ChartsController`, `AnalysisController`,
@@ -184,7 +184,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 |---|---|---|
 | [persistence.md](docs/persistence.md) | touch any repository, dedup rule or import path | Broker dedup keys are composite and cross-file; `cash_balance_gbp` is in the PK on purpose; read filters are allowlists |
 | [gilts-and-bonds.md](docs/gilts-and-bonds.md) | touch a gilt parser, price source or bond valuation | `Instruments.giltId` is the **only** place a gilt id is built — never concatenate `"GILT " + coupon`; bonds use the per-£100-nominal formula in 4 places |
-| [price-history.md](docs/price-history.md) | change a fetch job, ticker mapping or `adj_close` | `close` for market value, `adj_close` for total return; a missing mapping fails two different ways; derived dividend yields need a scan marker |
+| [price-history.md](docs/price-history.md) | change a fetch job, ticker mapping or `adj_close` | `close` for market value, `adj_close` for total return; a missing mapping fails two different ways; a ticker Yahoo refuses is *recorded* (`UnresolvedSymbols`), never left as "fetching"; derived dividend yields need a scan marker |
 | [instrument-mappings.md](docs/instrument-mappings.md) | change alias/ticker resolution | Both sides go through `Instruments.matchKey`; a rename re-keys ledger rows and is not undoable |
 | [sync-views.md](docs/sync-views.md) | change either sync tab or the Portfolio % column | Ledger view drops unpriced equities but not bonds; II SIPP cash comes from the form, blank ≠ zero |
 | [cash-ledger-irr.md](docs/cash-ledger-irr.md) | touch the Annualised return column or `Irr` | IRR not CAGR; current episode only; unsolvable writes **no** cell, never a zero; two day-count bases are deliberate |

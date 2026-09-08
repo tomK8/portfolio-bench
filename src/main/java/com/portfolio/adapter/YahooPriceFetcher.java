@@ -11,9 +11,11 @@ import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -40,12 +42,18 @@ public class YahooPriceFetcher {
     private static final String INTRADAY_URL =
             "https://query1.finance.yahoo.com/v8/finance/chart/%s" +
                     "?period1=%d&period2=%d&interval=1m&includePrePost=true";
+    // Symbol search. The same endpoint the Yahoo Finance search box uses; no crumb, no auth.
+    private static final String SEARCH_URL =
+            "https://query1.finance.yahoo.com/v1/finance/search?q=%s&quotesCount=%d&newsCount=0";
     // Yahoo rejects requests without a browser-like User-Agent.
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
 
     /** Probe window — long enough that a quiet week or a holiday still yields a bar. */
     private static final int PROBE_LOOKBACK_DAYS = 30;
+
+    /** Cap on search candidates — Yahoo's tail is noise (delisted lines, foreign duplicates). */
+    private static final int MAX_SEARCH_RESULTS = 10;
 
     private final HttpClient client =
             HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
@@ -193,6 +201,59 @@ public class YahooPriceFetcher {
         } catch (Exception e) {
             log.warn("Yahoo probe parse failed for {}", tk, e);
             return TickerProbe.failed(tk, true, "Could not read Yahoo's answer for " + tk + ".");
+        }
+    }
+
+    /**
+     * Ask Yahoo which listings answer to a name. The counterpart to {@link #probe}: probe judges a
+     * ticker you already have, search finds the ticker you do not.
+     *
+     * <p>This exists so a rejected symbol is a question the app can answer rather than one it hands
+     * back. An unsuffixed European line 404s on the chart endpoint ({@code EQQU}) while the search
+     * endpoint returns its real listings ({@code EQQU.L} on the LSE) — so "nothing priced under
+     * EQQU" can be reported with the candidates attached instead of as a dead end. Yahoo is the only
+     * authority on what its own tickers are; guessing a suffix from the quote currency is the
+     * fallback, not the answer.
+     *
+     * <p>Best-effort by construction: an unreachable Yahoo or an unparseable body yields an empty
+     * list, never an exception — every caller is already reporting a failure when it asks.
+     */
+    public List<Suggestion> search(String query, int limit) {
+        String q = query == null ? "" : query.trim();
+        if (q.isEmpty()) return List.of();
+        int count = Math.max(1, Math.min(limit, MAX_SEARCH_RESULTS));
+
+        String body = get(String.format(SEARCH_URL,
+                URLEncoder.encode(q, StandardCharsets.UTF_8), count));
+        if (body == null) return List.of();
+        try {
+            List<Suggestion> out = new ArrayList<>();
+            for (JsonNode n : mapper.readTree(body).path("quotes")) {
+                String sym = n.path("symbol").asText(null);
+                if (sym == null || sym.isBlank()) continue;
+                out.add(new Suggestion(sym,
+                        firstText(n, "longname", "shortname"),
+                        firstText(n, "exchDisp", "exchange"),
+                        firstText(n, "quoteType", "typeDisp")));
+            }
+            return List.copyOf(out);
+        } catch (Exception e) {
+            log.warn("Yahoo search parse failed for {}", q, e);
+            return List.of();
+        }
+    }
+
+    /** One candidate listing from {@link #search}. Every field but {@code symbol} may be null. */
+    public record Suggestion(String symbol, String name, String exchange, String quoteType) {
+
+        /** e.g. {@code EQQU.L (LSE · ETF) Invesco EQQQ NASDAQ-100 UCITS ETF} — for a log line or a warning. */
+        public String display() {
+            StringBuilder sb = new StringBuilder(symbol);
+            if (exchange != null && quoteType != null) sb.append(" (").append(exchange).append(" · ").append(quoteType).append(')');
+            else if (exchange != null) sb.append(" (").append(exchange).append(')');
+            else if (quoteType != null) sb.append(" (").append(quoteType).append(')');
+            if (name != null) sb.append(' ').append(name);
+            return sb.toString();
         }
     }
 

@@ -106,6 +106,9 @@ public class InstrumentMappingService {
     public void deleteTicker(String symbol) {
         repo.deleteTickerMapping(symbol);
         tickerMap.reload();
+        // The stored verdict, if any, is about the ticker this mapping resolved to. That ticker is
+        // no longer what the symbol means, so the diagnosis goes with it.
+        priceFetchJob.forgetUnresolved(symbol);
     }
 
     /**

@@ -154,7 +154,12 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
   the order existed at a broker — the wrong way round for calibrating one. A card at the top of the
   panel takes a symbol + limit (+ side + horizon) and reports the **same seven statistics** the
   table's columns do — Current, vs limit, RV10, RV30, σ→lim, P(5d), P(20d) — plus P(N).
-  `GET /orders/probe` → `OpenOrdersService.probe` → `fragments/orders :: probe`.
+  `GET /orders/probe` → `OpenOrdersService.probe` → `fragments/orders :: probe`. A symbol
+    with no stored currency has never priced, and the probe used to answer that by warming both
+    feeds and saying "reload in a few seconds" — every time, so a wrong ticker read as a slow one
+    forever. It now checks `UnresolvedSymbols` **first**: once a fetch has come back empty the
+    verdict is returned instead (naming the candidates Yahoo's own search offers, and the mappings
+    editor), and no further warm is queued. Only an unjudged symbol still gets the warm-and-wait.
   - **It is the same object, not a parallel calculation.** A hypothetical order is built as an
     `OpenOrder` (broker "What-if", no qty/date/status) and pushed through the *same*
     `enrichWithCurrentPrice` pass the parsed rows take, so the quote-age bound, the pre/post

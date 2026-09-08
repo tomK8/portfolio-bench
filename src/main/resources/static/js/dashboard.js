@@ -6518,8 +6518,8 @@
                     // A symbol with nothing cached renders as all dashes; say so rather than
                     // leaving the subtitle blank, which reads as a half-finished load.
                     if (row.missingData) {
-                        document.getElementById('wl-modal-sub').textContent =
-                            'No prices cached for ' + symbol + ' yet.';
+                        document.getElementById('wl-modal-sub').textContent = row.missingReason
+                            || ('No prices cached for ' + symbol + ' yet.');
                     }
                 })
                 .catch(function (err) {
@@ -7019,10 +7019,20 @@
         // edit can't lose focus, caret or keystrokes and a stale reload can't revert a saved value.
         // This makes the old focus snapshot/restore dance (and its querySelector escaping) obsolete.
 
-        // Inner HTML of the symbol cell (name + "fetching…" + held ● markers).
+        // Inner HTML of the symbol cell (name + fetch state + held ● markers). A row with no prices
+        // is one of two things and they must not look alike: missingReason set means Yahoo has
+        // already rejected the ticker and waiting will never fill the row, so it says so and hangs
+        // the diagnosis (and the ticker to map to) off the title. Only the unexplained case is
+        // "(fetching…)", which is now a claim that something really is in flight.
         function wlSymHtml(r) {
-            return '<b>' + r.symbol + '</b>' +
-                (r.missingData ? ' <span class="muted" style="font-size:0.75rem">(fetching…)</span>' : '') +
+            var state = '';
+            if (r.missingData && r.missingReason) {
+                state = ' <span class="wl-unresolved" title="' + escapeHtml(r.missingReason) +
+                    '">(no Yahoo data)</span>';
+            } else if (r.missingData) {
+                state = ' <span class="muted" style="font-size:0.75rem">(fetching…)</span>';
+            }
+            return '<b>' + r.symbol + '</b>' + state +
                 (r.held ? ' <span class="muted" title="You hold this" style="font-size:0.75rem">●</span>' : '');
         }
 

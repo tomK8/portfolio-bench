@@ -70,6 +70,7 @@ public class WatchlistService {
     private final CashTransactionRepository cashRepo;
     private final FxRateProvider fxRateProvider;
     private final YahooTickerMap tickerMap;
+    private final UnresolvedSymbols unresolved;
 
     public WatchlistService(WatchlistRepository watchlistRepo,
                             PriceHistoryRepository priceRepo,
@@ -78,6 +79,24 @@ public class WatchlistService {
                             CashTransactionRepository cashRepo,
                             FxRateProvider fxRateProvider,
                             YahooTickerMap tickerMap) {
+        this(watchlistRepo, priceRepo, intradayRepo, fundamentalsRepo, cashRepo, fxRateProvider,
+                tickerMap, null);
+    }
+
+    /**
+     * @param unresolved verdicts on symbols Yahoo has rejected, used to tell a row that is still
+     *                   backfilling from one that never will. Null means none are available, in
+     *                   which case an unpriced row reads as still-fetching — the old behaviour, and
+     *                   the right degradation: a missing diagnosis must not blank a working row.
+     */
+    public WatchlistService(WatchlistRepository watchlistRepo,
+                            PriceHistoryRepository priceRepo,
+                            IntradayPriceRepository intradayRepo,
+                            FundamentalsRepository fundamentalsRepo,
+                            CashTransactionRepository cashRepo,
+                            FxRateProvider fxRateProvider,
+                            YahooTickerMap tickerMap,
+                            UnresolvedSymbols unresolved) {
         this.watchlistRepo = watchlistRepo;
         this.priceRepo = priceRepo;
         this.intradayRepo = intradayRepo;
@@ -85,6 +104,7 @@ public class WatchlistService {
         this.cashRepo = cashRepo;
         this.fxRateProvider = fxRateProvider;
         this.tickerMap = tickerMap;
+        this.unresolved = unresolved;
     }
 
     public WatchlistView view() {
@@ -154,6 +174,18 @@ public class WatchlistService {
         return buildRow(e, LocalDate.now(), Instant.now(), fundamentals, ledgerBySymbol, rates, latest);
     }
 
+    /**
+     * Why a row has no data: a recorded rejection if Yahoo has already refused the ticker, else
+     * null for "still backfilling". The whole point of the distinction — a freshly added symbol
+     * and a mistyped one look identical until Yahoo has answered, and only one of them is worth
+     * waiting for.
+     */
+    private String missingReason(String symbol) {
+        if (unresolved == null) return null;
+        UnresolvedSymbols.Unresolved v = unresolved.get(symbol);
+        return v == null ? null : v.message();
+    }
+
     /** The stored watchlist entry for {@code symbol}, or a stand-in with every trigger disabled. */
     private Entry watchlistEntry(String symbol) {
         for (Entry e : watchlistRepo.loadAll()) {
@@ -172,7 +204,7 @@ public class WatchlistService {
         IntradayPrice ip = latest.get(ticker);
         Snapshot s = snapshot(e, ip, today, fundamentals);
         if (s == null) return Row.missing(symbol, e.highThresholdPct(), e.moveThresholdPct(),
-                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()));
+                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()), missingReason(symbol));
 
         Live live = computeLive(s, e, today, now);
 
@@ -193,7 +225,7 @@ public class WatchlistService {
                 levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()),
                 live.nearHigh(), live.bigMove(), live.moveDirection(),
                 live.aboveLevel(), live.belowLevel(),
-                false);
+                false, null);
     }
 
     private QuoteRow buildQuote(Entry e, LocalDate today, Instant now,
@@ -518,8 +550,9 @@ public class WatchlistService {
      * One watchlist row. Percentages are fractions ({@code 0.1} = 10%). {@code currentPrice},
      * {@code week52High}/{@code week52Low} are native-currency (see {@code currency}).
      * {@code held} gates the position columns. The {@code nearHigh}/{@code bigMove}/
-     * {@code moveDirection} triple drives the row colour. {@code missingData} marks a
-     * freshly-added symbol still backfilling.
+     * {@code moveDirection} triple drives the row colour. {@code missingData} marks a row with no
+     * prices; {@code missingReason} separates the two ways that happens — non-null means Yahoo has
+     * rejected the ticker and waiting will not help, null means a backfill is still in flight.
      */
     public record Row(String symbol, String currency, BigDecimal currentPrice,
                       BigDecimal todayPct, BigDecimal pct2d, BigDecimal pct3d, BigDecimal pct5d,
@@ -533,14 +566,14 @@ public class WatchlistService {
                       BigDecimal priceAbove, BigDecimal priceBelow,
                       boolean nearHigh, boolean bigMove, int moveDirection,
                       boolean aboveLevel, boolean belowLevel,
-                      boolean missingData) {
+                      boolean missingData, String missingReason) {
 
         static Row missing(String symbol, BigDecimal highPct, BigDecimal movePct,
-                           BigDecimal priceAbove, BigDecimal priceBelow) {
+                           BigDecimal priceAbove, BigDecimal priceBelow, String note) {
             return new Row(symbol, null, null, null, null, null, null, null, null,
                     null, null, null, null, null, null, null, null, null, null,
                     false, null, null, null, highPct, movePct, priceAbove, priceBelow,
-                    false, false, 0, false, false, true);
+                    false, false, 0, false, false, true, note);
         }
     }
 

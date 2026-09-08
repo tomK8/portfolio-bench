@@ -97,6 +97,32 @@ wrongly instead of not at all. Two signals cover the first case, one covers the 
   existing "Missing intraday prices" panel — that's an ordinary stale feed. Bonds are excluded (the
   gilt scraper, not Yahoo, prices them).
 
+**A rejected ticker is recorded, not only logged** (`UnresolvedSymbols`, KV key
+`unresolved_tickers`). The three signals above all end in the log, which no screen reads — so a
+symbol Yahoo 404s looked exactly like one still backfilling, indefinitely. `EQQU` (Invesco EQQQ's
+USD line, LSE) sat as `(fetching…)` on the watchlist and drew "a price fetch is queued now — reload
+in a few seconds" from the limit probe on every reload, for as long as it stayed unmapped. Three
+states, not two: **priced / still fetching / asked and refused.**
+- `PriceFetchJob.fetchSingle` writes a verdict when the response is empty *and* nothing was ever
+  stored for the ticker, and clears it the moment a fetch returns bars. That is the only writer;
+  `deleteTicker` clears through `PriceFetchJob.forgetUnresolved` because the verdict names a ticker
+  the symbol no longer resolves to. The bulk `run()` loop does not record — it works in ticker
+  space and never sees the internal symbol a report has to name.
+- The verdict carries **Yahoo's own answer to "then what is it?"**: `YahooPriceFetcher.search`
+  (`/v1/finance/search`, no crumb, no auth) resolves `EQQU` → `EQQU.L` even though the chart
+  endpoint 404s on it. Self-regulating over maintained — a suffix table would only ever be wrong,
+  and the currency-based `exchangeSuffix` guess in the mappings UI cannot run here (no price means
+  no currency). One extra request, on a failure only.
+- Readers are pure KV lookups, which is what lets `OpenOrdersService.probe` consult it on every
+  keystroke. `probe` returns the verdict *instead of* re-queueing a warm — repeating "reload in a
+  few seconds" is what made a mistyped symbol indistinguishable from a slow one. `WatchlistService`
+  puts it on `Row.missingReason`, and the UI renders amber `(no Yahoo data)` with the diagnosis in
+  the title rather than grey `(fetching…)`. A null reader (the 7-arg test constructor) degrades to
+  the old undiagnosed behaviour — a missing diagnosis must never blank a working row.
+- The message names where to fix it. There is **no standalone mappings tab**: the editor is the
+  "All instrument mappings" list at the foot of Open orders, plus the inline unpriced-symbol
+  editors on the two sync tabs. `UnresolvedSymbols.FIX_HINT` is the one place that wording lives.
+
 **Two mapping layers, both now user-editable at runtime** — a new instrument is only fully wired
 when both exist. PHP (Primary Health Properties, Aug 2026) is the worked example of what each one
 costs when missed:

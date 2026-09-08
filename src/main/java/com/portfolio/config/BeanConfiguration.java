@@ -114,6 +114,16 @@ public class BeanConfiguration {
         return new KeyValueStore(connections.dbDir());
     }
 
+    /**
+     * Verdicts on symbols Yahoo has rejected. Stateless over the {@link KeyValueStore}, so the
+     * fetch jobs that write them construct their own rather than churn the constructor every test
+     * in the suite calls; this bean serves the readers.
+     */
+    @Bean
+    public UnresolvedSymbols unresolvedSymbols(KeyValueStore keyValueStore) {
+        return new UnresolvedSymbols(keyValueStore);
+    }
+
     @Bean
     public SnapshotRepository snapshotRepository(JdbcConnectionFactory connections) {
         return new SnapshotRepository(connections);
@@ -738,9 +748,11 @@ public class BeanConfiguration {
                                              FundamentalsRepository fundamentalsRepository,
                                              CashTransactionRepository cashTransactionRepository,
                                              FxRateProvider fxRateProvider,
-                                             YahooTickerMap yahooTickerMap) {
+                                             YahooTickerMap yahooTickerMap,
+                                             UnresolvedSymbols unresolvedSymbols) {
         return new WatchlistService(watchlistRepository, priceHistoryRepository, intradayPriceRepository,
-                fundamentalsRepository, cashTransactionRepository, fxRateProvider, yahooTickerMap);
+                fundamentalsRepository, cashTransactionRepository, fxRateProvider, yahooTickerMap,
+                unresolvedSymbols);
     }
 
     /**

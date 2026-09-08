@@ -51,6 +51,12 @@ class WatchlistRowServiceTest {
 
     /** Service over a temp DB, with {@code AAPL} priced at 100 → 110 (a +10% last session). */
     private WatchlistService service(java.util.function.Consumer<WatchlistRepository> setup) {
+        return service(setup, u -> { });
+    }
+
+    /** As above, plus a chance to record verdicts on symbols Yahoo has rejected. */
+    private WatchlistService service(java.util.function.Consumer<WatchlistRepository> setup,
+                                     java.util.function.Consumer<UnresolvedSymbols> rejected) {
         var cf = new JdbcConnectionFactory(dbDir);
         var kv = new KeyValueStore(dbDir);
         var wlRepo = new WatchlistRepository(cf, kv);
@@ -58,9 +64,47 @@ class WatchlistRowServiceTest {
         priceRepo.savePriceBars(List.of(bar("AAPL", YESTERDAY, 100.0),
                 bar("AAPL", TODAY, 110.0)));
         setup.accept(wlRepo);
+        var unresolved = new UnresolvedSymbols(kv);
+        rejected.accept(unresolved);
         return new WatchlistService(wlRepo, priceRepo, new IntradayPriceRepository(cf),
                 new FundamentalsRepository(cf), new CashTransactionRepository(cf, kv),
-                () -> Map.of(), new YahooTickerMap());
+                () -> Map.of(), new YahooTickerMap(), unresolved);
+    }
+
+    /**
+     * The EQQU bug: an unpriced row is either backfilling or hopeless, and the two rendered
+     * identically as "(fetching…)". A recorded rejection has to reach the row so the UI can stop
+     * promising that waiting will help.
+     */
+    @Test
+    void aRejectedSymbolCarriesItsDiagnosisNotJustMissingData() {
+        Row r = service(repo -> { },
+                u -> u.record("EQQU", "EQQU", List.of(
+                        new com.portfolio.adapter.YahooPriceFetcher.Suggestion(
+                                "EQQU.L", "Invesco EQQQ NASDAQ-100 UCITS ETF", "LSE", "ETF"))))
+                .row("EQQU");
+
+        assertTrue(r.missingData());
+        assertNotNull(r.missingReason());
+        assertTrue(r.missingReason().contains("EQQU.L"), r.missingReason());
+    }
+
+    /** No verdict means the fetch may still be running — the row must keep saying so. */
+    @Test
+    void anUnpricedSymbolWithNoVerdictStaysUndiagnosed() {
+        Row r = service(repo -> { }).row("BRANDNEW");
+
+        assertTrue(r.missingData());
+        assertNull(r.missingReason(), "absent verdict must not be reported as a rejection");
+    }
+
+    /** A row that prices is never annotated, whatever stale verdicts sit in the store. */
+    @Test
+    void aPricedSymbolCarriesNoDiagnosis() {
+        Row r = service(repo -> { }, u -> u.record("AAPL", "AAPL", List.of())).row("AAPL");
+
+        assertFalse(r.missingData());
+        assertNull(r.missingReason());
     }
 
     @Test

@@ -32,12 +32,14 @@ public class PriceFetchJob {
     private static final int LOOKBACK_YEARS = 30;
     private static final long THROTTLE_MS = 500;   // be polite to Yahoo: ≤1 request / 500ms
     private static final int FRESH_LOOKBACK_DAYS = 4;   // history newer than this skips a re-add backfill
+    private static final int SUGGESTION_COUNT = 6;      // Yahoo candidates kept when a ticker is rejected
 
     private final CashTransactionRepository cashRepo;
     private final PriceHistoryRepository priceRepo;
     private final YahooPriceFetcher fetcher;
     private final YahooTickerMap tickers;
     private final KeyValueStore kv;
+    private final UnresolvedSymbols unresolved;
     /** Null in tests that only exercise price writes; every dividend write is guarded. */
     private final DividendHistoryRepository divRepo;
 
@@ -54,6 +56,7 @@ public class PriceFetchJob {
         this.fetcher = fetcher;
         this.tickers = tickers;
         this.kv = kv;
+        this.unresolved = new UnresolvedSymbols(kv);
         this.divRepo = divRepo;
     }
 
@@ -166,6 +169,16 @@ public class PriceFetchJob {
     }
 
     /**
+     * Drop any recorded "Yahoo rejected this" verdict for {@code symbol}. Called when its mapping
+     * is removed: the verdict names the ticker that failed, and once the mapping behind it is gone
+     * that sentence is about a ticker the app no longer resolves to. Better no diagnosis than a
+     * stale one — the next fetch writes a fresh one.
+     */
+    public void forgetUnresolved(String symbol) {
+        unresolved.clear(symbol);
+    }
+
+    /**
      * Watchlist-add helper: only backfill when the symbol's daily history is missing or stale.
      * A name that's already covered — held, or removed-then-re-added the same day — skips the
      * ~{@value #LOOKBACK_YEARS}-year re-fetch entirely, so the add's single small SQLite write
@@ -208,6 +221,13 @@ public class PriceFetchJob {
         log.info("fetchSingle {} → {}: {} rows ({} written)", symbol, ticker, bars.size(), touched);
         if (bars.isEmpty() && priceRepo.getLatestPriceDate(ticker) == null) {
             PriceFetchSupport.warnNoPriceData(log, symbol, ticker);
+            // Leave a verdict behind. Without one the caller cannot distinguish this from a
+            // backfill still running, and the watchlist row and the limit probe both said "wait"
+            // indefinitely. The search costs one request and only on a failure, and it is what
+            // turns the report from a dead end into the mapping to make (EQQU → EQQU.L).
+            unresolved.record(symbol, ticker, fetcher.search(symbol, SUGGESTION_COUNT));
+        } else if (!bars.isEmpty()) {
+            unresolved.clear(symbol);   // it prices now — a corrected mapping, or a new listing
         }
         return touched;
     }

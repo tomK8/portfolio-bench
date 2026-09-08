@@ -276,6 +276,17 @@
             color: #999;
         }
 
+        /* A watchlist row Yahoo has rejected outright. Deliberately not .muted: "(fetching…)" is
+           grey because it resolves itself, whereas this one needs the reader to act, so it takes
+           the same amber "check this" idiom the orders table uses. The full diagnosis and the
+           ticker to map to are in the title. */
+        .wl-unresolved {
+            font-size: 0.75rem;
+            color: #b8860b;
+            cursor: help;
+            border-bottom: 1px dotted currentColor;
+        }
+
         /* Marks a dividend yield derived from the name's own payment history rather than
            published by the feed — the caveat sits beside the number, never inside it. */
         .yield-derived {

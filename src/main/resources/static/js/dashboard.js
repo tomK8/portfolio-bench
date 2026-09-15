@@ -224,6 +224,11 @@
                 .then(function (res) {
                     if (res.ok) {
                         input.dataset.saved = value;
+                        // The Note column sorts on the cell's data-sort-value (the input's own
+                        // text is invisible to parseVal), so a note just written has to update it
+                        // or a later sort would order the table by what was on screen at render.
+                        var cell = input.closest('td');
+                        if (cell) cell.dataset.sortValue = value;
                         input.classList.add('order-note-saved');
                         setTimeout(function () { input.classList.remove('order-note-saved'); }, 1200);
                     } else {

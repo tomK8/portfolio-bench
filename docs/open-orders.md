@@ -326,6 +326,29 @@ estimated prices still sort numerically). No parser registration in `PortfolioGa
 pipeline is independent of the holdings/cash pipelines (and the II sniff keeps them from
 cross-matching).
 
+**Both tables sort, and the closed one needed no JS of its own.** The `htmx:afterSettle` handler
+already calls `attachSort` on *every* table inside `#orders-result` (guarded by
+`data-sortAttached`), so `#orders-history-table` only had to declare `data-sort` on its headers to
+become sortable — Qty and Price as `num`, the rest as `text`. **Both date columns are ISO
+`yyyy-MM-dd`, where a lexical sort is already chronological**, so there is no date parser here and
+therefore none that could disagree with the one the rest of the panel uses. Sorting by Status is
+the reason the vocabulary was normalised first: on the brokers' own spellings it grouped
+`CANCELLED` away from `Canceled` and `Dealt` away from `Executed`, i.e. it sorted the brokers, not
+the outcomes.
+
+- **The Note column sorts on `data-sort-value`, not on the cell's text.** The note lives in an
+  `<input>`, so `cell.textContent` is empty for every row and the column compared equal
+  everywhere — declared sortable and silently inert, which the open table had been since the Note
+  column shipped. The server renders the annotation onto the `<td>` as well, and the save handler
+  writes `cell.dataset.sortValue` on a successful POST: without that, sorting after typing a note
+  would order the table by what was on screen when it rendered. An absent note renders no
+  attribute at all and an emptied one an empty string; `parseVal` treats both as "fall back to the
+  cell text", so they behave identically.
+- **The closed table's ordering is deliberately not remembered across a re-render**, unlike
+  `ordersSort` above. The block is a `<details>` that a swap returns to collapsed, so there is no
+  ordering on screen to preserve — remembering it would restore a sort into something the reader
+  can't see.
+
 **The chosen sort survives a re-render**, which matters because both model checkboxes swap the
 whole fragment: ticking or unticking drift / earnings variance is a request to re-price the
 numbers, never to re-order the rows, and the table used to come back in the server's default

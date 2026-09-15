@@ -85,6 +85,65 @@ class OrderHistoryRepositoryTest {
         assertEquals("2026-08-02", closed.closedAt());
     }
 
+    // ---- what the Status column prints -------------------------------------
+
+    /**
+     * Three brokers, six spellings, three outcomes. The raw word stays in the row as evidence;
+     * what the panel prints is one vocabulary.
+     */
+    @Test
+    void theBrokersSpellingsAreNormalisedForDisplayButStoredVerbatim() {
+        var r = repo();
+        OpenOrder dealt = order("REF1", "LSEG", "80.00", "In progress");
+        OpenOrder executed = order("REF2", "NVDA", "200.00", "In progress");
+        OpenOrder cancelled = order("REF3", "EQQU", "689.30", "In progress");
+        r.record(AJ, List.of(dealt, executed, cancelled), openKeys(dealt, executed, cancelled), DAY1);
+
+        r.record(AJ, List.of(order("REF1", "LSEG", "80.00", "Dealt"),
+                        order("REF2", "NVDA", "200.00", "EXECUTED"),
+                        order("REF3", "EQQU", "689.30", "Canceled")),
+                Set.of(), DAY1.plusDays(1));
+
+        var byKey = r.closed().stream().collect(java.util.stream.Collectors.toMap(
+                OrderHistoryRepository.HistoricalOrder::symbol, h -> h));
+        assertEquals("Filled", byKey.get("LSEG").state());
+        assertEquals("Filled", byKey.get("NVDA").state());
+        assertEquals("Cancelled", byKey.get("EQQU").state());
+        assertEquals("EXECUTED", byKey.get("NVDA").status(), "the broker's own word is the evidence");
+        byKey.values().forEach(h -> assertFalse(h.stateInferred(), "the broker said so"));
+    }
+
+    /**
+     * The third state, and the only inferred one: the broker stopped listing the order without
+     * ever restating it, so its last-seen status is still an open one. Printing that "Open" in a
+     * table of closed orders said the opposite of the truth.
+     */
+    @Test
+    void anOrderClosedByAbsenceReadsAsNoLongerListedRatherThanOpen() {
+        var r = repo();
+        OpenOrder o = order("REF1", "NVDA", "203.43", "Open");
+        r.record(AJ, List.of(o), openKeys(o), DAY1);
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(1));
+
+        var closed = onlyClosed(r);
+        assertEquals("No longer listed", closed.state());
+        assertTrue(closed.stateInferred(), "nothing said it filled or cancelled — we inferred it");
+        assertEquals("Open", closed.status(), "the last-seen status is kept for the hover text");
+    }
+
+    /** A status this app has never seen is still not reported as filled or cancelled. */
+    @Test
+    void anUnrecognisedStatusIsNotGuessedAtEither() {
+        var r = repo();
+        OpenOrder o = order("REF1", "LSEG", "80.00", "Awaiting market");
+        r.record(AJ, List.of(o), openKeys(o), DAY1);
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(1));
+
+        var closed = onlyClosed(r);
+        assertEquals("No longer listed", closed.state());
+        assertTrue(closed.stateInferred());
+    }
+
     /**
      * The whole point of the feature: a modified order gets a new broker reference, so the version
      * that was replaced keeps its own note and both can be read side by side.

@@ -6,6 +6,10 @@
   probability of the market touching each limit **before that order expires**, on a volatility
   forecast matched to that horizon; it is editable per row, and clicking a row opens the same price
   popup the Live and Watchlist tables use. See the Open-orders section below.
+- **Ladders** — `GET /ladders` → `fragments/ladders :: list`, rendered inside the Open orders panel
+  above the table. Named groups of rungs on one security that the user creates and assigns orders
+  to, including rungs decided on but never placed. See the Ladders section below.
+
 
 # Open orders
 
@@ -375,3 +379,143 @@ are `0.00%`, `σ→lim (5d)` a signed plain number (`+0.00;-0.00`), `P(touch 5d)
 `setStyled`, raw fraction/number in the cell). (The Files-tab portfolio button was
 renamed to "Download Excel" too — both write to ~/Documents.)
 
+
+# Ladders
+
+The block above the orders table on the Open orders tab. `LadderService` +
+`persistence/OrderGroupRepository` + `domain/Ladders` (pure arithmetic) +
+`web/LaddersController`.
+
+**What it is for.** Some orders belong together and the table cannot say so. Three NVDA buy rungs at
+three prices are one intention, not three rows; a sell ladder and the buy ladder meant to pair with
+it are one round trip. The table can sort but not group, and sorting by symbol still does not say
+which rungs sit above the market and which below. Separately, a rung decided on but *not placeable*
+— the cash isn't in that account, or the broker won't take a limit on that instrument — is a real
+commitment that appeared nowhere at all, which is how the cash commitments got added up wrong.
+
+**A ladder is a named group of rungs on one security.** Created by the user, assigned to by the
+user. A rung is either a real order from a broker feed or an **intended** rung recorded here.
+
+- **Nothing is ever inferred.** Symbol, date and price proximity are all to hand and all deliberately
+  unused. Grouping by resemblance would attach the reasoning written on a ladder to orders that never
+  carried it, and the panel's entire value is that it records an intention the feed cannot see.
+- **An intended rung is never auto-promoted.** When a real order appears that matches one in every
+  visible way — same symbol, side, quantity and price — nothing happens. `markPlaced` is the only
+  path across and the user drives it: they pick the order the rung became. A feed match would
+  sometimes be wrong, and being wrong here means one decision's reasoning ends up on a different
+  order. `aMatchingRealOrderNeverAbsorbsTheIntendedRung` pins it.
+- **A ladder spans brokers on purpose.** The sells in II SIPP and the paired buys in the Roth are one
+  intention; nothing in the model ties a group to an account.
+- **An intended rung never reaches the orders table or the closed-orders block.** Those are broker
+  truth. It exists only here.
+
+## The price axis
+
+Rungs are ordered **strictly by price, highest first**, with the market's own price drawn as a row
+between them — so sells sit above buys and the lean of the ladder is the shape of the list. Strictly
+by price rather than "sells block, then buys block" because the two pictures differ exactly when a
+rung is on the wrong side of the market (a sell below the bid, a buy above the offer), and that is
+the state worth seeing: it is the same fact the table flags in amber, and a layout that always drew
+sells on top would hide it behind a tidy picture of a ladder leaning the way it is supposed to.
+`aRungOnTheWrongSideOfTheMarketStaysWhereItsPricePutsIt` is the test.
+
+A rung with no price sorts last — it cannot be placed on the axis and guessing would misstate which
+side of the market it is on. No live quote means **no marker at all** (`markerIndex` returns -1)
+rather than one at an invented position; the marker's whole job is to say which rungs are above the
+market.
+
+## The same analytics for an intended rung, by construction
+
+`vs mkt` and `P(N)` on an intended rung are the table's own columns, not a second calculation.
+`LadderService.intendedOrders` turns each intent into a synthetic `OpenOrder` — the chosen account as
+the broker, `intent:<id>` as the reference (a namespace no broker reference can collide with),
+`Intended` as the status (which `OrderStatus` reads as UNKNOWN, i.e. open, which is what it is) and
+`GTC` as the duration (an intent has no deadline, so it prices over the same 90-session horizon a GTC
+order gets). `OpenOrdersService.load` pushes those through **the same `enrichWithCurrentPrice`** the
+table's rows take. Nothing in `LadderService` computes a statistic.
+
+Two details in that pass:
+- **Two calls, not one list.** Real orders are enriched with `recordCalibration=true` and intended
+  rungs with `false`. The calibration log is a record of probabilities that can be scored against
+  actual fills, and an intended rung cannot fill — it is not at a broker. Same argument, and the same
+  flag, that keeps the pre-trade probe out of that log.
+- **Intended symbols are published to the fetch universe.** An intended rung is by definition on
+  something not yet traded, so nothing else in the app keeps its feed warm — the same gap that let a
+  resting WMT limit price off a two-week-old quote (2026-08-19). `publishOrderSymbols` is handed the
+  union.
+
+**No currency is stored on an intent.** The instrument's quote publishes it, so storing it would be a
+second and staler answer; `intendedOrders` asks the caller for it (`quoteCurrency(tickerFor(symbol))`,
+the same helper the probe uses). An instrument that has never priced yields no currency, and the rung
+is then visibly left out of the cash lines by name rather than summed under a guessed one.
+
+## What a ladder comes to
+
+`domain/Ladders.totals` — framework-free, and it takes `Rung`s rather than orders because an intended
+rung and a resting one are the same input to every figure. What state a rung is in decides only
+*which* totals it enters, once, in `Rung.remaining()` / `Rung.filled()`.
+
+- **Net position if every remaining rung fills** — buys positive, sells negative, over resting and
+  intended rungs. Filled rungs already moved the position; cancelled ones never will. Null (not zero)
+  when a remaining rung has no quantity.
+- **Cash per account, and never netted across accounts.** Two figures per account — raises and needs.
+  A single number would call a ladder that raises £10k in the SIPP and needs £10k in the Roth
+  cash-neutral, which is the precise error the panel exists to stop: the money is in the wrong
+  wrapper and cannot move. Keyed by `(account, currency)`, since one wrapper can hold more than one.
+- **The round trip**, once *both* sides have filled: matched quantity (the smaller side — the excess
+  on the longer one is a position change, not a completed trip), quantity-weighted average buy and
+  sell, and the difference. One side alone is null, not a number: calling that a round trip would
+  answer a question the ladder has not finished asking. `complete` additionally requires nothing left
+  resting.
+- **Prices are the last ones the exports carried.** No broker export here has an execution price
+  column — AJ Bell's `activeorders*.csv` has one `Price`, II's limit is `amount ÷ quantity`, Citi's is
+  the limit. For a limit order that is the price it filled at or better, and the panel says "on export
+  prices" beside the figure rather than letting it read as a settled P&L.
+- **Anything that cannot be computed is dropped from the figure it would have corrupted and named**
+  in `Totals.excluded`, which the panel prints underneath — the app-wide rule.
+
+## Storage, and the seam for the group type that is coming
+
+Three tables. `order_group` is the user's intention; `order_group_member` is a *pointer* into
+`order_history`, which the broker feed owns; `order_group_intent` is an order that exists nowhere
+else and so carries its own side, quantity and price.
+
+- **Membership points at an order key** (`OpenOrder.identity()` — the broker's own reference where
+  there is one), the same key the annotations use. A rung therefore keeps its ladder when it fills,
+  and a *modified* order — a new reference, by every broker's rules — does not silently inherit the
+  old one's place: it is a different order and the user assigns it, which is the whole point.
+- **One order, one group.** `order_key` is the member table's primary key, not a pair, so assigning an
+  order elsewhere moves it. A rung counted in two ladders would be counted twice in the cash each
+  needs.
+- **A rung is never pruned.** `OrderHistoryRepository.prune` takes a `keep` set and
+  `OpenOrdersService` passes `ladders.rungOrderKeys()`. The second leg of a round trip can fill months
+  after the first — a sell in August and the buy that closes it in October are one trip, and a
+  month's retention would have deleted half of it before the half that completes it arrived. The set
+  is passed in rather than read from the group table inside the query, so the history repository goes
+  on knowing nothing about ladders and the rule is visible where its reason is.
+- **`GroupType` exists with one constant.** A switch — selling out of one holding to buy into another
+  — is a different shape with different questions (sequencing, ratio, preserving the weight) and
+  flattening it onto a single price axis would answer none of them. What "one group, one security"
+  costs today is paid in exactly three places: the symbol lives on `order_group`,
+  `LadderReport.assignableFor` offers same-symbol orders only, and the view lays rungs on one price
+  axis. All three are decisions of *this* type's assembler, not assumptions in the storage. A group
+  whose `type` this build does not know is dropped with a warning, never read as a ladder.
+
+## The panel
+
+- **Empty-looking when there are no ladders**: one line and a `+ New ladder` form, not a wrapper
+  around everything. Most orders are not rungs — standalone trims and exits belong in the table only.
+- **Rendered from the same `OrdersReport` the table is** (`OrdersReport.ladders`), so a rung's numbers
+  are the row's numbers. It sits **outside** the "no order files found" guard: a ladder can be made
+  entirely of intended rungs, and hiding those whenever no export happens to be in `~/Downloads`
+  would hide them on the day they matter most.
+- **Mutations re-render the block alone** (`hx-target="#ladders-result"`), never the table. The one
+  exception is `markPlaced`, which targets `#orders-result`: linking can move the intent's note onto
+  the order, and that note is a cell of the table below.
+- **The picker offers closed orders as well as resting ones.** The first ladder anyone builds is
+  usually a sell that has already filled paired with a buy still resting; a picker of live orders only
+  could never assemble the completed round trip the panel exists to show.
+- **A rung row opens the shared price popup**, on the same terms the table's rows do — only when the
+  ladder's security resolved to a ticker.
+- Removing a rung takes it out of the ladder and touches the order not at all. Deleting a ladder takes
+  its memberships and its intended rungs (which exist nowhere else) and, again, no orders.

@@ -336,6 +336,90 @@
             font-size: 0.75em;
         }
 
+        /* ── Ladders (Open orders tab) ────────────────────────────────────────────
+           A ladder is a named group of rungs on one security. The block is deliberately quiet when
+           there are none: one line and a create form, not a wrapper around the whole panel. */
+        .ladders { margin: 0 0 1rem; }
+        .ladders-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+            font-size: 0.9rem; }
+        .ladders-head .muted { font-weight: 400; }
+        .ladder-new > summary { cursor: pointer; font-size: 0.82rem; color: #1f77b4; }
+        .ladder-form { display: flex; align-items: flex-end; gap: 0.6rem; flex-wrap: wrap;
+            margin: 0.4rem 0 0.2rem; font-size: 0.82rem; }
+        .ladder-form label { display: flex; flex-direction: column; gap: 0.15rem; }
+
+        .ladder { border: 1px solid #e3e3e3; border-radius: 8px; padding: 0.5rem 0.7rem;
+            margin: 0.6rem 0; }
+        .ladder-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+            font-size: 0.92rem; }
+        .ladder-symbol { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.82rem; color: #555; }
+        .ladder-symbol[data-symbol] { cursor: pointer; text-decoration: underline dotted; }
+        .ladder-count { font-size: 0.78rem; margin-left: auto; }
+        .ladder-badge { font-size: 0.72rem; padding: 1px 6px; border-radius: 999px;
+            background: #eef4fb; color: #1f77b4; }
+        .ladder-complete { background: #e8f6ec; color: #2ca02c; }
+        .ladder-inline { display: inline-flex; gap: 0.25rem; align-items: center; margin: 0; }
+        .ladder-x { font-size: 0.72rem; padding: 1px 6px; }
+        .ladder-empty { font-size: 0.8rem; margin: 0.3rem 0; }
+
+        .ladder-rungs { border-collapse: collapse; font-size: 0.8rem; width: 100%;
+            font-variant-numeric: tabular-nums; margin: 0.4rem 0; }
+        .ladder-rungs th, .ladder-rungs td { padding: 0.15rem 0.5rem; text-align: right;
+            white-space: nowrap; border-bottom: 1px solid #f0f0f0; }
+        .ladder-rungs th.txt, .ladder-rungs td.txt { text-align: left; }
+        .ladder-rungs th { font-weight: 600; color: #555; }
+        /* The market line. It is a row rather than a border so it can carry the price itself —
+           the whole point of the layout is reading which rungs sit above it and which below. */
+        .ladder-marker td { background: #f6f7f9; font-weight: 600; border-top: 2px solid #1f77b4;
+            border-bottom: 2px solid #1f77b4; }
+        .ladder-marker-none td { font-weight: 400; color: #888; border-color: #ddd; }
+        .rung-intended td { font-style: italic; }
+        .rung-filled td { background: #f4faf5; }
+        .rung-gone td { color: #999; text-decoration: line-through; }
+        .rung-gone .rung-state, .rung-gone .rung-note { text-decoration: none; }
+        .rung-state { font-size: 0.72rem; padding: 1px 6px; border-radius: 999px; background: #f0f0f0; }
+        .state-working { background: #eef4fb; color: #1f77b4; }
+        .state-intended { background: #fdf3e3; color: #a9740a; }
+        .state-filled { background: #e8f6ec; color: #2ca02c; }
+        .state-cancelled, .state-unlisted { background: #f0f0f0; color: #777; }
+        .rung-note { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+        .rung-act { white-space: nowrap; }
+        /* The "placed as…" picker is the widest thing in the row; cap it so the remove button
+           beside it cannot be pushed off the edge of the table. */
+        .rung-act select { max-width: 11rem; font-size: 0.75rem; }
+
+        .ladder-totals { display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem; font-size: 0.8rem;
+            margin: 0.3rem 0 0.2rem; }
+        .ladder-totals .lbl { color: #777; margin-right: 0.35rem; }
+        .ladder-totals .val { font-weight: 600; }
+        .ladder-totals .val.na { font-weight: 400; color: #999; }
+        .ladder-cash-line { display: flex; gap: 0.5rem; }
+        .ladder-cash-line .acct { color: #555; }
+        .ladder-trip { display: flex; gap: 0.5rem; align-items: baseline; }
+        .ladder-caveat { font-size: 0.72rem; border-bottom: 1px dotted #bbb; cursor: help; }
+        .ladder-excluded { flex-basis: 100%; margin: 0.2rem 0 0; padding-left: 1.1rem;
+            font-size: 0.75rem; color: #a9740a; }
+        .ladder-actions { display: flex; gap: 1.2rem; flex-wrap: wrap; margin-top: 0.4rem; }
+        .ladder-add > summary { cursor: pointer; font-size: 0.78rem; color: #1f77b4; }
+        .ladder-cand { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; margin: 0.15rem 0; }
+
+        html[data-theme="dark"] .ladder { border-color: #2e3137; }
+        html[data-theme="dark"] .ladder-rungs th, html[data-theme="dark"] .ladder-rungs td {
+            border-bottom-color: #26292e; }
+        html[data-theme="dark"] .ladder-marker td { background: #1c1f24; }
+        html[data-theme="dark"] .rung-filled td { background: #16211a; }
+        /* Per state in dark too, not one grey: the badge is how a filled rung, a resting one and
+           one that exists only here are told apart at a glance. */
+        html[data-theme="dark"] .rung-state { background: #26292e; color: #bbb; }
+        html[data-theme="dark"] .state-working { background: #1b2733; color: #7fb3e0; }
+        html[data-theme="dark"] .state-intended { background: #2c2416; color: #e0b055; }
+        html[data-theme="dark"] .state-filled { background: #16211a; color: #4ade80; }
+        html[data-theme="dark"] .ladder-cash-line .acct,
+        html[data-theme="dark"] .ladder-symbol { color: #9aa0a6; }
+        html[data-theme="dark"] .ladder-rungs th { color: #9aa0a6; }
+        html[data-theme="dark"] .ladder-badge { background: #1b2733; }
+
         .tabs {
             display: flex;
             gap: 0;

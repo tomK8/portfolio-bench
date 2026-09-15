@@ -19,9 +19,11 @@ import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.application.EarningsService;
 import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
+import com.portfolio.application.LadderService;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.InstrumentMappingRepository;
+import com.portfolio.persistence.OrderGroupRepository;
 import com.portfolio.persistence.OrderHistoryRepository;
 import com.portfolio.persistence.EarningsDateRepository;
 import com.portfolio.domain.EventMoves;
@@ -192,6 +194,7 @@ public class BeanConfiguration {
                                                FundamentalsRepository fundamentalsRepository,
                                                DividendYieldService dividendYieldService,
                                                OrderHistoryRepository orderHistoryRepository,
+                                               LadderService ladderService,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -226,7 +229,13 @@ public class BeanConfiguration {
                 dividendYieldService,
                 // Annotations on each order, and the orders a broker has stopped listing. This
                 // panel is the only writer, so it is also where retention runs.
-                orderHistoryRepository);
+                orderHistoryRepository,
+                // The Ladders block. Injected into the orders service rather than the other way
+                // round because ladders need orders priced and this is what prices them: intended
+                // rungs go in as synthetic orders and come back through the same enrichment the
+                // table's rows take, which is what makes "the same analytics" a fact rather than a
+                // promise.
+                ladderService);
     }
 
     /**
@@ -518,6 +527,22 @@ public class BeanConfiguration {
     @Bean
     public OrderHistoryRepository orderHistoryRepository(JdbcConnectionFactory connections) {
         return new OrderHistoryRepository(connections);
+    }
+
+    @Bean
+    public OrderGroupRepository orderGroupRepository(JdbcConnectionFactory connections) {
+        return new OrderGroupRepository(connections);
+    }
+
+    /**
+     * The Ladders panel's use case. It takes the order-history store only to carry an intended
+     * rung's note onto the order the user says it became — annotations live in one place for every
+     * order, rung or not.
+     */
+    @Bean
+    public LadderService ladderService(OrderGroupRepository orderGroupRepository,
+                                       OrderHistoryRepository orderHistoryRepository) {
+        return new LadderService(orderGroupRepository, orderHistoryRepository);
     }
 
     @Bean

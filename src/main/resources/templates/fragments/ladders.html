@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!--
+  The Ladders block of the Open orders tab.
+
+  Some orders belong together: three buy rungs on one name at three prices are one intention, and a
+  sell ladder and the buy ladder meant to pair with it are one round trip. The table below this can
+  sort but cannot group, and sorting by symbol still does not say which rungs sit above the market
+  and which below. This does both — and it carries the rungs the user has decided on but cannot
+  place, which are real commitments against real cash and were invisible everywhere else.
+
+  Rendered from the same OrdersReport the table is, so a rung's numbers are the row's numbers.
+  Mutations re-render this fragment alone (hx-target="#ladders-result"), never the whole panel.
+-->
+<div th:fragment="list">
+
+    <section class="ladders">
+
+        <div class="ladders-head">
+            <strong>Ladders</strong>
+            <span class="muted" th:if="${orders.ladders.isEmpty()}">
+                — none. A ladder is a named group of rungs on one security that you assign orders
+                to; nothing is grouped for you.
+            </span>
+            <span class="muted" th:unless="${orders.ladders.isEmpty()}"
+                  th:text="'(' + ${#lists.size(orders.ladders.ladders)} + ')'">(0)</span>
+
+            <details class="ladder-new">
+                <summary>+ New ladder</summary>
+                <form class="ladder-form" hx-post="/ladders/create"
+                      hx-target="#ladders-result" hx-swap="innerHTML">
+                    <label>Name
+                        <input name="name" type="text" size="18" required
+                               placeholder="NVDA round trip"
+                               title="Whatever you call this intention. It is yours — nothing reads it."/>
+                    </label>
+                    <label>Security
+                        <input name="symbol" type="text" size="8" spellcheck="false" required
+                               placeholder="NVDA"
+                               title="The one security this ladder's rungs trade. A ladder can span brokers — sells in one account, the paired buys in another — but not securities."/>
+                    </label>
+                    <button type="submit">Create</button>
+                </form>
+            </details>
+        </div>
+
+        <div th:if="${!#lists.isEmpty(orders.ladders.warnings)}" class="value-warnings">
+            <h4>Ladders</h4>
+            <ul>
+                <li th:each="w : ${orders.ladders.warnings}" th:text="${w}">warning</li>
+            </ul>
+        </div>
+
+        <article class="ladder" th:each="l : ${orders.ladders.ladders}">
+
+            <header class="ladder-head">
+                <strong th:text="${l.group.name}">Name</strong>
+                <span class="ladder-symbol" th:attr="data-symbol=${orders.chartableSymbols.contains(l.group.symbol) ? l.group.symbol : null}"
+                      th:text="${l.group.symbol}"
+                      th:title="'The one security this ladder trades. Click for the price popup.'">SYM</span>
+                <span class="ladder-badge ladder-complete" th:if="${l.totals.complete}"
+                      title="Both sides have filled and nothing is left resting — the round trip is done.">Round trip complete</span>
+                <span class="muted ladder-count"
+                      th:text="${l.totals.remainingCount} + ' resting or intended · '
+                               + ${l.totals.filledCount} + ' filled'">0 · 0</span>
+                <form class="ladder-inline" hx-post="/ladders/delete"
+                      hx-target="#ladders-result" hx-swap="innerHTML"
+                      hx-confirm="Delete this ladder? The orders themselves are untouched; any intended rungs on it are deleted.">
+                    <input type="hidden" name="id" th:value="${l.group.id}"/>
+                    <button type="submit" class="ladder-x" title="Delete this ladder">Delete</button>
+                </form>
+            </header>
+
+            <p class="muted ladder-empty" th:unless="${l.hasRungs()}">
+                No rungs yet. Add resting orders below, or record a rung you have decided on but
+                cannot place.
+            </p>
+
+            <!--
+              The price axis. Rungs are ordered strictly by price, highest first, with the market's
+              own price drawn in between — so sells sit above buys and the lean of the ladder is the
+              shape of the list. Strictly by price, and not "sells block then buys block", because
+              the two differ exactly when a rung is on the wrong side of the market, and that is the
+              thing worth seeing rather than the thing worth tidying away.
+            -->
+            <table class="ladder-rungs" th:if="${l.hasRungs()}">
+                <thead>
+                <tr>
+                    <th>Price</th>
+                    <th class="txt">Side</th>
+                    <th>Qty</th>
+                    <th class="txt">Account</th>
+                    <th class="txt">State</th>
+                    <th title="How far the market sits from this rung's price. Positive = market above it.">vs mkt</th>
+                    <th title="Probability the market touches this rung's price before the order expires — 90 sessions for a GTC order and for an intended rung, which has no deadline of its own. The same forecast the table's P(N) column uses.">P(N)</th>
+                    <th class="txt">Note</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                <th:block th:each="r : ${l.above()}">
+                    <tr th:replace="~{fragments/ladders :: rung(${r}, ${l})}"></tr>
+                </th:block>
+                <tr class="ladder-marker" th:if="${l.markerIndex >= 0}">
+                    <td th:text="${l.currencySymbol()}
+                                 + ${#numbers.formatDecimal(l.currentPrice, 1, 'COMMA', 2, 'POINT')}">0.00</td>
+                    <td class="txt" colspan="8">market — rungs above sell, rungs below buy</td>
+                </tr>
+                <th:block th:each="r : ${l.below()}">
+                    <tr th:replace="~{fragments/ladders :: rung(${r}, ${l})}"></tr>
+                </th:block>
+                <tr class="ladder-marker ladder-marker-none" th:if="${l.markerIndex < 0}">
+                    <td class="txt" colspan="9">No live price for this security, so there is no
+                        market line to place the rungs against.</td>
+                </tr>
+                </tbody>
+            </table>
+
+            <!--
+              What the ladder comes to. Cash is broken out per account and never netted across them:
+              money raised in one wrapper cannot fund a purchase in another, and a single figure
+              would call that pair cash-neutral.
+            -->
+            <div class="ladder-totals" th:if="${l.hasRungs()}">
+                <div class="ladder-total">
+                    <span class="lbl">If every remaining rung fills</span>
+                    <span class="val" th:if="${l.totals.netQuantity != null}"
+                          th:classappend="${l.totals.netQuantity.signum() > 0 ? 'val-pos'
+                                          : (l.totals.netQuantity.signum() < 0 ? 'val-neg' : '')}"
+                          th:text="${(l.totals.netQuantity.signum() > 0 ? '+' : '')
+                                   + #numbers.formatDecimal(l.totals.netQuantity, 1, 'COMMA', 2, 'POINT')
+                                   + ' ' + l.group.symbol}">+0</span>
+                    <span class="val na" th:if="${l.totals.netQuantity == null}"
+                          title="A remaining rung has no quantity, so this would be a partial sum wearing a full one's clothes.">—</span>
+                </div>
+
+                <div class="ladder-cash" th:if="${!#lists.isEmpty(l.totals.cash)}">
+                    <span class="lbl">Cash, by account</span>
+                    <div class="ladder-cash-line" th:each="c : ${l.totals.cash}">
+                        <span class="acct" th:text="${c.account}">Account</span>
+                        <span th:if="${c.raises.signum() > 0}" class="val-pos"
+                              th:text="'raises ' + ${l.currencySymbol()}
+                                       + ${#numbers.formatDecimal(c.raises, 1, 'COMMA', 2, 'POINT')}">raises</span>
+                        <span th:if="${c.needs.signum() > 0}" class="val-neg"
+                              th:text="'needs ' + ${l.currencySymbol()}
+                                       + ${#numbers.formatDecimal(c.needs, 1, 'COMMA', 2, 'POINT')}">needs</span>
+                        <span class="muted" th:text="'(' + ${c.currency} + ')'">(CCY)</span>
+                    </div>
+                </div>
+
+                <!--
+                  The round trip, once both sides have filled. Priced on matched quantity only: the
+                  excess on the longer side is a position change, not a completed trip.
+                -->
+                <div class="ladder-trip" th:if="${l.totals.roundTrip != null}"
+                     th:with="t=${l.totals.roundTrip}">
+                    <span class="lbl">Round trip</span>
+                    <span th:text="${#numbers.formatDecimal(t.matchedQuantity, 1, 'COMMA', 2, 'POINT')}
+                                   + ' matched · bought ' + ${l.currencySymbol()} + ${#numbers.formatDecimal(t.avgBuy, 1, 'COMMA', 2, 'POINT')}
+                                   + ' · sold ' + ${l.currencySymbol()} + ${#numbers.formatDecimal(t.avgSell, 1, 'COMMA', 2, 'POINT')}">detail</span>
+                    <span class="val"
+                          th:classappend="${t.total.signum() > 0 ? 'val-pos' : (t.total.signum() < 0 ? 'val-neg' : '')}"
+                          th:text="${(t.total.signum() > 0 ? '+' : '') + l.currencySymbol()
+                                   + #numbers.formatDecimal(t.total, 1, 'COMMA', 2, 'POINT')}">+0.00</span>
+                    <span class="muted ladder-caveat"
+                          title="No broker export here carries an execution price, so these are the last prices the exports showed for those orders. For a limit order that is the limit it filled at or better.">
+                        on export prices</span>
+                </div>
+
+                <ul class="ladder-excluded" th:if="${!#lists.isEmpty(l.totals.excluded)}">
+                    <li th:each="x : ${l.totals.excluded}" th:text="${x}">excluded</li>
+                </ul>
+            </div>
+
+            <div class="ladder-actions">
+
+                <!--
+                  Membership is created here and only here, by the user naming the orders. Nothing
+                  is grouped by symbol, date or price similarity: a guess would put the reasoning
+                  written on this ladder onto orders that never carried it.
+                -->
+                <details class="ladder-add">
+                    <summary>Add resting orders</summary>
+                    <form hx-post="/ladders/rungs/add" hx-target="#ladders-result" hx-swap="innerHTML"
+                          th:with="cands=${orders.ladders.assignableFor(l)}">
+                        <input type="hidden" name="id" th:value="${l.group.id}"/>
+                        <p class="muted" th:if="${#lists.isEmpty(cands)}"
+                           th:text="'No unassigned orders on ' + ${l.group.symbol} + ' — resting or recently closed.'">none</p>
+                        <!--
+                          Closed orders are in this list on purpose: the first ladder anyone builds
+                          is usually a sell that has already filled paired with a buy still resting,
+                          and a picker of live orders only could never assemble the completed round
+                          trip the panel exists to show.
+                        -->
+                        <label class="ladder-cand" th:each="c : ${cands}">
+                            <input type="checkbox" name="orderKey" th:value="${c.key}"/>
+                            <span th:text="${c.broker} + ' · ' + ${c.side} + ' '
+                                  + (${c.quantity} != null ? ${#numbers.formatDecimal(c.quantity, 1, 'COMMA', 2, 'POINT')} : '?')
+                                  + ' @ ' + (${c.price} != null ? ${#numbers.formatDecimal(c.price, 1, 'COMMA', 2, 'POINT')} : '?')">order</span>
+                            <span class="rung-state" th:classappend="${c.closed() ? 'state-filled' : 'state-working'}"
+                                  th:text="${c.closed() ? c.state + ' ' + c.closedAt : c.state}">state</span>
+                        </label>
+                        <button type="submit" th:unless="${#lists.isEmpty(cands)}">Add to ladder</button>
+                    </form>
+                </details>
+
+                <!--
+                  A rung decided on but not placed — the cash is not in that account, or the broker
+                  will not take a limit on the instrument. It lives only here and never appears in
+                  the orders table, which stays broker truth.
+                -->
+                <details class="ladder-add">
+                    <summary>Record an intended rung</summary>
+                    <form class="ladder-form" hx-post="/ladders/intents/add"
+                          hx-target="#ladders-result" hx-swap="innerHTML">
+                        <input type="hidden" name="id" th:value="${l.group.id}"/>
+                        <label>Account
+                            <select name="account">
+                                <option th:each="a : ${orders.ladders.accounts}" th:value="${a}"
+                                        th:text="${a}">Account</option>
+                            </select>
+                        </label>
+                        <label>Side
+                            <select name="side">
+                                <option value="Buy">Buy</option>
+                                <option value="Sell">Sell</option>
+                            </select>
+                        </label>
+                        <label>Qty
+                            <input name="quantity" type="number" step="any" min="0" size="7" required/>
+                        </label>
+                        <label>Price
+                            <input name="price" type="number" step="any" min="0" size="9"
+                                   title="In the instrument's own quote currency — London listings in pounds, as the table prints them."/>
+                        </label>
+                        <label>Note
+                            <input name="note" type="text" size="20" placeholder="why this rung"/>
+                        </label>
+                        <button type="submit">Record</button>
+                    </form>
+                </details>
+            </div>
+        </article>
+    </section>
+</div>
+
+<!--
+  One rung. A real order and an intended one are the same row on purpose: everything the panel does
+  with a rung is the same question for both, and the analytics come from the same enrichment pass.
+  What differs is the State cell and what the last cell offers.
+-->
+<tr th:fragment="rung(r, l)" class="ladder-rung"
+    th:classappend="${(r.intended() ? 'rung-intended ' : '')
+                   + (r.filled() ? 'rung-filled ' : '')
+                   + (r.gone() ? 'rung-gone ' : '')
+                   + (r.sell() ? 'rung-sell' : 'rung-buy')}"
+    th:attr="data-symbol=${orders.chartableSymbols.contains(l.group.symbol) ? l.group.symbol : null}">
+    <td th:text="${r.price != null ? r.currencySymbol() + #numbers.formatDecimal(r.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+    <td class="txt" th:classappend="${r.buy() ? 'val-pos' : (r.sell() ? 'val-neg' : '')}"
+        th:text="${r.side != null ? r.side : '—'}">Side</td>
+    <td th:text="${r.quantity != null ? #numbers.formatDecimal(r.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+    <td class="txt" th:text="${r.account}">Account</td>
+    <td class="txt">
+        <span class="rung-state" th:classappend="'state-' + ${r.state.name().toLowerCase()}"
+              th:text="${r.state.label()}"
+              th:title="${r.intended()
+                    ? 'Decided but not placed — it exists only in this panel and never in the orders table.'
+                    : (r.closedAt != null ? 'Closed ' + r.closedAt.toString() : 'Resting at the broker.')}">State</span>
+    </td>
+    <td th:with="o=${r.order}"
+        th:classappend="${o != null and o.distancePct != null
+                        ? (o.distancePct.signum() > 0 ? 'val-pos' : (o.distancePct.signum() < 0 ? 'val-neg' : '')) : ''}"
+        th:text="${o != null and o.distancePct != null
+                 ? (o.distancePct.signum() > 0 ? '+' : '')
+                   + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'
+                 : '—'}">—</td>
+    <td th:with="o=${r.order}"
+        th:title="${o != null and o.horizonSessions != null
+                  ? o.horizonSessions + ' trading sessions'
+                    + (o.sigmaEff != null ? ', σ_eff ' + #numbers.formatDecimal(o.sigmaEff.multiply(100), 1, 'COMMA', 2, 'POINT') + '%/day' : '')
+                  : null}"
+        th:text="${o != null and o.touchProbHorizon != null
+                 ? #numbers.formatDecimal(o.touchProbHorizon.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
+                 : '—'}">—</td>
+    <td class="txt rung-note" th:text="${r.note != null ? r.note : ''}"></td>
+    <td class="txt rung-act">
+        <!--
+          An intended rung offers the one path to a real one: the user names the order it became.
+          Nothing matches them automatically — see LadderService.markPlaced.
+        -->
+        <!-- Targets the whole panel, not just this block: linking can move the note onto the
+             order, and that note is a cell of the table below. -->
+        <form class="ladder-inline" th:if="${r.intended()}" hx-post="/ladders/intents/placed"
+              hx-target="#orders-result" hx-swap="innerHTML"
+              th:with="cands=${orders.ladders.assignableFor(l)}">
+            <input type="hidden" name="intentId" th:value="${r.intentId}"/>
+            <select name="orderKey" th:if="${!#lists.isEmpty(cands)}"
+                    title="Placed it? Name the order it became. The note moves across if that order has none of its own.">
+                <option value="">placed as…</option>
+                <option th:each="c : ${cands}" th:value="${c.key}"
+                        th:text="${c.broker} + ' ' + ${c.side} + ' @ '
+                                 + (${c.price} != null ? ${#numbers.formatDecimal(c.price, 1, 'COMMA', 2, 'POINT')} : '?')
+                                 + ' (' + ${c.state} + ')'">order</option>
+            </select>
+            <button type="submit" th:if="${!#lists.isEmpty(cands)}" title="Link this intended rung to the order it became">Link</button>
+        </form>
+        <form class="ladder-inline" th:if="${r.intended()}" hx-post="/ladders/intents/delete"
+              hx-target="#ladders-result" hx-swap="innerHTML">
+            <input type="hidden" name="intentId" th:value="${r.intentId}"/>
+            <button type="submit" class="ladder-x" title="Delete this intended rung">×</button>
+        </form>
+        <form class="ladder-inline" th:unless="${r.intended()}" hx-post="/ladders/rungs/remove"
+              hx-target="#ladders-result" hx-swap="innerHTML">
+            <input type="hidden" name="orderKey" th:value="${r.key}"/>
+            <button type="submit" class="ladder-x"
+                    title="Take this order out of the ladder. The order itself is untouched.">×</button>
+        </form>
+    </td>
+</tr>
+
+</body>
+</html>

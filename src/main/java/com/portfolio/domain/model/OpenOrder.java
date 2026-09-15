@@ -172,6 +172,15 @@ public record OpenOrder(
 
     /** Convenience for views — the leading symbol for {@link #currency} ($/£/€), or "" if unknown. */
     public String currencySymbol() {
+        return symbolFor(currency);
+    }
+
+    /**
+     * The same mapping, for a currency that is not on an order — a ladder rung's, say. Static so
+     * the two cannot drift: a rung and the order behind it printing different money would be a
+     * defect nobody would look for.
+     */
+    public static String symbolFor(String currency) {
         if (currency == null) return "";
         return switch (currency) {
             case "GBP", "GBp" -> "£";

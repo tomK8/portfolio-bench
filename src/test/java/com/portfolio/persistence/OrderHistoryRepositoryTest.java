@@ -247,6 +247,26 @@ class OrderHistoryRepositoryTest {
         assertTrue(r.allKeys().isEmpty());
     }
 
+    /**
+     * A closed order that is a rung of a ladder survives retention however old it is. The second
+     * leg of a round trip can fill months after the first, and a month's window would delete the
+     * half that was waiting to be completed — exactly the thing the ladder was kept for.
+     */
+    @Test
+    void aClosedOrderThatIsALadderRungIsNeverPruned() {
+        var r = repo();
+        OpenOrder rung = order("REF1", "NVDA", "233.90", "In progress");
+        OpenOrder loose = order("REF2", "LSEG", "80.00", "In progress");
+        r.record(AJ, List.of(rung, loose), openKeys(rung, loose), DAY1);
+        r.record(AJ, List.of(), Set.of(), DAY1);
+
+        int removed = r.prune(DAY1.plusYears(1), Set.of(rung.identity()));
+
+        assertEquals(1, removed, "only the order nothing points at");
+        assertEquals(List.of(rung.identity()),
+                r.closed().stream().map(OrderHistoryRepository.HistoricalOrder::orderKey).toList());
+    }
+
     /** An order resting for months is not history and must survive any prune. */
     @Test
     void aLongRestingOpenOrderIsNeverPruned() {

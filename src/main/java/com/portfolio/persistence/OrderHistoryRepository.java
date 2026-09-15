@@ -262,14 +262,25 @@ public class OrderHistoryRepository {
      * Drop closed orders that went more than {@link #RETENTION_DAYS} ago. Open orders are never
      * touched however long they have been resting — pruning one would delete a live annotation.
      *
+     * @param keep order keys that must survive whatever their age. The caller passes the rungs of
+     *             the user's ladders: the thing a ladder is kept for is the completed round trip,
+     *             and the second leg can fill months after the first — a sell in August and the buy
+     *             that closes it in October are one trip, and a month's retention would delete half
+     *             of it before the half that completes it arrives. Passed in rather than read from
+     *             the group table here, so this class keeps knowing nothing about ladders and the
+     *             rule is visible at the call site that has the reason for it.
      * @return how many rows were removed
      */
-    public int prune(LocalDate today) {
+    public int prune(LocalDate today, Set<String> keep) {
         String cutoff = today.minusDays(RETENTION_DAYS).toString();
+        List<String> protectedKeys = keep == null ? List.of() : List.copyOf(keep);
+        String sql = "DELETE FROM order_history WHERE closed_at IS NOT NULL AND closed_at < ?"
+                + (protectedKeys.isEmpty() ? ""
+                : " AND order_key NOT IN (" + "?,".repeat(protectedKeys.size() - 1) + "?)");
         try (Connection conn = connections.open();
-             PreparedStatement ps = conn.prepareStatement(
-                     "DELETE FROM order_history WHERE closed_at IS NOT NULL AND closed_at < ?")) {
+             PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, cutoff);
+            for (int i = 0; i < protectedKeys.size(); i++) ps.setString(i + 2, protectedKeys.get(i));
             int removed = ps.executeUpdate();
             if (removed > 0) log.info("Order history: pruned {} order(s) closed before {}", removed, cutoff);
             return removed;
@@ -277,6 +288,11 @@ public class OrderHistoryRepository {
             log.warn("Could not prune order history", e);
             return 0;
         }
+    }
+
+    /** Prune with nothing protected. */
+    public int prune(LocalDate today) {
+        return prune(today, Set.of());
     }
 
     /** Visible for tests — every stored row regardless of state. */

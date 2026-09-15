@@ -10,6 +10,7 @@ import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.MarketSession;
 import com.portfolio.domain.model.OpenOrder;
+import com.portfolio.domain.model.OrderStatus;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.parser.OrderParser;
 import com.portfolio.persistence.FundamentalsRepository;
@@ -70,15 +71,6 @@ public class OpenOrdersService {
      */
     private static final Logger calibration =
             LoggerFactory.getLogger("com.portfolio.calibration.touch");
-
-    /**
-     * Statuses that mean the order is no longer working. Everything else (In progress / PENDING /
-     * Open / partially-executed variants) counts as open — a denylist so an unseen "still working"
-     * status is shown rather than silently dropped.
-     */
-    private static final Set<String> TERMINAL = Set.of(
-            "dealt", "executed", "filled", "part executed", "cancelled", "canceled",
-            "expired", "rejected", "completed", "done", "settled");
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
@@ -1390,9 +1382,14 @@ public class OpenOrdersService {
         return o.name();
     }
 
+    /**
+     * Whether a parsed row still belongs in the table. The vocabulary lives in
+     * {@link OrderStatus} — the same classification the closed-orders table prints — and it is a
+     * denylist: an unrecognised status reads as {@code UNKNOWN}, which is open, so a broker's
+     * unseen "still working" wording is shown rather than silently dropped.
+     */
     static boolean isOpen(String status) {
-        if (status == null || status.isBlank()) return true;   // unknown → show it
-        return !TERMINAL.contains(status.trim().toLowerCase());
+        return OrderStatus.of(status).open();
     }
 
     /**

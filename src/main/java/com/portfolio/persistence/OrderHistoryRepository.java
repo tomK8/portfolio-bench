@@ -1,6 +1,7 @@
 package com.portfolio.persistence;
 
 import com.portfolio.domain.model.OpenOrder;
+import com.portfolio.domain.model.OrderStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -301,16 +302,50 @@ public class OrderHistoryRepository {
         return rs.wasNull() ? null : BigDecimal.valueOf(v);
     }
 
-    /** One closed order as the history panel shows it. */
+    /**
+     * One closed order as the history panel shows it.
+     *
+     * <p>{@link #status} is the broker's own word, stored verbatim and never rewritten — it is the
+     * evidence, and the three brokers between them write six spellings of it. {@link #state()} is
+     * what the panel prints: one vocabulary, from {@link OrderStatus}.
+     */
     public record HistoricalOrder(String orderKey, String broker, String symbol, String name,
                                   String side, String orderType, BigDecimal quantity,
                                   BigDecimal price, BigDecimal amount, String currency,
                                   String dateEntered, String status, String note,
                                   String closedAt) {
 
+        /**
+         * What the panel prints when the broker never said what happened — see {@link #state()}.
+         */
+        public static final String NO_LONGER_LISTED = "No longer listed";
+
         /** What to show in the Security column — the ticker, falling back to the exported name. */
         public String display() {
             return symbol != null && !symbol.isBlank() ? symbol : (name == null ? "—" : name);
+        }
+
+        /**
+         * The row's state in one vocabulary — the point of which is that "Dealt", "Executed" and
+         * "EXECUTED" are one outcome and should read as one.
+         *
+         * <p>The third state is the one no broker writes. An order closes by absence as much as by
+         * status, and a row that got here still carrying an open status ("Open", "PENDING", "In
+         * progress") is one the broker stopped listing without ever restating it — which is what
+         * every modified Roth order looks like, the broker issuing a new reference for the
+         * replacement. Printing that row's last-seen "Open" in a table of closed orders said the
+         * opposite of the truth. It is <b>not</b> reported as filled or cancelled either: which of
+         * the two it was is exactly what the export declined to say, and
+         * {@link #stateInferred()} marks it as our inference rather than the broker's word.
+         */
+        public String state() {
+            OrderStatus s = OrderStatus.of(status);
+            return s.open() ? NO_LONGER_LISTED : s.label();
+        }
+
+        /** True when {@link #state()} is read off the order's absence, not off the broker's word. */
+        public boolean stateInferred() {
+            return OrderStatus.of(status).open();
         }
     }
 }

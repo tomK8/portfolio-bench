@@ -56,7 +56,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `SectorClassifier`, `IndustryGroups`. Sub-packages `domain.swing` / `domain.trend` /
   `domain.momentum` / `domain.range` hold the four backtest engines, `domain.grouping` the
   table-grouping keys. `domain.model`: `Holding` (Builder; many nullable fields), `AggHolding`,
-  `CashTransaction`, `OpenOrder`, `EarningsEvent`, `Account` + `TransactionType` enums,
+  `CashTransaction`, `OpenOrder` + `OrderStatus`, `EarningsEvent`, `Account` + `TransactionType` enums,
   `PriceBar`, `IntradayBar`, `IntradayPrice`.
 - `port` — `FxRateProvider`, `HistoricalFxRateProvider`, `EarningsCalendarProvider`,
   `EarningsCalendarFeed`, `AlertNotifier` (interfaces, faked in tests).
@@ -189,7 +189,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [sync-views.md](docs/sync-views.md) | change either sync tab or the Portfolio % column | Ledger view drops unpriced equities but not bonds; II SIPP cash comes from the form, blank ≠ zero |
 | [cash-ledger-irr.md](docs/cash-ledger-irr.md) | touch the Annualised return column or `Irr` | IRR not CAGR; current episode only; unsolvable writes **no** cell, never a zero; two day-count bases are deliberate |
 | [table-grouping.md](docs/table-grouping.md) | add a grouping key to either table | Exactly one group per holding; Gain % is `Σgain ÷ Σcost`, never the mean of members; a new key is a resolver class and nothing else |
-| [open-orders.md](docs/open-orders.md) | change the orders panel, a parser or the probe | Parsers build via `OpenOrder.parsed(...)`; open/closed filter is a denylist; quote age is judged against same-market peers, not the clock |
+| [open-orders.md](docs/open-orders.md) | change the orders panel, a parser or the probe | Parsers build via `OpenOrder.parsed(...)`; open/closed filter is a denylist and `OrderStatus` is its only vocabulary; quote age is judged against same-market peers, not the clock |
 | [vol-forecast.md](docs/vol-forecast.md) | change P(N), σ_eff, drift or the calibration log | σ is *forecast* for the horizon, never a trailing window of that length; drift is a **price** drift (class total return − that name's yield); the probe writes no calibration line |
 | [live-tab.md](docs/live-tab.md) | change the Live tab or intraday session handling | Day Δ is anchored on the quote's **trading day**, not the calendar day; `loadLatestIntradayPrices` is regular-session only |
 | [attribution.md](docs/attribution.md) | change the Attribution window or its totals | A boundary that can't be valued is excluded from rows *and* totals; annualising under 30 days is blank |

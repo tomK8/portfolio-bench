@@ -410,6 +410,13 @@
             with their notes for <b>31 days</b> after they closed, then deleted. A broker issues a
             new reference when you modify an order, so the version you replaced keeps its own note
             and you can read it against the one above.
+            <br/>
+            <b>Status</b> is normalised: the three brokers write six spellings between them
+            (Dealt / Executed / EXECUTED, CANCELLED / Canceled), so each row shows the outcome in
+            one vocabulary and the broker's own word is on hover. A greyed
+            <i>No longer listed</i> is the third state and the only inferred one — the broker
+            stopped listing the order without ever saying what became of it, which is what a
+            modified order looks like from outside.
         </p>
         <table class="swing-tbl">
             <thead>
@@ -436,7 +443,17 @@
                 <td th:text="${h.quantity != null ? #numbers.formatDecimal(h.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td th:text="${h.price != null ? #numbers.formatDecimal(h.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
                 <td class="txt" th:text="${h.dateEntered != null ? h.dateEntered : '—'}">—</td>
-                <td class="txt" th:text="${h.status != null ? h.status : '—'}">—</td>
+                <!--
+                  One vocabulary, with the broker's own word kept on hover — it is the evidence,
+                  and a broker may write something this app has never seen. "No longer listed" is
+                  the inferred state and is muted to say so.
+                -->
+                <td class="txt" th:classappend="${h.stateInferred()} ? 'muted' : ''"
+                    th:title="${h.stateInferred()
+                        ? 'The broker stopped listing this order without restating it — last seen as: '
+                          + (h.status != null and !h.status.isBlank() ? h.status : 'no status')
+                        : 'Broker reported: ' + h.status}"
+                    th:text="${h.state()}">—</td>
                 <td class="txt order-note-cell">
                     <input class="order-note" type="text" placeholder="add a note…"
                            th:attr="data-order-key=${h.orderKey}" th:value="${h.note}"/>

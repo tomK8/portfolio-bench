@@ -125,6 +125,29 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
     would otherwise look like a disappearance and lose the status that says what happened to it.
     An order the broker restates as open again is **reopened**, so it never sits in the history
     block and the table at once.
+  - **One status vocabulary, in `domain.model.OrderStatus`.** Three brokers wrote six spellings of
+    three outcomes into the Status column — AJ Bell "Dealt", Citi "Executed" and the American
+    "Canceled", II "EXECUTED" and "CANCELLED" — so the same outcome appeared under several names
+    and the column could not be read, or sorted, as a state. `OrderStatus.of(raw)` classifies
+    (case, padding and the broker's choice of separator are noise) and `label()` is what the panel
+    prints; the broker's own word stays in `order_history.status` verbatim and is shown on hover.
+    It is **evidence**, not a display string: a broker can write something tomorrow that this map
+    has never seen.
+    - **The terminal set is byte-for-byte the one `isOpen` already used**, and `isOpen` is now
+      `OrderStatus.of(status).open()` — the open/closed filter and the history column read one
+      table instead of two. Teaching the map a new terminal word *removes orders from the panel*,
+      so it is a decision to take on a real export, not a guess: an unrecognised status is
+      `UNKNOWN`, which counts as open, keeping the denylist's "show an unseen 'still working'
+      wording rather than drop it".
+    - **The third state is the one no broker writes.** A row that reaches the history still
+      carrying an open status is one the broker stopped listing without restating — which is what
+      *every* modified Roth order looks like from outside, the composite identity changing when
+      the quantity or price does. The table printed its last-seen "Open" in a list of closed
+      orders, i.e. the opposite of the truth. It now reads **No longer listed**, greyed, with the
+      last-seen word on hover: it is not reported as filled or as cancelled, because which of the
+      two it was is exactly what the export declined to say. `HistoricalOrder.stateInferred()`
+      is what separates our inference from the broker's statement, and drives the muting.
+
   - **A re-parse never touches the note.** The `ON CONFLICT` update lists status, price, quantity,
     amount and `last_seen` and deliberately omits `note` and `first_seen`: the text belongs to the
     user, not the export. `saveNote` likewise only ever UPDATEs — an annotation is *about* an order

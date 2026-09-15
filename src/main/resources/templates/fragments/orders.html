@@ -305,7 +305,8 @@
                   An <input> is already excluded from the row's click handler (it lists input,
                   button, a, select, label), so typing a note cannot open the price popup.
                 -->
-                <td class="txt order-note-cell">
+                <!-- The note lives in an <input>, so the cell holds no text to sort on. -->
+                <td class="txt order-note-cell" th:attr="data-sort-value=${orders.noteFor(o)}">
                     <input class="order-note" type="text" placeholder="add a note…"
                            th:attr="data-order-key=${o.identity()}"
                            th:value="${orders.noteFor(o)}"/>
@@ -418,18 +419,26 @@
             stopped listing the order without ever saying what became of it, which is what a
             modified order looks like from outside.
         </p>
-        <table class="swing-tbl">
+        <!--
+          Sortable on every column, like the open table above it. No JS of its own: the
+          htmx:afterSettle handler already calls attachSort on every table inside #orders-result,
+          so the headers only had to declare what they hold. Both dates are ISO yyyy-MM-dd, where
+          a text sort *is* chronological — no date parser needed, and none that could disagree
+          with the one the rest of the panel uses.
+        -->
+        <table id="orders-history-table" class="swing-tbl">
             <thead>
             <tr>
-                <th class="txt">Closed</th>
-                <th class="txt">Broker</th>
-                <th class="txt">Security</th>
-                <th class="txt">Side</th>
-                <th>Qty</th>
-                <th>Price</th>
-                <th class="txt">Entered</th>
-                <th class="txt">Status</th>
-                <th class="txt">Note</th>
+                <th class="txt" data-sort="text">Closed</th>
+                <th class="txt" data-sort="text">Broker</th>
+                <th class="txt" data-sort="text">Security</th>
+                <th class="txt" data-sort="text">Side</th>
+                <th data-sort="num">Qty</th>
+                <th data-sort="num">Price</th>
+                <th class="txt" data-sort="text">Entered</th>
+                <th class="txt" data-sort="text"
+                    title="Normalised — sorting groups the outcomes rather than the brokers' spellings of them.">Status</th>
+                <th class="txt" data-sort="text">Note</th>
             </tr>
             </thead>
             <tbody>
@@ -454,7 +463,8 @@
                           + (h.status != null and !h.status.isBlank() ? h.status : 'no status')
                         : 'Broker reported: ' + h.status}"
                     th:text="${h.state()}">—</td>
-                <td class="txt order-note-cell">
+                <!-- The note lives in an <input>, so the cell holds no text to sort on. -->
+                <td class="txt order-note-cell" th:attr="data-sort-value=${h.note}">
                     <input class="order-note" type="text" placeholder="add a note…"
                            th:attr="data-order-key=${h.orderKey}" th:value="${h.note}"/>
                 </td>

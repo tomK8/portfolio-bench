@@ -54,6 +54,30 @@ public class LadderService {
 
     private static final Logger log = LoggerFactory.getLogger(LadderService.class);
 
+    /**
+     * The two horizons every rung's fill probability is priced over, in trading sessions.
+     *
+     * <p><b>Fixed, and named in the column headings</b> — {@code P(10)} and {@code P(30)}, not
+     * {@code P(N)}. The orders table prices each row over that order's own deadline, which is the
+     * right question for one order sitting on its own; on a ladder it is the wrong one, because the
+     * rungs are a single decision and the reader is comparing them with each other. A column whose
+     * horizon silently changes per row cannot be compared down its own length, and "N" on screen
+     * does not say what it is.
+     *
+     * <p>10 and 30 rather than the 5 and 20 the pre-trade probe uses, on the evidence: ladder rungs
+     * are deliberately placed away from the market, and over 5 sessions a real NVDA ladder priced
+     * 1.3% / 42.5% / 11.0% / 0.1% — three rungs reading "nothing happens", which says nothing about
+     * the ladder's shape. The same rungs at 10 and 30 sessions spread to 7.8–57.3% and 17.9–74.6%,
+     * where the ordering is legible and the near/far pair says which rungs are live now and which
+     * are the patient ones.
+     *
+     * <p>These are horizons, not volatility windows. That RV10 and RV30 share the numbers is a
+     * coincidence and not a reason: σ is <em>forecast</em> for a horizon, never a trailing window of
+     * the same length — see {@code domain/VolForecast}.
+     */
+    public static final int NEAR_HORIZON_SESSIONS = 10;
+    public static final int FAR_HORIZON_SESSIONS = 30;
+
     /** The broker a synthetic intent order is stamped with is the account the user chose. */
     private final OrderGroupRepository groups;
 
@@ -114,10 +138,15 @@ public class LadderService {
      * @param accounts the account names an intended rung may be placed in - the registered order
      *                 parsers' own labels, so the vocabulary is the one the table already prints and
      *                 a new broker appears here the moment its parser is registered
+     * @param touch    prices one enriched order's chance of being touched over a given number of
+     *                 sessions. Supplied by the caller for the same reason the enrichment is: the
+     *                 first-passage model lives in one place, and a ladder column computing its own
+     *                 would be a second implementation that eventually disagrees with the table.
      */
     public LadderReport assemble(List<OpenOrder> live, List<OpenOrder> intents,
                                  List<OrderHistoryRepository.HistoricalOrder> history,
-                                 Map<String, String> notes, List<String> accounts) {
+                                 Map<String, String> notes, List<String> accounts,
+                                 TouchPricer touch) {
         List<String> warnings = new ArrayList<>();
         List<OrderGroup> all = groups.groups();
         if (all.isEmpty()) {
@@ -136,7 +165,7 @@ public class LadderService {
         for (OrderGroup g : all) {
             List<Rung> rungs = new ArrayList<>();
             for (String key : members.getOrDefault(g.id(), List.of())) {
-                Rung r = realRung(key, liveByKey, closedByKey, notes);
+                Rung r = realRung(key, liveByKey, closedByKey, notes, touch);
                 if (r == null) {
                     warnings.add(g.name() + ": a rung points at an order that is no longer on file "
                             + "(" + key + "). Remove it from the ladder.");
@@ -148,7 +177,8 @@ public class LadderService {
                 OpenOrder o = intentByKey.get(i.account() + "|" + i.reference());
                 rungs.add(new Rung(i.reference(), i.id(), i.account(), i.side(), i.quantity(),
                         i.price(), o == null ? null : o.currency(), Rung.State.INTENDED, null,
-                        i.note(), o));
+                        i.note(), o, touch.at(o, NEAR_HORIZON_SESSIONS),
+                        touch.at(o, FAR_HORIZON_SESSIONS)));
             }
 
             List<Rung> ordered = Ladders.byPrice(rungs);
@@ -171,16 +201,27 @@ public class LadderService {
      */
     private Rung realRung(String key, Map<String, OpenOrder> live,
                           Map<String, OrderHistoryRepository.HistoricalOrder> closed,
-                          Map<String, String> notes) {
+                          Map<String, String> notes, TouchPricer touch) {
         OpenOrder o = live.get(key);
         if (o != null) {
             return new Rung(key, null, o.broker(), o.side(), o.quantity(), o.price(), o.currency(),
-                    Rung.State.WORKING, null, notes.get(key), o);
+                    Rung.State.WORKING, null, notes.get(key), o,
+                    touch.at(o, NEAR_HORIZON_SESSIONS), touch.at(o, FAR_HORIZON_SESSIONS));
         }
         OrderHistoryRepository.HistoricalOrder h = closed.get(key);
         if (h == null) return null;
+        // A closed rung is priced at nothing: it is not resting, so there is no fill to put odds on.
         return new Rung(key, null, h.broker(), h.side(), h.quantity(), h.price(), h.currency(),
-                stateOf(h), LocalDate.parse(h.closedAt()), h.note(), null);
+                stateOf(h), LocalDate.parse(h.closedAt()), h.note(), null, null, null);
+    }
+
+    /**
+     * Prices an enriched order's chance of the market touching its limit within {@code sessions}
+     * trading sessions. Null for an order that could not be priced at all.
+     */
+    @FunctionalInterface
+    public interface TouchPricer {
+        java.math.BigDecimal at(OpenOrder order, int sessions);
     }
 
     /**

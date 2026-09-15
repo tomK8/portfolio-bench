@@ -94,7 +94,16 @@
                     <th class="txt">Account</th>
                     <th class="txt">State</th>
                     <th title="How far the market sits from this rung's price. Positive = market above it.">vs mkt</th>
-                    <th title="Probability the market touches this rung's price before the order expires — 90 sessions for a GTC order and for an intended rung, which has no deadline of its own. The same forecast the table's P(N) column uses.">P(N)</th>
+                    <!--
+                      Two fixed horizons, named in the headings, rather than the table's P(N). A
+                      ladder's rungs are one decision and are read against each other, and a column
+                      whose horizon changes per row cannot be compared down its own length. The
+                      per-order deadline question is not lost — the table below still answers it.
+                    -->
+                    <th th:text="'P(' + ${T(com.portfolio.application.LadderService).NEAR_HORIZON_SESSIONS} + ')'"
+                        title="Probability the market touches this rung's price at least once within 10 trading sessions — about a fortnight. The same first-passage model and horizon-matched volatility forecast the orders table uses, on a horizon fixed across every rung so they can be read against each other.">P(10)</th>
+                    <th th:text="'P(' + ${T(com.portfolio.application.LadderService).FAR_HORIZON_SESSIONS} + ')'"
+                        title="The same over 30 trading sessions — about six weeks. The near and far pair says which rungs are live now and which are the patient ones. A rung whose own order expires inside the window is marked: the figure prices a window the order will not survive.">P(30)</th>
                     <th class="txt">Note</th>
                     <th></th>
                 </tr>
@@ -106,13 +115,13 @@
                 <tr class="ladder-marker" th:if="${l.markerIndex >= 0}">
                     <td th:text="${l.currencySymbol()}
                                  + ${#numbers.formatDecimal(l.currentPrice, 1, 'COMMA', 2, 'POINT')}">0.00</td>
-                    <td class="txt" colspan="8">market — rungs above sell, rungs below buy</td>
+                    <td class="txt" colspan="9">market — rungs above sell, rungs below buy</td>
                 </tr>
                 <th:block th:each="r : ${l.below()}">
                     <tr th:replace="~{fragments/ladders :: rung(${r}, ${l})}"></tr>
                 </th:block>
                 <tr class="ladder-marker ladder-marker-none" th:if="${l.markerIndex < 0}">
-                    <td class="txt" colspan="9">No live price for this security, so there is no
+                    <td class="txt" colspan="10">No live price for this security, so there is no
                         market line to place the rungs against.</td>
                 </tr>
                 </tbody>
@@ -276,13 +285,30 @@
                  ? (o.distancePct.signum() > 0 ? '+' : '')
                    + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'
                  : '—'}">—</td>
-    <td th:with="o=${r.order}"
-        th:title="${o != null and o.horizonSessions != null
-                  ? o.horizonSessions + ' trading sessions'
-                    + (o.sigmaEff != null ? ', σ_eff ' + #numbers.formatDecimal(o.sigmaEff.multiply(100), 1, 'COMMA', 2, 'POINT') + '%/day' : '')
+    <!--
+      A rung whose order lapses inside the window is marked rather than quietly priced over a window
+      it will not survive. Nothing is marked for II, Roth or an intended rung: none of them carries a
+      dated expiry, so there is no deadline to undercut the horizon.
+    -->
+    <td th:with="near=${T(com.portfolio.application.LadderService).NEAR_HORIZON_SESSIONS}"
+        th:classappend="${r.lapsesBefore(near)} ? 'rung-lapses' : ''"
+        th:title="${r.lapsesBefore(near)
+                  ? 'This order expires in ' + r.sessionsToExpiry() + ' sessions, inside the ' + near
+                    + '-session window — it cannot fill over the whole of it. The table below prices it to its own deadline.'
                   : null}"
-        th:text="${o != null and o.touchProbHorizon != null
-                 ? #numbers.formatDecimal(o.touchProbHorizon.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
+        th:text="${r.touchNear != null
+                 ? (r.lapsesBefore(near) ? '~' : '')
+                   + #numbers.formatDecimal(r.touchNear.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
+                 : '—'}">—</td>
+    <td th:with="far=${T(com.portfolio.application.LadderService).FAR_HORIZON_SESSIONS}"
+        th:classappend="${r.lapsesBefore(far)} ? 'rung-lapses' : ''"
+        th:title="${r.lapsesBefore(far)
+                  ? 'This order expires in ' + r.sessionsToExpiry() + ' sessions, inside the ' + far
+                    + '-session window — it cannot fill over the whole of it. The table below prices it to its own deadline.'
+                  : null}"
+        th:text="${r.touchFar != null
+                 ? (r.lapsesBefore(far) ? '~' : '')
+                   + #numbers.formatDecimal(r.touchFar.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
                  : '—'}">—</td>
     <td class="txt rung-note" th:text="${r.note != null ? r.note : ''}"></td>
     <td class="txt rung-act">

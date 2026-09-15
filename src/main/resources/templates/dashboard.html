@@ -384,6 +384,11 @@
         .state-filled { background: #e8f6ec; color: #2ca02c; }
         .state-cancelled, .state-unlisted { background: #f0f0f0; color: #777; }
         .rung-note { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+        /* A rung whose own order expires inside the fixed window: the figure is still the right
+           one for the window, but the order will not be there for all of it. Same amber-and-tilde
+           idiom the orders table uses for a horizon pushed past any real deadline. */
+        .rung-lapses { color: #a9740a; }
+        html[data-theme="dark"] .rung-lapses { color: #e0b055; }
         .rung-act { white-space: nowrap; }
         /* The "placed as…" picker is the widest thing in the row; cap it so the remove button
            beside it cannot be pushed off the edge of the table. */

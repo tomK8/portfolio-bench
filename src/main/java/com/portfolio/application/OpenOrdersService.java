@@ -554,7 +554,8 @@ public class OpenOrdersService {
                 : ladders.assemble(orders, intendedPriced,
                 orderHistory == null ? List.of() : orderHistory.closed(),
                 orderHistory == null ? Map.of() : orderHistory.notes(),
-                parsers.stream().map(OrderParser::sourceName).toList());
+                parsers.stream().map(OrderParser::sourceName).toList(),
+                (order, sessions) -> touchAt(order, sessions, cfg));
 
         // Retention runs here rather than on a scheduler: this panel is the only thing that writes
         // the table, so it is also the only thing that can leave it growing. A rung of a ladder is
@@ -847,6 +848,29 @@ public class OpenOrdersService {
                                 BigDecimal probabilityLow, BigDecimal probabilityHigh,
                                 BigDecimal sigmaEff, BigDecimal decay, String volSource,
                                 boolean longHorizon) {
+    }
+
+    /**
+     * One enriched order's touch probability at a caller-chosen horizon — what the Ladders block's
+     * fixed {@code P(10)} / {@code P(30)} columns are.
+     *
+     * <p>Not {@link #touchEstimate}, deliberately. That serves the browser's editable P(N) box and
+     * takes the four vol windows off the rendered row, which means it cannot see the scheduled-event
+     * term; these cells are rendered by the server from the same order the table row was built
+     * from, so they re-resolve the event set and price exactly as the table's own columns do.
+     * Anything else and ticking "Add earnings variance" would move the table's numbers and leave the
+     * ladder's behind. The calendar read is cached, so the extra lookups cost no HTTP.
+     */
+    private BigDecimal touchAt(OpenOrder o, int sessions, VolForecast.Config cfg) {
+        if (o == null || o.currentPrice() == null || o.price() == null) return null;
+        AssetClass assetClass = Instruments.assetClassOf(o.symbol());
+        OrderEventVariance.Events events = cfg.useEventVar() && eventVariance != null
+                ? eventVariance.eventsFor(o.symbol(), sessions)
+                : OrderEventVariance.Events.NONE;
+        VolForecast.Inputs vols = new VolForecast.Inputs(o.dailyVol10(), o.dailyVol20(),
+                o.dailyVol30(), o.dailyVol250(), events.events());
+        return VolForecast.touch(vols, o.currentPrice(), o.price(), sessions, cfg, assetClass,
+                yieldFor(o.symbol(), assetClass)).probability();
     }
 
     /** The four realized-vol windows carried on an enriched row, as the forecast's input record. */

@@ -18,6 +18,7 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -25,6 +26,16 @@ class LadderServiceTest {
 
     private static final LocalDate DAY = LocalDate.parse("2026-09-01");
     private static final List<String> ACCOUNTS = List.of("AJ Bell SIPP", "II SIPP", "Roth IRA");
+
+    /**
+     * A stand-in for the real first-passage model: the probability is just the horizon, scaled, so a
+     * test can tell the two fixed columns apart without pinning volatility maths that has its own
+     * tests. What matters here is that each rung is priced at both horizons and a closed one at
+     * neither.
+     */
+    private static final LadderService.TouchPricer TOUCH =
+            (order, sessions) -> order == null || order.price() == null
+                    ? null : new BigDecimal(sessions).movePointLeft(2);
 
     @TempDir
     Path dbDir;
@@ -60,7 +71,7 @@ class LadderServiceTest {
         OpenOrder buy = order("Roth IRA", "NVDA", "Buy", "20", "203.18", "REF2");
         s.addRungs(id, List.of(sell.identity(), buy.identity()));
 
-        var report = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS);
+        var report = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH);
 
         assertEquals(1, report.ladders().size());
         var ladder = report.ladders().get(0);
@@ -83,7 +94,7 @@ class LadderServiceTest {
         OpenOrder loose = order("Roth IRA", "NVDA", "Buy", "20", "193.73", "REF2");
         s.addRungs(id, List.of(assigned.identity()));
 
-        var report = s.assemble(List.of(assigned, loose), List.of(), List.of(), Map.of(), ACCOUNTS);
+        var report = s.assemble(List.of(assigned, loose), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH);
 
         assertEquals(1, report.ladders().get(0).rungs().size());
         assertEquals(List.of(loose.identity()),
@@ -98,7 +109,7 @@ class LadderServiceTest {
         OpenOrder nvda = order("Roth IRA", "NVDA", "Buy", "20", "193.73", "REF1");
         OpenOrder mrvl = order("Roth IRA", "MRVL", "Buy", "30", "195.10", "REF2");
 
-        var report = s.assemble(List.of(nvda, mrvl), List.of(), List.of(), Map.of(), ACCOUNTS);
+        var report = s.assemble(List.of(nvda, mrvl), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH);
 
         assertEquals(2, report.unassigned().size());
         assertEquals(List.of(nvda.identity()),
@@ -150,7 +161,7 @@ class LadderServiceTest {
         s.addIntent(id, "Roth IRA", "Buy", new BigDecimal("25"), new BigDecimal("175.00"), "why");
         List<OpenOrder> synthetic = s.intendedOrders(sym -> "USD");
 
-        var report = s.assemble(List.of(), synthetic, List.of(), Map.of(), ACCOUNTS);
+        var report = s.assemble(List.of(), synthetic, List.of(), Map.of(), ACCOUNTS, TOUCH);
         Rung r = report.ladders().get(0).rungs().get(0);
 
         assertTrue(r.intended());
@@ -158,6 +169,112 @@ class LadderServiceTest {
         assertEquals("USD", r.currency());
         assertEquals("why", r.note());
         assertNotNull(r.order(), "it carries the order the enrichment pass would have priced");
+    }
+
+    // ---- the two fixed horizons -------------------------------------------
+
+    /**
+     * Both fill-probability columns are priced over a horizon that is the same on every rung. The
+     * table's P(N) runs on each order's own deadline, which is the right question for one order on
+     * its own and the wrong one here: a ladder's rungs are a single decision and are read against
+     * each other, so a column whose horizon moves per row cannot be compared down its own length.
+     */
+    @Test
+    void everyRungIsPricedOverTheSameTwoHorizons() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        OpenOrder sell = order("II SIPP", "NVDA", "Sell", "30", "246.97", "REF1");
+        OpenOrder buy = order("Roth IRA", "NVDA", "Buy", "20", "203.18", "REF2");
+        s.addRungs(id, List.of(sell.identity(), buy.identity()));
+
+        var ladder = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH)
+                .ladders().get(0);
+
+        for (Rung r : ladder.rungs()) {
+            assertEquals(0, new BigDecimal("0.10").compareTo(r.touchNear()), r.describe());
+            assertEquals(0, new BigDecimal("0.30").compareTo(r.touchFar()), r.describe());
+        }
+        assertEquals(10, LadderService.NEAR_HORIZON_SESSIONS);
+        assertEquals(30, LadderService.FAR_HORIZON_SESSIONS);
+    }
+
+    /** An intended rung is priced over the same two horizons as everything else on the ladder. */
+    @Test
+    void anIntendedRungIsPricedOverTheSameHorizonsAsARealOne() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        s.addIntent(id, "Roth IRA", "Buy", new BigDecimal("25"), new BigDecimal("175.00"), null);
+
+        Rung r = s.assemble(List.of(), s.intendedOrders(sym -> "USD"), List.of(), Map.of(),
+                ACCOUNTS, TOUCH).ladders().get(0).rungs().get(0);
+
+        assertEquals(0, new BigDecimal("0.10").compareTo(r.touchNear()));
+        assertEquals(0, new BigDecimal("0.30").compareTo(r.touchFar()));
+    }
+
+    /** A closed rung is priced at neither: it is not resting, so there is no fill to put odds on. */
+    @Test
+    void aFilledRungCarriesNoFillProbability() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        OpenOrder o = order("II SIPP", "NVDA", "Sell", "20", "233.90", "REF1");
+        history.record("II SIPP", List.of(o), Set.of(o.identity()), DAY);
+        history.record("II SIPP", List.of(dealt(o)), Set.of(), DAY.plusDays(1));
+        s.addRungs(id, List.of(o.identity()));
+
+        Rung r = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS, TOUCH)
+                .ladders().get(0).rungs().get(0);
+
+        assertTrue(r.filled());
+        assertNull(r.touchNear());
+        assertNull(r.touchFar());
+    }
+
+    /**
+     * What a fixed horizon costs, paid openly. An order with a dated expiry inside the window is
+     * marked: the figure prices a window the order will not survive. The two horizons are judged
+     * separately, so an order that outlasts the near one and not the far one is marked on the far
+     * column only. II, Roth and intended rungs export no dated expiry, so nothing runs out for them.
+     */
+    @Test
+    void aRungWhoseOrderExpiresInsideAWindowIsMarkedOnThatWindowOnly() {
+        LadderService s = service();
+        long id = s.createLadder("EQQQ", "EQQQ");
+        OpenOrder soon = ajBell("AJREF1", "560");      // expires in 8 sessions
+        OpenOrder later = ajBell("AJREF2", "570");     // expires in 20
+        OpenOrder gtc = order("Roth IRA", "EQQQ", "Buy", "20", "500", "REF3");
+        s.addRungs(id, List.of(soon.identity(), later.identity(), gtc.identity()));
+
+        var ladder = s.assemble(
+                List.of(soon.withHorizonTouch(null, 8), later.withHorizonTouch(null, 20), gtc),
+                List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH).ladders().get(0);
+        Rung eight = rungAt(ladder, "560");
+        Rung twenty = rungAt(ladder, "570");
+        Rung noExpiry = rungAt(ladder, "500");
+
+        assertTrue(eight.lapsesBefore(LadderService.NEAR_HORIZON_SESSIONS), "8 < 10");
+        assertTrue(eight.lapsesBefore(LadderService.FAR_HORIZON_SESSIONS), "8 < 30");
+
+        assertFalse(twenty.lapsesBefore(LadderService.NEAR_HORIZON_SESSIONS),
+                "20 sessions outlasts the 10-session window");
+        assertTrue(twenty.lapsesBefore(LadderService.FAR_HORIZON_SESSIONS), "20 < 30");
+
+        assertFalse(noExpiry.lapsesBefore(LadderService.FAR_HORIZON_SESSIONS),
+                "no dated expiry, so nothing runs out");
+        assertTrue(eight.touchNear() != null && twenty.touchFar() != null,
+                "marked, but still priced — the figure is right for the window");
+    }
+
+    private static Rung rungAt(LadderService.Ladder ladder, String price) {
+        return ladder.rungs().stream()
+                .filter(r -> r.price().compareTo(new BigDecimal(price)) == 0)
+                .findFirst().orElseThrow();
+    }
+
+    private static OpenOrder ajBell(String reference, String price) {
+        return OpenOrder.parsed("AJ Bell SIPP", "EQQQ", null, "Sell", "Limit",
+                new BigDecimal("50"), new BigDecimal(price), false, new BigDecimal("28000"),
+                "GBP", DAY, DAY.plusDays(14), null, "In progress", reference);
     }
 
     // ---- no auto-promotion -------------------------------------------------
@@ -175,7 +292,7 @@ class LadderServiceTest {
         OpenOrder twin = order("Roth IRA", "NVDA", "Buy", "25", "175.00", "REF-NEW");
 
         var report = s.assemble(List.of(twin), s.intendedOrders(sym -> "USD"), List.of(),
-                Map.of(), ACCOUNTS);
+                Map.of(), ACCOUNTS, TOUCH);
 
         assertEquals(1, report.ladders().get(0).rungs().size(), "still just the intent");
         assertTrue(report.ladders().get(0).rungs().get(0).intended());
@@ -195,7 +312,7 @@ class LadderServiceTest {
         s.markPlaced(intentId, placed.identity());
 
         var report = s.assemble(List.of(placed), s.intendedOrders(sym -> "USD"), List.of(),
-                history.notes(), ACCOUNTS);
+                history.notes(), ACCOUNTS, TOUCH);
         List<Rung> rungs = report.ladders().get(0).rungs();
         assertEquals(1, rungs.size());
         assertFalse(rungs.get(0).intended(), "it is the real order now");
@@ -244,7 +361,7 @@ class LadderServiceTest {
         history.record("Roth IRA", List.of(dealt(buy)), Set.of(), DAY.plusDays(2));
         s.addRungs(id, List.of(sell.identity(), buy.identity()));
 
-        var report = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS);
+        var report = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS, TOUCH);
         var ladder = report.ladders().get(0);
 
         assertEquals(2, ladder.rungs().size());
@@ -263,7 +380,7 @@ class LadderServiceTest {
         history.record("II SIPP", List.of(cancelled(o)), Set.of(), DAY.plusDays(1));
         s.addRungs(id, List.of(o.identity()));
 
-        var ladder = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS)
+        var ladder = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS, TOUCH)
                 .ladders().get(0);
 
         assertEquals(Rung.State.CANCELLED, ladder.rungs().get(0).state());
@@ -278,7 +395,7 @@ class LadderServiceTest {
         long id = s.createLadder("NVDA round trip", "NVDA");
         s.addRungs(id, List.of("Roth IRA|VANISHED"));
 
-        var report = s.assemble(List.of(), List.of(), List.of(), Map.of(), ACCOUNTS);
+        var report = s.assemble(List.of(), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH);
 
         assertTrue(report.ladders().get(0).rungs().isEmpty());
         assertEquals(1, report.warnings().size());

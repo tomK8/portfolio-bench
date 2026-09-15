@@ -253,7 +253,7 @@ beyond the code, so treat the source as the specification.
 | `GET /orders` | Orders | `OpenOrdersService` |
 | `GET /orders/touch` | Orders | `OpenOrdersService.touchEstimate` (re-blends σ at the new N) |
 | `GET /orders/probe` | Orders | `OpenOrdersService.probe` (writes no calibration line) |
-| `GET /ladders`, `POST /ladders/{create,delete}` | Ladders | `LadderService` — groups of rungs on one security |
+| `GET /ladders`, `POST /ladders/{create,delete}` | Ladders | `LadderService` — groups of rungs on one security; `P(10)`/`P(30)` are **fixed** horizons, not the table's per-order `P(N)` |
 | `POST /ladders/rungs/{add,remove}` | Ladders | assign / unassign real orders; never inferred |
 | `POST /ladders/intents/{add,delete,placed}` | Ladders | rungs decided on but not placed; `placed` is the only intended→real path |
 | `POST /orders/drift`, `POST /orders/event-var` | Orders | stored app-wide model switches |

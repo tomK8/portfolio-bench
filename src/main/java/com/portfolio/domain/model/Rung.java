@@ -16,15 +16,25 @@ import java.time.LocalDate;
  * @param key   what the UI addresses this rung by: the broker order identity for a real rung, or
  *              {@code intent:<id>} for an intended one. Distinct namespaces, so a remove button
  *              can never take the wrong kind.
- * @param order the enriched order behind the rung — the live one for a working rung, the synthetic
- *              one built for an intended rung and pushed through the <em>same</em> enrichment pass.
- *              That is what makes "the same analytics" true by construction rather than by
- *              duplication. Null for a closed rung: nothing resting means nothing to price, and a
- *              touch probability on a filled order would be an answer to a question nobody has.
+ * @param order     the enriched order behind the rung — the live one for a working rung, the
+ *                  synthetic one built for an intended rung and pushed through the <em>same</em>
+ *                  enrichment pass. That is what makes "the same analytics" true by construction
+ *                  rather than by duplication. Null for a closed rung: nothing resting means nothing
+ *                  to price, and a touch probability on a filled order would answer a question
+ *                  nobody has.
+ * @param touchNear the probability of the market touching this rung's price within a <b>fixed</b>
+ *                  near horizon, and
+ * @param touchFar  the same over a fixed far one. Fixed, and named in the column heading, because a
+ *                  ladder's whole point is that its rungs are one decision and so have to be
+ *                  readable against each other. The table's own P(N) runs on each order's own
+ *                  deadline — a different and equally real question, will <em>this</em> limit fill
+ *                  before <em>this</em> expiry — and it is still one inch below. Null whenever the
+ *                  rung could not be priced at all.
  */
 public record Rung(String key, Long intentId, String account, String side,
                    BigDecimal quantity, BigDecimal price, String currency,
-                   State state, LocalDate closedAt, String note, OpenOrder order) {
+                   State state, LocalDate closedAt, String note, OpenOrder order,
+                   BigDecimal touchNear, BigDecimal touchFar) {
 
     /**
      * Where a rung stands. The four non-intended values are {@link OrderStatus} as the history
@@ -72,6 +82,27 @@ public record Rung(String key, Long intentId, String account, String side,
     /** Cancelled, or stopped being listed. Kept on the ladder, counted in nothing. */
     public boolean gone() {
         return state == State.CANCELLED || state == State.UNLISTED;
+    }
+
+    /**
+     * Whether this rung's order lapses before a fixed horizon runs out.
+     *
+     * <p>This is what a fixed horizon costs, and it is paid openly rather than hidden. A probability
+     * over 30 sessions for an order that expires in eight is a number about a world that will not
+     * happen — the order is gone before most of the window it is priced over. The rungs stay
+     * comparable, and the ones whose own deadline undercuts the comparison say so.
+     *
+     * <p>False for an order with no dated expiry: II and Roth export none, and an intended rung has
+     * no deadline at all, so for those nothing runs out.
+     */
+    public boolean lapsesBefore(int sessions) {
+        return order != null && order.sessionsToExpiry() != null
+                && order.sessionsToExpiry() < sessions;
+    }
+
+    /** Trading sessions until this rung's order expires, or null when it has no dated expiry. */
+    public Integer sessionsToExpiry() {
+        return order == null ? null : order.sessionsToExpiry();
     }
 
     public boolean buy() {

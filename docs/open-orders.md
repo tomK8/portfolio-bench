@@ -8,7 +8,9 @@
   popup the Live and Watchlist tables use. See the Open-orders section below.
 - **Ladders** — `GET /ladders` → `fragments/ladders :: list`, rendered inside the Open orders panel
   above the table. Named groups of rungs on one security that the user creates and assigns orders
-  to, including rungs decided on but never placed. See the Ladders section below.
+  to, including rungs decided on but never placed. Rungs are laid out by price around the market and
+  priced over two **fixed** horizons (`P(10)` / `P(30)`) so they can be read against each other, where
+  the table's `P(N)` runs on each order's own deadline. See the Ladders section below.
 
 
 # Open orders
@@ -424,9 +426,44 @@ side of the market it is on. No live quote means **no marker at all** (`markerIn
 rather than one at an invented position; the marker's whole job is to say which rungs are above the
 market.
 
+## Two fixed horizons, not the table's P(N)
+
+The fill-probability columns are **`P(10)` and `P(30)`** — 10 and 30 trading sessions, named in the
+headings — where the table's column is `P(N)` on each order's own deadline.
+
+That is a different question, deliberately. `P(N)` answers *will this limit fill before this order
+expires*, which is the right question for one order sitting on its own and is still answered one inch
+below. On a ladder the rungs are a **single decision** and the reader is comparing them with each
+other: which are live now, which are the patient ones, which way the thing leans. A column whose
+horizon silently changes from row to row cannot be compared down its own length, and an "N" on screen
+does not say what it is.
+
+**10 and 30 rather than the probe's 5 and 20, on the evidence.** Ladder rungs are deliberately placed
+away from the market, and over 5 sessions a real NVDA ladder priced 1.3% / 42.5% / 11.0% / 0.1% —
+three rungs reading "nothing happens", which says nothing about the ladder's shape. The same rungs at
+10 and 30 spread to 7.8–57.3% and 17.9–74.6%, where the ordering is legible and the near/far pair
+separates the rungs in play from the ones waiting. (These are *horizons*. RV10 and RV30 sharing the
+numbers is a coincidence, not a reason: σ is forecast for a horizon, never a trailing window of the
+same length — [vol-forecast.md](vol-forecast.md).)
+
+**What a fixed horizon costs is paid openly.** A probability over 30 sessions for an order that
+expires in eight prices a window the order will not survive. `Rung.lapsesBefore(sessions)` catches
+that and the cell is marked amber with a `~` — the same idiom the table uses for a horizon pushed
+past any real deadline — naming the expiry on hover and pointing at the table for the per-order
+figure. Only AJ Bell exports a dated expiry; II, Roth and intended rungs carry none, so nothing runs
+out for them and nothing is marked.
+
+`OpenOrdersService.touchAt` prices both columns, and deliberately **not** through `touchEstimate`:
+that serves the browser's editable P(N) box off the four vol windows on the rendered row, so it
+cannot see the scheduled-event term. These cells are server-rendered from the same order the table
+row was built from and re-resolve the event set, so ticking "Add earnings variance" moves the table's
+numbers and the ladder's together. The calendar read is cached — no extra HTTP. A closed rung is
+priced at neither horizon: nothing is resting, so there is no fill to put odds on.
+
 ## The same analytics for an intended rung, by construction
 
-`vs mkt` and `P(N)` on an intended rung are the table's own columns, not a second calculation.
+`vs mkt`, `P(10)` and `P(30)` on an intended rung are the table's own machinery, not a second
+calculation.
 `LadderService.intendedOrders` turns each intent into a synthetic `OpenOrder` — the chosen account as
 the broker, `intent:<id>` as the reference (a namespace no broker reference can collide with),
 `Intended` as the status (which `OrderStatus` reads as UNKNOWN, i.e. open, which is what it is) and

@@ -140,6 +140,20 @@
         <code>Order+Status*.xlsx</code> — and reload this tab.
     </div>
 
+    <!--
+      Ladders sit above the table and outside the "no order files" guard on purpose: a ladder can be
+      made entirely of intended rungs, which exist only here, and those are exactly the commitments
+      that were invisible before. A panel that hid them whenever no broker export happened to be in
+      ~/Downloads would hide them on the day they matter most.
+
+      The block is its own fragment with its own container so a rung moving re-renders the ladders
+      and not the whole panel — and so the mutations never touch the table below, which stays what
+      it always was: what the brokers say.
+    -->
+    <div id="ladders-result">
+        <div th:replace="~{fragments/ladders :: list}"></div>
+    </div>
+
     <div th:unless="${orders.empty}">
 
         <p class="muted" th:if="${!orders.sources.isEmpty()}"

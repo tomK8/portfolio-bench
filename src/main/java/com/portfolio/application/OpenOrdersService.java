@@ -205,6 +205,7 @@ public class OpenOrdersService {
     private final IntradayPriceRepository intraday;
     private final PriceHistoryRepository history;
     private final OrderHistoryRepository orderHistory;
+    private final LadderService ladders;
     private final YahooTickerMap tickerMap;
     private final KeyValueStore kv;
     /** Verdicts on symbols Yahoo has rejected — read-only here; the fetch jobs are what write them. */
@@ -339,6 +340,32 @@ public class OpenOrdersService {
                              FundamentalsRepository fundamentals,
                              DividendYieldService dividendYields,
                              OrderHistoryRepository orderHistory) {
+        this(fileLocator, parsers, fxRateProvider, excelReportWriter, outputDir, intraday, history,
+                tickerMap, kv, quoteWarmer, historyWarmer, eventVariance, fundamentals,
+                dividendYields, orderHistory, null);
+    }
+
+    /**
+     * @param ladders the user's ladders — groups of rungs they decided belong together, plus the
+     *                rungs they have decided on but not placed. Null degrades to a panel with no
+     *                Ladders block, the same bargain every other optional collaborator here takes.
+     *                <p>The dependency runs this way round, and not the other, on purpose: ladders
+     *                need orders priced and this service is what prices them, so the intended rungs
+     *                come through here as synthetic orders and go back enriched. Nothing in
+     *                {@link LadderService} computes a statistic, which is what keeps an intended
+     *                rung's numbers and a resting order's numbers the same numbers.
+     */
+    public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
+                             FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
+                             Path outputDir, IntradayPriceRepository intraday,
+                             PriceHistoryRepository history, YahooTickerMap tickerMap,
+                             KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
+                             Consumer<String> historyWarmer, OrderEventVariance eventVariance,
+                             FundamentalsRepository fundamentals,
+                             DividendYieldService dividendYields,
+                             OrderHistoryRepository orderHistory,
+                             LadderService ladders) {
+        this.ladders = ladders;
         this.orderHistory = orderHistory;
         this.dividendYields = dividendYields;
         this.fundamentals = fundamentals;
@@ -494,18 +521,54 @@ public class OpenOrdersService {
             }
         }
 
-        publishOrderSymbols(orders, sources);
+        // Intended rungs are orders that exist only in the Ladders panel. They are built here,
+        // beside the real ones, so the symbol of a rung nobody holds or orders still reaches the
+        // price-fetch universe — the same gap that let a resting WMT limit price off a two-week-old
+        // quote, and an intended rung is by definition on something not yet traded.
+        List<OpenOrder> intended = ladders == null ? List.of()
+                : ladders.intendedOrders(sym -> quoteCurrency(tickerFor(sym)));
+        List<OpenOrder> universe = new ArrayList<>(orders);
+        universe.addAll(intended);
+        publishOrderSymbols(universe, sources);
+
         Quotes quotes = enrichWithCurrentPrice(orders, rates, cfg, true);
         warnings.addAll(quotes.warnings());
         warmLaggingQuotes(quotes.warm());
-        // Retention runs here rather than on a scheduler: this panel is the only thing that writes
-        // the table, so it is also the only thing that can leave it growing.
-        if (orderHistory != null) orderHistory.prune(today);
-        return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
-                unmappedInstruments(orders), quotes.notes(), quotes.asOf(), chartableSymbols(orders),
-                cfg,
+
+        // A second call rather than one over the combined list, for one reason: the calibration log
+        // is a record of probabilities that could actually be scored against fills, and an intended
+        // rung cannot fill — it is not at a broker. It is the same argument (and the same flag) that
+        // keeps the pre-trade probe out of that log. Same method, so the statistics are identical;
+        // only the bookkeeping differs.
+        List<OpenOrder> intendedPriced = new ArrayList<>(intended);
+        if (!intendedPriced.isEmpty()) {
+            Quotes intentQuotes = enrichWithCurrentPrice(intendedPriced, rates, cfg, false);
+            for (String w : intentQuotes.warnings()) {
+                if (!warnings.contains(w)) warnings.add(w);
+            }
+            warmLaggingQuotes(intentQuotes.warm());
+        }
+
+        LadderService.LadderReport ladderReport = ladders == null
+                ? new LadderService.LadderReport(List.of(), List.of(), List.of(), List.of())
+                : ladders.assemble(orders, intendedPriced,
+                orderHistory == null ? List.of() : orderHistory.closed(),
                 orderHistory == null ? Map.of() : orderHistory.notes(),
-                orderHistory == null ? List.of() : orderHistory.closed());
+                parsers.stream().map(OrderParser::sourceName).toList());
+
+        // Retention runs here rather than on a scheduler: this panel is the only thing that writes
+        // the table, so it is also the only thing that can leave it growing. A rung of a ladder is
+        // exempt however old — half a round trip deleted before the half that completes it arrives
+        // is the one thing the ladder was being kept for.
+        if (orderHistory != null) {
+            orderHistory.prune(today, ladders == null ? Set.of() : ladders.rungOrderKeys());
+        }
+        return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
+                unmappedInstruments(orders), quotes.notes(), quotes.asOf(),
+                chartableSymbols(universe), cfg,
+                orderHistory == null ? Map.of() : orderHistory.notes(),
+                orderHistory == null ? List.of() : orderHistory.closed(),
+                ladderReport);
     }
 
     /**
@@ -1460,7 +1523,8 @@ public class OpenOrdersService {
                                Set<String> chartableSymbols,
                                VolForecast.Config config,
                                Map<String, String> notes,
-                               List<OrderHistoryRepository.HistoricalOrder> history) {
+                               List<OrderHistoryRepository.HistoricalOrder> history,
+                               LadderService.LadderReport ladders) {
 
         /** This order's annotation, or empty — what the editable Note cell is filled with. */
         public String noteFor(OpenOrder o) {

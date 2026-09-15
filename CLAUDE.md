@@ -52,11 +52,13 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `DividendAttributor` (FIFO), `CashLedgerReconstructor` (FIFO position-from-ledger
   reconstruction), `Irr` (the app's only XIRR solver) + `PositionIrr`, `Instruments`
   (`isBond`, `giltId`, `couponOf`, `assetClassOf` — single home of all four), `DividendYield`,
-  `VolForecast` + `AssetClass` (the open-orders touch model), `PriceStats`, `StyleClassifier`,
+  `VolForecast` + `AssetClass` (the open-orders touch model), `Ladders` (rung layout + per-account
+  cash), `PriceStats`, `StyleClassifier`,
   `SectorClassifier`, `IndustryGroups`. Sub-packages `domain.swing` / `domain.trend` /
   `domain.momentum` / `domain.range` hold the four backtest engines, `domain.grouping` the
   table-grouping keys. `domain.model`: `Holding` (Builder; many nullable fields), `AggHolding`,
-  `CashTransaction`, `OpenOrder` + `OrderStatus`, `EarningsEvent`, `Account` + `TransactionType` enums,
+  `CashTransaction`, `OpenOrder` + `OrderStatus`, `OrderGroup` + `GroupType` + `IntendedRung` +
+  `Rung` (ladders), `EarningsEvent`, `Account` + `TransactionType` enums,
   `PriceBar`, `IntradayBar`, `IntradayPrice`.
 - `port` — `FxRateProvider`, `HistoricalFxRateProvider`, `EarningsCalendarProvider`,
   `EarningsCalendarFeed`, `AlertNotifier` (interfaces, faked in tests).
@@ -69,11 +71,13 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 - `application` — use-case orchestration; ~40 services. `PortfolioGatherer`,
   `SyncPortfolioService`, `SyncFromCashService`, `ManualPositionService`, `AssetTransferService`,
   `ExportExcelService`, `DividendService`, `AllocationService`, `PortfolioValueService`,
-  `PortfolioReturnService`, `AttributionService`, `OpenOrdersService`, `LivePricesService`, `UnresolvedSymbols`,
+  `PortfolioReturnService`, `AttributionService`, `OpenOrdersService`, `LadderService`,
+  `LivePricesService`, `UnresolvedSymbols`,
   `WatchlistService`, the five `*AnalysisService` backtests, `PriceFetchJob` +
   `IntradayPriceFetchJob` (share `PriceFetchSupport`).
 - `web` — ~18 thin controllers (`RootController`, `ChartsController`, `AnalysisController`,
-  `OperationsController`, `OrdersController`, `LiveDashboardController`, `WatchlistController`,
+  `OperationsController`, `OrdersController`, `LaddersController`, `LiveDashboardController`,
+  `WatchlistController`,
   the five strategy controllers, …), plus `GlobalExceptionAdvice`
   (`@ExceptionHandler(IllegalStateException)` renders `fragments/error` instead of HTTP 500),
   `PriceFetchScheduler` and `WebSupport`.
@@ -189,7 +193,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [sync-views.md](docs/sync-views.md) | change either sync tab or the Portfolio % column | Ledger view drops unpriced equities but not bonds; II SIPP cash comes from the form, blank ≠ zero |
 | [cash-ledger-irr.md](docs/cash-ledger-irr.md) | touch the Annualised return column or `Irr` | IRR not CAGR; current episode only; unsolvable writes **no** cell, never a zero; two day-count bases are deliberate |
 | [table-grouping.md](docs/table-grouping.md) | add a grouping key to either table | Exactly one group per holding; Gain % is `Σgain ÷ Σcost`, never the mean of members; a new key is a resolver class and nothing else |
-| [open-orders.md](docs/open-orders.md) | change the orders panel, a parser or the probe | Parsers build via `OpenOrder.parsed(...)`; open/closed filter is a denylist and `OrderStatus` is its only vocabulary; quote age is judged against same-market peers, not the clock |
+| [open-orders.md](docs/open-orders.md) | change the orders panel, a parser or the probe | Parsers build via `OpenOrder.parsed(...)`; open/closed filter is a denylist and `OrderStatus` is its only vocabulary; quote age is judged against same-market peers, not the clock; **ladder membership is never inferred and an intended rung is never auto-promoted**; a rung is never pruned |
 | [vol-forecast.md](docs/vol-forecast.md) | change P(N), σ_eff, drift or the calibration log | σ is *forecast* for the horizon, never a trailing window of that length; drift is a **price** drift (class total return − that name's yield); the probe writes no calibration line |
 | [live-tab.md](docs/live-tab.md) | change the Live tab or intraday session handling | Day Δ is anchored on the quote's **trading day**, not the calendar day; `loadLatestIntradayPrices` is regular-session only |
 | [attribution.md](docs/attribution.md) | change the Attribution window or its totals | A boundary that can't be valued is excluded from rows *and* totals; annualising under 30 days is blank |
@@ -249,6 +253,9 @@ beyond the code, so treat the source as the specification.
 | `GET /orders` | Orders | `OpenOrdersService` |
 | `GET /orders/touch` | Orders | `OpenOrdersService.touchEstimate` (re-blends σ at the new N) |
 | `GET /orders/probe` | Orders | `OpenOrdersService.probe` (writes no calibration line) |
+| `GET /ladders`, `POST /ladders/{create,delete}` | Ladders | `LadderService` — groups of rungs on one security |
+| `POST /ladders/rungs/{add,remove}` | Ladders | assign / unassign real orders; never inferred |
+| `POST /ladders/intents/{add,delete,placed}` | Ladders | rungs decided on but not placed; `placed` is the only intended→real path |
 | `POST /orders/drift`, `POST /orders/event-var` | Orders | stored app-wide model switches |
 | `POST /orders/note` | Orders | `OrderHistoryRepository.saveNote` |
 | `POST /orders/export` | Orders | `OpenOrdersService.export` |

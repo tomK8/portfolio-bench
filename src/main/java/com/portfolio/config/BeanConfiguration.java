@@ -20,6 +20,8 @@ import com.portfolio.application.EarningsService;
 import com.portfolio.parser.AJBellOrdersParser;
 import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.application.LadderService;
+import com.portfolio.application.ShareClassRegistry;
+import com.portfolio.application.SwitchService;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.InstrumentMappingRepository;
@@ -195,6 +197,7 @@ public class BeanConfiguration {
                                                DividendYieldService dividendYieldService,
                                                OrderHistoryRepository orderHistoryRepository,
                                                LadderService ladderService,
+                                               SwitchService switchService,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -235,7 +238,11 @@ public class BeanConfiguration {
                 // rungs go in as synthetic orders and come back through the same enrichment the
                 // table's rows take, which is what makes "the same analytics" a fact rather than a
                 // promise.
-                ladderService);
+                ladderService,
+                // The Share-class switches block, on exactly the same terms and for the same
+                // reason: its buy leg is normally an intended one, and an intended leg is only as
+                // good as the enrichment it comes back with.
+                switchService);
     }
 
     /**
@@ -359,9 +366,10 @@ public class BeanConfiguration {
                                                      CashTransactionRepository cashTransactionRepository,
                                                      IntradayPriceRepository intradayPriceRepository,
                                                      FxRateProvider fxRateProvider,
-                                                     YahooTickerMap yahooTickerMap) {
+                                                     YahooTickerMap yahooTickerMap,
+                                                     ShareClassRegistry shareClassRegistry) {
         return new ConcentrationService(allocationService, cashTransactionRepository,
-                intradayPriceRepository, fxRateProvider, yahooTickerMap);
+                intradayPriceRepository, fxRateProvider, yahooTickerMap, shareClassRegistry);
     }
 
     @Bean
@@ -395,9 +403,11 @@ public class BeanConfiguration {
                                                            IntradayPriceRepository intradayPriceRepository,
                                                            FxRateProvider fxRateProvider,
                                                            HistoricalFxRateProvider historicalFxRateProvider,
-                                                           YahooTickerMap yahooTickerMap) {
+                                                           YahooTickerMap yahooTickerMap,
+                                                           ShareClassRegistry shareClassRegistry) {
         return new CurrencyExposureService(allocationService, cashTransactionRepository,
-                intradayPriceRepository, fxRateProvider, historicalFxRateProvider, yahooTickerMap);
+                intradayPriceRepository, fxRateProvider, historicalFxRateProvider, yahooTickerMap,
+                shareClassRegistry);
     }
 
     @Bean
@@ -422,9 +432,10 @@ public class BeanConfiguration {
                                                PriceHistoryRepository priceHistoryRepository,
                                                HistoricalFxRateProvider historicalFxRateProvider,
                                                YahooTickerMap yahooTickerMap,
-                                               KeyValueStore keyValueStore) {
+                                               KeyValueStore keyValueStore,
+                                               ShareClassRegistry shareClassRegistry) {
         return new AllocationService(cashTransactionRepository, priceHistoryRepository,
-                historicalFxRateProvider, yahooTickerMap, keyValueStore);
+                historicalFxRateProvider, yahooTickerMap, keyValueStore, shareClassRegistry);
     }
 
     @Bean
@@ -543,6 +554,31 @@ public class BeanConfiguration {
     public LadderService ladderService(OrderGroupRepository orderGroupRepository,
                                        OrderHistoryRepository orderHistoryRepository) {
         return new LadderService(orderGroupRepository, orderHistoryRepository);
+    }
+
+    /**
+     * The Share-class switches panel's use case — the same group store as ladders, a different
+     * assembler. It additionally reads the cash ledger, because the question that actually blocks a
+     * switch is whether the money has reached the buying account in the buying currency.
+     */
+    @Bean
+    public SwitchService switchService(OrderGroupRepository orderGroupRepository,
+                                       OrderHistoryRepository orderHistoryRepository,
+                                       CashTransactionRepository cashTransactionRepository) {
+        return new SwitchService(orderGroupRepository, orderHistoryRepository,
+                cashTransactionRepository);
+    }
+
+    /**
+     * Which listings are one holding, for the views that measure exposure.
+     *
+     * <p>Bound to the switch service by a method reference rather than by injecting it, so
+     * allocation, concentration and currency depend on the question and not on the panel that
+     * answers it. If a second way of declaring a share class ever appears, it is composed here.
+     */
+    @Bean
+    public ShareClassRegistry shareClassRegistry(SwitchService switchService) {
+        return switchService::shareClasses;
     }
 
     @Bean

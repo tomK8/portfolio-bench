@@ -33,7 +33,7 @@ class LadderServiceTest {
      * tests. What matters here is that each rung is priced at both horizons and a closed one at
      * neither.
      */
-    private static final LadderService.TouchPricer TOUCH =
+    private static final GroupRungs.TouchPricer TOUCH =
             (order, sessions) -> order == null || order.price() == null
                     ? null : new BigDecimal(sessions).movePointLeft(2);
 
@@ -98,7 +98,7 @@ class LadderServiceTest {
 
         assertEquals(1, report.ladders().get(0).rungs().size());
         assertEquals(List.of(loose.identity()),
-                report.unassigned().stream().map(LadderService.Candidate::key).toList());
+                report.unassigned().stream().map(GroupRungs.Candidate::key).toList());
     }
 
     /** The picker offers this ladder's security only — the rule of this group type, in one place. */
@@ -114,7 +114,7 @@ class LadderServiceTest {
         assertEquals(2, report.unassigned().size());
         assertEquals(List.of(nvda.identity()),
                 report.assignableFor(report.ladders().get(0)).stream()
-                        .map(LadderService.Candidate::key).toList());
+                        .map(GroupRungs.Candidate::key).toList());
     }
 
     // ---- intended rungs ----------------------------------------------------

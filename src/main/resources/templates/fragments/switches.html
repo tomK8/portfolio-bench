@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!--
+  The Share-class switches block of the Open orders tab.
+
+  A share-class switch is one holding moving between two listings of the SAME fund — same ISIN, same
+  holdings, different trading currency, exchange line and account. Nothing about what is owned
+  changes, which is why it is not a rotation, and why a ladder cannot hold it: a ladder assumes one
+  security and one price spine, and £530 and $716 do not share a price axis.
+
+  So the panel does four things the table cannot. It says the two legs are the same thing. It puts
+  both prices on one yardstick, in GBP, so "am I buying above where I am selling" has an answer. It
+  splits whatever gap is left into the part that is the exchange rate and the part that is not. And
+  it shows the sequencing — proceeds land in one account and currency, the purchase needs another,
+  no broker chains the two — with the step that is currently blocking it named.
+
+  Rendered from the same OrdersReport the table is, so a leg's numbers are the row's numbers.
+  Mutations re-render this fragment alone (hx-target="#switches-result"), never the whole panel.
+-->
+<div th:fragment="list">
+
+    <section class="ladders switches">
+
+        <div class="ladders-head">
+            <strong>Share-class switches</strong>
+            <span class="muted" th:if="${orders.switches.isEmpty()}">
+                — none. A switch moves one holding between two listings of the same fund. Declare
+                it; nothing here is inferred from a pair of orders.
+            </span>
+            <span class="muted" th:unless="${orders.switches.isEmpty()}"
+                  th:text="'(' + ${#lists.size(orders.switches.switches)} + ')'">(0)</span>
+
+            <details class="ladder-new">
+                <summary>+ New switch</summary>
+                <form class="ladder-form" hx-post="/switches/create"
+                      hx-target="#switches-result" hx-swap="innerHTML">
+                    <label>Name
+                        <input name="name" type="text" size="18" required
+                               placeholder="Nasdaq line to USD"
+                               title="Whatever you call this move. It is yours — nothing reads it."/>
+                    </label>
+                    <label>From
+                        <input name="from" type="text" size="8" spellcheck="false" required
+                               placeholder="EQQQ"
+                               title="The listing the holding is leaving. This is also the name the pair is counted under everywhere exposure is measured, because it is the line with the history."/>
+                    </label>
+                    <label>To
+                        <input name="to" type="text" size="8" spellcheck="false" required
+                               placeholder="EQQU"
+                               title="The listing the holding is moving into. Declaring the pair is the statement that the two are the same fund — the app will not work that out for you."/>
+                    </label>
+                    <button type="submit">Create</button>
+                </form>
+                <p class="muted switch-hint">
+                    For two listings of one fund only. Moving money from one investment to a
+                    different one is a change of exposure, not a switch, and is deliberately not
+                    this.
+                </p>
+            </details>
+        </div>
+
+        <div th:if="${!#lists.isEmpty(orders.switches.warnings)}" class="value-warnings">
+            <h4>Share-class switches</h4>
+            <ul>
+                <li th:each="w : ${orders.switches.warnings}" th:text="${w}">warning</li>
+            </ul>
+        </div>
+
+        <article class="ladder switch" th:each="s : ${orders.switches.switches}"
+                 th:with="sum=${s.summary}, p=${sum.progress}, b=${sum.basis}">
+
+            <header class="ladder-head">
+                <strong th:text="${s.group.name}">Name</strong>
+                <span class="switch-pair">
+                    <span class="ladder-symbol"
+                          th:attr="data-symbol=${orders.chartableSymbols.contains(s.from()) ? s.from() : null}"
+                          th:text="${s.from()}"
+                          title="The listing the holding is leaving. Click for the price popup.">FROM</span>
+                    <span class="switch-arrow" aria-hidden="true">→</span>
+                    <span class="ladder-symbol"
+                          th:attr="data-symbol=${orders.chartableSymbols.contains(s.to()) ? s.to() : null}"
+                          th:text="${s.to()}"
+                          title="The listing the holding is moving into. Click for the price popup.">TO</span>
+                </span>
+                <span class="ladder-badge ladder-complete" th:if="${p.complete}"
+                      title="Everything this switch covers has been sold and the same number of units bought back in the new line.">Switch complete</span>
+                <span class="ladder-badge switch-flight" th:if="${p.outOfMarket()}"
+                      th:text="${#numbers.formatDecimal(p.inFlight, 1, 'COMMA', 2, 'POINT')} + ' units out of the market'"
+                      title="Sold and not yet bought back. These units are cash right now: they are in neither line, and the fund can move without them.">out of market</span>
+                <form class="ladder-inline switch-del" hx-post="/switches/delete"
+                      hx-target="#switches-result" hx-swap="innerHTML"
+                      hx-confirm="Delete this switch? The orders themselves are untouched; any intended legs on it are deleted, and the two listings stop being counted as one holding.">
+                    <input type="hidden" name="id" th:value="${s.group.id}"/>
+                    <button type="submit" class="ladder-x" title="Delete this switch">Delete</button>
+                </form>
+            </header>
+
+            <!--
+              The premise, stated rather than assumed. The panel's whole job is to stop a switch
+              reading as a change of position, and the exposure views only stop counting these as two
+              holdings because this declaration exists.
+            -->
+            <p class="switch-premise">
+                Same fund, two listings — your exposure does not change. Counted as
+                <b th:text="${s.from()}">FROM</b> in Allocation, Concentration and Currency, never as
+                two positions.
+            </p>
+
+            <p class="muted ladder-empty" th:unless="${s.hasLegs()}">
+                No legs yet. Assign the sell and buy orders below, or record the buy as an intended
+                leg — which is what it is until the cash reaches the other account.
+            </p>
+
+            <!--
+              How far through it is, in units. Three states and not two: sold-but-not-bought-back is
+              neither line, and it is the state a half-finished switch is most easily lost in.
+            -->
+            <div class="switch-progress" th:if="${p.known()}">
+                <div class="switch-bar" th:title="${'Of ' + #numbers.formatDecimal(p.declared, 1, 'COMMA', 2, 'POINT') + ' units this switch covers.'}">
+                    <span class="seg seg-old" th:if="${p.inOldLine.signum() > 0}"
+                          th:style="'width:' + ${p.pctInOldLine()} + '%'"></span>
+                    <span class="seg seg-flight" th:if="${p.inFlight.signum() > 0}"
+                          th:style="'width:' + ${p.pctInFlight()} + '%'"></span>
+                    <span class="seg seg-new" th:if="${p.inNewLine.signum() > 0}"
+                          th:style="'width:' + ${p.pctInNewLine()} + '%'"></span>
+                </div>
+                <div class="switch-legend">
+                    <span><i class="key key-old"></i>
+                        <span th:text="${#numbers.formatDecimal(p.inOldLine, 1, 'COMMA', 2, 'POINT')} + ' still in ' + ${s.from()}">0</span></span>
+                    <span><i class="key key-flight"></i>
+                        <span th:text="${#numbers.formatDecimal(p.inFlight, 1, 'COMMA', 2, 'POINT')} + ' sold, not yet bought back'">0</span></span>
+                    <span><i class="key key-new"></i>
+                        <span th:text="${#numbers.formatDecimal(p.inNewLine, 1, 'COMMA', 2, 'POINT')} + ' in ' + ${s.to()}">0</span></span>
+                    <span class="muted"
+                          th:text="'of ' + ${#numbers.formatDecimal(p.declared, 1, 'COMMA', 2, 'POINT')} + ' units'">of 0</span>
+                </div>
+            </div>
+            <p class="muted switch-note" th:unless="${p.known()}">
+                How much of the position has moved cannot be counted — a leg has no quantity, and a
+                partial sum here would read as a finished switch.
+            </p>
+
+            <!--
+              One yardstick. Two prices in two currencies say nothing side by side; both in GBP say
+              whether the switch is selling above or below where it buys.
+            -->
+            <div class="switch-compare">
+                <div th:replace="~{fragments/switches :: comparison(${sum.resting}, 'Resting and intended', 'The limits you have out now, and the ones recorded but not placed. This is the decision in front of you.', ${s})}"></div>
+                <div th:replace="~{fragments/switches :: comparison(${sum.filled}, 'Already traded', 'The legs that have filled, on the prices the exports carried. No broker export here has an execution price column, so for a limit order this is the price it filled at or better.', ${s})}"></div>
+            </div>
+
+            <!--
+              The split. The ratio between the two lines IS the exchange rate, so a raw gap between
+              the sell price and the buy price mixes two entirely different things. Divide the rate
+              out and what is left is the only part that is a choice.
+            -->
+            <div class="switch-split" th:if="${sum.resting.complete()}" th:with="c=${sum.resting}">
+                <div class="switch-headline"
+                     th:classappend="${c.costly() ? 'val-neg' : 'val-pos'}">
+                    <span th:text="'Buying '
+                          + ${#numbers.formatDecimal(c.costPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')} + '% '
+                          + ${c.costly() ? 'above' : 'below'} + ' where you are selling'">—</span>
+                    <span class="muted" th:if="${c.perUnitGbp != null}"
+                          th:text="'(' + ${(c.costly() ? '+' : '')} + '£'
+                                   + ${#numbers.formatDecimal(c.perUnitGbp, 1, 'COMMA', 4, 'POINT')} + ' a unit'
+                                   + (${c.totalGbp} != null ? ', £' + ${#numbers.formatDecimal(c.totalGbp.abs(), 1, 'COMMA', 2, 'POINT')} + ' over ' + ${#numbers.formatDecimal(c.matchedQuantity, 1, 'COMMA', 2, 'POINT')} + ' matched units' : '') + ')'">detail</span>
+                </div>
+                <p class="switch-rate" th:if="${c.impliedCross != null and c.marketCross != null}"
+                   th:text="'Your two prices imply ' + ${#numbers.formatDecimal(c.impliedCross, 1, 'COMMA', 4, 'POINT')}
+                            + ' ' + ${c.in.currency} + ' per ' + ${c.out.currency}
+                            + '; the market is ' + ${#numbers.formatDecimal(c.marketCross, 1, 'COMMA', 4, 'POINT')}
+                            + '. Everything else in the gap between those two prices is the exchange rate.'">rate</p>
+                <ul class="switch-terms">
+                    <li th:if="${c.out.vsMarketPct != null}"
+                        th:text="'Selling ' + ${#numbers.formatDecimal(c.out.vsMarketPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')}
+                                 + '% ' + ${c.out.vsMarketPct.signum() >= 0 ? 'above' : 'below'} + ' the market on ' + ${s.from()}">sell term</li>
+                    <li th:if="${c.in.vsMarketPct != null}"
+                        th:text="'Buying ' + ${#numbers.formatDecimal(c.in.vsMarketPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')}
+                                 + '% ' + ${c.in.vsMarketPct.signum() >= 0 ? 'above' : 'below'} + ' the market on ' + ${s.to()}">buy term</li>
+                    <li th:if="${b.known()}" th:classappend="${b.wide()} ? 'switch-wide' : ''"
+                        th:text="'The two lines are ' + ${#numbers.formatDecimal(b.deviationPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')}
+                                 + '% apart once both are in GBP — the exchange-rate term, and on a genuine pair it is ~0%'">basis term</li>
+                </ul>
+                <p class="muted switch-caveat">
+                    Those three multiply to the figure above, exactly. The first two are where you
+                    put your limits; the third is not a choice at all.
+                </p>
+            </div>
+
+            <!--
+              The live check that the pair is the pair. Two listings of one fund differ by exactly
+              the exchange rate, so once both are in GBP they are the same number. Anything else says
+              a quote is stale, the lines are not one for one, or the pair is not what it looks like.
+            -->
+            <div class="switch-basis" th:if="${b.known()}">
+                <span class="lbl">The two lines right now</span>
+                <span th:text="${s.from()} + ' ' + ${b.outLine.currencySymbol()}
+                               + ${#numbers.formatDecimal(b.outLine.price, 1, 'COMMA', 2, 'POINT')}
+                               + ' = £' + ${#numbers.formatDecimal(b.outPriceGbp, 1, 'COMMA', 2, 'POINT')}">from</span>
+                <span class="muted">·</span>
+                <span th:text="${s.to()} + ' ' + ${b.inLine.currencySymbol()}
+                               + ${#numbers.formatDecimal(b.inLine.price, 1, 'COMMA', 2, 'POINT')}
+                               + ' = £' + ${#numbers.formatDecimal(b.inPriceGbp, 1, 'COMMA', 2, 'POINT')}">to</span>
+                <span class="val" th:classappend="${b.wide()} ? 'switch-wide' : ''"
+                      th:text="${(b.deviationPct.signum() > 0 ? '+' : '')
+                               + #numbers.formatDecimal(b.deviationPct.multiply(100), 1, 'COMMA', 2, 'POINT')} + '%'"
+                      title="The gap between the two listings once both are converted at today's rate. On two lines of one fund this is the exchange rate and nothing else, so it should sit at zero.">0%</span>
+                <span class="switch-warn" th:if="${b.wide()}">
+                    These two are not tracking. One quote may be stale, or the lines may not be one
+                    unit for one unit — which everything counted in units above assumes.
+                </span>
+            </div>
+            <p class="muted switch-note" th:unless="${b.known()}">
+                One of the two listings has no price on file, so the pair cannot be checked against
+                the exchange rate and neither leg can be put on the yardstick. The feed has been
+                asked for it.
+            </p>
+
+            <!--
+              The sequencing. This is the part no broker will do: proceeds arrive in one account in
+              one currency and the purchase needs a different one, nothing chains the orders, and
+              moving money between brokers is slow. Settlement is reported from the cash ledger
+              rather than asserted — this tool reads orders and a ledger, and neither says "that
+              trade settled".
+            -->
+            <div class="switch-steps" th:if="${!#lists.isEmpty(sum.sequence)}">
+                <div class="lbl">What has to happen, in order</div>
+                <ol>
+                    <li th:each="st : ${sum.sequence}" th:classappend="'step-' + ${st.state.cssClass()}">
+                        <span class="step-title" th:text="${st.title}">step</span>
+                        <span class="step-detail" th:text="${st.detail}">detail</span>
+                    </li>
+                </ol>
+                <p class="switch-blocked" th:if="${sum.blockedBy != null}"
+                   th:text="'Blocked on: ' + ${sum.blockedBy.title} + ' — ' + ${sum.blockedBy.detail}">blocked</p>
+                <p class="switch-blocked switch-clear" th:if="${sum.blockedBy == null}">
+                    Nothing is blocking the next leg.
+                </p>
+            </div>
+
+            <!--
+              Cash per account and currency, never netted across either — a sell raising £10,000 in
+              one wrapper and a buy needing $13,450 in another is not cash-neutral, it is two brokers
+              and a conversion apart, which is the whole reason the buy cannot simply be placed.
+            -->
+            <div class="ladder-totals" th:if="${!#lists.isEmpty(sum.cash)}">
+                <div class="ladder-cash">
+                    <span class="lbl">Cash the unfilled legs need, by account</span>
+                    <div class="ladder-cash-line" th:each="c : ${sum.cash}">
+                        <span class="acct" th:text="${c.account}">Account</span>
+                        <span th:if="${c.raises.signum() > 0}" class="val-pos"
+                              th:text="'raises ' + ${#numbers.formatDecimal(c.raises, 1, 'COMMA', 2, 'POINT')} + ' ' + ${c.currency}">raises</span>
+                        <span th:if="${c.needs.signum() > 0}" class="val-neg"
+                              th:text="'needs ' + ${#numbers.formatDecimal(c.needs, 1, 'COMMA', 2, 'POINT')} + ' ' + ${c.currency}">needs</span>
+                    </div>
+                </div>
+            </div>
+
+            <ul class="ladder-excluded" th:if="${!#lists.isEmpty(sum.excluded)}">
+                <li th:each="x : ${sum.excluded}" th:text="${x}">excluded</li>
+            </ul>
+            <ul class="ladder-excluded" th:if="${!#lists.isEmpty(s.offShape)}">
+                <li th:each="x : ${s.offShape}" th:text="${x}">off shape</li>
+            </ul>
+
+            <!-- The legs themselves, one table per side. Which side an order is on is read from its
+                 listing, so the two tables are the two lines and nothing has to be chosen. -->
+            <div th:replace="~{fragments/switches :: legs(${s.outLegs}, ${s.from()}, 'Selling', ${s})}"></div>
+            <div th:replace="~{fragments/switches :: legs(${s.inLegs}, ${s.to()}, 'Buying', ${s})}"></div>
+
+            <div class="ladder-actions">
+
+                <!--
+                  Membership is created here and only here. Two orders four characters apart on the
+                  same exchange are not evidence of a switch; a guess would stop counting a real
+                  rotation as a change of exposure.
+                -->
+                <details class="ladder-add">
+                    <summary>Add orders</summary>
+                    <form hx-post="/switches/legs/add" hx-target="#switches-result" hx-swap="innerHTML"
+                          th:with="cands=${orders.switches.assignableFor(s)}">
+                        <input type="hidden" name="id" th:value="${s.group.id}"/>
+                        <p class="muted" th:if="${#lists.isEmpty(cands)}"
+                           th:text="'No unassigned orders on ' + ${s.from()} + ' or ' + ${s.to()} + ' — resting or recently closed.'">none</p>
+                        <label class="ladder-cand" th:each="c : ${cands}">
+                            <input type="checkbox" name="orderKey" th:value="${c.key}"/>
+                            <span th:text="${c.broker} + ' · ' + ${c.symbol} + ' ' + ${c.side} + ' '
+                                  + (${c.quantity} != null ? ${#numbers.formatDecimal(c.quantity, 1, 'COMMA', 2, 'POINT')} : '?')
+                                  + ' @ ' + (${c.price} != null ? ${#numbers.formatDecimal(c.price, 1, 'COMMA', 2, 'POINT')} : '?')">order</span>
+                            <span class="rung-state" th:classappend="${c.closed() ? 'state-filled' : 'state-working'}"
+                                  th:text="${c.closed() ? c.state + ' ' + c.closedAt : c.state}">state</span>
+                        </label>
+                        <button type="submit" th:unless="${#lists.isEmpty(cands)}">Add to switch</button>
+                    </form>
+                </details>
+
+                <!--
+                  On a switch the unplaceable leg is the normal state, not the exception: the buy
+                  cannot be placed until the proceeds have settled, moved broker and been converted.
+                  Recording it is what makes the commitment visible and what gives the sequencing
+                  above something to be blocked on.
+                -->
+                <details class="ladder-add">
+                    <summary>Record an intended leg</summary>
+                    <form class="ladder-form" hx-post="/switches/intents/add"
+                          hx-target="#switches-result" hx-swap="innerHTML">
+                        <input type="hidden" name="id" th:value="${s.group.id}"/>
+                        <label>Account
+                            <select name="account">
+                                <option th:each="a : ${orders.switches.accounts}" th:value="${a}"
+                                        th:text="${a}">Account</option>
+                            </select>
+                        </label>
+                        <label>Side
+                            <select name="side"
+                                    title="The side names the listing: selling is the line you are leaving, buying the line you are moving into. Nothing else has to be chosen.">
+                                <option value="Buy" th:text="'Buy ' + ${s.to()}">Buy</option>
+                                <option value="Sell" th:text="'Sell ' + ${s.from()}">Sell</option>
+                            </select>
+                        </label>
+                        <label>Qty
+                            <input name="quantity" type="number" step="any" min="0" size="7" required/>
+                        </label>
+                        <label>Price
+                            <input name="price" type="number" step="any" min="0" size="9"
+                                   title="In that listing's own quote currency — the sterling line in pounds, the dollar line in dollars, as the table prints them."/>
+                        </label>
+                        <label>Note
+                            <input name="note" type="text" size="20" placeholder="why this leg"/>
+                        </label>
+                        <button type="submit">Record</button>
+                    </form>
+                </details>
+            </div>
+        </article>
+    </section>
+</div>
+
+<!--
+  One side's prices, on the listing's own terms and on the yardstick beside them. Both columns are
+  always shown: the native price is what the broker screen says and what the user typed, and the GBP
+  one is the only pair of numbers that can be compared.
+-->
+<div th:fragment="comparison(c, label, why, s)" class="switch-compare-block"
+     th:if="${c.out.present() or c.in.present()}">
+    <div class="lbl" th:text="${label}" th:title="${why}">label</div>
+    <table class="ladder-rungs switch-yardstick">
+        <thead>
+        <tr>
+            <th class="txt">Leg</th>
+            <th>Units</th>
+            <th>Price</th>
+            <th title="The same price converted at today's rate. This is the only column the two legs can be read against each other in.">In GBP</th>
+            <th title="Where your own average sits against this listing's market price — a limit above the market is positive. Note the direction: the leg tables lower down carry the orders table's own 'vs mkt', which measures the opposite way, how far the market sits from the limit. Both are currency-free, which is what lets this one stand as the non-FX half of the split.">Limit vs market</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:with="leg=${c.out}">
+            <td class="txt" th:text="'Sell ' + ${leg.symbol}">Sell</td>
+            <td th:text="${leg.quantity != null ? #numbers.formatDecimal(leg.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:text="${leg.avgPrice != null ? leg.currencySymbol() + #numbers.formatDecimal(leg.avgPrice, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:text="${leg.avgPriceGbp != null ? '£' + #numbers.formatDecimal(leg.avgPriceGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:classappend="${leg.vsMarketPct != null ? (leg.vsMarketPct.signum() > 0 ? 'val-pos' : 'val-neg') : ''}"
+                th:text="${leg.vsMarketPct != null
+                         ? (leg.vsMarketPct.signum() > 0 ? '+' : '')
+                           + #numbers.formatDecimal(leg.vsMarketPct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'
+                         : '—'}">—</td>
+        </tr>
+        <tr th:with="leg=${c.in}">
+            <td class="txt" th:text="'Buy ' + ${leg.symbol}">Buy</td>
+            <td th:text="${leg.quantity != null ? #numbers.formatDecimal(leg.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:text="${leg.avgPrice != null ? leg.currencySymbol() + #numbers.formatDecimal(leg.avgPrice, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:text="${leg.avgPriceGbp != null ? '£' + #numbers.formatDecimal(leg.avgPriceGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:classappend="${leg.vsMarketPct != null ? (leg.vsMarketPct.signum() > 0 ? 'val-pos' : 'val-neg') : ''}"
+                th:text="${leg.vsMarketPct != null
+                         ? (leg.vsMarketPct.signum() > 0 ? '+' : '')
+                           + #numbers.formatDecimal(leg.vsMarketPct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'
+                         : '—'}">—</td>
+        </tr>
+        <tr class="switch-net" th:if="${c.complete()}">
+            <td class="txt">Difference</td>
+            <td></td>
+            <td class="muted" title="Two prices in two currencies. This column cannot be subtracted, which is why the one beside it exists.">not comparable</td>
+            <td th:classappend="${c.costly() ? 'val-neg' : 'val-pos'}"
+                th:text="${(c.costly() ? '+' : '') + '£'
+                         + #numbers.formatDecimal(c.perUnitGbp, 1, 'COMMA', 4, 'POINT')}">—</td>
+            <td th:classappend="${c.costly() ? 'val-neg' : 'val-pos'}"
+                th:text="${(c.costly() ? '+' : '')
+                         + #numbers.formatDecimal(c.costPct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'}">—</td>
+        </tr>
+        </tbody>
+    </table>
+</div>
+
+<!--
+  One leg of the switch. A real order and an intended one are the same row, for the reason a ladder's
+  are: everything the panel does with a leg is the same question for both, and the analytics come
+  from the same enrichment pass.
+-->
+<div th:fragment="legs(rungs, symbol, verb, s)" class="switch-legs" th:if="${!#lists.isEmpty(rungs)}">
+    <div class="lbl" th:text="${verb} + ' ' + ${symbol}">Selling SYM</div>
+    <table class="ladder-rungs">
+        <thead>
+        <tr>
+            <th>Price</th>
+            <th>Qty</th>
+            <th class="txt">Account</th>
+            <th class="txt">State</th>
+            <th title="How far the market sits from this leg's price. Positive = market above it.">vs mkt</th>
+            <th th:text="'P(' + ${T(com.portfolio.application.GroupRungs).NEAR_HORIZON_SESSIONS} + ')'"
+                title="Probability the market touches this leg's price at least once within 10 trading sessions — the same first-passage model and horizon-matched volatility forecast the orders table uses, on a horizon fixed across every leg so the two sides can be read against each other.">P(10)</th>
+            <th th:text="'P(' + ${T(com.portfolio.application.GroupRungs).FAR_HORIZON_SESSIONS} + ')'"
+                title="The same over 30 trading sessions. On a switch this is the sequencing question: how likely is the sell to fill, and how likely is the buy to be there when the cash finally arrives.">P(30)</th>
+            <th class="txt">Note</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="r : ${rungs}" class="ladder-rung"
+            th:classappend="${(r.intended() ? 'rung-intended ' : '')
+                           + (r.filled() ? 'rung-filled ' : '')
+                           + (r.gone() ? 'rung-gone ' : '')
+                           + (r.sell() ? 'rung-sell' : 'rung-buy')}"
+            th:attr="data-symbol=${orders.chartableSymbols.contains(symbol) ? symbol : null}">
+            <td th:text="${r.price != null ? r.currencySymbol() + #numbers.formatDecimal(r.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:text="${r.quantity != null ? #numbers.formatDecimal(r.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td class="txt" th:text="${r.account}">Account</td>
+            <td class="txt">
+                <span class="rung-state" th:classappend="'state-' + ${r.state.name().toLowerCase()}"
+                      th:text="${r.state.label()}"
+                      th:title="${r.intended()
+                            ? 'Decided but not placed — it exists only in this panel and never in the orders table. On a switch that is the ordinary state of the buy leg.'
+                            : (r.closedAt != null ? 'Closed ' + r.closedAt.toString() : 'Resting at the broker.')}">State</span>
+            </td>
+            <td th:with="o=${r.order}"
+                th:classappend="${o != null and o.distancePct != null
+                                ? (o.distancePct.signum() > 0 ? 'val-pos' : (o.distancePct.signum() < 0 ? 'val-neg' : '')) : ''}"
+                th:text="${o != null and o.distancePct != null
+                         ? (o.distancePct.signum() > 0 ? '+' : '')
+                           + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'
+                         : '—'}">—</td>
+            <td th:with="near=${T(com.portfolio.application.GroupRungs).NEAR_HORIZON_SESSIONS}"
+                th:classappend="${r.lapsesBefore(near)} ? 'rung-lapses' : ''"
+                th:title="${r.lapsesBefore(near)
+                          ? 'This order expires in ' + r.sessionsToExpiry() + ' sessions, inside the ' + near
+                            + '-session window — it cannot fill over the whole of it. The table below prices it to its own deadline.'
+                          : null}"
+                th:text="${r.touchNear != null
+                         ? (r.lapsesBefore(near) ? '~' : '')
+                           + #numbers.formatDecimal(r.touchNear.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
+                         : '—'}">—</td>
+            <td th:with="far=${T(com.portfolio.application.GroupRungs).FAR_HORIZON_SESSIONS}"
+                th:classappend="${r.lapsesBefore(far)} ? 'rung-lapses' : ''"
+                th:title="${r.lapsesBefore(far)
+                          ? 'This order expires in ' + r.sessionsToExpiry() + ' sessions, inside the ' + far
+                            + '-session window — it cannot fill over the whole of it. The table below prices it to its own deadline.'
+                          : null}"
+                th:text="${r.touchFar != null
+                         ? (r.lapsesBefore(far) ? '~' : '')
+                           + #numbers.formatDecimal(r.touchFar.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
+                         : '—'}">—</td>
+            <td class="txt rung-note" th:text="${r.note != null ? r.note : ''}"></td>
+            <td class="txt rung-act">
+                <!-- Targets the whole panel, not just this block: linking can move the note onto the
+                     order, and that note is a cell of the table below. -->
+                <form class="ladder-inline" th:if="${r.intended()}" hx-post="/switches/intents/placed"
+                      hx-target="#orders-result" hx-swap="innerHTML"
+                      th:with="cands=${orders.switches.assignableFor(s)}">
+                    <input type="hidden" name="intentId" th:value="${r.intentId}"/>
+                    <select name="orderKey" th:if="${!#lists.isEmpty(cands)}"
+                            title="Placed it? Name the order it became. The note moves across if that order has none of its own.">
+                        <option value="">placed as…</option>
+                        <option th:each="c : ${cands}" th:value="${c.key}"
+                                th:text="${c.broker} + ' ' + ${c.symbol} + ' ' + ${c.side} + ' @ '
+                                         + (${c.price} != null ? ${#numbers.formatDecimal(c.price, 1, 'COMMA', 2, 'POINT')} : '?')
+                                         + ' (' + ${c.state} + ')'">order</option>
+                    </select>
+                    <button type="submit" th:if="${!#lists.isEmpty(cands)}" title="Link this intended leg to the order it became">Link</button>
+                </form>
+                <form class="ladder-inline" th:if="${r.intended()}" hx-post="/switches/intents/delete"
+                      hx-target="#switches-result" hx-swap="innerHTML">
+                    <input type="hidden" name="intentId" th:value="${r.intentId}"/>
+                    <button type="submit" class="ladder-x" title="Delete this intended leg">×</button>
+                </form>
+                <form class="ladder-inline" th:unless="${r.intended()}" hx-post="/switches/legs/remove"
+                      hx-target="#switches-result" hx-swap="innerHTML">
+                    <input type="hidden" name="orderKey" th:value="${r.key}"/>
+                    <button type="submit" class="ladder-x"
+                            title="Take this order out of the switch. The order itself is untouched.">×</button>
+                </form>
+            </td>
+        </tr>
+        </tbody>
+    </table>
+</div>
+
+</body>
+</html>

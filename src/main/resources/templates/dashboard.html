@@ -425,6 +425,92 @@
         html[data-theme="dark"] .ladder-rungs th { color: #9aa0a6; }
         html[data-theme="dark"] .ladder-badge { background: #1b2733; }
 
+        /* ── Share-class switches (Open orders tab) ───────────────────────────────
+           One holding moving between two listings of the same fund. It reuses the ladder's tables
+           and state badges — a leg and a rung are the same object — and adds only what a switch
+           needs and a ladder has no use for: the two-line header, the three-state progress bar, the
+           one-yardstick comparison, and the sequence of things that have to happen before the buy
+           leg can be placed at all. */
+        .switch-hint { font-size: 0.75rem; margin: 0.2rem 0 0; max-width: 34rem; }
+        .switch-pair { display: inline-flex; align-items: center; gap: 0.35rem; }
+        .switch-arrow { color: #1f77b4; font-weight: 700; }
+        .switch-flight { background: #fdf3e3; color: #a9740a; }
+        .switch-del { margin-left: auto; }
+        /* The premise, stated on every card. The panel exists to stop a switch reading as a change
+           of position, and a reader who skims must not have to infer that. */
+        .switch-premise { font-size: 0.78rem; color: #555; margin: 0.15rem 0 0.4rem; }
+
+        .switch-progress { margin: 0.4rem 0 0.5rem; }
+        .switch-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden;
+            background: #f0f0f0; }
+        .switch-bar .seg { display: block; height: 100%; }
+        /* Three colours for three states, and the middle one is the point of the bar: units sold
+           and not bought back are in neither line and own nothing. */
+        .seg-old { background: #9aa0a6; }
+        .seg-flight { background: #e0a53a; }
+        .seg-new { background: #1f77b4; }
+        .switch-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.76rem;
+            margin-top: 0.25rem; }
+        .switch-legend .key { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+            margin-right: 0.3rem; }
+        .key-old { background: #9aa0a6; }
+        .key-flight { background: #e0a53a; }
+        .key-new { background: #1f77b4; }
+        .switch-note { font-size: 0.76rem; margin: 0.2rem 0; }
+
+        .switch-compare { display: flex; flex-wrap: wrap; gap: 0.6rem 1.6rem; }
+        .switch-compare-block { flex: 1 1 22rem; min-width: 18rem; }
+        .switch-compare-block .lbl, .switch-steps .lbl, .switch-basis .lbl {
+            font-size: 0.76rem; color: #777; }
+        .switch-yardstick { margin-top: 0.2rem; }
+        .switch-net td { border-top: 1px solid #ccc; font-weight: 600; }
+
+        .switch-split { margin: 0.5rem 0 0.3rem; font-size: 0.8rem; }
+        .switch-headline { font-weight: 600; font-size: 0.86rem; }
+        .switch-headline .muted { font-weight: 400; }
+        .switch-rate { margin: 0.2rem 0; max-width: 46rem; }
+        .switch-terms { margin: 0.2rem 0; padding-left: 1.1rem; }
+        .switch-terms li { margin: 0.05rem 0; }
+        .switch-caveat { font-size: 0.74rem; margin: 0.15rem 0 0; }
+        .switch-wide { color: #d62728; }
+
+        .switch-basis { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem;
+            font-size: 0.8rem; margin: 0.3rem 0; }
+        .switch-basis .val { font-weight: 600; }
+        .switch-warn { flex-basis: 100%; font-size: 0.75rem; color: #d62728; }
+
+        .switch-steps { margin: 0.5rem 0 0.3rem; font-size: 0.8rem; }
+        .switch-steps ol { margin: 0.2rem 0; padding-left: 1.3rem; }
+        .switch-steps li { margin: 0.1rem 0; }
+        .switch-steps .step-title { font-weight: 600; }
+        .switch-steps .step-detail { color: #555; margin-left: 0.4rem; }
+        /* The state of a step is carried by colour on the marker only, never by hiding the step:
+           "not needed" is a fact worth reading — it says the two legs share an account or a
+           currency, which is the whole difficulty this list is about. */
+        .step-done::marker { color: #2ca02c; }
+        .step-waiting::marker { color: #e0a53a; }
+        .step-short::marker { color: #d62728; }
+        .step-not-needed { color: #999; }
+        .step-not-needed .step-detail { color: #999; }
+        .step-info::marker { color: #1f77b4; }
+        .step-unknown::marker { color: #999; }
+        .switch-blocked { font-weight: 600; font-size: 0.8rem; margin: 0.2rem 0 0; color: #a9740a; }
+        .switch-clear { color: #2ca02c; }
+
+        .switch-legs { margin-top: 0.4rem; }
+        .switch-legs .lbl { font-size: 0.76rem; color: #777; }
+
+        html[data-theme="dark"] .switch-premise,
+        html[data-theme="dark"] .switch-steps .step-detail { color: #9aa0a6; }
+        html[data-theme="dark"] .switch-compare-block .lbl,
+        html[data-theme="dark"] .switch-steps .lbl,
+        html[data-theme="dark"] .switch-legs .lbl,
+        html[data-theme="dark"] .switch-basis .lbl { color: #9aa0a6; }
+        html[data-theme="dark"] .switch-bar { background: #26292e; }
+        html[data-theme="dark"] .switch-net td { border-top-color: #3a3d42; }
+        html[data-theme="dark"] .switch-flight { background: #2c2416; color: #e0b055; }
+        html[data-theme="dark"] .switch-wide, html[data-theme="dark"] .switch-warn { color: #f08080; }
+
         .tabs {
             display: flex;
             gap: 0;

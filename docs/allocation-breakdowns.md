@@ -1,5 +1,12 @@
 # Allocation breakdowns (sector, style, AI/Tech)
 
+**One row per holding, not per listing.** Everything below is keyed by the symbols
+`AllocationService` produces, and those are folded by `domain/ShareClasses` first: two listings the
+user has declared a share-class switch between are one position, counted under the line the switch is
+leaving. Each listing is still valued on its own quote in its own currency — only the GBP results are
+added — so the fold changes no total, and the same rule is applied to concentration and currency
+exposure. Why, and what would otherwise go wrong: [share-class-switches.md](share-class-switches.md).
+
 ## Investment-style breakdown (growth vs value/income)
 
 Current-snapshot composition by **investment style**, rendered at the very **top of Allocation →

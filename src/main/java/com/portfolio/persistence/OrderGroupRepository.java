@@ -41,7 +41,14 @@ import java.util.Set;
  *
  * <p><b>One order belongs to at most one group</b> ({@code order_key} is the member table's primary
  * key, not a pair). A rung counted in two ladders would be counted twice in the cash each needs,
- * which is the figure the panel exists to get right.
+ * which is the figure the panel exists to get right. The key is unique across <em>types</em> too,
+ * so an order cannot be a ladder rung and a switch leg at once - it is one order and it was placed
+ * for one reason.
+ *
+ * <p><b>The table is type-agnostic and stays that way.</b> It holds ladders and share-class
+ * switches side by side and knows the difference only as a string in {@code type}. A switch's second
+ * listing is one more nullable column; which types may use it, which orders may be assigned to it
+ * and how its legs are read are all decisions of the per-type assemblers in {@code application}.
  *
  * <p>Write paths throw {@link IllegalStateException} (the app-wide convention - the caller renders
  * the error fragment); reads log and degrade to empty, since a panel that cannot list ladders
@@ -57,6 +64,7 @@ public class OrderGroupRepository {
                 type        TEXT NOT NULL,
                 name        TEXT NOT NULL,
                 symbol      TEXT,
+                symbol_to   TEXT,
                 note        TEXT,
                 created_at  TEXT NOT NULL
             )""";
@@ -92,8 +100,34 @@ public class OrderGroupRepository {
                     + "ON order_group_member(group_id)");
             ddl.execute("CREATE INDEX IF NOT EXISTS idx_group_intent_group "
                     + "ON order_group_intent(group_id)");
+            // A database created before share-class switches existed has no second symbol column.
+            // Additive and nullable, so it needs no table rebuild and no data migration: every row
+            // already there is a ladder, and a ladder's second symbol is null by definition.
+            addColumnIfMissing(conn, "order_group", "symbol_to", "TEXT");
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise the order-group tables", e);
+        }
+    }
+
+    /**
+     * Add a column to an existing table when it is not already there.
+     *
+     * <p>Kept deliberately narrow — no rebuild, no copy, no constraint change — because that is the
+     * only migration this table is allowed to need. A column that is nullable and unread by older
+     * code can be added under a running schema; anything beyond that (a rename, a new NOT NULL)
+     * would be a data migration and belongs in its own method with its own reason written down.
+     */
+    private static void addColumnIfMissing(Connection conn, String table, String column,
+                                           String type) throws Exception {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("name"))) return;
+            }
+        }
+        try (Statement st = conn.createStatement()) {
+            st.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + type);
+            log.info("Added {}.{} to an existing database", table, column);
         }
     }
 
@@ -109,7 +143,7 @@ public class OrderGroupRepository {
         try (Connection conn = connections.open();
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
-                     "SELECT id, type, name, symbol, note, created_at FROM order_group "
+                     "SELECT id, type, name, symbol, note, created_at, symbol_to FROM order_group "
                              + "ORDER BY created_at DESC, id DESC")) {
             while (rs.next()) {
                 GroupType type = GroupType.fromDb(rs.getString(2));
@@ -118,7 +152,7 @@ public class OrderGroupRepository {
                     continue;
                 }
                 out.add(new OrderGroup(rs.getLong(1), type, rs.getString(3), rs.getString(4),
-                        rs.getString(5), LocalDate.parse(rs.getString(6))));
+                        rs.getString(7), rs.getString(5), LocalDate.parse(rs.getString(6))));
             }
         } catch (Exception e) {
             log.warn("Could not load order groups", e);
@@ -199,25 +233,34 @@ public class OrderGroupRepository {
 
     // ---- writes ------------------------------------------------------------
 
-    /** Create a group. Returns its id. */
-    public long create(GroupType type, String name, String symbol, String note, LocalDate today) {
+    /**
+     * Create a group. Returns its id.
+     *
+     * @param symbolTo the second listing, for a share-class switch; null for a ladder. The storage
+     *                 does not police which types use it — that is the assembler's rule, and this
+     *                 table has stayed type-agnostic on purpose.
+     */
+    public long create(GroupType type, String name, String symbol, String symbolTo, String note,
+                       LocalDate today) {
         if (type == null) throw new IllegalStateException("A group needs a type.");
-        if (name == null || name.isBlank()) throw new IllegalStateException("Give the ladder a name.");
+        if (name == null || name.isBlank()) throw new IllegalStateException("Give the group a name.");
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
-                     "INSERT INTO order_group (type, name, symbol, note, created_at) VALUES (?,?,?,?,?)",
+                     "INSERT INTO order_group (type, name, symbol, symbol_to, note, created_at) "
+                             + "VALUES (?,?,?,?,?,?)",
                      Statement.RETURN_GENERATED_KEYS)) {
             ps.setString(1, type.name());
             ps.setString(2, name.trim());
             ps.setString(3, symbol == null || symbol.isBlank() ? null : symbol.trim().toUpperCase());
-            ps.setString(4, note == null || note.isBlank() ? null : note.trim());
-            ps.setString(5, today.toString());
+            ps.setString(4, symbolTo == null || symbolTo.isBlank() ? null : symbolTo.trim().toUpperCase());
+            ps.setString(5, note == null || note.isBlank() ? null : note.trim());
+            ps.setString(6, today.toString());
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 return keys.next() ? keys.getLong(1) : -1;
             }
         } catch (Exception e) {
-            throw new IllegalStateException("Could not create the ladder: " + e.getMessage(), e);
+            throw new IllegalStateException("Could not create the group: " + e.getMessage(), e);
         }
     }
 
@@ -243,7 +286,7 @@ public class OrderGroupRepository {
                 conn.setAutoCommit(autoCommit);
             }
         } catch (Exception e) {
-            throw new IllegalStateException("Could not delete the ladder: " + e.getMessage(), e);
+            throw new IllegalStateException("Could not delete the group: " + e.getMessage(), e);
         }
     }
 
@@ -266,7 +309,7 @@ public class OrderGroupRepository {
             }
             ps.executeBatch();
         } catch (Exception e) {
-            throw new IllegalStateException("Could not add the rung(s): " + e.getMessage(), e);
+            throw new IllegalStateException("Could not add the order(s): " + e.getMessage(), e);
         }
     }
 
@@ -275,7 +318,7 @@ public class OrderGroupRepository {
         try (Connection conn = connections.open()) {
             exec(conn, "DELETE FROM order_group_member WHERE order_key = ?", orderKey);
         } catch (Exception e) {
-            throw new IllegalStateException("Could not remove the rung: " + e.getMessage(), e);
+            throw new IllegalStateException("Could not remove the order: " + e.getMessage(), e);
         }
     }
 

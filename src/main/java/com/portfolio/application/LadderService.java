@@ -5,19 +5,15 @@ import com.portfolio.domain.model.GroupType;
 import com.portfolio.domain.model.IntendedRung;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.domain.model.OrderGroup;
-import com.portfolio.domain.model.OrderStatus;
 import com.portfolio.domain.model.Rung;
 import com.portfolio.persistence.OrderGroupRepository;
 import com.portfolio.persistence.OrderHistoryRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -52,31 +48,12 @@ import java.util.function.Function;
  */
 public class LadderService {
 
-    private static final Logger log = LoggerFactory.getLogger(LadderService.class);
-
     /**
-     * The two horizons every rung's fill probability is priced over, in trading sessions.
-     *
-     * <p><b>Fixed, and named in the column headings</b> — {@code P(10)} and {@code P(30)}, not
-     * {@code P(N)}. The orders table prices each row over that order's own deadline, which is the
-     * right question for one order sitting on its own; on a ladder it is the wrong one, because the
-     * rungs are a single decision and the reader is comparing them with each other. A column whose
-     * horizon silently changes per row cannot be compared down its own length, and "N" on screen
-     * does not say what it is.
-     *
-     * <p>10 and 30 rather than the 5 and 20 the pre-trade probe uses, on the evidence: ladder rungs
-     * are deliberately placed away from the market, and over 5 sessions a real NVDA ladder priced
-     * 1.3% / 42.5% / 11.0% / 0.1% — three rungs reading "nothing happens", which says nothing about
-     * the ladder's shape. The same rungs at 10 and 30 sessions spread to 7.8–57.3% and 17.9–74.6%,
-     * where the ordering is legible and the near/far pair says which rungs are live now and which
-     * are the patient ones.
-     *
-     * <p>These are horizons, not volatility windows. That RV10 and RV30 share the numbers is a
-     * coincidence and not a reason: σ is <em>forecast</em> for a horizon, never a trailing window of
-     * the same length — see {@code domain/VolForecast}.
+     * The two fixed horizons a rung is priced over. They live on {@link GroupRungs} because every
+     * group panel shares them — see that class for why they are fixed and why they are 10 and 30.
      */
-    public static final int NEAR_HORIZON_SESSIONS = 10;
-    public static final int FAR_HORIZON_SESSIONS = 30;
+    public static final int NEAR_HORIZON_SESSIONS = GroupRungs.NEAR_HORIZON_SESSIONS;
+    public static final int FAR_HORIZON_SESSIONS = GroupRungs.FAR_HORIZON_SESSIONS;
 
     /** The broker a synthetic intent order is stamped with is the account the user chose. */
     private final OrderGroupRepository groups;
@@ -99,11 +76,8 @@ public class LadderService {
      * Synthetic orders standing in for every intended rung, for the caller to enrich alongside the
      * real ones.
      *
-     * <p>Stamped with the user's chosen account as the broker and {@code intent:<id>} as the
-     * reference, so {@link OpenOrder#identity()} comes back as a key that can never collide with a
-     * broker's own. Status is "Intended", which {@link OrderStatus} does not recognise and therefore
-     * classifies as UNKNOWN - open, which is what an intent is. Duration is GTC because an intent
-     * has no deadline, so the touch probability is priced over the same horizon a GTC order gets.
+     * <p>The construction is {@link GroupRungs#syntheticOrder}, shared with every other group type
+     * so an intended rung is the same object wherever it is shown.
      *
      * @param quoteCurrency the instrument's own quote currency, asked of the caller rather than
      *                      stored on the intent: the feed publishes it, so storing it would be a
@@ -115,13 +89,10 @@ public class LadderService {
         Map<Long, List<IntendedRung>> byGroup = groups.intents();
         if (byGroup.isEmpty()) return out;
         for (OrderGroup g : groups.groups()) {
+            if (!g.isLadder()) continue;
             for (IntendedRung r : byGroup.getOrDefault(g.id(), List.of())) {
                 String ccy = g.symbol() == null ? null : quoteCurrency.apply(g.symbol());
-                BigDecimal amount = r.quantity() == null || r.price() == null
-                        ? null : r.quantity().multiply(r.price());
-                out.add(OpenOrder.parsed(r.account(), g.symbol(), null, r.side(), "Limit",
-                        r.quantity(), r.price(), false, amount, ccy, r.createdAt(), null, "GTC",
-                        "Intended", r.reference()));
+                out.add(GroupRungs.syntheticOrder(r, g.symbol(), ccy));
             }
         }
         return out;
@@ -142,19 +113,23 @@ public class LadderService {
      *                 sessions. Supplied by the caller for the same reason the enrichment is: the
      *                 first-passage model lives in one place, and a ladder column computing its own
      *                 would be a second implementation that eventually disagrees with the table.
+     *                 See {@link GroupRungs.TouchPricer}.
      */
     public LadderReport assemble(List<OpenOrder> live, List<OpenOrder> intents,
                                  List<OrderHistoryRepository.HistoricalOrder> history,
                                  Map<String, String> notes, List<String> accounts,
-                                 TouchPricer touch) {
+                                 GroupRungs.TouchPricer touch) {
         List<String> warnings = new ArrayList<>();
-        List<OrderGroup> all = groups.groups();
+        // Ladders only. A group of another type has its own assembler with its own shape, and
+        // reading one here would lay two listings of a fund on a single price axis that means
+        // nothing for them - the exact mistake GroupType exists to prevent.
+        List<OrderGroup> all = groups.groups().stream().filter(OrderGroup::isLadder).toList();
         if (all.isEmpty()) {
             return new LadderReport(List.of(), List.of(), accounts, warnings);
         }
 
-        Map<String, OpenOrder> liveByKey = byKey(live);
-        Map<String, OpenOrder> intentByKey = byKey(intents);
+        Map<String, OpenOrder> liveByKey = GroupRungs.byKey(live);
+        Map<String, OpenOrder> intentByKey = GroupRungs.byKey(intents);
         Map<String, OrderHistoryRepository.HistoricalOrder> closedByKey = new HashMap<>();
         for (OrderHistoryRepository.HistoricalOrder h : history) closedByKey.put(h.orderKey(), h);
 
@@ -165,7 +140,7 @@ public class LadderService {
         for (OrderGroup g : all) {
             List<Rung> rungs = new ArrayList<>();
             for (String key : members.getOrDefault(g.id(), List.of())) {
-                Rung r = realRung(key, liveByKey, closedByKey, notes, touch);
+                Rung r = GroupRungs.realRung(key, liveByKey, closedByKey, notes, touch);
                 if (r == null) {
                     warnings.add(g.name() + ": a rung points at an order that is no longer on file "
                             + "(" + key + "). Remove it from the ladder.");
@@ -174,11 +149,8 @@ public class LadderService {
                 rungs.add(r);
             }
             for (IntendedRung i : intentRows.getOrDefault(g.id(), List.of())) {
-                OpenOrder o = intentByKey.get(i.account() + "|" + i.reference());
-                rungs.add(new Rung(i.reference(), i.id(), i.account(), i.side(), i.quantity(),
-                        i.price(), o == null ? null : o.currency(), Rung.State.INTENDED, null,
-                        i.note(), o, touch.at(o, NEAR_HORIZON_SESSIONS),
-                        touch.at(o, FAR_HORIZON_SESSIONS)));
+                rungs.add(GroupRungs.intendedRung(
+                        i, intentByKey.get(i.account() + "|" + i.reference()), touch));
             }
 
             List<Rung> ordered = Ladders.byPrice(rungs);
@@ -188,60 +160,6 @@ public class LadderService {
         }
 
         return new LadderReport(ladders, unassigned(live, history), accounts, warnings);
-    }
-
-    /**
-     * A rung that came from a broker. Live first: an order still resting is the richer record and
-     * the only one carrying the enrichment. Failing that the history, which is where an order goes
-     * when it fills, is cancelled, or stops being listed.
-     *
-     * <p>Null when the key is in neither. That happens to a rung whose order was pruned before
-     * ladders existed to protect it, and it is reported rather than dropped silently - a ladder
-     * quietly one rung short is a wrong total.
-     */
-    private Rung realRung(String key, Map<String, OpenOrder> live,
-                          Map<String, OrderHistoryRepository.HistoricalOrder> closed,
-                          Map<String, String> notes, TouchPricer touch) {
-        OpenOrder o = live.get(key);
-        if (o != null) {
-            return new Rung(key, null, o.broker(), o.side(), o.quantity(), o.price(), o.currency(),
-                    Rung.State.WORKING, null, notes.get(key), o,
-                    touch.at(o, NEAR_HORIZON_SESSIONS), touch.at(o, FAR_HORIZON_SESSIONS));
-        }
-        OrderHistoryRepository.HistoricalOrder h = closed.get(key);
-        if (h == null) return null;
-        // A closed rung is priced at nothing: it is not resting, so there is no fill to put odds on.
-        return new Rung(key, null, h.broker(), h.side(), h.quantity(), h.price(), h.currency(),
-                stateOf(h), LocalDate.parse(h.closedAt()), h.note(), null, null, null);
-    }
-
-    /**
-     * Prices an enriched order's chance of the market touching its limit within {@code sessions}
-     * trading sessions. Null for an order that could not be priced at all.
-     */
-    @FunctionalInterface
-    public interface TouchPricer {
-        java.math.BigDecimal at(OpenOrder order, int sessions);
-    }
-
-    /**
-     * How a closed order reads as a rung. The vocabulary is {@link OrderStatus}, the same one the
-     * closed-orders table prints, so the two can never disagree about what happened to an order.
-     *
-     * <p>A part-executed order counts as FILLED here for the reason the open/closed filter already
-     * treats it as terminal: it is no longer working. None of the three brokers has yet written
-     * that status, and if one does the round-trip quantity will be its full size rather than the
-     * part that traded - the export carries no other number.
-     */
-    private static Rung.State stateOf(OrderHistoryRepository.HistoricalOrder h) {
-        return switch (OrderStatus.of(h.status())) {
-            case FILLED, PART_FILLED -> Rung.State.FILLED;
-            case CANCELLED, EXPIRED, REJECTED -> Rung.State.CANCELLED;
-            // WORKING or UNKNOWN on a closed row means the broker stopped listing it without ever
-            // saying what became of it. Not counted as a fill: which it was is what the export
-            // declined to say.
-            case WORKING, UNKNOWN -> Rung.State.UNLISTED;
-        };
     }
 
     /**
@@ -265,38 +183,14 @@ public class LadderService {
     }
 
     /**
-     * Orders not in any ladder - what the "add rungs" picker offers. Resting ones first, then the
-     * recently closed.
-     *
-     * <p><b>Closed orders are offered too</b>, and that is not a convenience. The ladder a user most
-     * wants to see is the completed round trip, and the first one they build will usually be a sell
-     * that has already filled paired with a buy still resting: a picker that offered only live
-     * orders could never assemble it, and the panel would take weeks to show the thing it exists
-     * for. The window is whatever the order history is holding - a month, or longer for anything
-     * already a rung, which is never pruned.
+     * Orders in no group - what the "add rungs" picker starts from, before
+     * {@link LadderReport#assignableFor} narrows it to this ladder's own security. The shared list
+     * is built once in {@link GroupRungs#unassigned}; who may be assigned where is this type's rule
+     * and stays here.
      */
-    private List<Candidate> unassigned(List<OpenOrder> live,
-                                       List<OrderHistoryRepository.HistoricalOrder> history) {
-        Set<String> taken = groups.assignedKeys();
-        List<Candidate> out = new ArrayList<>();
-        for (OpenOrder o : live) {
-            String key = o.identity();
-            if (taken.contains(key)) continue;
-            out.add(new Candidate(key, o.broker(), o.symbol(), o.side(), o.quantity(), o.price(),
-                    o.currency(), OrderStatus.WORKING.label(), null));
-        }
-        for (OrderHistoryRepository.HistoricalOrder h : history) {
-            if (taken.contains(h.orderKey())) continue;
-            out.add(new Candidate(h.orderKey(), h.broker(), h.symbol(), h.side(), h.quantity(),
-                    h.price(), h.currency(), h.state(), h.closedAt()));
-        }
-        return out;
-    }
-
-    private static Map<String, OpenOrder> byKey(List<OpenOrder> orders) {
-        Map<String, OpenOrder> out = new LinkedHashMap<>();
-        for (OpenOrder o : orders) out.put(o.identity(), o);
-        return out;
+    private List<GroupRungs.Candidate> unassigned(
+            List<OpenOrder> live, List<OrderHistoryRepository.HistoricalOrder> history) {
+        return GroupRungs.unassigned(live, history, groups.assignedKeys());
     }
 
     // ---- writes ------------------------------------------------------------
@@ -306,7 +200,7 @@ public class LadderService {
         if (symbol == null || symbol.isBlank()) {
             throw new IllegalStateException("A ladder needs a security - give it a symbol.");
         }
-        return groups.create(GroupType.LADDER, name, symbol, null, LocalDate.now());
+        return groups.create(GroupType.LADDER, name, symbol, null, null, LocalDate.now());
     }
 
     public void deleteLadder(long id) {
@@ -347,21 +241,16 @@ public class LadderService {
             throw new IllegalStateException("That intended rung is no longer on file.");
         }
         groups.addMembers(intent.groupId(), List.of(orderKey), LocalDate.now());
-        if (intent.note() != null && !intent.note().isBlank() && orderHistory != null) {
-            String existing = orderHistory.notes().get(orderKey);
-            if (existing == null || existing.isBlank()) {
-                try {
-                    orderHistory.saveNote(orderKey, intent.note());
-                } catch (Exception e) {
-                    // The rung is placed either way; losing the note is not worth failing the move.
-                    log.warn("Could not carry the intended rung's note onto {}", orderKey, e);
-                }
-            }
-        }
+        GroupRungs.carryNote(orderHistory, orderKey, intent.note());
         groups.deleteIntent(intentId);
     }
 
-    /** Every assigned order key - handed to the history pruner so a rung is never deleted. */
+    /**
+     * Every order in <em>any</em> group - handed to the history pruner so a grouped order is never
+     * deleted. The member table is shared across group types (one order, one group, whatever kind),
+     * so this is deliberately not filtered to ladders: a switch's sell leg has to survive until the
+     * buy leg that completes it arrives, which can be months.
+     */
     public Set<String> rungOrderKeys() {
         return new LinkedHashSet<>(groups.assignedKeys());
     }
@@ -393,40 +282,24 @@ public class LadderService {
     }
 
     /**
-     * An order the user could assign to a ladder - resting, or closed inside the history window.
-     *
-     * @param state    what it is doing, in {@link OrderStatus}'s vocabulary, so the picker reads the
-     *                 same way the closed-orders table does
-     * @param closedAt null for a resting order; the date it went for a closed one
-     */
-    public record Candidate(String key, String broker, String symbol, String side,
-                            BigDecimal quantity, BigDecimal price, String currency,
-                            String state, String closedAt) {
-
-        public boolean closed() {
-            return closedAt != null;
-        }
-    }
-
-    /**
      * What the Ladders panel renders.
      *
      * <p>{@link #assignableFor} is the single place the "one group, one security" rule is applied.
      * It is a rule of this group type and not of the storage: a later type whose rungs span two
      * securities changes this method and nothing under it.
      */
-    public record LadderReport(List<Ladder> ladders, List<Candidate> unassigned,
+    public record LadderReport(List<Ladder> ladders, List<GroupRungs.Candidate> unassigned,
                                List<String> accounts, List<String> warnings) {
 
         public boolean isEmpty() {
             return ladders.isEmpty();
         }
 
-        public List<Candidate> assignableFor(Ladder ladder) {
+        public List<GroupRungs.Candidate> assignableFor(Ladder ladder) {
             String symbol = ladder.group().symbol();
             if (symbol == null) return List.of();
-            List<Candidate> out = new ArrayList<>();
-            for (Candidate c : unassigned) {
+            List<GroupRungs.Candidate> out = new ArrayList<>();
+            for (GroupRungs.Candidate c : unassigned) {
                 if (symbol.equalsIgnoreCase(c.symbol())) out.add(c);
             }
             return out;

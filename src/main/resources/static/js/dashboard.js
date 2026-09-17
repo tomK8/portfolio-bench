@@ -315,10 +315,10 @@
             // fetch nothing and read as a broken feature rather than as the missing mapping the
             // panel already offers to add.
             document.body.addEventListener('click', function (e) {
-                // The Ladders block is included on the same terms: its rungs carry data-symbol only
-                // when the ladder's security resolved to a ticker, so an unmapped one stays inert
-                // here for the same reason it does in the table.
-                if (!e.target.closest('#orders-table, #ladders-result')) return;
+                // The Ladders and Share-class switches blocks are included on the same terms: their
+                // rungs and legs carry data-symbol only when the listing resolved to a ticker, so an
+                // unmapped one stays inert here for the same reason it does in the table.
+                if (!e.target.closest('#orders-table, #ladders-result, #switches-result')) return;
                 if (e.target.closest('input, button, a, select, label')) return;  // the days box lives in a cell
                 var el = e.target.closest('tr[data-symbol], .ladder-symbol[data-symbol]');
                 if (el) openSymbolModal(el.dataset.symbol);

@@ -32,6 +32,33 @@ public enum Account {
         return dbValue;
     }
 
+    /**
+     * The label this account is printed under everywhere in the UI, and the same string the order
+     * parsers report as their {@code sourceName()} — so a broker name coming off an order and an
+     * account name coming off the ledger are the same word and can be matched.
+     *
+     * <p>This is the single home for that mapping. Several services still carry a private copy of
+     * it from before this method existed; they should move here as they are next touched, not all
+     * at once in an unrelated change.
+     */
+    public String displayName() {
+        return switch (this) {
+            case AJBELL -> "AJ Bell SIPP";
+            case ROTH_IRA -> "Roth IRA";
+            case II -> "II SIPP";
+            case EQUATE -> "Equate";
+        };
+    }
+
+    /** The account a display label names, or null when it names none. */
+    public static Account fromDisplayName(String label) {
+        if (label == null) return null;
+        for (Account a : values()) {
+            if (a.displayName().equalsIgnoreCase(label.trim())) return a;
+        }
+        return null;
+    }
+
     /** Whether this account's ledger rows are hand-entered rather than parsed from an export. */
     public boolean isManual() {
         return manual;

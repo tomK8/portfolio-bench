@@ -11,6 +11,11 @@
   to, including rungs decided on but never placed. Rungs are laid out by price around the market and
   priced over two **fixed** horizons (`P(10)` / `P(30)`) so they can be read against each other, where
   the table's `P(N)` runs on each order's own deadline. See the Ladders section below.
+- **Share-class switches** — `GET /switches` → `fragments/switches :: list`, rendered inside the Open
+  orders panel beside the Ladders block. One holding moving between two listings of the *same* fund —
+  same ISIN, different trading currency, exchange line and account. Its own shape because a ladder
+  assumes one security and one price spine and these two lines' ratio *is* the exchange rate. See
+  [share-class-switches.md](share-class-switches.md).
 
 
 # Open orders
@@ -530,13 +535,16 @@ else and so carries its own side, quantity and price.
   month's retention would have deleted half of it before the half that completes it arrived. The set
   is passed in rather than read from the group table inside the query, so the history repository goes
   on knowing nothing about ladders and the rule is visible where its reason is.
-- **`GroupType` exists with one constant.** A switch — selling out of one holding to buy into another
-  — is a different shape with different questions (sequencing, ratio, preserving the weight) and
-  flattening it onto a single price axis would answer none of them. What "one group, one security"
-  costs today is paid in exactly three places: the symbol lives on `order_group`,
-  `LadderReport.assignableFor` offers same-symbol orders only, and the view lays rungs on one price
-  axis. All three are decisions of *this* type's assembler, not assumptions in the storage. A group
-  whose `type` this build does not know is dropped with a warning, never read as a ladder.
+- **`GroupType` now has two constants, and the seam held.** The share-class switch that this column
+  was left here for arrived as one new constant, one nullable `symbol_to` column and a second
+  assembler — no change to a table already holding the user's groups. What "one group, one security"
+  costs is paid in exactly three places, all of them this type's assembler and none of them the
+  storage: the symbol lives on `order_group`, `LadderReport.assignableFor` offers same-symbol orders
+  only, and the view lays rungs on one price axis. `LadderService` reads `GroupType.LADDER` groups
+  and nothing else; a group whose `type` this build does not know is still dropped with a warning,
+  never read as a ladder. What the two types genuinely share — building a rung, pricing an intent,
+  the unassigned list, the two fixed horizons — moved to `GroupRungs`, which holds no rule about
+  which orders belong in which group. See [share-class-switches.md](share-class-switches.md).
 
 ## The panel
 

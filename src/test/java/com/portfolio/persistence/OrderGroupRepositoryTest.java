@@ -28,7 +28,7 @@ class OrderGroupRepositoryTest {
     }
 
     private long ladder(OrderGroupRepository r, String name, String symbol) {
-        return r.create(GroupType.LADDER, name, symbol, null, DAY);
+        return r.create(GroupType.LADDER, name, symbol, null, null, DAY);
     }
 
     @Test
@@ -133,6 +133,51 @@ class OrderGroupRepositoryTest {
         assertEquals(1, r.groups().size());
     }
 
+    /** A switch carries both listings; a ladder has one security and no second line at all. */
+    @Test
+    void aSwitchRoundTripsWithBothListingsAndALadderWithNeither() {
+        var r = repo();
+        long switchId = r.create(GroupType.SHARE_CLASS_SWITCH, "Nasdaq line to USD", "eqqq",
+                "eqqu", null, DAY);
+        ladder(r, "NVDA round trip", "NVDA");
+
+        OrderGroup sw = r.groups().stream().filter(g -> g.id() == switchId).findFirst().orElseThrow();
+        assertEquals(GroupType.SHARE_CLASS_SWITCH, sw.type());
+        assertEquals("EQQQ", sw.symbol(), "the line being left");
+        assertEquals("EQQU", sw.symbolTo(), "the line being entered, upper-cased like the first");
+        assertTrue(sw.isSwitch());
+
+        OrderGroup ladder = r.groups().stream().filter(g -> g.id() != switchId).findFirst().orElseThrow();
+        assertNull(ladder.symbolTo(), "a ladder has one security by definition");
+        assertTrue(ladder.isLadder());
+    }
+
+    /**
+     * A database written before switches existed has no second-symbol column, and opening it adds
+     * one rather than rebuilding the table. Every row already there is a ladder, whose second
+     * listing is null anyway.
+     */
+    @Test
+    void aDatabaseWithoutTheSecondSymbolColumnGainsItWithoutLosingItsGroups() throws Exception {
+        try (var conn = new JdbcConnectionFactory(dbDir).open();
+             var st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS order_group");
+            st.execute("CREATE TABLE order_group (id INTEGER PRIMARY KEY, type TEXT NOT NULL, "
+                    + "name TEXT NOT NULL, symbol TEXT, note TEXT, created_at TEXT NOT NULL)");
+            st.executeUpdate("INSERT INTO order_group (type, name, symbol, created_at) "
+                    + "VALUES ('LADDER', 'Older ladder', 'NVDA', '2026-09-01')");
+        }
+
+        var r = repo();
+        assertEquals(1, r.groups().size());
+        assertEquals("Older ladder", r.groups().get(0).name());
+        assertNull(r.groups().get(0).symbolTo());
+        // And the column is now really there — a switch can be written into the same database.
+        assertTrue(r.create(GroupType.SHARE_CLASS_SWITCH, "Nasdaq line to USD", "EQQQ", "EQQU",
+                null, DAY) > 0);
+        assertEquals(2, r.groups().size());
+    }
+
     /** A group written by a build that knows a type this one does not is skipped, never guessed. */
     @Test
     void aGroupOfAnUnknownTypeIsNotReadAsALadder() throws Exception {
@@ -141,7 +186,7 @@ class OrderGroupRepositoryTest {
         try (var conn = new JdbcConnectionFactory(dbDir).open();
              var st = conn.createStatement()) {
             st.executeUpdate("INSERT INTO order_group (type, name, symbol, created_at) "
-                    + "VALUES ('SWITCH', 'Some future thing', 'NVDA', '2026-09-01')");
+                    + "VALUES ('ROTATION', 'Some future thing', 'NVDA', '2026-09-01')");
         }
 
         assertEquals(1, r.groups().size());

@@ -154,6 +154,16 @@
         <div th:replace="~{fragments/ladders :: list}"></div>
     </div>
 
+    <!--
+      Share-class switches, on the same terms and for the same reasons. A switch is nearly always
+      half intended — the buy leg cannot be placed until the proceeds have settled, changed broker
+      and changed currency — so hiding it behind the "no order files" guard would hide the panel
+      precisely when it is doing its job.
+    -->
+    <div id="switches-result">
+        <div th:replace="~{fragments/switches :: list}"></div>
+    </div>
+
     <div th:unless="${orders.empty}">
 
         <p class="muted" th:if="${!orders.sources.isEmpty()}"

@@ -2,6 +2,7 @@ package com.portfolio.application;
 
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.ShareClasses;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.PriceBar;
@@ -52,17 +53,33 @@ public class AllocationService {
     private final HistoricalFxRateProvider fxProvider;
     private final YahooTickerMap tickerMap;
     private final KeyValueStore settings;
+    /**
+     * The listings declared to be one fund. Two lines of one share class are one holding, and every
+     * consumer of these points — the composition chart, concentration, currency, sector and style —
+     * inherits that by the points being folded here rather than each folding them again.
+     */
+    private final ShareClassRegistry shareClasses;
 
     public AllocationService(CashTransactionRepository cashRepo,
                              PriceHistoryRepository priceRepo,
                              HistoricalFxRateProvider fxProvider,
                              YahooTickerMap tickerMap,
                              KeyValueStore settings) {
+        this(cashRepo, priceRepo, fxProvider, tickerMap, settings, ShareClassRegistry.NONE);
+    }
+
+    public AllocationService(CashTransactionRepository cashRepo,
+                             PriceHistoryRepository priceRepo,
+                             HistoricalFxRateProvider fxProvider,
+                             YahooTickerMap tickerMap,
+                             KeyValueStore settings,
+                             ShareClassRegistry shareClasses) {
         this.cashRepo = cashRepo;
         this.priceRepo = priceRepo;
         this.fxProvider = fxProvider;
         this.tickerMap = tickerMap;
         this.settings = settings;
+        this.shareClasses = shareClasses == null ? ShareClassRegistry.NONE : shareClasses;
     }
 
     public AllocationTimeline timeline() {
@@ -118,6 +135,9 @@ public class AllocationService {
 
         Map<String, NavigableMap<LocalDate, PricePoint>> prices = loadPriceSeries(txs);
         Map<String, NavigableMap<LocalDate, BigDecimal>> fx = preloadFx(start, today);
+        // Read once for the whole replay: ~550 samples must not each ask the same question, and a
+        // declaration that changed mid-replay would draw a series that folds only part of itself.
+        ShareClasses holdings = shareClasses.declared();
 
         BigDecimal rothSeedUsd = settings.getBigDecimal(
                 CashTransactionRepository.ROTH_BROUGHT_FORWARD_KEY, BigDecimal.ZERO);
@@ -141,7 +161,7 @@ public class AllocationService {
                     cashByAcctCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
                     rothSeeded = true;
                 }
-                points.add(snapshot(sample, qty, cashByAcctCcy, prices, fx));
+                points.add(snapshot(sample, qty, cashByAcctCcy, prices, fx, holdings));
                 sample = sample.plusDays(SAMPLE_INTERVAL_DAYS);
             }
         }
@@ -159,7 +179,7 @@ public class AllocationService {
             cashByAcctCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
         }
         if (points.isEmpty() || !points.get(points.size() - 1).date().equals(today.toString())) {
-            points.add(snapshot(today, qty, cashByAcctCcy, prices, fx));
+            points.add(snapshot(today, qty, cashByAcctCcy, prices, fx, holdings));
         }
         return new Replay(points, cashDetailGbp(cashByAcctCcy, today, fx), heldQuantities(qty));
     }
@@ -197,11 +217,21 @@ public class AllocationService {
         return out;
     }
 
+    /**
+     * Composition at one sample.
+     *
+     * <p>Each listing is valued on <em>its own</em> quote in its own currency, and only then are the
+     * declared share-class pairs folded together — so nothing here assumes one unit of a fund's
+     * sterling line equals one unit of its dollar line, which is an assumption about units rather
+     * than about money. Folding after valuation also means the totals are identical either way: the
+     * fold moves value between rows, never into or out of the chart.
+     */
     private AllocationPoint snapshot(LocalDate sample,
                                      Map<String, BigDecimal> qty,
                                      Map<String, BigDecimal> cashByAcctCcy,
                                      Map<String, NavigableMap<LocalDate, PricePoint>> prices,
-                                     Map<String, NavigableMap<LocalDate, BigDecimal>> fx) {
+                                     Map<String, NavigableMap<LocalDate, BigDecimal>> fx,
+                                     ShareClasses holdings) {
         Map<String, BigDecimal> symbolGbp = new LinkedHashMap<>();
         BigDecimal investedGbp = BigDecimal.ZERO;
         for (Map.Entry<String, BigDecimal> e : qty.entrySet()) {
@@ -224,7 +254,7 @@ public class AllocationService {
         return new AllocationPoint(sample.toString(), cashGbp,
                 investedGbp.setScale(2, RoundingMode.HALF_UP),
                 cashGbp.add(investedGbp).setScale(2, RoundingMode.HALF_UP),
-                symbolGbp);
+                holdings.fold(symbolGbp));
     }
 
     // ---- replay -------------------------------------------------------------
@@ -332,6 +362,10 @@ public class AllocationService {
      * Composition at one sample. {@code symbolGbp} is keyed by internal symbol and only
      * carries non-zero positions, so payload stays compact for the multi-year timeline.
      * {@code cashGbp + investedGbp = totalGbp} by construction.
+     *
+     * <p>Keyed by <b>holding</b>, not by listing: two lines of one share class the user has declared
+     * a switch between are one entry, under the line the switch is leaving. A half-finished switch
+     * would otherwise draw one series falling as another rises while nothing owned had changed.
      */
     public record AllocationPoint(String date,
                                   BigDecimal cashGbp,
@@ -348,6 +382,11 @@ public class AllocationService {
      * {@code "<Account.dbValue()>|<CCY>"} (e.g. {@code "AJBell|GBP"}), and the held quantity per
      * internal symbol — nominal for a bond, shares for anything else, in the same units every
      * {@code qty × price / 100} valuation in the codebase assumes.
+     *
+     * <p>Quantities stay keyed by <b>listing</b> while the point's values are keyed by holding. They
+     * are a unit count, and adding two listings' units together would assert they are interchangeable
+     * — a claim about share classes this map has no business making. Its one consumer is the fixed-
+     * income yield, which needs a gilt's nominal, and a gilt has no second listing to be folded with.
      */
     public record CurrentSnapshot(AllocationPoint point,
                                   Map<String, BigDecimal> cashGbpByAccountCcy,

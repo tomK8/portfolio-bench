@@ -6,6 +6,7 @@ import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.AssetClass;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PriceStats;
+import com.portfolio.domain.Switches;
 import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.MarketSession;
@@ -206,6 +207,7 @@ public class OpenOrdersService {
     private final PriceHistoryRepository history;
     private final OrderHistoryRepository orderHistory;
     private final LadderService ladders;
+    private final SwitchService switches;
     private final YahooTickerMap tickerMap;
     private final KeyValueStore kv;
     /** Verdicts on symbols Yahoo has rejected — read-only here; the fetch jobs are what write them. */
@@ -342,7 +344,7 @@ public class OpenOrdersService {
                              OrderHistoryRepository orderHistory) {
         this(fileLocator, parsers, fxRateProvider, excelReportWriter, outputDir, intraday, history,
                 tickerMap, kv, quoteWarmer, historyWarmer, eventVariance, fundamentals,
-                dividendYields, orderHistory, null);
+                dividendYields, orderHistory, null, null);
     }
 
     /**
@@ -354,6 +356,9 @@ public class OpenOrdersService {
      *                come through here as synthetic orders and go back enriched. Nothing in
      *                {@link LadderService} computes a statistic, which is what keeps an intended
      *                rung's numbers and a resting order's numbers the same numbers.
+     * @param switches the user's share-class switches — a holding moving between two listings of one
+     *                fund. Optional on the same terms, and wired the same way round and for the same
+     *                reason: its legs are orders, and orders are priced here.
      */
     public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
                              FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
@@ -364,8 +369,9 @@ public class OpenOrdersService {
                              FundamentalsRepository fundamentals,
                              DividendYieldService dividendYields,
                              OrderHistoryRepository orderHistory,
-                             LadderService ladders) {
+                             LadderService ladders, SwitchService switches) {
         this.ladders = ladders;
+        this.switches = switches;
         this.orderHistory = orderHistory;
         this.dividendYields = dividendYields;
         this.fundamentals = fundamentals;
@@ -521,15 +527,21 @@ public class OpenOrdersService {
             }
         }
 
-        // Intended rungs are orders that exist only in the Ladders panel. They are built here,
-        // beside the real ones, so the symbol of a rung nobody holds or orders still reaches the
+        // Intended rungs are orders that exist only in the group panels — a ladder's unplaceable
+        // rung, a switch's buy leg waiting on cash that has not arrived. They are built here, beside
+        // the real ones, so the symbol of a rung nobody holds or orders still reaches the
         // price-fetch universe — the same gap that let a resting WMT limit price off a two-week-old
         // quote, and an intended rung is by definition on something not yet traded.
-        List<OpenOrder> intended = ladders == null ? List.of()
-                : ladders.intendedOrders(sym -> quoteCurrency(tickerFor(sym)));
+        List<OpenOrder> intended = new ArrayList<>();
+        if (ladders != null) intended.addAll(ladders.intendedOrders(sym -> quoteCurrency(tickerFor(sym))));
+        if (switches != null) intended.addAll(switches.intendedOrders(sym -> quoteCurrency(tickerFor(sym))));
+        // A switch's two listings have to be priced whether or not either carries an order: the one
+        // live check that the pair really is one fund is the two lines' prices against the exchange
+        // rate, and a line the user has only declared has nothing else keeping its feed warm.
+        Set<String> lineSymbols = switches == null ? Set.of() : switches.lineSymbols();
         List<OpenOrder> universe = new ArrayList<>(orders);
         universe.addAll(intended);
-        publishOrderSymbols(universe, sources);
+        publishOrderSymbols(universe, lineSymbols, sources);
 
         Quotes quotes = enrichWithCurrentPrice(orders, rates, cfg, true);
         warnings.addAll(quotes.warnings());
@@ -549,13 +561,20 @@ public class OpenOrdersService {
             warmLaggingQuotes(intentQuotes.warm());
         }
 
+        List<OrderHistoryRepository.HistoricalOrder> closed =
+                orderHistory == null ? List.of() : orderHistory.closed();
+        Map<String, String> orderNotes = orderHistory == null ? Map.of() : orderHistory.notes();
+        List<String> accountLabels = parsers.stream().map(OrderParser::sourceName).toList();
+        GroupRungs.TouchPricer touch = (order, sessions) -> touchAt(order, sessions, cfg);
+
         LadderService.LadderReport ladderReport = ladders == null
                 ? new LadderService.LadderReport(List.of(), List.of(), List.of(), List.of())
-                : ladders.assemble(orders, intendedPriced,
-                orderHistory == null ? List.of() : orderHistory.closed(),
-                orderHistory == null ? Map.of() : orderHistory.notes(),
-                parsers.stream().map(OrderParser::sourceName).toList(),
-                (order, sessions) -> touchAt(order, sessions, cfg));
+                : ladders.assemble(orders, intendedPriced, closed, orderNotes, accountLabels, touch);
+
+        SwitchService.SwitchReport switchReport = switches == null
+                ? new SwitchService.SwitchReport(List.of(), List.of(), List.of(), List.of())
+                : switches.assemble(orders, intendedPriced, closed, orderNotes, accountLabels,
+                linePrices(lineSymbols), rates, touch);
 
         // Retention runs here rather than on a scheduler: this panel is the only thing that writes
         // the table, so it is also the only thing that can leave it growing. A rung of a ladder is
@@ -566,10 +585,8 @@ public class OpenOrdersService {
         }
         return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
                 unmappedInstruments(orders), quotes.notes(), quotes.asOf(),
-                chartableSymbols(universe), cfg,
-                orderHistory == null ? Map.of() : orderHistory.notes(),
-                orderHistory == null ? List.of() : orderHistory.closed(),
-                ladderReport);
+                chartableSymbols(universe, lineSymbols), cfg, orderNotes, closed,
+                ladderReport, switchReport);
     }
 
     /**
@@ -1201,13 +1218,20 @@ public class OpenOrdersService {
      * reason. Skipped when nothing parsed: an unreadable export must not read as "there are no
      * orders any more" and silently drop every symbol from the fetch set.
      */
-    private void publishOrderSymbols(List<OpenOrder> orders, List<String> sources) {
+    private void publishOrderSymbols(List<OpenOrder> orders, Collection<String> declaredLines,
+                                     List<String> sources) {
+        // The guard stands: a run that found no export must not replace the set with an empty one,
+        // which would stop the fetch jobs keeping resting orders' feeds warm on the strength of a
+        // missing download rather than a closed order.
         if (sources.isEmpty()) return;
         Set<String> symbols = new LinkedHashSet<>();
         for (OpenOrder o : orders) {
             // An unmapped AJ Bell row falls through carrying its description as the symbol; those
             // resolve to no ticker and would only pollute the fetch set.
             if (o.symbol() != null && tickerFor(o.symbol()) != null) symbols.add(o.symbol().toUpperCase());
+        }
+        for (String s : declaredLines) {
+            if (s != null && tickerFor(s) != null) symbols.add(s.toUpperCase());
         }
         kv.putStringSet(ORDER_SYMBOLS_KEY, symbols);
     }
@@ -1331,6 +1355,53 @@ public class OpenOrdersService {
         return Instruments.isBond(symbol) ? symbol.toUpperCase() : tickerMap.tickerFor(symbol);
     }
 
+    /**
+     * Each declared share-class listing's market price, in the listing's <em>own</em> quote
+     * currency, keyed by upper-cased symbol.
+     *
+     * <p>Read from the same two feeds the table's Current column reads, in the same order — the
+     * latest intraday quote inside the age bound, else the most recent daily close inside it — so
+     * the switch panel and the row a foot below it can never print different prices for the same
+     * listing. The feed's own currency is passed straight through — {@code Switches.LinePrice}
+     * folds London pence into pounds in its constructor, so it is normalised once and cannot be
+     * done twice, which is how a factor of a hundred gets lost.
+     *
+     * <p>A listing that could not be priced comes back as {@link Switches.LinePrice#none} rather
+     * than being absent, so the panel can say which line it is missing, and its ticker is queued for
+     * a fetch: a line the user has only just declared has nothing else keeping its feed warm.
+     */
+    private Map<String, Switches.LinePrice> linePrices(Set<String> symbols) {
+        Map<String, Switches.LinePrice> out = new LinkedHashMap<>();
+        if (symbols.isEmpty()) return out;
+        Map<String, String> tickers = new LinkedHashMap<>();
+        for (String sym : symbols) {
+            String tk = tickerFor(sym);
+            if (tk != null) tickers.put(sym.toUpperCase(), tk);
+        }
+        Map<String, IntradayPrice> latest = tickers.isEmpty()
+                ? Map.of() : intraday.loadLatestQuotes(new LinkedHashSet<>(tickers.values()));
+        Instant cutoff = Instant.now().minus(Duration.ofDays(MAX_PRICE_AGE_DAYS));
+        Set<String> warm = new LinkedHashSet<>();
+        for (Map.Entry<String, String> e : tickers.entrySet()) {
+            IntradayPrice ip = latest.get(e.getValue());
+            if (ip != null && ip.ts().isAfter(cutoff)) {
+                out.put(e.getKey(), new Switches.LinePrice(e.getKey(),
+                        BigDecimal.valueOf(ip.close()), ip.currency()));
+                continue;
+            }
+            PriceBar bar = latestDailyClose(e.getValue());
+            out.put(e.getKey(), bar == null ? Switches.LinePrice.none(e.getKey())
+                    : new Switches.LinePrice(e.getKey(), BigDecimal.valueOf(bar.close()),
+                    bar.currency()));
+            if (!Instruments.isBond(e.getKey())) warm.add(e.getValue());
+        }
+        for (String sym : symbols) {
+            out.putIfAbsent(sym.toUpperCase(), Switches.LinePrice.none(sym));
+        }
+        warmLaggingQuotes(warm);
+        return out;
+    }
+
     /** Most recent stored daily close for {@code ticker}, or null when there is none inside the age bound. */
     private PriceBar latestDailyClose(String ticker) {
         // getPriceOn is on-or-before, so one call already returns the newest bar there is — walking
@@ -1379,10 +1450,13 @@ public class OpenOrdersService {
      * are gilts, which map to themselves and are priced by the HL scrape). See
      * {@link OrdersReport#chartable(OpenOrder)} for why the unresolvable ones stay inert.
      */
-    private Set<String> chartableSymbols(List<OpenOrder> orders) {
+    private Set<String> chartableSymbols(List<OpenOrder> orders, Collection<String> extra) {
         Set<String> out = new LinkedHashSet<>();
         for (OpenOrder o : orders) {
             if (o.symbol() != null && tickerFor(o.symbol()) != null) out.add(o.symbol());
+        }
+        for (String s : extra) {
+            if (s != null && tickerFor(s) != null) out.add(s);
         }
         return out;
     }
@@ -1548,7 +1622,8 @@ public class OpenOrdersService {
                                VolForecast.Config config,
                                Map<String, String> notes,
                                List<OrderHistoryRepository.HistoricalOrder> history,
-                               LadderService.LadderReport ladders) {
+                               LadderService.LadderReport ladders,
+                               SwitchService.SwitchReport switches) {
 
         /** This order's annotation, or empty — what the editable Note cell is filled with. */
         public String noteFor(OpenOrder o) {

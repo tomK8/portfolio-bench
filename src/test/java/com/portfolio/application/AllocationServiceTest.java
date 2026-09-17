@@ -3,6 +3,7 @@ package com.portfolio.application;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.AllocationService.AllocationPoint;
 import com.portfolio.application.AllocationService.AllocationTimeline;
+import com.portfolio.domain.ShareClasses;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.PriceBar;
@@ -36,6 +37,10 @@ class AllocationServiceTest {
     Path dbDir;
 
     private AllocationService service() {
+        return service(ShareClassRegistry.NONE);
+    }
+
+    private AllocationService service(ShareClassRegistry shareClasses) {
         JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
         KeyValueStore kv = new KeyValueStore(dbDir);
         return new AllocationService(
@@ -43,7 +48,8 @@ class AllocationServiceTest {
                 new PriceHistoryRepository(cf),
                 FLAT_USD_FX,
                 new YahooTickerMap(),
-                kv);
+                kv,
+                shareClasses);
     }
 
     private CashTransactionRepository repo() {
@@ -67,6 +73,11 @@ class AllocationServiceTest {
     private static PriceBar bar(String symbol, String date, double close) {
         return new PriceBar(symbol, LocalDate.parse(date), null, null, null,
                 close, close, 1.0, null, "GBP");
+    }
+
+    private static PriceBar barUsd(String symbol, String date, double close) {
+        return new PriceBar(symbol, LocalDate.parse(date), null, null, null,
+                close, close, 1.0, null, "USD");
     }
 
     @Test
@@ -141,5 +152,45 @@ class AllocationServiceTest {
         assertEquals(LocalDate.now().toString(),
                 t.points().get(t.points().size() - 1).date(),
                 "last sample is always today, so the date-picker snapshot reflects current state");
+    }
+
+    /**
+     * A holding half-moved between two listings of one fund is one series of the full size, not two
+     * of half. Counted the other way the chart shows one line falling as another rises while
+     * nothing owned has changed — and concentration, which reads these very points, calls the book
+     * more diversified than it is.
+     *
+     * <p>Each listing is still valued on its own price and its own currency; only the GBP results
+     * are added together, so nothing here assumes the two lines' units are interchangeable.
+     */
+    @Test
+    void twoListingsOfOneFundAreOneSeries() {
+        repo().saveII(List.of(
+                contribGbp("2026-01-05", 20000),
+                trade("2026-01-06", "EQQQ", 20, -10000),
+                trade("2026-02-06", "EQQU", 20, -10000)));
+        // The sterling line is priced in pounds under its mapped ticker; the dollar line in dollars
+        // under its own. Each is valued on its own quote and only the GBP results are added.
+        prices().upsertPriceBars(List.of(
+                bar("EQQQ.L", "2026-01-06", 500.0),
+                barUsd("EQQU", "2026-02-06", 625.0)));
+
+        AllocationPoint split = last(service().timeline());
+        assertEquals(2, split.symbolGbp().size(), "undeclared, they are two positions");
+
+        ShareClasses declared = ShareClasses.of(
+                List.of(new ShareClasses.Pair("EQQQ", "EQQU")));
+        AllocationPoint folded = last(service(() -> declared).timeline());
+
+        assertEquals(1, folded.symbolGbp().size());
+        assertEquals(10000.0 + 10000.0, folded.symbolGbp().get("EQQQ").doubleValue(), 0.01);
+        assertFalse(folded.symbolGbp().containsKey("EQQU"),
+                "the second line is not a second position");
+        assertEquals(split.investedGbp().doubleValue(), folded.investedGbp().doubleValue(), 0.01,
+                "the fold moves value between rows, never into or out of the book");
+    }
+
+    private static AllocationPoint last(AllocationTimeline t) {
+        return t.points().get(t.points().size() - 1);
     }
 }

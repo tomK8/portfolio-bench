@@ -3,6 +3,7 @@ package com.portfolio.application;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.AllocationService.AllocationPoint;
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.ShareClasses;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.TransactionType;
@@ -61,6 +62,13 @@ public class CurrencyExposureService {
     private final FxRateProvider fxRateProvider;
     private final HistoricalFxRateProvider historicalFxProvider;
     private final YahooTickerMap tickerMap;
+    /**
+     * Two listings of one fund are one position, and here that matters most: a fund's sterling line
+     * and its dollar line hold exactly the same assets, so a switch between them would otherwise
+     * swing the reported currency mix from GBP to USD while the book's actual exposure never moved.
+     * A declared pair is therefore counted once, under the line the switch is leaving.
+     */
+    private final ShareClassRegistry shareClasses;
 
     public CurrencyExposureService(AllocationService allocationService,
                                    CashTransactionRepository cashRepo,
@@ -68,12 +76,24 @@ public class CurrencyExposureService {
                                    FxRateProvider fxRateProvider,
                                    HistoricalFxRateProvider historicalFxProvider,
                                    YahooTickerMap tickerMap) {
+        this(allocationService, cashRepo, intradayRepo, fxRateProvider, historicalFxProvider,
+                tickerMap, ShareClassRegistry.NONE);
+    }
+
+    public CurrencyExposureService(AllocationService allocationService,
+                                   CashTransactionRepository cashRepo,
+                                   IntradayPriceRepository intradayRepo,
+                                   FxRateProvider fxRateProvider,
+                                   HistoricalFxRateProvider historicalFxProvider,
+                                   YahooTickerMap tickerMap,
+                                   ShareClassRegistry shareClasses) {
         this.allocationService = allocationService;
         this.cashRepo = cashRepo;
         this.intradayRepo = intradayRepo;
         this.fxRateProvider = fxRateProvider;
         this.historicalFxProvider = historicalFxProvider;
         this.tickerMap = tickerMap;
+        this.shareClasses = shareClasses == null ? ShareClassRegistry.NONE : shareClasses;
     }
 
     public CurrencyExposure summary() {
@@ -100,13 +120,22 @@ public class CurrencyExposureService {
             else sharesByKey.merge(key, qty, BigDecimal::add);
         }
 
-        // Map currently-held symbols → ticker → intraday → listing currency.
+        // Map currently-held symbols → ticker → intraday → listing currency. A declared pair's
+        // canonical line is quoted too, held or not: once a switch completes, the holding's name is
+        // a line nothing is held in any more, and the alternative is its currency silently
+        // defaulting on the very row the declaration exists to keep steady.
+        ShareClasses holdings = shareClasses.declared();
         Map<String, String> tickerBySymbol = new LinkedHashMap<>();
         for (var e : sharesByKey.entrySet()) {
             if (e.getValue().signum() <= 0) continue;
             String sym = keySymbol(e.getKey());
             String ticker = Instruments.isBond(sym) ? sym : tickerMap.tickerFor(sym);
             tickerBySymbol.putIfAbsent(sym, ticker);
+            String holding = holdings.canonical(sym);
+            if (!holding.equalsIgnoreCase(sym)) {
+                tickerBySymbol.putIfAbsent(holding,
+                        Instruments.isBond(holding) ? holding : tickerMap.tickerFor(holding));
+            }
         }
         Map<String, IntradayPrice> byTicker =
                 intradayRepo.loadLatestIntradayPrices(tickerBySymbol.values());
@@ -126,12 +155,16 @@ public class CurrencyExposureService {
             if (shares.signum() <= 0) continue;
             String sym = keySymbol(e.getKey());
             IntradayPrice ip = bySymbol.get(sym);
-            String ccy = normalise(ip == null ? "GBP" : ip.currency());
+            // Valued on the listing's own quote; bucketed under the holding's currency, and counted
+            // once per holding rather than once per line.
+            String holding = holdings.canonical(sym);
+            IntradayPrice holdingQuote = bySymbol.get(holding);
+            String ccy = normalise(holdingQuote == null ? "GBP" : holdingQuote.currency());
             BigDecimal gbp = valueGbp(sym, shares, ip, currentRates);
             if (gbp == null) continue;
             investedByCcy.merge(ccy, gbp, BigDecimal::add);
             investedTotal = investedTotal.add(gbp);
-            if (seenSymbols.add(sym)) {
+            if (seenSymbols.add(holding)) {
                 positionsByCcy.merge(ccy, 1, Integer::sum);
             }
         }

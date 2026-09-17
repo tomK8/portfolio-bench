@@ -3,6 +3,7 @@ package com.portfolio.application;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.AllocationService.AllocationPoint;
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.ShareClasses;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.TransactionType;
@@ -54,17 +55,34 @@ public class ConcentrationService {
     private final IntradayPriceRepository intradayRepo;
     private final FxRateProvider fxRateProvider;
     private final YahooTickerMap tickerMap;
+    /**
+     * Two listings of one fund are one position. Without this the headline HHI counts a
+     * half-finished share-class switch as two holdings of half the size, which is the one direction
+     * a concentration figure must never be wrong in: it reads as more diversified than the book is.
+     */
+    private final ShareClassRegistry shareClasses;
 
     public ConcentrationService(AllocationService allocationService,
                                 CashTransactionRepository cashRepo,
                                 IntradayPriceRepository intradayRepo,
                                 FxRateProvider fxRateProvider,
                                 YahooTickerMap tickerMap) {
+        this(allocationService, cashRepo, intradayRepo, fxRateProvider, tickerMap,
+                ShareClassRegistry.NONE);
+    }
+
+    public ConcentrationService(AllocationService allocationService,
+                                CashTransactionRepository cashRepo,
+                                IntradayPriceRepository intradayRepo,
+                                FxRateProvider fxRateProvider,
+                                YahooTickerMap tickerMap,
+                                ShareClassRegistry shareClasses) {
         this.allocationService = allocationService;
         this.cashRepo = cashRepo;
         this.intradayRepo = intradayRepo;
         this.fxRateProvider = fxRateProvider;
         this.tickerMap = tickerMap;
+        this.shareClasses = shareClasses == null ? ShareClassRegistry.NONE : shareClasses;
     }
 
     public ConcentrationMetrics metrics() {
@@ -118,7 +136,10 @@ public class ConcentrationService {
             if (p != null) bySymbol.put(e.getKey(), p);
         }
 
-        // Value each (account, symbol) → GBP.
+        // Value each (account, symbol) → GBP. Each listing is valued on its own quote and only
+        // then merged onto its holding, so a declared share-class pair contributes one weight
+        // without either line's units ever being read as the other's.
+        ShareClasses holdings = shareClasses.declared();
         Map<String, BigDecimal> gbpByAccount = new LinkedHashMap<>();
         Map<String, BigDecimal> gbpBySymbol = new LinkedHashMap<>();
         BigDecimal investedTotal = BigDecimal.ZERO;
@@ -130,7 +151,7 @@ public class ConcentrationService {
             BigDecimal gbp = valueGbp(sym, shares, bySymbol.get(sym), rates);
             if (gbp == null) continue;
             gbpByAccount.merge(account, gbp, BigDecimal::add);
-            gbpBySymbol.merge(sym, gbp, BigDecimal::add);
+            gbpBySymbol.merge(holdings.canonical(sym), gbp, BigDecimal::add);
             investedTotal = investedTotal.add(gbp);
         }
 

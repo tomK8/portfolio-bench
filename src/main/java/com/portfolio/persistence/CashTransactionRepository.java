@@ -1022,6 +1022,30 @@ public class CashTransactionRepository {
     }
 
     /**
+     * Latest stored transaction date for the given account, or null when the account is empty —
+     * how far the imported ledger actually runs.
+     *
+     * <p>It exists so a claim made <em>from</em> the ledger can be dated. A cash balance is a
+     * statement about the last day an export was imported, not about today, and a panel that tells
+     * the user they are short of dollars has to say as at when, or the reader cannot tell a real
+     * shortfall from a fortnight-old import.
+     */
+    public String latestTransactionDate(Account account) {
+        if (!connections.dbExists()) return null;
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT MAX(transaction_date) FROM cash_transactions WHERE account = ?")) {
+            ps.setString(1, account.dbValue());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        } catch (Exception e) {
+            log.warn("Could not query latest transaction date for {}", account, e);
+            return null;
+        }
+    }
+
+    /**
      * Latest stored cash balance per {@code (account, currency)} — the live cash position
      * derived from the running-balance column on the most recent row of each per-currency
      * ledger. AJBell has one entry (GBP); RothIRA has one (USD); II has two (GBP, USD).

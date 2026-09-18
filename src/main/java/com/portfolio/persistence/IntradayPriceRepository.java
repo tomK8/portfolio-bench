@@ -136,11 +136,11 @@ public class IntradayPriceRepository {
      * Bulk lookup: latest stored <em>regular-session</em> bar per ticker. One DB hit, not N.
      *
      * <p>Extended-hours rows are excluded here rather than at each call site, so every existing
-     * reader — portfolio valuation, reconciliation, the sync views, open orders, watchlist
-     * alerts — keeps the semantics it was written against once the fetcher started storing
-     * pre/post minutes. A thin 200-share pre-market print is a fine thing to *look* at and a bad
-     * thing to value a portfolio or fire an alert on. The Live tab opts in explicitly via
-     * {@link #loadLatestQuotes}.
+     * reader — portfolio valuation, reconciliation, the sync views, watchlist alerts — keeps the
+     * semantics it was written against once the fetcher started storing pre/post minutes. A thin
+     * 200-share pre-market print is a fine thing to *look* at and a bad thing to value a portfolio
+     * or fire an alert on. The Live tab and the Open-orders panel opt in explicitly via
+     * {@link #loadLatestQuotes} — both price against the newest bar and label the session.
      */
     public Map<String, IntradayPrice> loadLatestIntradayPrices(Collection<String> tickers) {
         return loadLatest(tickers, true);

@@ -13,13 +13,15 @@ on last night's close. The extra minutes are **labelled, never blended**:
   written before them are NULL and read as `REGULAR` by `MarketSession.fromDb` — everything stored
   up to then *was* regular-session, so that is the truthful reading, not a default.
 - **`loadLatestIntradayPrices` filters to regular only**, so every pre-existing reader (portfolio
-  valuation, both sync views, reconciliation, open orders, watchlist alerts) keeps the semantics it
-  was written against. A thin 200-share pre-market print is a fine thing to look at and a bad thing
-  to value a portfolio or fire an alert on. `loadIntradaySeries` filters too — pre/post minutes
+  valuation, both sync views, reconciliation, watchlist alerts) keeps the semantics it was written
+  against. A thin 200-share pre-market print is a fine thing to look at and a bad thing to value a
+  portfolio or fire an alert on. `loadIntradaySeries` filters too — pre/post minutes
   would inflate `PriceStats.annualizedVolIntraday` with spread noise and draw the overnight gap as
   a run of intraday moves on the popup chart.
-- The Live tab opts in via **`loadLatestQuotes`** (newest bar of any session) and renders a
-  `PRE` / `AH` badge beside the price.
+- **Two panels opt in via `loadLatestQuotes`** (newest bar of any session): the Live tab, which
+  renders a `PRE` / `AH` badge beside the price, and **Open orders**, where a resting limit is
+  judged against the newest price there is — see [open-orders.md](open-orders.md) for the quote-age
+  bound that pairs with it. Both label the session rather than blending it in.
 - Classification comes from the feed's own `meta.tradingPeriods` — three arrays **zipped by day
   index**, which is the only way to give a pre-market minute the trading day of the session it
   *precedes* once a US after-hours session crosses midnight UTC. Half-days and holidays are right

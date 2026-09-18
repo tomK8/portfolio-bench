@@ -14,6 +14,13 @@
   A **Download Excel** button (`POST /sync-from-cash/export`) writes
   `Portfolio Ledger-YYYYMMDD.xlsx` to ~/Documents — see [excel-exports.md](excel-exports.md). A **Group by**
   dropdown collapses the rows into expandable groups — see [table-grouping.md](table-grouping.md).
+- **A row click opens the shared price popup** — chart + window toggle, momentum, the vol term
+  structure, 52-week levels, position/gain and a Fundamentals disclosure — the same `#wl-modal`
+  the Live, Watchlist and Open-orders tables open, filled from `GET /watchlist/row?symbol=`.
+  Both tables (flat and grouped) mark an instrument row with `data-symbol` in the Thymeleaf
+  fragment; the `CASH` rows deliberately carry none and stay inert, and a Cash-ledger **group
+  header** carries none either, so it keeps its expand/collapse click. Gilts open like anything
+  else. Details, and why `data-symbol` is the only test: [watchlist.md](watchlist.md).
 - **Portfolio % column** (both tables above + the Excel `Portfolio` sheet): each row's
   `marketValueGbp ÷ totals.totalGbp`. On-screen it's computed in the Thymeleaf fragment as
   double division (guarded against null/zero total — no BigDecimal divide that could throw on

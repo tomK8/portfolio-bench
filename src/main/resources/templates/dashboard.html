@@ -640,12 +640,19 @@
 
         /* Rows resolve to a ticker open the shared price popup on click (as the Live and Watchlist
            tables do). An unmapped row carries no data-symbol and stays inert — there is nothing to
-           chart, and the mapping editor a few inches above is the actual fix. */
-        #orders-table tbody tr[data-symbol] {
+           chart, and the mapping editor a few inches above is the actual fix. The two sync tables
+           join on the same terms: their cash rows name no instrument, and a Cash-ledger group
+           header names no single one, so neither carries data-symbol and both keep their own
+           behaviour (nothing, and expand/collapse). */
+        #orders-table tbody tr[data-symbol],
+        #portfolio-result tbody tr[data-symbol],
+        #portfolio-cash-result tbody tr[data-symbol] {
             cursor: pointer;
         }
 
-        #orders-table tbody tr[data-symbol]:hover {
+        #orders-table tbody tr[data-symbol]:hover,
+        #portfolio-result tbody tr[data-symbol]:hover,
+        #portfolio-cash-result tbody tr[data-symbol]:hover {
             background: rgba(52, 152, 219, 0.10);
         }
 
@@ -1935,6 +1942,10 @@
     </section>
     <section class="result-panel">
         <h2>Aggregated portfolio (from broker holdings files)</h2>
+        <p class="muted" style="margin-top: 0">
+            Click a row for the price chart, momentum, vol term structure and fundamentals — the
+            same popup the Live and Watchlist tabs open. The cash row has no chart.
+        </p>
         <div id="portfolio-result"></div>
     </section>
 </section>
@@ -3990,7 +4001,8 @@
             </select>
         </label>
         <button type="button" id="ledger-expand-all" class="link-button" hidden>Expand all</button>
-        <span class="muted">positions reconstructed FIFO from <code>cash_transactions</code>, priced by latest intraday quote</span>
+        <span class="muted">positions reconstructed FIFO from <code>cash_transactions</code>, priced by latest intraday quote &mdash;
+            click a row for its price chart and fundamentals</span>
     </form>
     <div id="cash-export-result"></div>
     <section class="result-panel">

@@ -118,7 +118,13 @@
             </tr>
             </thead>
             <tbody>
-            <tr th:each="h : ${result.holdings}">
+            <!--
+              A row click opens the shared price popup (the one the Live, Watchlist and
+              Open-orders tables open). The cash row names no instrument, so it carries no
+              data-symbol and stays inert — see docs/watchlist.md.
+            -->
+            <tr th:each="h : ${result.holdings}"
+                th:attr="data-symbol=${h.securityId != 'CASH' ? h.securityId : null}">
                 <td class="txt" th:text="${h.securityId}">SYM</td>
                 <td class="txt" th:text="${h.currencyCode}">USD</td>
                 <td th:text="${#numbers.formatDecimal(h.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>

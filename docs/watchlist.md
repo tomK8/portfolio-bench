@@ -39,21 +39,34 @@ touches an order.
   means it never will be, and carries the candidates Yahoo's own search returned plus where to map
   them. Adding `EQQU` used to sit at `(fetching…)` forever — the add's backfill 404'd, logged, and
   told no one. The popup subtitle takes the same sentence.
-- **The popup is shared with the Live tab.** Its markup (`#wl-modal`) sits at **body level**, not
-  inside `panel-watchlist` — a modal nested in a hidden `.tab-panel` is hidden along with it, so
-  the Live row click opened a popup nobody could see. Its listeners (close/Escape/backdrop, the
-  window toggle, the Fundamentals disclosure) are bound by `ensureWlModalInited()`, separate from
-  `setupWatchlist()`'s tab-specific bindings, so a user who never opens the Watchlist tab doesn't
-  get a popup whose Close button is dead. Clicking a Live row calls `openSymbolModal(symbol)`,
-  which opens the modal immediately with a "Loading…" line and fills it from
-  `GET /watchlist/row?symbol=` — the Live table carries none of the popup's data (no 52-week
-  levels, vol term structure or fundamentals), and `wlCurrentSymbol` doubles as the staleness
-  latch so a response landing after a close/re-click is dropped. `WatchlistService.row` serves
-  **any** symbol, watched or not: a watched one is assembled from its stored `Entry` so popup and
-  watchlist row agree, an unwatched one gets a stand-in entry with every trigger **disabled** —
+- **The popup is shared with every table that names an instrument** — Live, Open orders (rows,
+  ladder rungs, switch legs and the probe result), Holdings and the Cash ledger. Its markup
+  (`#wl-modal`) sits at **body level**, not inside `panel-watchlist` — a modal nested in a hidden
+  `.tab-panel` is hidden along with it, so the Live row click opened a popup nobody could see.
+  Its listeners (close/Escape/backdrop, the window toggle, the Fundamentals disclosure) are bound
+  by `ensureWlModalInited()`, separate from `setupWatchlist()`'s tab-specific bindings, so a user
+  who never opens the Watchlist tab doesn't get a popup whose Close button is dead. Every one of
+  those tables calls the same `openSymbolModal(symbol)`, which opens the modal immediately with a
+  "Loading…" line and fills it from `GET /watchlist/row?symbol=` — none of those tables carries
+  the popup's data (no 52-week levels, vol term structure or fundamentals), and `wlCurrentSymbol`
+  doubles as the staleness latch so a response landing after a close/re-click is dropped.
+  `WatchlistService.row` serves **any** symbol, watched or not: a watched one is assembled from
+  its stored `Entry` so popup and watchlist row agree, an unwatched one gets a stand-in entry
+  with every trigger **disabled** —
   looking at a holding must never arm an alert. The click is delegated from the Live `<tbody>`
   (rows are rebuilt and re-ordered on every SSE frame); the poll guard in `wlPollTick` already
   requires `panel-watchlist` to be active, so a popup opened from Live doesn't suppress anything.
+- **A row opts in by carrying `data-symbol`; there is no other test.** Every caller delegates from
+  the body (each of these tables is htmx-swapped or rebuilt under it) and matches
+  `tr[data-symbol]`, so the rows that name *no* instrument are inert by construction rather than
+  by a special case in the handler: the two sync tables' `CASH` rows (a currency balance is not a
+  security), a grouping header in the Cash-ledger or Live table (it names no *single* symbol and
+  keeps its own expand/collapse click — it carries no `data-symbol`, so the two handlers can never
+  both fire on one click), and an Open-orders row whose description resolved to no ticker. Held
+  names go through unfiltered, gilts included: `WatchlistService.tickerFor` maps a bond to itself
+  and the HL scrape has priced it. A held symbol Yahoo has never answered to still opens — and
+  says so, in the same amber `(no Yahoo data)` sentence the watchlist row uses, with the mapping
+  editor sitting a few inches above it in the same panel.
 - **Popup extras:** `GET /watchlist/vol` returns a realized-vol **term structure** (5D/10D from
   intraday 1-min returns via `PriceStats.annualizedVolIntraday`, 30D/1Y from daily closes) shown
   in the popup stats. `GET /watchlist/series` for `1D` returns only the latest session's bars

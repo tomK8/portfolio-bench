@@ -298,6 +298,26 @@
             syncLedgerExpandAll();
         });
 
+        // ── Holdings / Cash-ledger row click → the shared price popup ───────────
+        // The same modal the Live, Watchlist and Open-orders tables open, so a holding can be
+        // charted from the table it is read in rather than by retyping its symbol elsewhere.
+        // Delegated from the body because both tables are htmx-swapped on every re-sync and on
+        // every change of the Group-by dropdown.
+        //
+        // Matching on tr[data-symbol] is what keeps the rows that name no instrument out: the
+        // cash row (which the fragments deliberately leave without one) and a group header
+        // (which names no *single* symbol and keeps the expand/collapse handler above — that one
+        // returns first for those rows, and a header carries no data-symbol, so the two can never
+        // both fire on one click). Scoped to a `table` inside the two result panels so the inline
+        // mapping editors, which carry a data-symbol of their own on a div, are untouched.
+        document.body.addEventListener('click', function (e) {
+            if (!e.target || !e.target.closest) return;
+            if (!e.target.closest('#portfolio-result table, #portfolio-cash-result table')) return;
+            if (e.target.closest('input, button, a, select, label')) return;
+            var tr = e.target.closest('tr[data-symbol]');
+            if (tr) openSymbolModal(tr.dataset.symbol);
+        });
+
         // Open orders — a cheap local disk read, so re-fetch on each activation to reflect any
         // freshly exported order files (the sticky-head table gets sort attached via afterSettle).
         // Open orders is the one panel whose loader used to be able to run *before* htmx had

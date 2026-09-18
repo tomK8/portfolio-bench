@@ -185,10 +185,16 @@
   `groupId` is null for a flat row and the owning group's id for a member. A member starts
   `collapsed` (CSS display:none) rather than being hidden by script after paint, so the grouped
   table never flashes its full row set on the way to being collapsed.
+
+  `data-symbol` is what makes a row click open the shared price popup (the one the Live,
+  Watchlist and Open-orders tables open). A cash row names no instrument, so it carries none and
+  stays inert; a group header names no *single* one, so it carries none either and keeps its own
+  expand/collapse click. See docs/watchlist.md.
 -->
 <tr th:fragment="ledgerRow(h, result, groupId)"
     th:classappend="${groupId != null} ? 'group-member collapsed' : ''"
-    th:attr="data-group-of=${groupId}">
+    th:attr="data-group-of=${groupId},
+             data-symbol=${h.securityId != 'CASH' ? h.securityId : null}">
     <td class="txt" th:text="${h.securityId}">SYM</td>
     <td class="txt" th:text="${h.currencyCode}">USD</td>
     <td th:text="${#numbers.formatDecimal(h.quantity, 1, 'COMMA', 2, 'POINT')}">0</td>

@@ -562,5 +562,11 @@ else and so carries its own side, quantity and price.
   could never assemble the completed round trip the panel exists to show.
 - **A rung row opens the shared price popup**, on the same terms the table's rows do — only when the
   ladder's security resolved to a ticker.
+- **`Download Excel` writes every ladder** to `Ladders-{date}.xlsx` (`POST /ladders/export`) — three
+  sheets: the rungs, the per-ladder totals, and cash by account. It re-loads on the press like the
+  orders export, which matters more here because `P(10)`/`P(30)` are priced on the stored forecast
+  settings. The button appears only once a ladder exists, and the export sits outside the order-files
+  guard for the same reason the block does. Sheet design and the columns that exist only because a
+  sheet has no colour or position to lean on: [excel-exports.md](excel-exports.md).
 - Removing a rung takes it out of the ladder and touches the order not at all. Deleting a ladder takes
   its memberships and its intended rungs (which exist nowhere else) and, again, no orders.

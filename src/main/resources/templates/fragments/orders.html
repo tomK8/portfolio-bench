@@ -153,6 +153,13 @@
     <div id="ladders-result">
         <div th:replace="~{fragments/ladders :: list}"></div>
     </div>
+    <!--
+      The export's result lands here rather than inside the block above: the Download button is
+      rendered by the ladders fragment, and a target inside that fragment would have the export
+      response replace the whole block with a one-line "wrote a file" note. Outside it, a later rung
+      mutation (which targets #ladders-result) also leaves the note alone.
+    -->
+    <div id="ladders-export-result"></div>
 
     <!--
       Share-class switches, on the same terms and for the same reasons. A switch is nearly always
@@ -163,6 +170,7 @@
     <div id="switches-result">
         <div th:replace="~{fragments/switches :: list}"></div>
     </div>
+    <div id="switches-export-result"></div>
 
     <div th:unless="${orders.empty}">
 

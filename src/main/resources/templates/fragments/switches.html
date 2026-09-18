@@ -59,6 +59,11 @@
                     this.
                 </p>
             </details>
+            <!-- Only when there is a switch to write; the export re-derives on the press. -->
+            <button type="button" class="link-button ladder-export"
+                    th:unless="${orders.switches.isEmpty()}"
+                    hx-post="/switches/export" hx-target="#switches-export-result" hx-swap="innerHTML"
+                    title="Writes every switch to a date-stamped .xlsx in ~/Documents — progress and the basis check, the GBP yardstick, the legs, the sequence and cash by account.">Download Excel</button>
         </div>
 
         <div th:if="${!#lists.isEmpty(orders.switches.warnings)}" class="value-warnings">

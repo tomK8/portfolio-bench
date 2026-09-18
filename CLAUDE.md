@@ -203,7 +203,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [period-diff.md](docs/period-diff.md) | change Period diff or the TWR | Contributions and brought-forward are two figures, never one; flows count over `(from, to]` |
 | [charts.md](docs/charts.md) | change Contributions or Value over time | Roth's USD seed converts at the FX rate on its earliest ledger date, not today's |
 | [allocation-breakdowns.md](docs/allocation-breakdowns.md) | change sector, style or AI/Tech | The sector table is a partition, the AI/Tech tile an **overlay** — never sum them; `Instruments` owns the wrapper sets, properties files must not redeclare them; unclassified is three states |
-| [excel-exports.md](docs/excel-exports.md) | touch any Download Excel button | `setForceFormulaRecalculation(true)` or every formula opens blank; an empty view writes literals, not `SUM` over an empty range |
+| [excel-exports.md](docs/excel-exports.md) | touch any Download Excel button | `setForceFormulaRecalculation(true)` or every formula opens blank; an empty view writes literals, not `SUM` over an empty range; the Ladders/Switches sheets carry no formula at all — a cash column total *is* the netting across accounts both panels forbid |
 | [watchlist.md](docs/watchlist.md) | change the watchlist, alerts or the shared price popup | The popup lives at body level, not inside a tab panel; an unwatched symbol gets every trigger **disabled**; five tables open it and `data-symbol` is the only test of whether a row can |
 | [earnings.md](docs/earnings.md) | change the earnings calendar | Three-valued feed: `[]` is a successful empty read, `null` is a failure; `NOT_COVERED` ≠ `NONE_SCHEDULED` |
 | [manual-positions.md](docs/manual-positions.md) | change hand-entered positions | Each acquisition is **two** rows; `OPENING_BALANCE`, not `CONTRIBUTION`; balances are recomputed, never supplied |
@@ -259,9 +259,11 @@ beyond the code, so treat the source as the specification.
 | `GET /ladders`, `POST /ladders/{create,delete}` | Ladders | `LadderService` — groups of rungs on one security; `P(10)`/`P(30)` are **fixed** horizons, not the table's per-order `P(N)` |
 | `POST /ladders/rungs/{add,remove}` | Ladders | assign / unassign real orders; never inferred |
 | `POST /ladders/intents/{add,delete,placed}` | Ladders | rungs decided on but not placed; `placed` is the only intended→real path |
+| `POST /ladders/export` | Ladders | `OpenOrdersService.exportLadders` — `Ladders-{date}.xlsx`, 3 sheets (→ ~/Documents) |
 | `GET /switches`, `POST /switches/{create,delete}` | Switches | `SwitchService` — one holding moving between two listings of **one** fund; creating one also declares the pair to every exposure view |
 | `POST /switches/legs/{add,remove}` | Switches | assign / unassign orders; which leg is read from the listing, membership never inferred |
 | `POST /switches/intents/{add,delete,placed}` | Switches | the buy leg before the cash arrives — the ordinary state here; `placed` is the only intended→real path |
+| `POST /switches/export` | Switches | `OpenOrdersService.exportSwitches` — `Share-Class Switches-{date}.xlsx`, 5 sheets |
 | `POST /orders/drift`, `POST /orders/event-var` | Orders | stored app-wide model switches |
 | `POST /orders/note` | Orders | `OrderHistoryRepository.saveNote` |
 | `POST /orders/export` | Orders | `OpenOrdersService.export` |

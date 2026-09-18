@@ -125,6 +125,20 @@ public class SwitchesController {
         return "fragments/orders :: result";
     }
 
+    /**
+     * Writes the whole Share-class switches block to a date-stamped workbook in the output
+     * directory, and renders the shared export fragment naming the file. Re-derives on the press,
+     * like every other export; {@code emptyNote} replaces the fragment's default sentence about
+     * missing input files, which a switch does not need — the buy leg is usually an intent.
+     */
+    @PostMapping("/switches/export")
+    public String export(Model model) {
+        model.addAttribute("export", openOrdersService.exportSwitches());
+        model.addAttribute("emptyNote", "Nothing to export — no switches declared yet.");
+        model.addAttribute("completedAt", WebSupport.now());
+        return "fragments/export :: result";
+    }
+
     /** One load, one fragment — the block always redraws from the orders service's own report. */
     private String render(Model model) {
         model.addAttribute("orders", openOrdersService.load());

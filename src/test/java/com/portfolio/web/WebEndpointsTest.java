@@ -83,6 +83,47 @@ class WebEndpointsTest {
     }
 
     /**
+     * With no ladders, the export says so in the ladders' own words.
+     *
+     * <p>The shared export fragment's default — "no input files found in ~/Downloads" — is true of
+     * the holdings and orders exports and false here: a ladder can be made entirely of intended
+     * rungs and needs no broker export at all, so a file-shaped explanation would send the user to
+     * look for a problem that does not exist. This fixture has an empty database, which is exactly
+     * the state that reaches it.
+     */
+    @Test
+    void ladderExportWithNoLaddersSaysThereAreNoLaddersNotThatFilesAreMissing() throws Exception {
+        mvc.perform(post("/ladders/export"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("no ladders yet")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        containsString("no input files found"))));
+    }
+
+    @Test
+    void switchExportWithNoSwitchesSaysThereAreNoSwitches() throws Exception {
+        mvc.perform(post("/switches/export"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("no switches declared yet")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        containsString("no input files found"))));
+    }
+
+    /**
+     * And the button is not offered in that state either — a Download that can only report
+     * "nothing to export" is worse than no Download.
+     */
+    @Test
+    void noExportButtonIsOfferedWhileThereAreNoGroups() throws Exception {
+        mvc.perform(get("/orders"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        containsString("/ladders/export"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        containsString("/switches/export"))));
+    }
+
+    /**
      * Override the live FX adapter so the test never hits the network.
      */
     @TestConfiguration

@@ -4,8 +4,18 @@
 
 <div th:fragment="result">
     <p class="completed-at" th:text="'Completed at ' + ${completedAt}">Completed at 00:00:00</p>
+    <!--
+      The default sentence is the holdings/orders one: those exports genuinely have nothing to write
+      when ~/Downloads is empty. The Ladders and Switches blocks need no input files at all — a
+      ladder can be made entirely of intended rungs, and a switch's buy leg is usually an intent —
+      so those callers pass their own `emptyNote` rather than let the file-shaped explanation stand
+      for a state it does not describe.
+    -->
     <div class="note" th:if="${export.empty}">
-        Nothing to export — no input files found in <code>~/Downloads</code>.
+        <th:block th:if="${emptyNote != null}" th:text="${emptyNote}">Nothing to export.</th:block>
+        <th:block th:unless="${emptyNote != null}">
+            Nothing to export — no input files found in <code>~/Downloads</code>.
+        </th:block>
     </div>
     <div class="note" th:unless="${export.empty}">
         Wrote <span th:text="${#lists.size(export.files)}">2</span> Excel file(s):

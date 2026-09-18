@@ -124,6 +124,27 @@ public class LaddersController {
     }
 
     /**
+     * Writes the whole Ladders block to a date-stamped workbook in the output directory
+     * (~/Documents, beside the portfolio exports — not the browser's download folder) and renders
+     * the shared export fragment naming the file.
+     *
+     * <p>Re-derives at the moment the button is pressed, like every other export here: the file is
+     * the ladders as they are now, never a copy of whatever this panel last rendered.
+     *
+     * <p>{@code emptyNote} because the shared fragment's default — "no input files found in
+     * ~/Downloads" — is the wrong sentence for a block that needs none: a ladder can be made
+     * entirely of intended rungs, so the only thing "nothing to export" can mean here is that there
+     * are no ladders.
+     */
+    @PostMapping("/ladders/export")
+    public String export(Model model) {
+        model.addAttribute("export", openOrdersService.exportLadders());
+        model.addAttribute("emptyNote", "Nothing to export — no ladders yet.");
+        model.addAttribute("completedAt", WebSupport.now());
+        return "fragments/export :: result";
+    }
+
+    /**
      * One load, one fragment. The block always redraws from the orders service's own report, so the
      * rungs on screen are the rows the table would show, priced by the pass that priced them.
      */

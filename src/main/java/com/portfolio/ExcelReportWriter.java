@@ -1,13 +1,19 @@
 package com.portfolio;
 
+import com.portfolio.application.GroupRungs;
+import com.portfolio.application.LadderService;
 import com.portfolio.application.LivePricesService;
+import com.portfolio.application.SwitchService;
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.Ladders;
 import com.portfolio.domain.PortfolioAggregator;
 import com.portfolio.domain.PortfolioMetrics;
 import com.portfolio.domain.PositionIrr;
+import com.portfolio.domain.Switches;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.Holding;
 import com.portfolio.domain.model.OpenOrder;
+import com.portfolio.domain.model.Rung;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
@@ -1173,5 +1179,506 @@ public class ExcelReportWriter {
             case "CLOSED" -> "closed";
             default -> "";
         };
+    }
+
+    // -------------------------------------------------------------------------
+    // Ladders and Share-class switches workbooks (Open orders tab)
+    // -------------------------------------------------------------------------
+    //
+    // Neither panel is a table, so neither workbook is one sheet. A ladder is a price axis plus a
+    // totals block plus cash broken out per account; a switch is a progress bar, a two-sided
+    // yardstick, a sequence of steps and its own cash lines. Flattening each into one wide row
+    // would put figures that are about different things — a rung's fill probability, an account's
+    // cash, a step's blocker — on one line and lose which was which.
+    //
+    // So each block of the panel becomes a sheet whose grain it states, and the group's name is the
+    // leading column of every one of them: that is the join, and it is what lets a reader filter or
+    // pivot the file back into the cards they saw. Nothing is summed across groups anywhere, for
+    // the reason the panels do not sum either.
+    //
+    // No formulas. The existing sheets carry them where a reader edits an input (the II SIPP cash
+    // cell) and the totals have to follow; nothing here is editable, and a SUM over cash lines is
+    // exactly the netting across accounts both panels exist to prevent.
+
+    /**
+     * Workbook of the Ladders block: {@code Rungs}, {@code Ladders}, {@code Cash}.
+     *
+     * <p>The {@code Rungs} sheet is the price axis flattened. The axis itself is an ordering, which
+     * a spreadsheet will not preserve the moment anyone sorts it, so the fact the ordering encodes
+     * — which side of the market a rung sits on — is written into its own column rather than left
+     * implicit in the row order. {@code Above market} / {@code Below market} survive a re-sort; a
+     * position in a list does not.
+     */
+    public byte[] laddersWorkbook(List<LadderService.Ladder> ladders) throws IOException {
+        try (Workbook wb = new XSSFWorkbook();
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            writeRungsSheet(wb.createSheet("Rungs"), ladders, wb);
+            writeLadderSummarySheet(wb.createSheet("Ladders"), ladders, wb);
+            writeGroupCashSheet(wb.createSheet("Cash"), ladderCashLines(ladders), "Ladder", wb);
+            wb.write(bos);
+            return bos.toByteArray();
+        }
+    }
+
+    private static void writeRungsSheet(Sheet sheet, List<LadderService.Ladder> ladders, Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle qtyNum = numericStyle(wb, false);
+        CellStyle count = countStyle(wb);
+        Map<String, CellStyle> money = new HashMap<>();
+        CellStyle signedPct = signedPctStyle(wb);
+        CellStyle touchPct = touchPctStyle(wb);
+
+        // "Lapses before" carries what the on-screen amber "~" says: the probability beside it
+        // prices a window the order will not survive. The sheet has no cell tint to lean on, so the
+        // caveat gets a column of its own rather than being folded into the number it qualifies.
+        String[] headers = {"Ladder", "Security", "Side of market", "Price", "Side", "Quantity",
+                "Cash", "Currency", "Account", "State", "Vs market",
+                "P(" + LadderService.NEAR_HORIZON_SESSIONS + ")",
+                "P(" + LadderService.FAR_HORIZON_SESSIONS + ")",
+                "Lapses before P(" + LadderService.FAR_HORIZON_SESSIONS + ")",
+                "Sessions to expiry", "Closed", "Note"};
+        header(sheet, headers, boldText);
+
+        int rowNum = 1;
+        for (LadderService.Ladder l : ladders) {
+            List<Rung> rungs = l.rungs();
+            for (int i = 0; i < rungs.size(); i++) {
+                Rung r = rungs.get(i);
+                Row row = sheet.createRow(rowNum++);
+                styledCell(row, 0, l.group().name(), text);
+                styledCell(row, 1, dashIfNull(l.group().symbol()), text);
+                styledCell(row, 2, sideOfMarket(l.markerIndex(), i), text);
+                if (r.price() != null) setMoney(row, 3, r.price(), r.currency(), false, wb, money);
+                styledCell(row, 4, dashIfNull(r.side()), text);
+                setNumeric(row, 5, r.quantity(), qtyNum);
+                // Quantity × price, the money this one rung moves if it fills. Null, never zero,
+                // when either side of the product is missing — the app-wide rule.
+                if (r.cash() != null) setMoney(row, 6, r.cash(), r.currency(), false, wb, money);
+                styledCell(row, 7, dashIfNull(r.currency()), text);
+                styledCell(row, 8, dashIfNull(r.account()), text);
+                styledCell(row, 9, r.state().label(), text);
+                BigDecimal vsMkt = r.order() == null ? null : r.order().distancePct();
+                if (vsMkt != null) setStyled(row, 10, vsMkt, signedPct);
+                if (r.touchNear() != null) setStyled(row, 11, r.touchNear(), touchPct);
+                if (r.touchFar() != null) setStyled(row, 12, r.touchFar(), touchPct);
+                styledCell(row, 13, r.lapsesBefore(LadderService.FAR_HORIZON_SESSIONS) ? "yes" : "", text);
+                if (r.sessionsToExpiry() != null) {
+                    setNumeric(row, 14, BigDecimal.valueOf(r.sessionsToExpiry()), count);
+                }
+                styledCell(row, 15, r.closedAt() != null ? r.closedAt().toString() : "", text);
+                styledCell(row, 16, r.note() == null ? "" : r.note(), text);
+            }
+        }
+        finishSheet(sheet, headers.length, rowNum);
+    }
+
+    /**
+     * Where this rung sits against the market — the one thing the on-screen ordering says that a
+     * re-sortable sheet cannot. Blank when the security has no live price: the panel draws no
+     * marker at all in that case rather than guessing a position, and neither does this.
+     */
+    private static String sideOfMarket(int markerIndex, int index) {
+        if (markerIndex < 0) return "";
+        return index < markerIndex ? "Above market" : "Below market";
+    }
+
+    private static void writeLadderSummarySheet(Sheet sheet, List<LadderService.Ladder> ladders,
+                                                Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle qtyNum = numericStyle(wb, false);
+        CellStyle count = countStyle(wb);
+        Map<String, CellStyle> money = new HashMap<>();
+
+        // The round-trip columns are the panel's own block. They stay null rather than zero until
+        // both sides have filled: a ladder with only its sells done has not made a round trip, and
+        // a zero there would read as one that broke even.
+        String[] headers = {"Ladder", "Security", "Currency", "Market price",
+                "Resting or intended", "Filled", "Net if every remaining rung fills",
+                "Round trip complete", "Matched quantity", "Average bought", "Average sold",
+                "Per unit", "Round trip total", "Left out of the totals"};
+        header(sheet, headers, boldText);
+
+        int rowNum = 1;
+        for (LadderService.Ladder l : ladders) {
+            Ladders.Totals t = l.totals();
+            Row row = sheet.createRow(rowNum++);
+            styledCell(row, 0, l.group().name(), text);
+            styledCell(row, 1, dashIfNull(l.group().symbol()), text);
+            styledCell(row, 2, dashIfNull(l.currency()), text);
+            if (l.currentPrice() != null) setMoney(row, 3, l.currentPrice(), l.currency(), false, wb, money);
+            setNumeric(row, 4, BigDecimal.valueOf(t.remainingCount()), count);
+            setNumeric(row, 5, BigDecimal.valueOf(t.filledCount()), count);
+            setNumeric(row, 6, t.netQuantity(), qtyNum);
+            styledCell(row, 7, t.complete() ? "yes" : "", text);
+            Ladders.RoundTrip rt = t.roundTrip();
+            if (rt != null) {
+                setNumeric(row, 8, rt.matchedQuantity(), qtyNum);
+                if (rt.avgBuy() != null) setMoney(row, 9, rt.avgBuy(), rt.currency(), false, wb, money);
+                if (rt.avgSell() != null) setMoney(row, 10, rt.avgSell(), rt.currency(), false, wb, money);
+                if (rt.perShare() != null) setMoney(row, 11, rt.perShare(), rt.currency(), false, wb, money);
+                if (rt.total() != null) setMoney(row, 12, rt.total(), rt.currency(), false, wb, money);
+            }
+            // Anything that could not be computed is named rather than absorbed — the app-wide
+            // rule, and the panel prints the same list under the totals it was left out of.
+            styledCell(row, 13, String.join("; ", t.excluded()), text);
+        }
+        finishSheet(sheet, headers.length, rowNum);
+    }
+
+    /** One {@code (group, account, currency)} cash line per row, flattened across the groups. */
+    private static List<GroupCashLine> ladderCashLines(List<LadderService.Ladder> ladders) {
+        List<GroupCashLine> out = new ArrayList<>();
+        for (LadderService.Ladder l : ladders) {
+            for (Ladders.CashLine c : l.totals().cash()) {
+                out.add(new GroupCashLine(l.group().name(), c));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The cash block of either panel: two figures per account and currency, never one.
+     *
+     * <p>There is deliberately no total row and no {@code SUM}. A ladder that raises £10,000 in one
+     * wrapper and needs £10,000 in another is not cash-neutral — the money is in the wrong account
+     * and cannot move — and a column total is precisely the netting the split exists to prevent.
+     * {@code Net} is per line, which is the only level at which subtracting is meaningful.
+     */
+    private static void writeGroupCashSheet(Sheet sheet, List<GroupCashLine> lines,
+                                            String groupLabel, Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle num = numericStyle(wb, false);
+
+        String[] headers = {groupLabel, "Account", "Currency", "Raises", "Needs", "Net"};
+        header(sheet, headers, boldText);
+
+        int rowNum = 1;
+        for (GroupCashLine g : lines) {
+            Ladders.CashLine c = g.line();
+            Row row = sheet.createRow(rowNum++);
+            styledCell(row, 0, g.group(), text);
+            styledCell(row, 1, dashIfNull(c.account()), text);
+            styledCell(row, 2, dashIfNull(c.currency()), text);
+            setNumeric(row, 3, c.raises(), num);
+            setNumeric(row, 4, c.needs(), num);
+            setNumeric(row, 5, c.net(), num);
+        }
+        finishSheet(sheet, headers.length, rowNum);
+    }
+
+    /** A cash line with the group it belongs to — the join column every sheet here carries. */
+    private record GroupCashLine(String group, Ladders.CashLine line) {
+    }
+
+    /**
+     * Workbook of the Share-class switches block: {@code Switches}, {@code Yardstick},
+     * {@code Legs}, {@code Sequence}, {@code Cash}.
+     *
+     * <p>Five sheets because the panel answers five different questions and they have five
+     * different grains — one row per switch, per side of a comparison, per leg, per step, per
+     * account. The {@code Yardstick} sheet is the one that has to exist separately: both legs are
+     * converted to GBP there and nowhere else, and that conversion is the whole reason the panel
+     * can say whether the switch buys above where it sells.
+     */
+    public byte[] switchesWorkbook(List<SwitchService.Switch> switches) throws IOException {
+        try (Workbook wb = new XSSFWorkbook();
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            writeSwitchSummarySheet(wb.createSheet("Switches"), switches, wb);
+            writeYardstickSheet(wb.createSheet("Yardstick"), switches, wb);
+            writeSwitchLegsSheet(wb.createSheet("Legs"), switches, wb);
+            writeSequenceSheet(wb.createSheet("Sequence"), switches, wb);
+            writeGroupCashSheet(wb.createSheet("Cash"), switchCashLines(switches), "Switch", wb);
+            wb.write(bos);
+            return bos.toByteArray();
+        }
+    }
+
+    private static void writeSwitchSummarySheet(Sheet sheet, List<SwitchService.Switch> switches,
+                                                Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle qtyNum = numericStyle(wb, false);
+        CellStyle signedPct = signedPctStyle(wb);
+        CellStyle movedPct = touchPctStyle(wb);
+        CellStyle rate = rateNumStyle(wb);
+        Map<String, CellStyle> money = new HashMap<>();
+
+        // Three progress columns, not two. "Sold, not bought back" is the state a half-finished
+        // switch is most easily lost in: those units are in neither line, they own nothing, and no
+        // view that counts positions can see them. Dropping the column would lose exactly the fact
+        // the panel exists to show.
+        String[] headers = {"Switch", "From", "To", "Declared units", "Still in from-line",
+                "Sold, not bought back", "In to-line", "Moved", "Complete",
+                "From price", "From price GBP", "To price", "To price GBP",
+                "Lines apart (GBP)", "Lines tracking", "Market cross rate",
+                "Blocked on", "Blocker detail",
+                "Left out of the totals", "Assigned but off-shape"};
+        header(sheet, headers, boldText);
+
+        int rowNum = 1;
+        for (SwitchService.Switch s : switches) {
+            Switches.Summary sum = s.summary();
+            Switches.Progress p = sum.progress();
+            Switches.Basis b = sum.basis();
+            Row row = sheet.createRow(rowNum++);
+            styledCell(row, 0, s.group().name(), text);
+            styledCell(row, 1, dashIfNull(s.from()), text);
+            styledCell(row, 2, dashIfNull(s.to()), text);
+            setNumeric(row, 3, p.declared(), qtyNum);
+            setNumeric(row, 4, p.inOldLine(), qtyNum);
+            setNumeric(row, 5, p.inFlight(), qtyNum);
+            setNumeric(row, 6, p.inNewLine(), qtyNum);
+            if (p.movedPct() != null) setStyled(row, 7, p.movedPct(), movedPct);
+            styledCell(row, 8, p.complete() ? "yes" : "", text);
+            if (b.outLine() != null && b.outLine().priced()) {
+                setMoney(row, 9, b.outLine().price(), b.outLine().currency(), false, wb, money);
+            }
+            if (b.outPriceGbp() != null) setMoney(row, 10, b.outPriceGbp(), "GBP", false, wb, money);
+            if (b.inLine() != null && b.inLine().priced()) {
+                setMoney(row, 11, b.inLine().price(), b.inLine().currency(), false, wb, money);
+            }
+            if (b.inPriceGbp() != null) setMoney(row, 12, b.inPriceGbp(), "GBP", false, wb, money);
+            // The basis is the only live evidence the pair is the pair: two listings of one fund
+            // differ by exactly the exchange rate, so in GBP they are the same number. The verdict
+            // gets its own column because the sheet has no amber tint to carry it.
+            if (b.deviationPct() != null) setStyled(row, 13, b.deviationPct(), signedPct);
+            styledCell(row, 14, !b.known() ? "" : (b.wide() ? "no — not tracking" : "yes"), text);
+            // The rate that was standing when the file was written. A basis read months later can
+            // only be judged against it, and nothing else in the workbook records it.
+            if (b.marketCross() != null) setRate(row, 15, b.marketCross(), rate);
+            styledCell(row, 16, sum.blockedBy() == null ? "" : sum.blockedBy().title(), text);
+            styledCell(row, 17, sum.blockedBy() == null ? "" : sum.blockedBy().detail(), text);
+            styledCell(row, 18, String.join("; ", sum.excluded()), text);
+            styledCell(row, 19, String.join("; ", s.offShape()), text);
+        }
+        finishSheet(sheet, headers.length, rowNum);
+    }
+
+    /**
+     * The two comparison tables, mirrored: for each switch, each basis (resting-and-intended, then
+     * already-traded), one row per side plus the net the panel draws under them.
+     *
+     * <p>Kept off the summary sheet because the grain differs — a side, not a switch — and folding
+     * four rows into columns would have made the widest sheet in the app out of the block a reader
+     * most needs to read across.
+     */
+    private static void writeYardstickSheet(Sheet sheet, List<SwitchService.Switch> switches,
+                                            Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle qtyNum = numericStyle(wb, false);
+        CellStyle signedPct = signedPctStyle(wb);
+        CellStyle rate = rateNumStyle(wb);
+        Map<String, CellStyle> money = new HashMap<>();
+
+        CellStyle count = countStyle(wb);
+        String[] headers = {"Switch", "Basis", "Leg", "Listing", "Legs", "Units", "Average price",
+                "Average price GBP", "Limit vs market", "Cost per unit GBP", "Cost",
+                "Matched units", "Cost over matched GBP", "Implied cross", "Market cross"};
+        header(sheet, headers, boldText);
+
+        int rowNum = 1;
+        for (SwitchService.Switch s : switches) {
+            rowNum = writeComparison(sheet, rowNum, s, s.summary().resting(),
+                    "Resting and intended", text, qtyNum, count, signedPct, rate, boldText, wb, money);
+            rowNum = writeComparison(sheet, rowNum, s, s.summary().filled(),
+                    "Already traded", text, qtyNum, count, signedPct, rate, boldText, wb, money);
+        }
+        finishSheet(sheet, headers.length, rowNum);
+    }
+
+    private static int writeComparison(Sheet sheet, int rowNum, SwitchService.Switch s,
+                                       Switches.Comparison c, String basis, CellStyle text,
+                                       CellStyle qtyNum, CellStyle count, CellStyle signedPct,
+                                       CellStyle rate, CellStyle boldText, Workbook wb,
+                                       Map<String, CellStyle> money) {
+        rowNum = writeLegSide(sheet, rowNum, s, c.out(), basis, "Selling", text, qtyNum, count, signedPct, wb, money);
+        rowNum = writeLegSide(sheet, rowNum, s, c.in(), basis, "Buying", text, qtyNum, count, signedPct, wb, money);
+        // The net line only exists when both sides are present and priced. Writing it anyway with
+        // blanks would put a row that looks like a comparison under two that are not one.
+        if (!c.complete()) return rowNum;
+        Row row = sheet.createRow(rowNum++);
+        styledCell(row, 0, s.group().name(), boldText);
+        styledCell(row, 1, basis, boldText);
+        styledCell(row, 2, "Net", boldText);
+        if (c.perUnitGbp() != null) setMoney(row, 9, c.perUnitGbp(), "GBP", false, wb, money);
+        setStyled(row, 10, c.costPct(), signedPct);
+        setNumeric(row, 11, c.matchedQuantity(), qtyNum);
+        if (c.totalGbp() != null) setMoney(row, 12, c.totalGbp(), "GBP", false, wb, money);
+        // Implied against market is the same statement as Cost, read as a rate: their ratio less
+        // one IS the cost, exactly. Both are written because a reader checking the claim needs the
+        // two numbers it is made of.
+        if (c.impliedCross() != null) setRate(row, 13, c.impliedCross(), rate);
+        if (c.marketCross() != null) setRate(row, 14, c.marketCross(), rate);
+        return rowNum;
+    }
+
+    private static int writeLegSide(Sheet sheet, int rowNum, SwitchService.Switch s,
+                                    Switches.LegSide side, String basis, String verb,
+                                    CellStyle text, CellStyle qtyNum, CellStyle count,
+                                    CellStyle signedPct, Workbook wb, Map<String, CellStyle> money) {
+        Row row = sheet.createRow(rowNum++);
+        styledCell(row, 0, s.group().name(), text);
+        styledCell(row, 1, basis, text);
+        styledCell(row, 2, verb, text);
+        styledCell(row, 3, dashIfNull(side.symbol()), text);
+        setNumeric(row, 4, BigDecimal.valueOf(side.legCount()), count);
+        setNumeric(row, 5, side.quantity(), qtyNum);
+        if (side.avgPrice() != null) setMoney(row, 6, side.avgPrice(), side.currency(), false, wb, money);
+        if (side.avgPriceGbp() != null) setMoney(row, 7, side.avgPriceGbp(), "GBP", false, wb, money);
+        if (side.vsMarketPct() != null) setStyled(row, 8, side.vsMarketPct(), signedPct);
+        return rowNum;
+    }
+
+    /**
+     * Both leg tables, one row each, with the line and the direction stated.
+     *
+     * <p>Which leg an order is on is read from its listing, never from its side, so {@code Leg} is
+     * derived from the symbol and {@code Side} is the order's own — printed beside each other
+     * precisely so a buy of the old line or a sell of the new one is visible as the off-shape thing
+     * it is rather than being silently counted the wrong way.
+     */
+    private static void writeSwitchLegsSheet(Sheet sheet, List<SwitchService.Switch> switches,
+                                             Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle qtyNum = numericStyle(wb, false);
+        CellStyle signedPct = signedPctStyle(wb);
+        CellStyle touchPct = touchPctStyle(wb);
+        Map<String, CellStyle> money = new HashMap<>();
+
+        String[] headers = {"Switch", "Leg", "Listing", "Price", "Side", "Quantity", "Cash",
+                "Currency", "Account", "State", "Vs market",
+                "P(" + GroupRungs.NEAR_HORIZON_SESSIONS + ")",
+                "P(" + GroupRungs.FAR_HORIZON_SESSIONS + ")",
+                "Closed", "Note"};
+        header(sheet, headers, boldText);
+
+        int rowNum = 1;
+        for (SwitchService.Switch s : switches) {
+            for (Rung r : s.outLegs()) {
+                writeSwitchLeg(sheet.createRow(rowNum++), s, r, "Selling " + s.from(), s.from(),
+                        text, qtyNum, signedPct, touchPct, wb, money);
+            }
+            for (Rung r : s.inLegs()) {
+                writeSwitchLeg(sheet.createRow(rowNum++), s, r, "Buying " + s.to(), s.to(),
+                        text, qtyNum, signedPct, touchPct, wb, money);
+            }
+        }
+        finishSheet(sheet, headers.length, rowNum);
+    }
+
+    private static void writeSwitchLeg(Row row, SwitchService.Switch s, Rung r, String leg,
+                                       String listing, CellStyle text, CellStyle qtyNum,
+                                       CellStyle signedPct, CellStyle touchPct, Workbook wb,
+                                       Map<String, CellStyle> money) {
+        styledCell(row, 0, s.group().name(), text);
+        styledCell(row, 1, leg, text);
+        styledCell(row, 2, dashIfNull(listing), text);
+        if (r.price() != null) setMoney(row, 3, r.price(), r.currency(), false, wb, money);
+        styledCell(row, 4, dashIfNull(r.side()), text);
+        setNumeric(row, 5, r.quantity(), qtyNum);
+        if (r.cash() != null) setMoney(row, 6, r.cash(), r.currency(), false, wb, money);
+        styledCell(row, 7, dashIfNull(r.currency()), text);
+        styledCell(row, 8, dashIfNull(r.account()), text);
+        styledCell(row, 9, r.state().label(), text);
+        BigDecimal vsMkt = r.order() == null ? null : r.order().distancePct();
+        if (vsMkt != null) setStyled(row, 10, vsMkt, signedPct);
+        if (r.touchNear() != null) setStyled(row, 11, r.touchNear(), touchPct);
+        if (r.touchFar() != null) setStyled(row, 12, r.touchFar(), touchPct);
+        styledCell(row, 13, r.closedAt() != null ? r.closedAt().toString() : "", text);
+        styledCell(row, 14, r.note() == null ? "" : r.note(), text);
+    }
+
+    /**
+     * The sequencing — the part no broker will do, and the reason the panel exists at all.
+     *
+     * <p>{@code Step} is numbered because the order is the content: the first step that is not done
+     * is what everything after it is waiting on, and a sorted sheet that lost the numbering would
+     * lose the claim. {@code Blocks the next step} restates {@code StepState.blocks()} rather than
+     * leaving a reader to infer which states stop the chain.
+     */
+    private static void writeSequenceSheet(Sheet sheet, List<SwitchService.Switch> switches,
+                                           Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle count = countStyle(wb);
+
+        String[] headers = {"Switch", "Step", "What has to happen", "State", "Detail",
+                "Blocks the next step"};
+        header(sheet, headers, boldText);
+
+        int rowNum = 1;
+        for (SwitchService.Switch s : switches) {
+            int step = 1;
+            for (Switches.Step st : s.summary().sequence()) {
+                Row row = sheet.createRow(rowNum++);
+                styledCell(row, 0, s.group().name(), text);
+                setNumeric(row, 1, BigDecimal.valueOf(step++), count);
+                styledCell(row, 2, st.title(), text);
+                styledCell(row, 3, st.state().name().toLowerCase().replace('_', ' '), text);
+                styledCell(row, 4, st.detail() == null ? "" : st.detail(), text);
+                styledCell(row, 5, st.state().blocks() ? "yes" : "", text);
+            }
+        }
+        finishSheet(sheet, headers.length, rowNum);
+    }
+
+    private static List<GroupCashLine> switchCashLines(List<SwitchService.Switch> switches) {
+        List<GroupCashLine> out = new ArrayList<>();
+        for (SwitchService.Switch s : switches) {
+            for (Ladders.CashLine c : s.summary().cash()) {
+                out.add(new GroupCashLine(s.group().name(), c));
+            }
+        }
+        return out;
+    }
+
+    // ---- shared sheet furniture for the two group workbooks ----
+
+    private static void header(Sheet sheet, String[] headers, CellStyle boldText) {
+        Row hdr = sheet.createRow(0);
+        for (int i = 0; i < headers.length; i++) styledCell(hdr, i, headers[i], boldText);
+    }
+
+    /**
+     * Auto-filter over the written rows, a frozen header, and column widths.
+     *
+     * <p>{@code rowNum} is the next free row, so the last written one is {@code rowNum - 1}; the
+     * filter range is clamped to the header row when a sheet has none, because an auto-filter over
+     * row 0 alone is valid and one over a negative range is not.
+     */
+    private static void finishSheet(Sheet sheet, int cols, int rowNum) {
+        sheet.createFreezePane(0, 1);
+        sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, rowNum - 1), 0, cols - 1));
+        autoSizeColumns(sheet, cols);
+    }
+
+    /** Signed fraction — a limit above the market, a line that is 0.3% rich. */
+    private static CellStyle signedPctStyle(Workbook wb) {
+        CellStyle s = wb.createCellStyle();
+        s.setDataFormat(wb.createDataFormat().getFormat("+0.00%;-0.00%"));
+        return s;
+    }
+
+    /**
+     * Whole numbers — a rung count, a leg count, a step number, sessions to expiry. Quantities are
+     * deliberately not these: a fractional share is a real quantity and rounding it to look tidy
+     * would misstate a position.
+     */
+    private static CellStyle countStyle(Workbook wb) {
+        CellStyle s = wb.createCellStyle();
+        s.setDataFormat(wb.createDataFormat().getFormat("0"));
+        return s;
+    }
+
+    /** Unsigned fraction — a probability, a share of a switch that has moved. */
+    private static CellStyle touchPctStyle(Workbook wb) {
+        CellStyle s = wb.createCellStyle();
+        s.setDataFormat(wb.createDataFormat().getFormat("0.0%"));
+        return s;
     }
 }

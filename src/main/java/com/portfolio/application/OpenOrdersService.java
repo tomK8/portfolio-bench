@@ -403,14 +403,56 @@ public class OpenOrdersService {
     public ExportResult export() {
         OrdersReport report = load();
         if (report.empty()) return ExportResult.nothing();
+        return writeWorkbook("Open Orders-", () -> excelReportWriter.ordersWorkbook(report.orders()));
+    }
+
+    /**
+     * Writes the Ladders block to {@code Ladders-YYYYMMDD.xlsx} in the output directory.
+     *
+     * <p>Re-loads for the same reason {@link #export()} does, and it matters more here: the rungs'
+     * {@code P(10)}/{@code P(30)} are priced on the stored forecast settings, so a file written off
+     * a cached report could carry probabilities from a model the panel is no longer using.
+     *
+     * <p>A ladder is deliberately <em>not</em> behind the "no order files found" guard the orders
+     * export sits behind. One made entirely of intended rungs is a real set of commitments that
+     * exists only here, and there is something to export even when {@code ~/Downloads} is empty —
+     * which is exactly the day those commitments are the only record of what was decided. Nothing
+     * to export means no ladders, and nothing else.
+     */
+    public ExportResult exportLadders() {
+        List<LadderService.Ladder> ladders = load().ladders().ladders();
+        if (ladders.isEmpty()) return ExportResult.nothing();
+        return writeWorkbook("Ladders-", () -> excelReportWriter.laddersWorkbook(ladders));
+    }
+
+    /**
+     * Writes the Share-class switches block to {@code Share-Class Switches-YYYYMMDD.xlsx}.
+     *
+     * <p>Outside the order-files guard on the switches' own stronger version of the ladder's
+     * argument: a switch is nearly always half intended — the buy leg cannot be placed until the
+     * proceeds have settled, changed broker and changed currency — so requiring a broker export
+     * would refuse to write the file precisely while the switch is doing its job.
+     */
+    public ExportResult exportSwitches() {
+        List<SwitchService.Switch> switches = load().switches().switches();
+        if (switches.isEmpty()) return ExportResult.nothing();
+        return writeWorkbook("Share-Class Switches-", () -> excelReportWriter.switchesWorkbook(switches));
+    }
+
+    private ExportResult writeWorkbook(String namePrefix, WorkbookBytes bytes) {
         try {
             Files.createDirectories(outputDir);
-            Path file = outputDir.resolve("Open Orders-" + LocalDate.now().format(DATE_FMT) + ".xlsx");
-            Files.write(file, excelReportWriter.ordersWorkbook(report.orders()));
+            Path file = outputDir.resolve(namePrefix + LocalDate.now().format(DATE_FMT) + ".xlsx");
+            Files.write(file, bytes.get());
             return new ExportResult(false, List.of(file.toString()));
         } catch (IOException e) {
-            throw new IllegalStateException("Failed to write open-orders Excel to " + outputDir, e);
+            throw new IllegalStateException("Failed to write Excel report to " + outputDir, e);
         }
+    }
+
+    /** A workbook rendered to bytes; {@code IOException} so POI's writer can be passed directly. */
+    private interface WorkbookBytes {
+        byte[] get() throws IOException;
     }
 
     /** Whether the drifted first passage is switched on, from the stored setting. */

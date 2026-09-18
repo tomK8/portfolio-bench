@@ -201,6 +201,12 @@ dropped with a warning rather than read as one of the types that exist.
   Mutations re-render the block alone (`hx-target="#switches-result"`); `markPlaced` targets
   `#orders-result` for the ladder's reason — linking can move the intent's note onto the order, and
   that note is a cell of the table below.
+- **`Download Excel` writes every switch** to `Share-Class Switches-{date}.xlsx`
+  (`POST /switches/export`) — five sheets, one per block of the card: the switch with its progress
+  and basis check, the GBP yardstick, the legs, the sequence, and cash by account. Re-derived on the
+  press, and outside the order-files guard on the block's own argument — a switch whose buy leg is
+  still an intent is exactly the state worth having a record of. See
+  [excel-exports.md](excel-exports.md).
 - **The premise is stated on every card** ("same fund, two listings — your exposure does not
   change"), because a reader who skims must not have to infer it.
 - **Two adjacent columns measure in opposite directions**, deliberately and labelled: the yardstick's

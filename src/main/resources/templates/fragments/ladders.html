@@ -44,6 +44,17 @@
                     <button type="submit">Create</button>
                 </form>
             </details>
+
+            <!--
+              Rendered only when there is a ladder to write. A Download button that can only report
+              "nothing to export" is worse than no button — and the export re-derives on the press,
+              so what lands in ~/Documents is the ladders as they are now, not this render.
+              hx-target is outside this fragment; see the container in fragments/orders.
+            -->
+            <button type="button" class="link-button ladder-export"
+                    th:unless="${orders.ladders.isEmpty()}"
+                    hx-post="/ladders/export" hx-target="#ladders-export-result" hx-swap="innerHTML"
+                    title="Writes every ladder to a date-stamped .xlsx in ~/Documents — one sheet of rungs, one of ladder totals, one of cash by account.">Download Excel</button>
         </div>
 
         <div th:if="${!#lists.isEmpty(orders.ladders.warnings)}" class="value-warnings">

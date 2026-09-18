@@ -38,3 +38,16 @@ duplicate handler per retry. Loaders that own a sub-view (allocation's concentra
 pass the **sub-view** id, not the panel id — `panelLoadFailed` queries descendants, so a
 panel-scoped call would clear a sibling sub-view's box.
 
+**The tab restore runs at DOM ready, not during script execution.** `dashboard.js` is the last
+element in `<body>`, so its top-level code runs while `readyState` is still `"loading"`: htmx has
+parsed but has not yet run its own `DOMContentLoaded` init. Calling `activatePanel` from there
+fired the restored panel's loader in a materially different environment from a tab *click*, which
+always happens long after init. `restoreActiveTab` is therefore deferred — htmx registers its
+listener from `<head>`, before this one, so by the time the restore runs htmx is fully up and the
+restore path and the click path are the same path. Open orders is where it showed: `loadOrders`
+is a bare `htmx.ajax`, and its `if (window.htmx)` guard made the pre-init case a **silent
+no-op** — the panel came up active and blank on every reload and filled only after a round trip
+to another tab and back. A loader reached by restore must therefore never assume a vendored
+library is initialised, and must report rather than swallow the case: `loadOrders` now ends in
+the same `.catch` → `panelLoadFailed` every other loader has.
+

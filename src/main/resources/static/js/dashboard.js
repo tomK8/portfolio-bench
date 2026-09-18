@@ -300,9 +300,23 @@
 
         // Open orders — a cheap local disk read, so re-fetch on each activation to reflect any
         // freshly exported order files (the sticky-head table gets sort attached via afterSettle).
+        // Open orders is the one panel whose loader used to be able to run *before* htmx had
+        // initialised — it is reachable as the restored tab, and the restore fired during script
+        // execution rather than after DOM ready (see restoreActiveTab). The bare `if (window.htmx)`
+        // turned that into a silent no-op: the panel came up active and blank, and only clicking
+        // away to another tab and back — by which point htmx was up — filled it. The restore is
+        // deferred now, and this keeps the guard honest rather than swallowing the case: every
+        // other panel reports a failed load and offers a Retry, and this one does too.
         function loadOrders() {
-            if (window.htmx) {
-                htmx.ajax('GET', '/orders', {target: '#orders-result', swap: 'innerHTML'});
+            clearPanelError('panel-orders');
+            if (!window.htmx) {
+                panelLoadFailed('panel-orders',
+                        new Error('htmx has not loaded yet'), loadOrders);
+                return;
+            }
+            var req = htmx.ajax('GET', '/orders', {target: '#orders-result', swap: 'innerHTML'});
+            if (req && req.catch) {
+                req.catch(function (e) { panelLoadFailed('panel-orders', e, loadOrders); });
             }
         }
 
@@ -751,12 +765,28 @@
 
         // Restore the last-visited tab. Silent fall-through if the saved id no longer matches
         // an existing panel (e.g. after a tab rename) — page-default Holdings stays active.
-        try {
-            var savedTab = localStorage.getItem(TAB_KEY);
-            if (savedTab && document.getElementById(savedTab)) {
-                activatePanel(savedTab, false);
-            }
-        } catch (e) {}
+        //
+        // Deferred to DOM ready so a restored panel loads under exactly the conditions a click on
+        // its tab does. This script is the last element in <body>, so it runs while readyState is
+        // still "loading": htmx has parsed but has not yet run its own DOMContentLoaded init, and
+        // firing a panel loader from there is a different environment from every other call into
+        // activatePanel. htmx registers its listener from <head>, before this one, so by the time
+        // this runs htmx is fully up. Open orders — whose loader is a single htmx.ajax — is the
+        // panel that showed it, coming back blank on a reload and filling only on a tab round-trip.
+        function restoreActiveTab() {
+            try {
+                var savedTab = localStorage.getItem(TAB_KEY);
+                if (savedTab && document.getElementById(savedTab)) {
+                    activatePanel(savedTab, false);
+                }
+            } catch (e) {}
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', restoreActiveTab);
+        } else {
+            restoreActiveTab();
+        }
 
         // Shared failure path for the load-once panels.
         //

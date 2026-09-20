@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      th:attr="data-demo=${demo} ? 'true' : null">
+<head>
+    <meta charset="UTF-8"/>
+    <title>Demo mode · Portfolio Bench</title>
+    <script>
+        // Same pre-paint theme bootstrap the other pages use, so this one does not flash light.
+        (function () {
+            try {
+                var t = localStorage.getItem('portfolio-bench.theme');
+                if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+            } catch (e) { /* private window: fall back to the light default */ }
+        })();
+    </script>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            margin: 3rem auto; max-width: 820px; padding: 0 1rem;
+            color: #1a1a1a; line-height: 1.5;
+        }
+        h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+        h2 { font-size: 1.05rem; margin: 2rem 0 0.6rem; }
+        .sub { color: #666; margin-top: 0; }
+        table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+        th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #e4e4e8; }
+        th { font-weight: 600; color: #444; }
+        td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        code { font-size: 0.85rem; word-break: break-all; }
+        .note {
+            border-left: 4px solid #e0a800; background: #fffbe6;
+            padding: 0.6rem 0.9rem; border-radius: 0 4px 4px 0; font-size: 0.9rem;
+        }
+        .wrap { overflow-x: auto; }
+        a { color: #1f77b4; }
+        html[data-theme="dark"] body { background: #16181c; color: #d8d8dc; }
+        html[data-theme="dark"] th, html[data-theme="dark"] td { border-bottom-color: #2c2f36; }
+        html[data-theme="dark"] th { color: #b0b0b8; }
+        html[data-theme="dark"] .sub { color: #999; }
+        html[data-theme="dark"] .note { background: #3a2f15; color: #ffeab0; }
+        html[data-theme="dark"] a { color: #6ab0e8; }
+    </style>
+</head>
+<body>
+<div th:if="${demo}" th:replace="~{fragments/demo-banner :: banner}"></div>
+
+<div th:unless="${demo}">
+    <h1>Not running in demo mode</h1>
+    <p class="sub">This instance is serving real data.</p>
+    <p>Start a demo instance with <code>scripts/demo.sh</code>. It runs the same jar against
+        sample data in <code>demo/</code>, on its own port, so it can sit beside this one.</p>
+    <p><a href="/">Back to the dashboard</a></p>
+</div>
+
+<div th:if="${demo}">
+    <h1>Demo mode</h1>
+    <p class="sub">This instance is running on sample data.</p>
+
+    <p class="note">
+        The figures here are randomised and do not describe any real portfolio. The
+        instruments are genuine tickers, so classification, fund look-through and live
+        pricing behave exactly as they do in normal use.
+    </p>
+
+    <h2>Where this instance reads and writes</h2>
+    <div class="wrap">
+        <table>
+            <tr><th>Input (broker exports)</th><td><code th:text="${inputDir}">-</code></td></tr>
+            <tr><th>Database</th><td><code th:text="${dbDir}">-</code></td></tr>
+            <tr><th>Exports</th><td><code th:text="${outputDir}">-</code></td></tr>
+            <tr><th>Data built</th><td th:text="${generatedAt}">-</td></tr>
+        </table>
+    </div>
+    <p class="sub" style="font-size: 0.85rem;">Read back from the beans that resolved them, so
+        these are the directories actually in use — not the ones that were configured.</p>
+
+    <h2>Contents</h2>
+    <div class="wrap">
+        <table>
+            <tr><th>Table</th><th class="num">Rows</th><th>Latest</th></tr>
+            <tr th:each="e : ${tables}">
+                <td><code th:text="${e.key}">-</code></td>
+                <td class="num" th:text="${e.value.rows} ?: '—'">-</td>
+                <td th:text="${e.value.latest} ?: '—'">-</td>
+            </tr>
+        </table>
+    </div>
+
+    <p style="margin-top: 2rem;"><a href="/">Back to the dashboard</a></p>
+</div>
+</body>
+</html>

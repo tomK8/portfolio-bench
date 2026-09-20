@@ -8,3 +8,7 @@ node_modules/
 application-local.properties
 *.local.properties
 /config/
+
+# Generated demo dataset. The generator is committed; its output is not.
+demo/
+portfolio-bench-demo.pid

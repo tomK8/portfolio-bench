@@ -36,6 +36,23 @@ log file, so non-Logback output (early classloader errors, OOM dumps) is capture
 **`start.sh` runs a prebuilt jar and never rebuilds.** After any change: `mvn package` first,
 then restart — otherwise you are testing the old build.
 
+### Demo mode
+
+```bash
+python3 scripts/make-demo-data.py   # demo/input and demo/db
+scripts/demo.sh                     # :8081, beside the real daemon
+```
+
+The same jar pointed at `demo/`, on sample data. Runs on its own port/PID/log so `start.sh` is
+unaffected, and `--portfolio.demo=true` (command line, which outranks
+`~/.portfolio-bench.properties`) puts a banner on every page.
+
+**Figures come from a generator profile outside this repository** (`PB_DEMO_PROFILE`, default
+`~/.portfolio-bench-demo/profile.py`); there is no fallback and nothing builds without it. How
+it produces them is not documented here, in the code, in the history or in the UI — do not add
+it. `demo/` and the profile are both uncommitted; this repo is public.
+See [docs/demo-mode.md](docs/demo-mode.md).
+
 ### Test fixtures
 
 `src/test/resources/` **must contain only synthetic data — no real brokerage exports.** Fixtures
@@ -213,6 +230,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [strategy-momentum.md](docs/strategy-momentum.md) | change momentum or the signal comparison | V1 must reproduce the Momentum tab bit-for-bit; the adoption rule is pre-registered and printed verbatim; controls run on the fit window only |
 | [strategy-range.md](docs/strategy-range.md) | change the range-floor backtest | Defaults *are* the pre-registration — any override flags the run EXPLORATORY; signals on split-adjusted price, P&L in total-return space |
 | [ui-conventions.md](docs/ui-conventions.md) | add a tab, chart loader or vendored library | Loaders need `.catch` + `panelLoadFailed`; tab groups are derived from the DOM; vendored libs are pinned by URL and load in a fixed order |
+| [demo-mode.md](docs/demo-mode.md) | run the app on demo data, or change the generator | The generator profile lives **outside the repo** and its method is documented nowhere — never add a fallback or explain it; the ledger is built in the **database** and holdings in the **files**, because holdings have no table and files cannot reproduce the ledger; `order_key` must be rebuilt or every ladder rung orphans |
 | [postmortems.md](docs/postmortems.md) | investigate a reconciliation gap between views | Resolved incidents kept for the invariants they justify |
 
 ## Not documented yet

@@ -273,6 +273,31 @@ public class WatchlistService {
     }
 
     /**
+     * The trading day the current price belongs to — what the session windows must count back
+     * from, rather than the calendar date.
+     *
+     * <p>{@code closeNSessionsBefore} wants the close of the session <em>before</em> the one being
+     * judged, so it skips bars that are not strictly older than its anchor. Hand it the calendar
+     * date on a non-trading day and the anchor sits ahead of the last session: Friday's close is
+     * then "one session before" Sunday, {@code current} is compared against itself, and every
+     * window on the watchlist reads 0.00% all weekend. The same trap closed a holiday.
+     *
+     * <p>So anchor on the session {@code current} actually came from — the quote's trading day
+     * when there is a quote, else the date of the last daily bar, which is where the fallback
+     * close was read. This is the rule {@code docs/live-tab.md} already states for the Live
+     * tab's Day Δ; the watchlist simply was not following it.
+     */
+    private static LocalDate sessionAnchor(Snapshot s, LocalDate today) {
+        if (s.ip() != null) return s.ip().tradingDay();
+        List<PriceBar> bars = s.bars();
+        if (!bars.isEmpty()) {
+            LocalDate last = bars.get(bars.size() - 1).date();
+            if (last.isBefore(today)) return last;
+        }
+        return today;
+    }
+
+    /**
      * The intraday-varying fields common to the full row and the quote poll: calendar-anchored
      * trailing momentum, the 5D/10D intraday-derived realized vol, distance from the 52-week
      * high/low, and the alert flags. Percentages come back already scaled. Kept as one method so
@@ -285,12 +310,13 @@ public class WatchlistService {
         // "2d" = live vs two sessions ago (today + the prior session), etc. Counting sessions keeps
         // the short windows distinct over weekends/holidays (a calendar anchor makes Today/2d/3d
         // identical on Mondays). k "days" here means k trading sessions.
-        BigDecimal todayPct = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 1));
-        BigDecimal pct2d  = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 2));
-        BigDecimal pct3d  = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 3));
-        BigDecimal pct5d  = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 5));
-        BigDecimal pct10d = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 10));
-        BigDecimal pct30d = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, today, 30));
+        LocalDate anchor = sessionAnchor(s, today);
+        BigDecimal todayPct = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, anchor, 1));
+        BigDecimal pct2d  = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, anchor, 2));
+        BigDecimal pct3d  = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, anchor, 3));
+        BigDecimal pct5d  = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, anchor, 5));
+        BigDecimal pct10d = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, anchor, 10));
+        BigDecimal pct30d = PriceStats.pctChange(current, PriceStats.closeNSessionsBefore(bars, anchor, 30));
 
         // 5D/10D vol from intraday 1-minute returns (less noisy over a few days than a handful of
         // daily returns). Same estimator the popup term structure uses.

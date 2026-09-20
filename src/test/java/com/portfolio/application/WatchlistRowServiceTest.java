@@ -126,6 +126,35 @@ class WatchlistRowServiceTest {
         assertFalse(r.held(), "no ledger rows — not held");
     }
 
+    /**
+     * The weekend anchor. {@code closeNSessionsBefore} skips bars that are not strictly older
+     * than its anchor, so anchoring on the calendar date rather than the quote's trading day
+     * makes Friday's close "one session before" Sunday — {@code current} is compared against
+     * itself and every window reads 0.00% until Monday. The other tests here only catch this on
+     * the days of the week that happen to expose it; this one pins it whatever day it runs.
+     */
+    @Test
+    void sessionWindowsAnchorOnTheTradingDayNotTheCalendarDate() {
+        var cf = new JdbcConnectionFactory(dbDir);
+        var kv = new KeyValueStore(dbDir);
+        var wlRepo = new WatchlistRepository(cf, kv);
+        var priceRepo = new PriceHistoryRepository(cf);
+        // Two sessions, then a gap: the most recent bar is a week old, as it would be to any
+        // caller running on a non-trading day.
+        LocalDate lastSession = weekdayOnOrBefore(LocalDate.now().minusDays(7));
+        LocalDate priorSession = weekdayOnOrBefore(lastSession.minusDays(1));
+        priceRepo.savePriceBars(List.of(bar("AAPL", priorSession, 100.0),
+                bar("AAPL", lastSession, 110.0)));
+        var svc = new WatchlistService(wlRepo, priceRepo, new IntradayPriceRepository(cf),
+                new FundamentalsRepository(cf), new CashTransactionRepository(cf, kv),
+                () -> Map.of(), new YahooTickerMap(), new UnresolvedSymbols(kv));
+
+        Row r = svc.row("AAPL");
+
+        assertEquals(0, new BigDecimal("0.100000").compareTo(r.todayPct()),
+                "the last session's move, not 0% — the anchor must follow the price, not the clock");
+    }
+
     @Test
     void watchedSymbolUsesItsStoredEntry() {
         Row r = service(repo -> repo.add("AAPL", new BigDecimal("5"), new BigDecimal("3"),

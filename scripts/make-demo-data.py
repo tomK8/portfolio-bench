@@ -76,11 +76,11 @@ def load_profile():
         sys.exit(
             f"No generator profile at {path}.\n"
             f"Demo data cannot be built without one. Point {PROFILE_ENV} at a Python file\n"
-            f"exposing magnitude(value) -> number and describe() -> str.")
+            f"exposing randomize(value) -> number and describe() -> str.")
     spec = importlib.util.spec_from_file_location("pb_demo_profile", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    for fn in ("magnitude", "describe"):
+    for fn in ("randomize", "describe"):
         if not hasattr(mod, fn):
             sys.exit(f"Generator profile at {path} does not define {fn}().")
     return mod
@@ -107,7 +107,7 @@ def _synth_number(numtext):
     """
     had_commas = "," in numtext
     decimals = len(numtext.split(".")[1]) if "." in numtext else 0
-    value = PROFILE.magnitude(float(numtext.replace(",", "")))
+    value = PROFILE.randomize(float(numtext.replace(",", "")))
     return f"{value:,.{decimals}f}" if had_commas else f"{value:.{decimals}f}"
 
 
@@ -133,7 +133,7 @@ def synth_cell(value):
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
-        return PROFILE.magnitude(value)
+        return PROFILE.randomize(value)
     return synth_text(value)
 
 
@@ -370,7 +370,7 @@ def demo_order_key(prod_key):
     if len(parts) != 6 or not parts[3]:
         return prod_key
     try:
-        parts[3] = plain(PROFILE.magnitude(float(parts[3])))
+        parts[3] = plain(PROFILE.randomize(float(parts[3])))
     except ValueError:
         return prod_key
     return "|".join(parts)
@@ -488,7 +488,7 @@ def build_database(source, out, intraday_days, log):
                 for c in synth_cols:
                     i = idx.get(c)
                     if i is not None and isinstance(r[i], (int, float)):
-                        r[i] = PROFILE.magnitude(r[i])
+                        r[i] = PROFILE.randomize(r[i])
                 if "description" in idx:
                     r[idx["description"]] = synth_description(r[idx["description"]])
                 # order_key embeds the quantity when the broker gave no reference, so the
@@ -533,7 +533,7 @@ def build_database(source, out, intraday_days, log):
             value = float(f.read_text().strip())
         except ValueError:
             continue
-        (out / f.name).write_text(f"{PROFILE.magnitude(value):.2f}")
+        (out / f.name).write_text(f"{PROFILE.randomize(value):.2f}")
         synth_n += 1
     log(f"  key-value files: {copied} copied, {synth_n} regenerated, "
           f"{len(KV_NEVER)} deliberately omitted")

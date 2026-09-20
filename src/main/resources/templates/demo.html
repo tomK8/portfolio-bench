@@ -42,7 +42,11 @@
     </style>
 </head>
 <body>
-<div th:if="${demo}" th:replace="~{fragments/demo-banner :: banner}"></div>
+<!-- Conditional fragment expression, not th:if + th:replace on one element: th:replace has
+     higher precedence than th:if, so the replacement happens first and the condition is
+     discarded along with the host element - which rendered the demo banner on the real
+     instance. ~{} is the empty fragment. -->
+<div th:replace="${demo} ? ~{fragments/demo-banner :: banner} : ~{}"></div>
 
 <div th:unless="${demo}">
     <h1>Not running in demo mode</h1>

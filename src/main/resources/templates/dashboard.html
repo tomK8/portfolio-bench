@@ -1,5 +1,6 @@
 <!DOCTYPE html>
-<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      th:attr="data-demo=${demo} ? 'true' : null">
 <head>
     <meta charset="UTF-8"/>
     <title th:text="${appName}">Portfolio Bench</title>
@@ -41,6 +42,10 @@
             display: flex;
             align-items: center;
             gap: 0.75rem;
+            /* Wrap rather than overflow the viewport: these rows hold a variable-width value
+               (the II SIPP cash balances) beside fixed buttons, so the row's width depends on
+               the data in it. */
+            flex-wrap: wrap;
         }
 
         label {
@@ -274,6 +279,12 @@
 
         .muted {
             color: #999;
+        }
+
+        /* The import hints name the resolved input directory, which can be a long absolute
+           path. Without this it overflows the viewport on a narrow screen instead of wrapping. */
+        .muted code {
+            overflow-wrap: anywhere;
         }
 
         /* A watchlist row Yahoo has rejected outright. Deliberately not .muted: "(fetching…)" is
@@ -1832,19 +1843,20 @@
     </style>
 </head>
 <body>
+<div th:if="${demo}" th:replace="~{fragments/demo-banner :: banner}"></div>
 <button id="theme-toggle" class="theme-toggle" type="button" title="Toggle dark mode">🌓</button>
 <h1 th:text="${appName}">Portfolio Bench</h1>
 <p class="sub">Local portfolio dashboard · <a href="/reference" style="color: #1f77b4;">Reference</a></p>
 
 <form class="actions" hx-indicator="#spinner">
     <button hx-post="/import-cash" hx-target="#import-result" type="submit">Import cash statement</button>
-    <span class="muted">reads <code>~/Downloads/cashstatements*.csv</code> (AJBell), <code>~/Downloads/History*.xlsx</code> (RothIRA) and UUID-named <code>~/Downloads/*.csv</code> (II SIPP)</span>
+    <span class="muted">reads <code th:text="${inputDir} + '/cashstatements*.csv'">~/Downloads/cashstatements*.csv</code> (AJBell), <code th:text="${inputDir} + '/History*.xlsx'">~/Downloads/History*.xlsx</code> (RothIRA) and UUID-named <code th:text="${inputDir} + '/*.csv'">~/Downloads/*.csv</code> (II SIPP)</span>
     <span class="htmx-indicator" id="spinner">Working…</span>
 </form>
 
 <form class="actions" hx-indicator="#spinner">
     <button hx-post="/import-gilt-prices" hx-target="#gilt-import-result" type="submit">Import gilt prices</button>
-    <span class="muted">reads <code>~/Downloads/Tradeweb_FTSE_ClosePrices*.csv</code> (manual Tradeweb downloads)</span>
+    <span class="muted">reads <code th:text="${inputDir} + '/Tradeweb_FTSE_ClosePrices*.csv'">~/Downloads/Tradeweb_FTSE_ClosePrices*.csv</code> (manual Tradeweb downloads)</span>
 </form>
 
 <form class="actions" hx-indicator="#spinner">
@@ -1956,7 +1968,7 @@
 <section class="tab-panel" id="panel-orders">
     <p class="muted" style="margin-top: 0">
         Resting (open) orders across brokers, parsed from the latest order-status exports in
-        <code>~/Downloads</code> — AJ Bell <code>activeorders*.csv</code>, II order history
+        <code th:text="${inputDir}">~/Downloads</code> — AJ Bell <code>activeorders*.csv</code>, II order history
         (UUID <code>.csv</code>), Citi Roth <code>Order+Status*.xlsx</code>. Read-only; filled,
         cancelled and expired orders are excluded.
     </p>

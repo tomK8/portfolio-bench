@@ -1,5 +1,6 @@
 <!DOCTYPE html>
-<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      th:attr="data-demo=${demo} ? 'true' : null">
 <head>
     <meta charset="UTF-8"/>
     <title>Reference · Portfolio Bench</title>
@@ -89,6 +90,7 @@
     </style>
 </head>
 <body>
+<div th:if="${demo}" th:replace="~{fragments/demo-banner :: banner}"></div>
 <button id="theme-toggle" class="theme-toggle" type="button" title="Toggle dark mode">🌓</button>
 <a href="/" class="nav-link">← Back to dashboard</a>
 <h1>Reference</h1>

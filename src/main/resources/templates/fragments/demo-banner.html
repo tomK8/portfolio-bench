@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--
+  Demo-mode banner. Rendered only when portfolio.demo=true, which scripts/demo.sh passes on
+  the command line - and a command-line argument outranks ~/.portfolio-bench.properties, so
+  nothing in the home config can turn this off while the demo directories are in use.
+
+  Deliberately fixed to the viewport rather than placed in the flow: it has to stay visible
+  through every tab switch, and htmx only ever swaps panel-sized targets, never the body.
+  The paired rule in dashboard.html pushes the page and the theme toggle down to clear it.
+
+  Carried by all three page templates. reference.html and glossary.html are standalone, with
+  their own <head> - there is no layout dialect here, so nothing is inherited.
+-->
+<th:block th:fragment="banner">
+<style>
+    /* Demo mode. Fixed to the viewport so it survives every tab switch - htmx only ever
+       swaps panel-sized targets. The [data-demo] rules below push the page and the theme
+       toggle clear of it, so nothing has to know about the banner except the root element. */
+    .demo-banner {
+        position: fixed; top: 0; left: 0; right: 0; z-index: 2000;
+        display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+        padding: 0.5rem 0.9rem;
+        background: #fff3cd; border-bottom: 2px solid #e0a800; color: #7a5b00;
+        font-size: 0.85rem; line-height: 1.3;
+    }
+
+    .demo-banner-tag {
+        font-weight: 700; letter-spacing: 0.08em;
+        background: #7a5b00; color: #fff3cd;
+        padding: 0.1rem 0.45rem; border-radius: 3px; flex: none;
+    }
+
+    .demo-banner-text { flex: 1 1 auto; min-width: 0; }
+
+    html[data-demo] body { margin-top: 4rem; }
+    html[data-demo] .theme-toggle { top: 3.1rem; }
+
+    html[data-theme="dark"] .demo-banner {
+        background: #3a2f15; border-bottom-color: #7a5f16; color: #ffeab0;
+    }
+    html[data-theme="dark"] .demo-banner-tag { background: #ffeab0; color: #3a2f15; }
+
+    @media (max-width: 560px) {
+        .demo-banner { font-size: 0.78rem; padding: 0.4rem 0.6rem; gap: 0.4rem; }
+        html[data-demo] body { margin-top: 4.6rem; }
+        html[data-demo] .theme-toggle { top: 3.6rem; }
+    }
+</style>
+<div class="demo-banner" role="status">
+    <span class="demo-banner-tag">DEMO</span>
+    <span class="demo-banner-text">Randomised sample data &mdash; not a real portfolio</span>
+</div>
+</th:block>
+</body>
+</html>

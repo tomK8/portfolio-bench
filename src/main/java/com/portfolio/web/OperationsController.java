@@ -2,6 +2,7 @@ package com.portfolio.web;
 
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.ImportCashService;
+import com.portfolio.application.BackupService;
 import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.LedgerGroupingService;
 import com.portfolio.application.PriceFetchJob;
@@ -38,6 +39,7 @@ public class OperationsController {
     private final ExportExcelService exportService;
     private final ImportCashService importCashService;
     private final ImportGiltPricesService importGiltPricesService;
+    private final BackupService backupService;
     private final PriceFetchJob priceFetchJob;
     private final PriceHistoryRepository priceHistoryRepository;
     private final KeyValueStore settings;
@@ -48,6 +50,7 @@ public class OperationsController {
                                 ExportExcelService exportService,
                                 ImportCashService importCashService,
                                 ImportGiltPricesService importGiltPricesService,
+                                BackupService backupService,
                                 PriceFetchJob priceFetchJob,
                                 PriceHistoryRepository priceHistoryRepository,
                                 KeyValueStore settings,
@@ -57,6 +60,7 @@ public class OperationsController {
         this.exportService = exportService;
         this.importCashService = importCashService;
         this.importGiltPricesService = importGiltPricesService;
+        this.backupService = backupService;
         this.priceFetchJob = priceFetchJob;
         this.priceHistoryRepository = priceHistoryRepository;
         this.settings = settings;
@@ -125,6 +129,17 @@ public class OperationsController {
         model.addAttribute("cashImports", importCashService.importCash());
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/import :: result";
+    }
+
+    /**
+     * Writes the off-machine backup now, rather than waiting for the monthly check. The point
+     * of having it on a button is the moment before doing something irreversible.
+     */
+    @PostMapping("/backup")
+    public String backup(Model model) {
+        model.addAttribute("backup", backupService.run());
+        model.addAttribute("completedAt", WebSupport.now());
+        return "fragments/backup :: result";
     }
 
     @PostMapping("/import-gilt-prices")

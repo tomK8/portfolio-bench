@@ -3,6 +3,7 @@ package com.portfolio.web;
 import com.portfolio.application.CachedHistoricalFxRateProvider;
 import com.portfolio.application.FundamentalsFetchJob;
 import com.portfolio.application.GiltPriceFetchJob;
+import com.portfolio.application.BackupService;
 import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.IntradayPriceFetchJob;
 import com.portfolio.application.PriceFetchJob;
@@ -14,6 +15,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+
 /**
  * Thin Spring trigger for the framework-free price jobs. All three fire on startup (off the main
  * thread, so a first-run backfill doesn't delay the web UI). The daily Yahoo job runs each
@@ -24,6 +27,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class PriceFetchScheduler {
 
+    /** How stale the newest archive may get before another is written. */
+    private static final int BACKUP_INTERVAL_DAYS = 30;
+
     private static final Logger log = LoggerFactory.getLogger(PriceFetchScheduler.class);
 
     private final PriceFetchJob job;
@@ -33,13 +39,15 @@ public class PriceFetchScheduler {
     private final FundamentalsFetchJob fundamentalsJob;
     private final WatchlistAlertJob watchlistAlertJob;
     private final CachedHistoricalFxRateProvider historicalFx;
+    private final BackupService backupService;
 
     public PriceFetchScheduler(PriceFetchJob job, IntradayPriceFetchJob intradayJob,
                                GiltPriceFetchJob giltJob,
                                ImportGiltPricesService giltImportService,
                                FundamentalsFetchJob fundamentalsJob,
                                WatchlistAlertJob watchlistAlertJob,
-                               CachedHistoricalFxRateProvider historicalFx) {
+                               CachedHistoricalFxRateProvider historicalFx,
+                               BackupService backupService) {
         this.job = job;
         this.intradayJob = intradayJob;
         this.giltJob = giltJob;
@@ -47,6 +55,7 @@ public class PriceFetchScheduler {
         this.fundamentalsJob = fundamentalsJob;
         this.watchlistAlertJob = watchlistAlertJob;
         this.historicalFx = historicalFx;
+        this.backupService = backupService;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -59,6 +68,21 @@ public class PriceFetchScheduler {
         // Warms the whole USD/EUR history in one call each, so a cold start during a Frankfurter
         // outage can still value non-GBP positions instead of silently reporting them as £0.
         startDaemon("fx-history-warm-startup", historicalFx::warm);
+        startDaemon("backup-startup", this::backupIfDue);
+    }
+
+    /**
+     * Monthly off-machine backup, checked every six hours rather than fired by a calendar cron.
+     *
+     * <p>A {@code cron} on the 1st assumes the machine is awake and the app running at that
+     * instant. This is a laptop tool that is shut more often than not, so a date-triggered job
+     * would skip whole months without saying so. Asking "is the newest archive older than a
+     * month?" instead means the backup happens within hours of the laptop next being used,
+     * whatever day that is, and re-running it is harmless.
+     */
+    @Scheduled(fixedDelay = 6 * 60 * 60 * 1000, initialDelay = 6 * 60 * 60 * 1000)
+    public void backup() {
+        backupIfDue();
     }
 
     @Scheduled(cron = "0 0 22 * * *", zone = "Europe/London")
@@ -99,6 +123,21 @@ public class PriceFetchScheduler {
         Thread t = new Thread(r, name);
         t.setDaemon(true);
         t.start();
+    }
+
+    private void backupIfDue() {
+        try {
+            LocalDate last = backupService.lastBackupDate();
+            if (last != null && last.isAfter(LocalDate.now().minusDays(BACKUP_INTERVAL_DAYS))) {
+                return;
+            }
+            backupService.run();
+        } catch (RuntimeException e) {
+            // Degrades like every other background job: a failed backup must not take the
+            // scheduler down with it. It is logged at WARN because, unlike a missed price
+            // fetch, nothing later repairs it.
+            log.warn("Backup failed", e);
+        }
     }
 
     private void runQuietly() {

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:fragment="result">
+    <p class="note">
+        <strong>Backed up</strong> <span th:text="${backup.rows()}">0</span> rows across
+        <span th:text="${backup.tableCounts().size()}">0</span> tables
+        (<span th:text="${#numbers.formatDecimal(backup.bytes() / 1024.0, 1, 0)}">0</span> KB)
+        at <span th:text="${completedAt}">–</span>.
+    </p>
+    <p class="muted" style="font-size: 0.85rem;">
+        <code th:text="${backup.file()}">–</code>
+        <span th:if="${backup.pruned() > 0}">
+            · <span th:text="${backup.pruned()}">0</span> older archive(s) removed</span>
+    </p>
+    <table class="backup-tables">
+        <tr th:each="e : ${backup.tableCounts()}">
+            <td><code th:text="${e.key}">–</code></td>
+            <td style="text-align: right;" th:text="${e.value}">0</td>
+        </tr>
+    </table>
+</div>
+</body>
+</html>

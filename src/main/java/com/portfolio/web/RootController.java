@@ -1,6 +1,7 @@
 package com.portfolio.web;
 
 import com.portfolio.adapter.HoldingFileLocator;
+import com.portfolio.application.BackupService;
 import com.portfolio.application.LedgerGroupingService;
 import com.portfolio.persistence.KeyValueStore;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,14 +37,17 @@ public class RootController {
      * made those hints wrong in demo mode, in the one way that undercuts the banner.
      */
     private final String inputDir;
+    private final String backupDir;
 
     public RootController(KeyValueStore settings, LedgerGroupingService groupingService,
                           HoldingFileLocator fileLocator,
+                          BackupService backupService,
                           @Value("${portfolio.demo:false}") boolean demo) {
         this.settings = settings;
         this.groupingService = groupingService;
         this.demo = demo;
         this.inputDir = abbreviateHome(fileLocator.inputDir().toString());
+        this.backupDir = abbreviateHome(backupService.destination().toString());
     }
 
     @GetMapping("/")
@@ -51,6 +55,7 @@ public class RootController {
         model.addAttribute("appName", demo ? "Portfolio Bench — DEMO" : "Portfolio Bench");
         model.addAttribute("demo", demo);
         model.addAttribute("inputDir", inputDir);
+        model.addAttribute("backupDir", backupDir);
         model.addAttribute("iiSippCash",
                 settings.getBigDecimal(WebSupport.II_SIPP_CASH_KEY, BigDecimal.ZERO).toPlainString());
         model.addAttribute("iiSippCashUsd",

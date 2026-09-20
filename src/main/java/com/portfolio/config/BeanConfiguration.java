@@ -113,6 +113,21 @@ public class BeanConfiguration {
         return new JdbcConnectionFactory(dbDir(dbDir));
     }
 
+    /**
+     * Off-machine backup of the irreplaceable rows. Defaults into iCloud Drive's Documents
+     * folder so the copy leaves the machine on its own — a backup that only ever sits on the
+     * disk it is protecting is not one. Override with {@code portfolio.backup-dir}.
+     */
+    @Bean
+    public BackupService backupService(JdbcConnectionFactory connections,
+                                       @Value("${portfolio.backup-dir:}") String backupDir) {
+        Path dir = backupDir.isBlank()
+                ? Path.of(System.getProperty("user.home"), "Library", "Mobile Documents",
+                          "com~apple~CloudDocs", "Documents")
+                : Path.of(backupDir);
+        return new BackupService(connections, dir);
+    }
+
     @Bean
     public KeyValueStore keyValueStore(JdbcConnectionFactory connections) {
         return new KeyValueStore(connections.dbDir());

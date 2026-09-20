@@ -1868,6 +1868,17 @@
     <span class="muted">re-fetches the full 30-year history per ticker; re-run after a notable dividend or split (takes 1–2 min)</span>
 </form>
 
+<form class="actions" hx-indicator="#spinner">
+    <button hx-post="/backup" hx-target="#backup-result" type="submit">Back up now</button>
+    <span class="muted">writes the irreplaceable tables and settings to
+        <code th:text="${backupDir}">iCloud Drive</code>; the app also does this monthly</span>
+</form>
+
+<section class="result-panel">
+    <h2>Backup</h2>
+    <div id="backup-result"></div>
+</section>
+
 <section class="result-panel">
     <h2>Import cash statement</h2>
     <div id="import-result"></div>

@@ -231,6 +231,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [strategy-range.md](docs/strategy-range.md) | change the range-floor backtest | Defaults *are* the pre-registration — any override flags the run EXPLORATORY; signals on split-adjusted price, P&L in total-return space |
 | [ui-conventions.md](docs/ui-conventions.md) | add a tab, chart loader or vendored library | Loaders need `.catch` + `panelLoadFailed`; tab groups are derived from the DOM; vendored libs are pinned by URL and load in a fixed order |
 | [demo-mode.md](docs/demo-mode.md) | run the app on demo data, or change the generator | The generator profile lives **outside the repo** and its method is documented nowhere — never add a fallback or explain it; the ledger is built in the **database** and holdings in the **files**, because holdings have no table and files cannot reproduce the ledger; `order_key` must be rebuilt or every ladder rung orphans |
+| [backup.md](docs/backup.md) | change what is backed up, or the schedule | Only the ~1000 rows that cannot be re-fetched, plus the `KeyValueStore` files a SQL dump would miss; the dump is plain SQL so a restore needs none of our code; due-by-elapsed-time, not a calendar cron, because the laptop is usually shut |
 | [postmortems.md](docs/postmortems.md) | investigate a reconciliation gap between views | Resolved incidents kept for the invariants they justify |
 
 ## Not documented yet
@@ -268,6 +269,7 @@ beyond the code, so treat the source as the specification.
 | `POST /import-gilt-prices` | Operations | `ImportGiltPricesService` |
 | `POST /rebuild-prices` | Operations | full-window refetch + `adj_close` rebuild |
 | `POST /prices/manual` | Operations | hand-entered price row |
+| `POST /backup` | Operations | `BackupService` — irreplaceable tables + settings → iCloud Drive |
 | `POST /returns/benchmark/fetch` | Operations | benchmark series backfill |
 | `GET /live`, `GET /live/stream` (SSE) | LiveDashboard | `LivePricesService` |
 | `POST /live/export` | LiveDashboard | `ExportExcelService.exportLive` |

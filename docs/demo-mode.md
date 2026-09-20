@@ -30,11 +30,11 @@ and the only thing keeping it worth anything is that nothing published states th
 The profile interface is two functions:
 
 ```python
-def magnitude(value): ...   # the demo figure for a real one
+def randomize(value): ...
 def describe():      ...    # a short label for logs, saying nothing
 ```
 
-`magnitude` is called for sizes only. Prices, FX rates, dates and percentages never pass
+`randomize` is called for sizes only. Prices, FX rates, dates and percentages never pass
 through it, which is what keeps the demo internally consistent against live market data:
 market value is still quantity × live price, and the ratios the app derives are ordinary
 arithmetic on whatever it was handed.

@@ -1843,7 +1843,11 @@
     </style>
 </head>
 <body>
-<div th:if="${demo}" th:replace="~{fragments/demo-banner :: banner}"></div>
+<!-- Conditional fragment expression, not th:if + th:replace on one element: th:replace has
+     higher precedence than th:if, so the replacement happens first and the condition is
+     discarded along with the host element - which rendered the demo banner on the real
+     instance. ~{} is the empty fragment. -->
+<div th:replace="${demo} ? ~{fragments/demo-banner :: banner} : ~{}"></div>
 <button id="theme-toggle" class="theme-toggle" type="button" title="Toggle dark mode">🌓</button>
 <h1 th:text="${appName}">Portfolio Bench</h1>
 <p class="sub">Local portfolio dashboard · <a href="/reference" style="color: #1f77b4;">Reference</a></p>

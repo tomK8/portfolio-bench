@@ -250,6 +250,69 @@
             e.target.blur();
         });
 
+        // ── Intended rungs: editable price and quantity ─────────────────────────
+        // Only the rungs the user recorded here are editable — a rung that came from a broker's CSV
+        // prints as text and carries no input at all, so nothing below can reach one.
+        //
+        // A commit posts every editable cell in the block and the server redraws the whole thing:
+        // the two fixed horizons, the distance to market, the price axis and its marker, the totals,
+        // and on a switch the yardstick, the split and the shortfall. It is deliberately not per
+        // keystroke — a commit is a full re-load (three broker exports re-parsed, the price feed
+        // re-read), and the box being typed in is inside the fragment that gets replaced.
+        //
+        // Delegated from document.body, like the note handlers above: both blocks are htmx-swapped
+        // on every tab click and on every mutation, so anything bound inside them would be lost on
+        // the first swap and stacked on every re-bind.
+        var pendingRungFocus = null;
+
+        function commitRungEdits(input) {
+            var block = input.closest('.ladders');
+            if (!block) return;
+            // Each block carries its own hidden commit button, which knows the endpoint, the target
+            // and which inputs to include. A button rather than hx-* on the input itself: htmx posts
+            // the triggering element's own value *and* everything hx-include names, and the server
+            // reads three index-aligned lists — one duplicated entry and every rung after it takes
+            // the figure belonging to the one before.
+            var commit = block.querySelector('.rung-commit');
+            if (!commit) return;
+            // Where to put the caret back after the swap. Without this, tuning a ladder means
+            // finding the cell again after every commit.
+            pendingRungFocus = {key: input.dataset.rungKey, field: input.dataset.field};
+            commit.click();
+        }
+
+        document.body.addEventListener('change', function (e) {
+            var input = e.target.closest ? e.target.closest('.rung-edit') : null;
+            if (input) commitRungEdits(input);
+        });
+
+        // Enter commits without waiting for focus to move, which is what a one-line numeric field
+        // implies. blur() is what fires `change`, and only when the value actually moved — so
+        // Enter on an untouched cell is as quiet as tabbing through one.
+        document.body.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter' || !e.target.classList
+                || !e.target.classList.contains('rung-edit')) return;
+            e.preventDefault();
+            e.target.blur();
+        });
+
+        // Matched by walking the inputs rather than by an attribute selector, so the lookup cannot
+        // break on whatever a key turns out to contain.
+        document.body.addEventListener('htmx:afterSettle', function () {
+            if (!pendingRungFocus) return;
+            var want = pendingRungFocus;
+            pendingRungFocus = null;
+            if (!want.key) return;
+            var boxes = document.querySelectorAll('.rung-edit');
+            for (var i = 0; i < boxes.length; i++) {
+                if (boxes[i].dataset.rungKey === want.key && boxes[i].dataset.field === want.field) {
+                    boxes[i].focus();
+                    boxes[i].select();
+                    return;
+                }
+            }
+        });
+
         // ── Cash-ledger grouping: expand / collapse ─────────────────────────────
         // Groups render collapsed from the server and open on click. Both handlers are delegated
         // from document.body because the whole table is htmx-swapped on every re-sync — anything

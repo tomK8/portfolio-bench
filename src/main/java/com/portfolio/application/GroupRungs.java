@@ -4,6 +4,7 @@ import com.portfolio.domain.model.IntendedRung;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.domain.model.OrderStatus;
 import com.portfolio.domain.model.Rung;
+import com.portfolio.persistence.OrderGroupRepository;
 import com.portfolio.persistence.OrderHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -199,6 +200,36 @@ public final class GroupRungs {
         Map<String, OpenOrder> out = new LinkedHashMap<>();
         for (OpenOrder o : orders) out.put(o.identity(), o);
         return out;
+    }
+
+    /**
+     * Write a new price and/or quantity onto a rung the user recorded here, whichever kind of group
+     * it belongs to.
+     *
+     * <p>Shared for the reason everything in this class is: an intended ladder rung and an intended
+     * switch leg are the same row of the same table, and two copies of the rule about what a blank
+     * cell means would eventually be two rules. What is <em>not</em> shared, and stays in each
+     * service, is anything about where a rung may belong.
+     *
+     * <p>A figure that matches what is stored is not written at all. The panel posts every editable
+     * cell on screen rather than tracking which were touched, so without this a commit anywhere in
+     * the block would rewrite every intent in it.
+     *
+     * <p>There is deliberately no counterpart for a rung that came from a broker export. Those are
+     * what the broker is holding, they are re-read from the file on every load, and this app has no
+     * business restating them.
+     */
+    static void updateIntent(OrderGroupRepository groups, long intentId,
+                             BigDecimal quantity, BigDecimal price) {
+        IntendedRung r = groups.intent(intentId);
+        if (r == null) {
+            throw new IllegalStateException("That intended rung is no longer on file.");
+        }
+        boolean movedQty = IntentEdits.differs(quantity, r.quantity());
+        boolean movedPrice = IntentEdits.differs(price, r.price());
+        if (!movedQty && !movedPrice) return;
+        groups.updateIntent(intentId, movedQty ? quantity : r.quantity(),
+                movedPrice ? price : r.price());
     }
 
     /**

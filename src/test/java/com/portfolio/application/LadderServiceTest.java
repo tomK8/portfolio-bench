@@ -171,6 +171,80 @@ class LadderServiceTest {
         assertNotNull(r.order(), "it carries the order the enrichment pass would have priced");
     }
 
+    // ---- editable intended rungs -------------------------------------------
+
+    /**
+     * The whole rule, from the other side: a rung that came from a broker's export is not editable
+     * and there is no path that could make it so. Only an intended rung is rendered with inputs, and
+     * a key naming anything else is dropped rather than interpreted — so a stale tab or a hand-made
+     * request cannot restate what a broker is holding.
+     */
+    @Test
+    void onlyAnIntendedRungCanBeEdited() {
+        OpenOrder resting = order("Roth IRA", "NVDA", "Buy", "20", "203.18", "REF2");
+
+        assertTrue(IntentEdits.of(List.of(resting.identity()), List.of("175"), List.of("30"))
+                        .isEmpty(),
+                "a broker order key must name nothing this panel can write");
+        assertEquals(1, IntentEdits.of(List.of("intent:7"), List.of("175"), List.of("30"))
+                .all().size());
+    }
+
+    /**
+     * An intended rung is the user's own record, so typing over it is the edit — written, and
+     * keeping the note that says why the rung is there. Re-recording it was the alternative, and it
+     * threw the note away.
+     */
+    @Test
+    void editingAnIntendedRungIsSavedAndKeepsItsNote() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        long intentId = s.addIntent(id, "Roth IRA", "Buy", new BigDecimal("25"),
+                new BigDecimal("175.00"), "the patient rung");
+
+        s.updateIntent(intentId, new BigDecimal("30"), new BigDecimal("168.50"));
+
+        var r = groups.intent(intentId);
+        assertEquals(0, new BigDecimal("30").compareTo(r.quantity()));
+        assertEquals(0, new BigDecimal("168.50").compareTo(r.price()));
+        assertEquals("the patient rung", r.note());
+        assertEquals("Buy", r.side(), "a figure being tuned is not a change of side");
+    }
+
+    /**
+     * The panel posts every cell on screen, so an unchanged one has to write nothing — otherwise a
+     * commit anywhere in the block would rewrite every intent in it. A blank is "leave it", never
+     * zero, so a half-typed figure cannot empty a commitment against cash.
+     */
+    @Test
+    void anUnchangedOrBlankIntentCellWritesNothing() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        long intentId = s.addIntent(id, "Roth IRA", "Buy", new BigDecimal("25"),
+                new BigDecimal("175.00"), null);
+
+        s.updateIntent(intentId, new BigDecimal("25"), new BigDecimal("175"));
+        s.updateIntent(intentId, null, null);
+
+        var r = groups.intent(intentId);
+        assertEquals(0, new BigDecimal("25").compareTo(r.quantity()));
+        assertEquals(0, new BigDecimal("175.00").compareTo(r.price()));
+    }
+
+    /** A rung with no size is not a commitment, so zero is refused rather than stored. */
+    @Test
+    void anIntendedRungCannotBeResizedToNothing() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        long intentId = s.addIntent(id, "Roth IRA", "Buy", new BigDecimal("25"),
+                new BigDecimal("175.00"), null);
+
+        assertThrows(IllegalStateException.class,
+                () -> s.updateIntent(intentId, BigDecimal.ZERO, new BigDecimal("175.00")));
+        assertThrows(IllegalStateException.class,
+                () -> s.updateIntent(999L, new BigDecimal("1"), new BigDecimal("1")));
+    }
+
     // ---- the two fixed horizons -------------------------------------------
 
     /**

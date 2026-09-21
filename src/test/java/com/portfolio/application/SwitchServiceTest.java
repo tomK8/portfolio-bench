@@ -113,6 +113,42 @@ class SwitchServiceTest {
         assertEquals(2, report.unassigned().size());
     }
 
+    /**
+     * Editing an intended leg moves the only figure the two legs can be read against each other in.
+     *
+     * <p>It is worth more on a switch than on a ladder: the buy leg is an intent for days by
+     * construction, and the two limits are chosen against each other rather than against one
+     * market, so "where do these two have to sit" has two answers that only make sense together.
+     */
+    @Test
+    void editingAnIntendedLegMovesTheGbpYardstickAndTheCost() {
+        SwitchService s = service();
+        long id = s.createSwitch("Nasdaq line to USD", "EQQQ", "EQQU");
+        OpenOrder sell = order("II SIPP", "EQQQ", "Sell", "100", "530.00", "GBP", "REF1");
+        s.addLegs(id, List.of(sell.identity()));
+        long intentId = s.addIntent(id, "Roth IRA", "Buy", new BigDecimal("100"),
+                new BigDecimal("716.00"), "waiting on the transfer");
+
+        BigDecimal before = s.assemble(List.of(sell), s.intendedOrders(sym -> "USD"),
+                history.closed(), history.notes(), ACCOUNTS, LINES, RATES, TOUCH)
+                .switches().get(0).summary().resting().costPct();
+
+        s.updateIntent(intentId, new BigDecimal("100"), new BigDecimal("700"));
+
+        SwitchService.Switch sw = s.assemble(List.of(sell), s.intendedOrders(sym -> "USD"),
+                history.closed(), history.notes(), ACCOUNTS, LINES, RATES, TOUCH)
+                .switches().get(0);
+        Switches.LegSide in = sw.summary().resting().in();
+        assertEquals(0, new BigDecimal("700").compareTo(in.avgPrice()));
+        // 700 ÷ 1.345 — the FX convention is units of foreign currency per 1 GBP, so divide.
+        assertEquals(0, new BigDecimal("520.45").compareTo(in.avgPriceGbp().setScale(2,
+                java.math.RoundingMode.HALF_UP)));
+        assertTrue(sw.summary().resting().costPct().compareTo(before) < 0,
+                "a lower buy limit has to read as a cheaper switch");
+        assertEquals("waiting on the transfer", sw.inLegs().get(0).note(),
+                "the reasoning survives the edit — which re-recording the leg would not have");
+    }
+
     /** The picker offers exactly the two listings — this type's rule, in one place. */
     @Test
     void thePickerOffersBothListingsAndNothingElse() {

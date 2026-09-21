@@ -209,6 +209,28 @@ dropped with a warning rather than read as one of the types that exist.
   [excel-exports.md](excel-exports.md).
 - **The premise is stated on every card** ("same fund, two listings — your exposure does not
   change"), because a reader who skims must not have to infer it.
+- **An intended leg's price and quantity are editable in place** (`POST /switches/intents/update`),
+  the ladder's cells and the ladder's rule: an intended leg is the user's own record, a leg that came
+  from a broker's export is fixed. The shared machinery is in
+  [open-orders.md](open-orders.md#editable-intended-rungs-the-price-and-quantity-cells).
+
+  It is worth more here than on a ladder, twice over. The buy leg is an intent for *days* by
+  construction — the cash is in the wrong account and the wrong currency — so it is both the leg most
+  likely to need moving as the market does and the one an edit can actually reach. And the two limits
+  are chosen against *each other* rather than against one market, so "where do these two have to sit"
+  has two answers that only make sense together; moving one and reading what it does to the cost, the
+  implied cross rate and the shortfall is the only way to settle them. Everything on the card is
+  derived from the legs rather than stored, so all of it moves at once: the GBP yardstick, all three
+  terms of the split, the progress in units, and which step of the sequence is blocking.
+
+  What an edit does **not** move is the basis check. `basis` is the two *lines'* market prices
+  against the exchange rate, not the limits, so it is untouched — which is right, because it is the
+  panel's only live evidence that the pair is the pair, and evidence you can edit is not evidence.
+  What it does move is the headline's other reading ("your two prices imply 1.3509 USD per GBP"), and
+  that is exactly what it is for: an implied rate is a statement about where you have put your two
+  limits.
+- **An intended leg's side is never touched by an edit.** A switch reads the listing off the side, so
+  a figure being tuned must not be able to move the leg onto the other line.
 - **Two adjacent columns measure in opposite directions**, deliberately and labelled: the yardstick's
   *Limit vs market* is where your price sits against the market, which is the term the split needs;
   the leg tables carry the orders table's own *vs mkt*, how far the market sits from the limit. Each

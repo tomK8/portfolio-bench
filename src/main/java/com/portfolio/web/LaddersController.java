@@ -2,6 +2,7 @@ package com.portfolio.web;
 
 import com.portfolio.application.LadderService;
 import com.portfolio.application.OpenOrdersService;
+import com.portfolio.application.IntentEdits;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -99,6 +100,35 @@ public class LaddersController {
     @PostMapping("/ladders/intents/delete")
     public String deleteIntent(@RequestParam long intentId, Model model) {
         ladders.deleteIntent(intentId);
+        return render(model);
+    }
+
+    /**
+     * Re-price or re-size the intended rungs, from the figures as they now stand on screen.
+     *
+     * <p>The panel posts <em>every</em> editable cell in the block rather than the one that was
+     * committed, and the service writes only the ones that actually differ from what is stored —
+     * so "which cells did the user touch" is never a claim the browser has to make and get right.
+     * The whole block then redraws, because a rung moving changes the price axis, both fill
+     * probabilities, the net position and the cash each account needs.
+     *
+     * <p>Only intended rungs are editable, so only intended rungs are here: a rung that came from a
+     * broker's CSV is what the broker is holding, it is re-read from the file on every load, and
+     * this app has no business restating it. Keys are {@code intent:<id>} and anything else is
+     * dropped rather than interpreted. See {@link IntentEdits}.
+     *
+     * <p>The three lists are index-aligned, one entry per editable cell, parsed leniently: a
+     * half-typed figure has to come back as "that cell is unchanged" rather than a 400 that wipes
+     * the block being worked in.
+     */
+    @PostMapping("/ladders/intents/update")
+    public String updateIntents(@RequestParam(name = "editKey", required = false) List<String> keys,
+                                @RequestParam(name = "editPrice", required = false) List<String> prices,
+                                @RequestParam(name = "editQty", required = false) List<String> quantities,
+                                Model model) {
+        for (IntentEdits.Typed t : IntentEdits.of(keys, prices, quantities).all()) {
+            ladders.updateIntent(t.intentId(), t.quantity(), t.price());
+        }
         return render(model);
     }
 

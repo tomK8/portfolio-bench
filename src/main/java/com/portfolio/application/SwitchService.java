@@ -330,6 +330,20 @@ public class SwitchService {
     }
 
     /**
+     * Re-price or re-size an intended leg in place.
+     *
+     * <p>The same write a ladder's intended rung takes — and, as there, the only figures this panel
+     * can move: a leg that came from a broker export is fixed. It matters more here, because on a
+     * switch the buy leg is an intent for days by construction, so it is the leg most likely to need
+     * moving as the market does — and re-recording it would throw away its note along with it. The
+     * side is untouched, which is what keeps the leg on the listing it was recorded against: a
+     * switch reads the listing off the side, never off a stored symbol.
+     */
+    public void updateIntent(long intentId, BigDecimal quantity, BigDecimal price) {
+        GroupRungs.updateIntent(groups, intentId, quantity, price);
+    }
+
+    /**
      * The user says an intended leg has been placed, and names the order it became — the only path
      * from intended to real, for the same reason a ladder has no other one.
      */

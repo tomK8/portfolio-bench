@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!--
+  The Price and Quantity cells a ladder rung and a switch leg share.
+
+  One definition for both panels, for the reason GroupRungs exists: a rung and a leg are the same
+  object, and two copies of the rule about when a cell is editable would eventually be two rules.
+
+  EDITABLE ON AN INTENDED RUNG, AND ONLY THERE. An intended rung exists nowhere but this panel —
+  nothing else writes it, and editing it is the only way it can ever change — so typing over its
+  price or quantity *is* the edit, and it is saved. Committing one (leave the box, or press Enter)
+  redraws the block: both fixed horizons, the distance to market, the price axis and its marker, the
+  net position and the cash each account raises or needs, and on a switch the GBP yardstick, the
+  index/FX split and the shortfall as well. Before this, moving a rung you had decided on but not
+  placed meant deleting it and recording it again, which threw away the note.
+
+  A RUNG THAT CAME FROM A BROKER'S CSV IS FIXED, and prints as text. It is not ours to restate: the
+  panel's whole claim is that it shows what is resting at the broker. The pipeline re-parses the
+  export on every load and order_history's upsert restates price and quantity from it, so a typed
+  figure would either be reverted on the next read or — worse, if it survived — have this app assert
+  a limit the broker has never been told about. To move one, move it at the broker; the next export
+  brings it here.
+-->
+
+<!--
+  Price. The currency prints beside the box rather than inside it: it was never the thing being
+  edited, and a "£" in the field is a character the server would have to strip back out.
+-->
+<td th:fragment="price(r)">
+    <span th:unless="${r.intended()}"
+          th:text="${r.price != null ? r.currencySymbol()
+                   + #numbers.formatDecimal(r.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</span>
+    <span th:if="${r.intended()}" class="rung-edit-box">
+        <!-- intent:<id> — the key the panel addresses this rung by. Nothing else is accepted. -->
+        <input type="hidden" class="rung-adjust" name="editKey" th:value="${r.key}"/>
+        <span class="rung-ccy" th:text="${r.currencySymbol()}">£</span>
+        <input class="rung-adjust rung-edit" name="editPrice" type="text" inputmode="decimal"
+               data-field="price" th:attr="data-rung-key=${r.key}"
+               th:value="${T(com.portfolio.application.IntentEdits).editable(r.price)}"
+               title="Your own rung, so this is saved when you leave the box or press Enter — and the whole ladder re-prices around it. Blank leaves it as it is. In the instrument's own quote currency."/>
+    </span>
+</td>
+
+<!--
+  Quantity. It changes no probability — a touch probability is about the price and not the size —
+  and it changes every figure that is money or position: the net if everything fills, what each
+  account raises or needs, and a switch's progress in units.
+-->
+<td th:fragment="qty(r)">
+    <span th:unless="${r.intended()}"
+          th:text="${r.quantity != null
+                   ? #numbers.formatDecimal(r.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</span>
+    <span th:if="${r.intended()}" class="rung-edit-box">
+        <input class="rung-adjust rung-edit" name="editQty" type="text" inputmode="decimal"
+               data-field="qty" th:attr="data-rung-key=${r.key}"
+               th:value="${T(com.portfolio.application.IntentEdits).editable(r.quantity)}"
+               title="Saved on the same terms as Price. Blank leaves it as it is, and a quantity of zero is refused — a rung with no size is not a commitment against cash."/>
+    </span>
+</td>
+
+<!--
+  The commit. A hidden button rather than hx-* on each input, because htmx sends the triggering
+  element's own value *and* everything hx-include names: an input that is both would be posted
+  twice, and the three lists the server reads are index-aligned — one stray entry and every rung
+  after it takes the figure belonging to the one before.
+
+  Clicked from dashboard.js when a cell commits (change, or Enter, which blurs). On change and not
+  on every keystroke: a commit is a whole re-load — three broker exports re-parsed, the price feed
+  re-read — and the box the reader is typing in is inside the fragment being replaced.
+-->
+<button th:fragment="commit(path, target, include)" type="button" hidden class="rung-commit"
+        th:attr="hx-post=${path}, hx-include=${include}, hx-target=${target}"
+        hx-swap="innerHTML"></button>
+
+</body>
+</html>

@@ -225,6 +225,26 @@ public class LadderService {
     }
 
     /**
+     * Re-price or re-size an intended rung in place.
+     *
+     * <p>An intended rung is the <b>only</b> kind this panel can edit, and that is the whole rule:
+     * it is the user's own record, so typing over its price or quantity <em>is</em> the edit and is
+     * written straight through. A rung that came from a broker export is what the broker is holding
+     * and is fixed - see {@code GroupRungs.updateIntent}.
+     *
+     * <p>The alternative was delete and re-record, which threw away the note: the one part of a rung
+     * that says <em>why</em> it is there, and the reason intended rungs exist at all.
+     *
+     * <p>Blank means "leave it" and never zero, the app-wide rule, so tabbing through a row commits
+     * nothing and a half-typed figure cannot silently empty a commitment. Nothing else about the
+     * rung moves: an intent's side names its account's role in the ladder, and its note is the
+     * reasoning, neither of which is a figure being tuned here.
+     */
+    public void updateIntent(long intentId, BigDecimal quantity, BigDecimal price) {
+        GroupRungs.updateIntent(groups, intentId, quantity, price);
+    }
+
+    /**
      * The user says they have placed an intended rung, and names the order it became.
      *
      * <p>This is the only path from intended to real, and it exists because the panel deliberately

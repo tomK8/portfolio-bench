@@ -57,6 +57,9 @@
                     title="Writes every ladder to a date-stamped .xlsx in ~/Documents — one sheet of rungs, one of ladder totals, one of cash by account.">Download Excel</button>
         </div>
 
+        <!-- What an edited intended rung commits through. See fragments/rung-edit. -->
+        <button th:replace="~{fragments/rung-edit :: commit('/ladders/intents/update', '#ladders-result', '#ladders-result .rung-adjust')}"></button>
+
         <div th:if="${!#lists.isEmpty(orders.ladders.warnings)}" class="value-warnings">
             <h4>Ladders</h4>
             <ul>
@@ -99,9 +102,9 @@
             <table class="ladder-rungs" th:if="${l.hasRungs()}">
                 <thead>
                 <tr>
-                    <th>Price</th>
+                    <th title="Editable on an intended rung — the one kind this panel owns. Commit it (leave the box, or press Enter) and the whole ladder re-prices around it. A rung that came from a broker's export is what the broker is holding and is fixed here: move it at the broker.">Price</th>
                     <th class="txt">Side</th>
-                    <th>Qty</th>
+                    <th title="Editable on an intended rung, like Price. Quantity moves the cash and the net position; it changes no probability, since a touch is about where the price is and not how much of it you want.">Qty</th>
                     <th class="txt">Account</th>
                     <th class="txt">State</th>
                     <th title="How far the market sits from this rung's price. Positive = market above it.">vs mkt</th>
@@ -277,10 +280,10 @@
                    + (r.gone() ? 'rung-gone ' : '')
                    + (r.sell() ? 'rung-sell' : 'rung-buy')}"
     th:attr="data-symbol=${orders.chartableSymbols.contains(l.group.symbol) ? l.group.symbol : null}">
-    <td th:text="${r.price != null ? r.currencySymbol() + #numbers.formatDecimal(r.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+    <td th:replace="~{fragments/rung-edit :: price(${r})}">—</td>
     <td class="txt" th:classappend="${r.buy() ? 'val-pos' : (r.sell() ? 'val-neg' : '')}"
         th:text="${r.side != null ? r.side : '—'}">Side</td>
-    <td th:text="${r.quantity != null ? #numbers.formatDecimal(r.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+    <td th:replace="~{fragments/rung-edit :: qty(${r})}">—</td>
     <td class="txt" th:text="${r.account}">Account</td>
     <td class="txt">
         <span class="rung-state" th:classappend="'state-' + ${r.state.name().toLowerCase()}"

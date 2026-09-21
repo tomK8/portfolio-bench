@@ -66,6 +66,9 @@
                     title="Writes every switch to a date-stamped .xlsx in ~/Documents — progress and the basis check, the GBP yardstick, the legs, the sequence and cash by account.">Download Excel</button>
         </div>
 
+        <!-- What an edited intended leg commits through. See fragments/rung-edit. -->
+        <button th:replace="~{fragments/rung-edit :: commit('/switches/intents/update', '#switches-result', '#switches-result .rung-adjust')}"></button>
+
         <div th:if="${!#lists.isEmpty(orders.switches.warnings)}" class="value-warnings">
             <h4>Share-class switches</h4>
             <ul>
@@ -409,8 +412,8 @@
     <table class="ladder-rungs">
         <thead>
         <tr>
-            <th>Price</th>
-            <th>Qty</th>
+            <th title="Editable on an intended leg — which on a switch is usually the buy, for days at a time, so it is the leg most likely to need moving. Commit it (leave the box, or press Enter) and the whole switch re-prices around it: the GBP yardstick, all three terms of the split, the implied cross rate and what the buy still needs. A leg that came from a broker's export is fixed here: move it at the broker.">Price</th>
+            <th title="Editable on an intended leg, like Price. Quantity moves the progress in units and the cash the buy leg needs, and changes no probability.">Qty</th>
             <th class="txt">Account</th>
             <th class="txt">State</th>
             <th title="How far the market sits from this leg's price. Positive = market above it.">vs mkt</th>
@@ -429,8 +432,8 @@
                            + (r.gone() ? 'rung-gone ' : '')
                            + (r.sell() ? 'rung-sell' : 'rung-buy')}"
             th:attr="data-symbol=${orders.chartableSymbols.contains(symbol) ? symbol : null}">
-            <td th:text="${r.price != null ? r.currencySymbol() + #numbers.formatDecimal(r.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
-            <td th:text="${r.quantity != null ? #numbers.formatDecimal(r.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:replace="~{fragments/rung-edit :: price(${r})}">—</td>
+            <td th:replace="~{fragments/rung-edit :: qty(${r})}">—</td>
             <td class="txt" th:text="${r.account}">Account</td>
             <td class="txt">
                 <span class="rung-state" th:classappend="'state-' + ${r.state.name().toLowerCase()}"

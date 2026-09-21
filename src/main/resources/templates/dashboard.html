@@ -408,6 +408,31 @@
            beside it cannot be pushed off the edge of the table. */
         .rung-act select { max-width: 11rem; font-size: 0.75rem; }
 
+        /* ── Editable rung cells (intended rungs only) ────────────────────────
+           Borderless, like the Note column: an intended rung already reads as its own thing (the
+           row is italic and badged), and a box drawn around its figures would say "form" where the
+           column says "table". The border appears on hover and focus, where it means something.
+           Right-aligned with the read-only cells above and below so the decimal points still line
+           up down the column. */
+        .rung-edit-box { display: inline-flex; align-items: baseline; gap: 1px; justify-content: flex-end; }
+        .rung-ccy { color: #888; font-size: 0.75rem; }
+        .rung-edit {
+            width: 5.4rem;
+            text-align: right;
+            border: 1px solid transparent;
+            background: transparent;
+            font: inherit;
+            font-size: 0.8rem;
+            font-variant-numeric: tabular-nums;
+            padding: 0 0.15rem;
+            border-radius: 3px;
+            color: inherit;
+        }
+        .rung-edit:hover { border-color: #d5d8dd; }
+        .rung-edit:focus { border-color: #4a7ebb; background: #fff; outline: none; }
+        html[data-theme="dark"] .rung-edit:hover { border-color: #3a3f47; }
+        html[data-theme="dark"] .rung-edit:focus { border-color: #7aa7dd; background: #1a1c20; }
+
         .ladder-totals { display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem; font-size: 0.8rem;
             margin: 0.3rem 0 0.2rem; }
         .ladder-totals .lbl { color: #777; margin-right: 0.35rem; }

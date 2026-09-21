@@ -10,7 +10,9 @@
   above the table. Named groups of rungs on one security that the user creates and assigns orders
   to, including rungs decided on but never placed. Rungs are laid out by price around the market and
   priced over two **fixed** horizons (`P(10)` / `P(30)`) so they can be read against each other, where
-  the table's `P(N)` runs on each order's own deadline. See the Ladders section below.
+  the table's `P(N)` runs on each order's own deadline. An **intended** rung's price and quantity are
+  editable in place (`POST /ladders/intents/update`) and committing one re-prices the block; a rung
+  that came from a broker's export is fixed. See the Ladders section below.
 - **Share-class switches** — `GET /switches` → `fragments/switches :: list`, rendered inside the Open
   orders panel beside the Ladders block. One holding moving between two listings of the *same* fund —
   same ISIN, different trading currency, exchange line and account. Its own shape because a ladder
@@ -516,6 +518,61 @@ rung and a resting one are the same input to every figure. What state a rung is 
 - **Anything that cannot be computed is dropped from the figure it would have corrupted and named**
   in `Totals.excluded`, which the panel prints underneath — the app-wide rule.
 
+## Editable intended rungs: the price and quantity cells
+
+An intended rung's price and quantity are inputs, and committing one — leave the box, or press Enter
+— redraws the block. `application/IntentEdits` + `GroupRungs.updateIntent` + `fragments/rung-edit` +
+`POST /{ladders,switches}/intents/update`.
+
+**Intended rungs, and nothing else.** A rung that came from a broker's CSV prints as text and
+carries no input at all. That is not a judgement about how useful editing one would be — it is not
+ours to restate. The panel's whole claim is that it shows what is resting at the broker, and this
+tool re-parses the export on every load while `order_history`'s upsert restates price and quantity
+from it: a typed figure would either be reverted on the next read or, worse, survive and have the
+app assert a limit the broker has never been told about. To move a resting rung, move it at the
+broker; the next export brings it here. An intended rung is the opposite case in every respect — it
+exists nowhere but this panel, nothing else writes it, and editing it is the only way it can ever
+change.
+
+The rule is enforced twice over rather than just in the rendering. The panel draws an input only on
+an intended rung, and the key a cell posts is `intent:<id>`; `IntentEdits.of` drops anything else
+outright, so a stale tab or a hand-made request reaches nothing. `onlyAnIntendedRungCanBeAddressed`
+pins it.
+
+**What it replaced.** Before this, moving a rung you had decided on but not placed meant deleting it
+and recording it again — which threw away the note, the one part of a rung that says *why* it is
+there and the reason intended rungs exist at all. Side and note are untouched by an edit: a figure
+being tuned is not a change of either, and on a switch the side is what names the listing.
+
+**Nothing downstream is special-cased**, because a rung's figures were never stored anywhere but the
+intent. `LadderService.intendedOrders` rebuilds the synthetic order from what was just written and it
+goes through the same `enrichWithCurrentPrice` pass it always did, so `vs mkt`, both fixed horizons,
+the price-axis ordering and the market marker, the net position, the cash each account raises or
+needs — and on a switch the GBP yardstick, all three terms of the split, the implied cross rate, the
+progress and the shortfall — all move together.
+
+**Two details are load-bearing.**
+
+- **The panel posts every editable cell, and the server decides which ones are edits.** Tracking
+  "touched" in the browser would make the client the authority on what the user meant; instead a
+  posted figure counts only when it differs from the one the cell was rendered with, at
+  `IntentEdits.EDIT_SCALE` (6 dp, the precision the cell prints). That is what stops a commit
+  anywhere in the block from rewriting every intent in it.
+- **Blank is "no opinion", never zero** — the app-wide rule. Tabbing through a row writes nothing, a
+  half-typed figure leaves the cell as it was rather than emptying a commitment against cash, and a
+  quantity of zero is refused outright by `OrderGroupRepository.updateIntent`, on the same guard
+  `addIntent` has always had. A price may be null: a rung decided on before its level is is a real
+  state, and the panel prices it at nothing rather than at zero.
+
+The commit is on `change` and not per keystroke, and the panel is redrawn rather than the cell
+patched: a commit is a whole `load()` — three broker exports re-parsed, the price feed re-read — and
+the box being typed in is inside the fragment that gets replaced. `dashboard.js` puts the caret back
+in the same cell afterwards, matching on `dataset.rungKey` by walking the inputs rather than by an
+attribute selector. The commit itself is a **hidden button** carrying the `hx-post` / `hx-include` /
+`hx-target`, not `hx-*` on each input: htmx posts the triggering element's own value *and* everything
+`hx-include` names, and the server reads three index-aligned lists — one duplicated entry and every
+rung after it takes the figure belonging to the one before.
+
 ## Storage, and the seam for the group type that is coming
 
 Three tables. `order_group` is the user's intention; `order_group_member` is a *pointer* into
@@ -561,7 +618,8 @@ else and so carries its own side, quantity and price.
   usually a sell that has already filled paired with a buy still resting; a picker of live orders only
   could never assemble the completed round trip the panel exists to show.
 - **A rung row opens the shared price popup**, on the same terms the table's rows do — only when the
-  ladder's security resolved to a ticker.
+  ladder's security resolved to a ticker. An `<input>` is excluded from that row click, so typing in
+  a price cell cannot open a chart — the same exclusion the table's Note and P(N) cells rely on.
 - **`Download Excel` writes every ladder** to `Ladders-{date}.xlsx` (`POST /ladders/export`) — three
   sheets: the rungs, the per-ladder totals, and cash by account. It re-loads on the press like the
   orders export, which matters more here because `P(10)`/`P(30)` are priced on the stored forecast

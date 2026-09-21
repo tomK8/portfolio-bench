@@ -353,6 +353,35 @@ public class OrderGroupRepository {
         }
     }
 
+    /**
+     * Re-price or re-size a rung the user recorded here. Both figures are written together — the
+     * caller has already decided which of them actually moved and passes the stored one back for
+     * the other, so this stays one statement rather than a conditional SQL builder.
+     *
+     * <p>Quantity is guarded exactly as {@link #addIntent} guards it: a rung is a commitment against
+     * cash, and one with no size is not a commitment. Price may be null — a rung decided on before
+     * its level is is a real state, and the panel prices it at nothing rather than at zero.
+     */
+    public void updateIntent(long intentId, BigDecimal quantity, BigDecimal price) {
+        if (quantity == null || quantity.signum() <= 0) {
+            throw new IllegalStateException("Give the rung a quantity above zero.");
+        }
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE order_group_intent SET quantity = ?, price = ? WHERE id = ?")) {
+            setDecimal(ps, 1, quantity);
+            setDecimal(ps, 2, price);
+            ps.setLong(3, intentId);
+            if (ps.executeUpdate() == 0) {
+                throw new IllegalStateException("That intended rung is no longer on file.");
+            }
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not update the intended rung: " + e.getMessage(), e);
+        }
+    }
+
     public void deleteIntent(long intentId) {
         try (Connection conn = connections.open()) {
             exec(conn, "DELETE FROM order_group_intent WHERE id = ?", intentId);

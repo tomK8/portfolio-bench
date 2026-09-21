@@ -1,6 +1,7 @@
 package com.portfolio.web;
 
 import com.portfolio.application.OpenOrdersService;
+import com.portfolio.application.IntentEdits;
 import com.portfolio.application.SwitchService;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -106,6 +107,28 @@ public class SwitchesController {
     @PostMapping("/switches/intents/delete")
     public String deleteIntent(@RequestParam long intentId, Model model) {
         switches.deleteIntent(intentId);
+        return render(model);
+    }
+
+    /**
+     * Re-price or re-size the intended legs, from the figures as they now stand on screen — the
+     * switch's half of {@link LaddersController#updateIntents}, and the same rule: an intended leg
+     * is the user's own record and is editable, a leg that came from a broker's CSV is not.
+     *
+     * <p>It is worth more here than on a ladder. The buy leg is an intent for days by construction,
+     * so it is the leg most likely to need moving as the market does; and both limits are chosen
+     * against each other rather than against one market — the pair's price ratio <em>is</em> the
+     * exchange rate — so moving one and reading what it does to the cost, the implied cross and the
+     * shortfall is the only way to settle them.
+     */
+    @PostMapping("/switches/intents/update")
+    public String updateIntents(@RequestParam(name = "editKey", required = false) List<String> keys,
+                                @RequestParam(name = "editPrice", required = false) List<String> prices,
+                                @RequestParam(name = "editQty", required = false) List<String> quantities,
+                                Model model) {
+        for (IntentEdits.Typed t : IntentEdits.of(keys, prices, quantities).all()) {
+            switches.updateIntent(t.intentId(), t.quantity(), t.price());
+        }
         return render(model);
     }
 

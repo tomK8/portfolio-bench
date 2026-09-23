@@ -60,8 +60,8 @@ numbers that can be read against each other.
 **A side that spans both listings has no native average**, and none is shown — £584.80 and $682.35
 have no mean, and a blended figure would print as money and be none. The GBP column still answers,
 which is the whole reason the two columns exist. The implied cross rate goes with it: a rate implied
-by *your two prices* needs one currency on each side. The leg tables are likewise **ordered on the
-yardstick**, not on the raw figure; £584.80 is *below* $682.35 once the rate is divided out, and
+by *your two prices* needs one currency on each side. Each leg section is likewise **ordered on
+the yardstick**, not on the raw figure; £584.80 is *below* $682.35 once the rate is divided out, and
 sorting the printed numbers would stack every sterling row above every dollar one and call that a
 price order.
 
@@ -244,10 +244,17 @@ dropped with a warning rather than read as one of the types that exist.
 - **Quiet when there are none**: one line and a create form, like the Ladders block, and it sits
   **outside** the "no order files found" guard. A switch is nearly always half intended, so hiding it
   whenever no export happens to be in `~/Downloads` would hide it exactly when it is doing its job.
-- **Two tables, one per direction, and each row names its own listing.** The tables are the two
-  *sides*, not the two lines, so both listings appear in both — ordered by GBP price, the only axis
-  they share. The card's premise line says so, because a reader who skims must not read the tables
-  as the lines.
+- **One legs table, two sections — one per direction, and each row names its own listing.** The
+  sections are the two *sides*, not the two lines, so both listings appear in both — ordered by GBP
+  price, the only axis they share. The card's premise line says so, because a reader who skims must
+  not read the sections as the lines.
+- **One table rather than one per side, because the two sides are read against each other**: a sell
+  at -1.04% beside a buy at +8.42%, both on the same fixed P(10). As two tables each sized itself to
+  its own contents and no column lined up with its opposite number — a side holding an intended leg
+  carries the "placed as…" picker and one without it does not, which on its own moves every column
+  to the left of it. The side's name is a *row* of that table for the same reason: a heading outside
+  it could not be one of its columns. The header row is likewise written once, which is what keeps
+  the two sides' columns the same columns.
 - **Rendered from the same `OrdersReport` the table is**, so a leg's numbers are the row's numbers.
   Mutations re-render the block alone (`hx-target="#switches-result"`); `markPlaced` targets
   `#orders-result` for the ladder's reason — linking can move the intent's note onto the order, and
@@ -286,5 +293,5 @@ dropped with a warning rather than read as one of the types that exist.
   the same one.
 - **Two adjacent columns measure in opposite directions**, deliberately and labelled: the yardstick's
   *Limit vs market* is where your price sits against the market, which is the term the split needs;
-  the leg tables carry the orders table's own *vs mkt*, how far the market sits from the limit. Each
+  the leg rows carry the orders table's own *vs mkt*, how far the market sits from the limit. Each
   tooltip names the other.

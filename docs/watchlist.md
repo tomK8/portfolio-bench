@@ -20,7 +20,8 @@ touches an order.
   they can't diverge; realized vol is `PriceStats.annualizedVol` (30-session sample
   stdev × √252, on split-adjusted `close`, same convention as the Risk tab). 52-wk high/low,
   P/E and beta come from the fundamentals cache. `series()` serves the popup chart: intraday
-  for 1D–15D (downsampled to ~5-min beyond 5 days), daily `close×splitFactor` for 30D.
+  for 1D–15D (downsampled to ~5-min beyond 5 days), daily `close×splitFactor` for 30D — and,
+  alongside the points, the selected window's own traded high/low (`Series.range`).
 - **Triggers** are pure domain logic (`WatchlistAlerts.evaluate` → `Flags`): (a) within
   `highThresholdPct`% of the 52-week high (a fresh high always fires); (b) `|today's move|` ≥
   `moveThresholdPct`%, either direction; (c) price ≥ `priceAbove` level; (d) price ≤ `priceBelow`
@@ -74,6 +75,49 @@ touches an order.
   overnight/weekend gaps don't draw diagonal lines — 1D labels are times, multi-day/30D labels
   are dates. Popup fundamentals reuse the Snapshot-diff renderer (`fundamentalsHtml` /
   `fundamentalsFieldGroups` in `dashboard.js`) laid out in columns.
+- **The window's own high/low** sits beside the fixed 52-week pair and is relabelled as the window
+  changes (`5D high`, `1Y low`, …), so the same two cells answer whichever term is selected. The
+  52-week pair stays put: it is the near-high alert's yardstick and comes from the fundamentals
+  cache, not from here.
+  - **It is the traded range, not the range of the drawn line.** `price_history` has stored
+    `high`/`low` since the first fetch (827k of 836k bars, back to 1981), so no window needs a
+    "close-only, approximate" disclaimer and nothing new is fetched — the accuracy worry that
+    prompted the feature turned out to be unfounded. One rule serves all fifteen windows: the
+    highest and lowest price actually traded over the span the *label* claims, auctions included.
+  - **The stated high can sit visibly above the chart.** The line is closes (daily, or 1-minute),
+    the range is the session's true extreme, and our minute capture is gappy by construction — the
+    app is only running when the laptop is open. BARC.L on 2026-09-22 closed a session whose daily
+    bar high was 483.60 while our 446 stored minutes topped out at 475.30: a 1.7% gap, and the
+    daily bar is the one to believe. Reading the high off the plotted points would have under-
+    reported it.
+  - **Every window sees the session in progress.** Today's daily bar does not land until the
+    evening fetch, so `addLiveSession` folds the current session's minute bars into the daily
+    windows too. Without it a high made this morning showed in `5D high` (which reads minute bars)
+    but not `30D high` — a longer window reporting a lower high than a shorter one inside it.
+    Windows nest, and a test asserts it.
+  - **Zero is not a price.** A bar contributes `max(high, close)` / `min(low, close)`, and a stored
+    `0.0` is treated as absent in all three fields. Both zeroes are real: Yahoo writes a whole OHLC
+    row as `0.0` now and then (24 rows across 16 `.L` listings on one 2026 date) and a failed HL
+    scrape has written a `0.0` close (6 rows, the `GILT 0%` strips) — either one taken at face
+    value is the window's low, for ever. Only an *exact* zero is rejected: `^IRX` is a yield and
+    really did print below zero in March 2020. Folding the close in also fixes the opposite
+    glitch — ~0.4% of LSE ETF bars close just *outside* their own reported range (the closing
+    auction prints against a different book), which would otherwise draw a line poking above its
+    own stated high.
+  - **The `*` is judged per extreme, at the bar that set it** (`highCloseOnly`/`lowCloseOnly`), not
+    over the window: it says *this* figure is a bare closing price, with nothing stored about how
+    that day traded. That is the gilts — the HL scrape stores a close and no OHLC, so a gilt's
+    `1Y high` is the highest *close* and can sit below the year's real high. Judging it over the
+    window instead was wrong twice over: folding the live session into every window (above) then
+    let one day of scraped intraday vouch for the other 364 and the gilt silently stopped
+    flagging, while an equity's 1D mid-session — a few hundred minute samples, a sound figure —
+    would have been marked all day, training the reader to ignore the one case that matters. A
+    close on a day whose range *is* known (the LSE ETF quirk) is not marked either; it is a real
+    print on a bar we can see. A gilt's popup previously had no high/low at all — its 52-week
+    cells come from fundamentals, which don't cover gilts — so these two cells are the only ones
+    it gets, which is the more reason to say what they are.
+  - Ordering is latched (`wlSeriesToken`): clicking 5D then 1Y must not let the slower 5D reply
+    repaint the chart, nor label its high `1Y high`.
 - **Manual order:** `watchlist.display_order` + `POST /watchlist/move?dir=up|down` swap
   neighbours; rows render in that order (↑/↓ buttons per row). Add-backfills run on a
   single-thread executor in `WatchlistController` so two quick adds queue rather than racing
@@ -105,6 +149,7 @@ touches an order.
   targets (≥ above and ≤ below, in the price's native currency). Row colour = alert state
   (green/red today-move by direction, blue near-high, amber ≥-target, purple ≤-target,
   pulsing when both near-high + big-move). Click a row for a
-  popup: same fields + a price chart with a 1D/3D/5D/10D/15D (intraday) + 30D (daily) window
-  toggle + a collapsible Fundamentals section. 
+  popup: same fields + a price chart with a 1D/3D/5D/10D/15D (intraday) + 30D…MAX (daily) window
+  toggle, the **selected window's own high/low** beside the fixed 52-week pair, + a collapsible
+  Fundamentals section. 
 

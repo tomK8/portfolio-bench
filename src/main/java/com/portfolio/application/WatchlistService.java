@@ -391,18 +391,23 @@ public class WatchlistService {
     // ---- Popup price series -------------------------------------------------
 
     /**
-     * Price series for the popup chart. Windows {@code 1D}/{@code 3D}/{@code 5D}/{@code 10D}/
-     * {@code 15D} come from 1-minute intraday bars (downsampled to ~5-minute buckets beyond
-     * 5 days to stay light); everything longer ({@code 30D}, {@code 2M}/{@code 3M}/{@code 6M},
-     * {@code 1Y}…{@code 10Y}, {@code MAX}) falls back to daily closes, since intraday retention
-     * only reaches 15 days. {@code 30D} uses the raw close the user saw that day
-     * ({@code close × splitFactor}); longer daily windows use split-adjusted close so splits
-     * don't draw a cliff. See {@link #dailyWindowStart}.
+     * Price series for the popup chart, plus the high/low of the window itself. Windows
+     * {@code 1D}/{@code 3D}/{@code 5D}/{@code 10D}/{@code 15D} come from 1-minute intraday bars
+     * (downsampled to ~5-minute buckets beyond 5 days to stay light); everything longer
+     * ({@code 30D}, {@code 2M}/{@code 3M}/{@code 6M}, {@code 1Y}…{@code 10Y}, {@code MAX}) falls
+     * back to daily closes, since intraday retention only reaches 15 days. {@code 30D} uses the
+     * raw close the user saw that day ({@code close × splitFactor}); longer daily windows use
+     * split-adjusted close so splits don't draw a cliff. See {@link #dailyWindowStart}.
+     *
+     * <p>The {@link Extremes} come from {@code price_history}'s stored OHLC in <em>both</em>
+     * cases, so "5D high" means the same thing as "5Y high" — the highest price actually traded
+     * in the window, auctions included, not the highest point on the drawn line. The drawn line
+     * is closes (daily, or 1-minute), so the true high can sit a hair above its visible peak.
      */
     public Series series(String symbolRaw, String windowRaw) {
         String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase();
         String window = windowRaw == null ? "5D" : windowRaw.trim().toUpperCase();
-        if (symbol.isEmpty()) return new Series(symbol, window, "daily", List.of());
+        if (symbol.isEmpty()) return new Series(symbol, window, "daily", List.of(), Extremes.NONE);
         String ticker = tickerFor(symbol);
 
         LocalDate dailyFrom = dailyWindowStart(window);
@@ -419,7 +424,13 @@ public class WatchlistService {
                 pts.add(new Point(b.date().toString(),
                         BigDecimal.valueOf(price).setScale(PRICE_SCALE, RoundingMode.HALF_UP)));
             }
-            return new Series(symbol, window, "daily", pts);
+            // Today's daily bar does not exist until the evening fetch, so a daily window would
+            // otherwise miss a high made this morning — while 5D, which reads minute bars, would
+            // show it. "30D high" below "5D high" reads as a bug, and is one: every window has to
+            // see the session in progress.
+            Range r = dailyRange(bars, raw);
+            addLiveSession(ticker, r);
+            return new Series(symbol, window, "daily", pts, r.toExtremes());
         }
 
         int days = switch (window) {
@@ -440,7 +451,150 @@ public class WatchlistService {
             pts.add(new Point(b.ts().toString(),
                     BigDecimal.valueOf(b.close()).setScale(PRICE_SCALE, RoundingMode.HALF_UP)));
         }
-        return new Series(symbol, window, "intraday", pts);
+        // The range is taken over every bar loaded, not the strided subset: the stride is a
+        // drawing economy, and dropping four minutes in five from the high would understate it.
+        // 1D means the latest session, so its range is that one session; the rest span the same
+        // calendar window the chart asked for.
+        LocalDate rangeFrom = "1D".equals(window)
+                ? (bars.isEmpty() ? LocalDate.now() : sessionDateOf(bars.get(bars.size() - 1)))
+                : from.atZone(java.time.ZoneId.systemDefault()).toLocalDate();
+        LocalDate rangeTo = "1D".equals(window) ? rangeFrom : LocalDate.now();
+        return new Series(symbol, window, "intraday", pts,
+                intradayRange(ticker, rangeFrom, rangeTo, bars).toExtremes());
+    }
+
+    /**
+     * Window high/low from stored daily OHLC, in the same basis as the plotted line
+     * ({@code raw} multiplies by {@code splitFactor} to recover the price of the day).
+     *
+     * <p>Each bar contributes {@code max(high, close)} / {@code min(low, close)} rather than
+     * its high and low alone. That is not belt-and-braces: Yahoo prices ~0.4% of LSE ETF bars
+     * with a close just <em>outside</em> the day's range (the closing auction prints against a
+     * different book than the intraday range it reports), so taking the high alone would draw a
+     * chart line poking above its own stated high. Folding the close in also makes a bar with no
+     * usable OHLC degrade to its close instead of vanishing.
+     */
+    private static Range dailyRange(List<PriceBar> bars, boolean raw) {
+        Range r = new Range();
+        for (PriceBar b : bars) {
+            double mult = raw ? b.splitFactor() : 1.0;
+            Double high = tradedPrice(b.high()), low = tradedPrice(b.low());
+            Double close = tradedPrice(b.close());
+            if (high != null && low != null) {
+                double hi = high * mult, lo = low * mult;
+                if (close != null) { hi = Math.max(hi, close * mult); lo = Math.min(lo, close * mult); }
+                r.addTraded(hi, lo, b.date());
+            } else if (close != null) {
+                r.addClose(close * mult, b.date());
+            }
+        }
+        return r;
+    }
+
+    /**
+     * Window high/low for an intraday window — the true session range over the window's own
+     * calendar span, taken from the daily bars, with the plotted 1-minute closes folded in.
+     *
+     * <p>Both halves are load-bearing. The daily bars carry the real extremes (a 1-minute close
+     * series never sees the tick between two minutes, nor either auction), but today's daily bar
+     * does not exist until the evening fetch, so during the session the minute closes are the
+     * only evidence of today's range — which is exactly the part of the chart the user is
+     * watching.
+     *
+     * <p>The span is the window's, <em>not</em> the span the intraday bars happen to cover: a
+     * symbol whose 1-minute backfill started this morning would otherwise report its "5D high"
+     * off one session while the label still promised five. What a window says it covers and what
+     * its high is measured over have to be the same thing. The price of that is that the earliest
+     * session is counted whole even though the chart draws it from mid-session — right for the
+     * label, and the alternative is dropping a day inside the window entirely.
+     */
+    private Range intradayRange(String ticker, LocalDate from, LocalDate to, List<IntradayBar> bars) {
+        Range r = dailyRange(priceRepo.getPriceHistory(ticker, from, to), true);
+        for (IntradayBar b : bars) {
+            Double close = tradedPrice(b.close());
+            if (close != null) r.addTraded(close, close, sessionDateOf(b));
+        }
+        return r;
+    }
+
+    /**
+     * Fold the session in progress into a daily window's range, from its 1-minute bars. Two days
+     * of minutes are loaded and all but the latest session discarded — cheaper than asking which
+     * session is current, and correct on a weekend or holiday, when the latest session is simply
+     * the last one that traded and its daily bar has long since landed (the fold is then a no-op
+     * against figures already counted).
+     */
+    private void addLiveSession(String ticker, Range r) {
+        List<IntradayBar> live = latestSessionOnly(
+                intradayRepo.loadIntradaySeries(ticker, Instant.now().minus(Duration.ofDays(2))));
+        for (IntradayBar b : live) {
+            Double close = tradedPrice(b.close());
+            if (close != null) r.addTraded(close, close, sessionDateOf(b));
+        }
+    }
+
+    /** The trading day a bar belongs to; pre-{@code sessionDate} rows fall back to the UTC date. */
+    private static LocalDate sessionDateOf(IntradayBar b) {
+        return b.sessionDate() != null
+                ? b.sessionDate()
+                : b.ts().atZone(java.time.ZoneOffset.UTC).toLocalDate();
+    }
+
+    /**
+     * A stored price we can believe, or {@code null}. Yahoo intermittently returns {@code 0.0}
+     * for a whole OHLC row (24 rows across 16 {@code .L} listings on one 2026 date), and a failed
+     * HL scrape has written a {@code 0.0} close (6 rows across the {@code GILT 0%} strips). Both
+     * mean "we don't know", and taken at face value either prints the window's low as a crash to
+     * nothing — "absent is never zero", in the one place a reader would take it for a price.
+     *
+     * <p>Only an exact zero is rejected. A negative is left alone: {@code ^IRX} is a yield, not a
+     * price, and it really did print below zero in March 2020.
+     */
+    private static Double tradedPrice(Double v) {
+        return v == null || v == 0 ? null : v;
+    }
+
+    /**
+     * Running window high/low. Deliberately not a record: it accumulates across a loop and,
+     * for the intraday windows, across two sources.
+     */
+    private static final class Range {
+        private double hi = Double.NEGATIVE_INFINITY, lo = Double.POSITIVE_INFINITY;
+        private LocalDate hiDate, loDate;
+        private boolean hiFromClose, loFromClose;
+
+        /**
+         * Evidence from inside a session — a stored daily range, or a price sampled during one.
+         * A day sampled every minute has a believable range before its daily bar exists, which
+         * is the normal state of the session in progress: the very one the user is watching.
+         */
+        void addTraded(double high, double low, LocalDate date) {
+            add(high, low, date, false);
+        }
+
+        /** An end-of-day close, with nothing else known about that day. */
+        void addClose(double close, LocalDate date) {
+            add(close, close, date, true);
+        }
+
+        /**
+         * Strictly greater, so session evidence wins a tie against the same day's close and the
+         * extreme is credited to the stronger source.
+         */
+        private void add(double high, double low, LocalDate date, boolean fromClose) {
+            if (high > hi) { hi = high; hiDate = date; hiFromClose = fromClose; }
+            if (low < lo) { lo = low; loDate = date; loFromClose = fromClose; }
+        }
+
+        Extremes toExtremes() {
+            if (hiDate == null) return Extremes.NONE;
+            return new Extremes(scalePrice(hi), scalePrice(lo), hiDate.toString(), loDate.toString(),
+                    hiFromClose, loFromClose);
+        }
+    }
+
+    private static BigDecimal scalePrice(double v) {
+        return BigDecimal.valueOf(v).setScale(PRICE_SCALE, RoundingMode.HALF_UP);
     }
 
     /**
@@ -632,7 +786,27 @@ public class WatchlistService {
     public record Point(String t, BigDecimal p) {
     }
 
-    public record Series(String symbol, String window, String granularity, List<Point> points) {
+    public record Series(String symbol, String window, String granularity, List<Point> points,
+                        Extremes range) {
+    }
+
+    /**
+     * The high and low of one popup window, with the date each was set.
+     *
+     * <p>{@code highCloseOnly} / {@code lowCloseOnly} say that <em>that</em> extreme was set by a
+     * bare end-of-day close, with nothing known about the day it was set on beyond where it
+     * finished — so the real extreme may lie past it. They are judged per extreme, at the bar
+     * that set it, not over the window: the HL gilt scrape stores a close and no OHLC, and one
+     * day of live sampling must not vouch for the other 364. That keeps the mark where it earns
+     * its keep — a gilt's 1Y high — and off an equity's 1D mid-session, whose range comes from a
+     * few hundred 1-minute samples rather than a daily bar that does not exist yet. An asterisk
+     * on every 1D view during market hours would train the reader to ignore the one that matters.
+     * Everything is null when the window holds no usable bars at all — absent, not zero.
+     */
+    public record Extremes(BigDecimal high, BigDecimal low, String highDate, String lowDate,
+                           boolean highCloseOnly, boolean lowCloseOnly) {
+
+        public static final Extremes NONE = new Extremes(null, null, null, null, false, false);
     }
 
     /** Annualised realized-vol horizons (fractions). 5D/10D intraday-derived, 30D/1Y daily. */

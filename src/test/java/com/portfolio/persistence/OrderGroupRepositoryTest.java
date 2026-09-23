@@ -75,7 +75,7 @@ class OrderGroupRepositoryTest {
     void anIntendedRungKeepsItsOwnSideQuantityPriceAndNote() {
         var r = repo();
         long id = ladder(r, "NVDA round trip", "NVDA");
-        long intentId = r.addIntent(id, "Roth IRA", "buy", new BigDecimal("25"),
+        long intentId = r.addIntent(id, "Roth IRA", null, "buy", new BigDecimal("25"),
                 new BigDecimal("175.00"), "needs the II sell to settle first", DAY);
 
         IntendedRung i = r.intent(intentId);
@@ -94,9 +94,9 @@ class OrderGroupRepositoryTest {
         long id = ladder(r, "NVDA round trip", "NVDA");
 
         assertThrows(IllegalStateException.class,
-                () -> r.addIntent(id, "Roth IRA", "Buy", null, new BigDecimal("175"), null, DAY));
+                () -> r.addIntent(id, "Roth IRA", null, "Buy", null, new BigDecimal("175"), null, DAY));
         assertThrows(IllegalStateException.class,
-                () -> r.addIntent(id, " ", "Buy", new BigDecimal("25"), new BigDecimal("175"), null, DAY));
+                () -> r.addIntent(id, " ", null, "Buy", new BigDecimal("25"), new BigDecimal("175"), null, DAY));
         assertTrue(r.intents().isEmpty());
     }
 
@@ -111,7 +111,7 @@ class OrderGroupRepositoryTest {
         long keep = ladder(r, "MRVL", "MRVL");
         r.addMembers(id, List.of("II SIPP|REF1"), DAY);
         r.addMembers(keep, List.of("II SIPP|REF2"), DAY);
-        r.addIntent(id, "Roth IRA", "Buy", new BigDecimal("25"), new BigDecimal("175"), null, DAY);
+        r.addIntent(id, "Roth IRA", null, "Buy", new BigDecimal("25"), new BigDecimal("175"), null, DAY);
 
         r.delete(id);
 

@@ -48,11 +48,18 @@ import java.util.function.Function;
  *       different questions and it is deliberately not built here.</li>
  * </ul>
  *
- * <h2>Which leg an order is on</h2>
- * By <b>listing</b>, never by side: an order on the group's first symbol is on the leg being left,
- * one on its second symbol is on the leg being entered. Side is then checked rather than assumed —
- * a buy of the old line or a sell of the new one is kept (the user assigned it) but left out of
- * every figure and named, because it is not part of moving a holding one way.
+ * <h2>Which side an order is on</h2>
+ * By <b>side</b>: a sell is on the side being sold, a buy on the side being bought, and
+ * <em>either</em> may sit on either of the pair's two listings. Limits go out on both lines at once
+ * in the ordinary case — sells above on one, buys below on the other — and which line a fill lands
+ * on is whichever was dearer on the day. The listing is still read, and it decides the one thing it
+ * is evidence for: which market price the leg is measured against, and which currency it is in.
+ *
+ * <p>The group's declared {@code symbol} and {@code symbolTo} therefore no longer place legs. They
+ * are the <b>pair</b> — the two listings this switch is allowed to touch, and the check that an
+ * assigned order is one of them — and their order names which listing the holding is counted under
+ * everywhere exposure is measured. An order on neither is a mis-assignment, kept and named, counted
+ * in nothing.
  */
 public class SwitchService {
 
@@ -91,10 +98,11 @@ public class SwitchService {
      * Synthetic orders standing in for every intended leg, for the caller to enrich alongside the
      * real ones — the same construction, and therefore the same analytics, a ladder's intents get.
      *
-     * <p>The listing comes from the <b>side</b>: a switch sells the line it is leaving and buys the
-     * line it is entering, so the side names the symbol and nothing has to be stored twice. An
-     * intent that goes the other way — a buy of the old line — would be a leg outside the shape, and
-     * is rejected at the point it is recorded rather than silently priced against the wrong listing.
+     * <p>The listing is the one recorded on the intent. It has to be stored, because the side no
+     * longer names it: a switch can be selling either line and buying either line, so "Sell" says
+     * nothing about which of the two the leg is on. An intent written before that was true carries
+     * no symbol, and is read under the rule it was written under — sell is the line being left, buy
+     * the line being entered.
      */
     public List<OpenOrder> intendedOrders(Function<String, String> quoteCurrency) {
         List<OpenOrder> out = new ArrayList<>();
@@ -102,7 +110,7 @@ public class SwitchService {
         if (byGroup.isEmpty()) return out;
         for (OrderGroup g : switchGroups()) {
             for (IntendedRung r : byGroup.getOrDefault(g.id(), List.of())) {
-                String symbol = symbolForSide(g, r.side());
+                String symbol = listingOf(g, r);
                 String ccy = symbol == null ? null : quoteCurrency.apply(symbol);
                 out.add(GroupRungs.syntheticOrder(r, symbol, ccy));
             }
@@ -143,8 +151,8 @@ public class SwitchService {
 
         List<Switch> out = new ArrayList<>();
         for (OrderGroup g : all) {
-            List<Rung> outLegs = new ArrayList<>();
-            List<Rung> inLegs = new ArrayList<>();
+            List<Rung> sellLegs = new ArrayList<>();
+            List<Rung> buyLegs = new ArrayList<>();
             List<String> offShape = new ArrayList<>();
 
             for (String key : members.getOrDefault(g.id(), List.of())) {
@@ -154,65 +162,74 @@ public class SwitchService {
                             + key + "). Remove it from the switch.");
                     continue;
                 }
-                OpenOrder src = liveByKey.get(key);
-                String symbol = src != null ? src.symbol()
-                        : closedByKey.containsKey(key) ? closedByKey.get(key).symbol() : null;
-                place(g, r, symbol, outLegs, inLegs, offShape);
+                place(g, r, sellLegs, buyLegs, offShape);
             }
             for (IntendedRung i : intentRows.getOrDefault(g.id(), List.of())) {
-                Rung r = GroupRungs.intendedRung(
-                        i, intentByKey.get(i.account() + "|" + i.reference()), touch);
-                place(g, r, symbolForSide(g, i.side()), outLegs, inLegs, offShape);
+                Rung r = GroupRungs.intendedRung(i, listingOf(g, i),
+                        intentByKey.get(i.account() + "|" + i.reference()), touch);
+                place(g, r, sellLegs, buyLegs, offShape);
             }
 
-            outLegs.sort(LEG_ORDER);
-            inLegs.sort(LEG_ORDER);
             Switches.LinePrice outLine = lines.getOrDefault(upper(g.symbol()),
                     Switches.LinePrice.none(g.symbol()));
             Switches.LinePrice inLine = lines.getOrDefault(upper(g.symbolTo()),
                     Switches.LinePrice.none(g.symbolTo()));
-            Switches.Summary summary = Switches.summarise(outLegs, inLegs, outLine, inLine, rates,
+            Comparator<Rung> order = legOrder(outLine, inLine, rates);
+            sellLegs.sort(order);
+            buyLegs.sort(order);
+            Switches.Summary summary = Switches.summarise(sellLegs, buyLegs, outLine, inLine, rates,
                     available);
-            out.add(new Switch(g, outLegs, inLegs, summary, offShape));
+            out.add(new Switch(g, sellLegs, buyLegs, summary, offShape));
         }
         return new SwitchReport(out, unassigned(live, history), accounts, warnings);
     }
 
     /**
-     * Put a leg on the side its <em>listing</em> says, and check the direction rather than assume
-     * it.
+     * Put a leg on the side its <em>direction</em> says, having checked it is on one of the pair's
+     * two listings.
      *
-     * <p>A leg on neither listing is a mis-assignment and is named; a leg going the wrong way — a
-     * buy of the line being left, a sell of the line being entered — is a real order the user
-     * assigned, so it is kept and shown, but it is not part of moving a holding one way and is left
-     * out of every figure. Absorbing it would make the progress read as further along, or further
-     * behind, than the holding actually is.
+     * <p>Both listings take both sides. Selling the sterling line while a buy rests on it, and the
+     * dollar line doing the same, is one position being worked from both ends, and it is what the
+     * panel had no way to record before. What the listing still decides is which market the leg is
+     * priced against — {@link Switches} reads that off the rung.
+     *
+     * <p>A leg on neither listing is a mis-assignment: kept, because the user assigned it, named in
+     * the panel, and counted in nothing. So is one whose side the export never said, which cannot be
+     * put on a side without guessing which.
      */
-    private static void place(OrderGroup g, Rung r, String symbol, List<Rung> outLegs,
-                              List<Rung> inLegs, List<String> offShape) {
-        if (symbol != null && symbol.equalsIgnoreCase(g.symbol())) {
-            if (r.sell() || r.gone()) outLegs.add(r);
-            else offShape.add(r.describe() + " on " + g.symbol()
-                    + " — a buy of the line being left is not part of this switch, so it is "
-                    + "counted in nothing.");
+    private static void place(OrderGroup g, Rung r, List<Rung> sellLegs, List<Rung> buyLegs,
+                              List<String> offShape) {
+        String symbol = r.symbol();
+        boolean onPair = symbol != null && (symbol.equalsIgnoreCase(g.symbol())
+                || symbol.equalsIgnoreCase(g.symbolTo()));
+        if (!onPair) {
+            offShape.add(r.describe() + " is on "
+                    + (symbol == null ? "an unknown listing" : symbol)
+                    + ", which is neither line of this switch, so it is counted in nothing.");
             return;
         }
-        if (symbol != null && symbol.equalsIgnoreCase(g.symbolTo())) {
-            if (r.buy() || r.gone()) inLegs.add(r);
-            else offShape.add(r.describe() + " on " + g.symbolTo()
-                    + " — a sell of the line being entered is not part of this switch, so it is "
-                    + "counted in nothing.");
-            return;
-        }
-        offShape.add(r.describe() + " is on " + (symbol == null ? "an unknown listing" : symbol)
-                + ", which is neither line of this switch, so it is counted in nothing.");
+        if (r.sell()) sellLegs.add(r);
+        else if (r.buy()) buyLegs.add(r);
+        else offShape.add(r.describe() + " on " + symbol + " — the export does not say which way it "
+                + "goes, so it cannot be put on a side and is counted in nothing.");
     }
 
-    /** Highest price first inside a leg, so a leg of several rungs reads like a ladder's would. */
-    private static final Comparator<Rung> LEG_ORDER = Comparator
-            .comparing(Rung::price, Comparator.nullsLast(Comparator.reverseOrder()))
-            .thenComparing(Rung::account, Comparator.nullsLast(Comparator.naturalOrder()))
-            .thenComparing(Rung::key, Comparator.nullsLast(Comparator.naturalOrder()));
+    /**
+     * Highest price first inside a side, on the <b>yardstick</b>.
+     *
+     * <p>A side now holds both listings, and £584.80 is not above $682.35 — it is below it, once the
+     * exchange rate is divided out. Sorting on the raw figures would stack every sterling row above
+     * every dollar one and call it a price order. Legs that cannot be converted sort last rather
+     * than to one end of the prices, since where they belong is exactly what is unknown.
+     */
+    private static Comparator<Rung> legOrder(Switches.LinePrice outLine, Switches.LinePrice inLine,
+                                             Map<String, BigDecimal> rates) {
+        return Comparator
+                .comparing((Rung r) -> Switches.gbpPrice(r, outLine, inLine, rates),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(Rung::account, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(Rung::key, Comparator.nullsLast(Comparator.naturalOrder()));
+    }
 
     /**
      * What each account holds, in the vocabulary the orders use.
@@ -250,8 +267,27 @@ public class SwitchService {
         return groups.groups().stream().filter(OrderGroup::isSwitch).toList();
     }
 
-    private static String symbolForSide(OrderGroup g, String side) {
-        return "sell".equalsIgnoreCase(side) ? g.symbol() : g.symbolTo();
+    /**
+     * The listing an intended leg trades.
+     *
+     * <p>Stored on the intent, because a switch can now be selling either line and buying either
+     * line, so the side no longer names it. Null means a row written before that was true, and it is
+     * read under the rule it was written under — sell is the line being left, buy the line being
+     * entered. Reading those rows any other way would silently move an existing leg onto the other
+     * listing and re-price it against the wrong market.
+     */
+    private static String listingOf(OrderGroup g, IntendedRung r) {
+        if (r.symbol() != null && !r.symbol().isBlank()) return r.symbol();
+        return "sell".equalsIgnoreCase(r.side()) ? g.symbol() : g.symbolTo();
+    }
+
+    /** Which of the pair a typed listing is, or null when it is neither. */
+    private static String listingOnPair(OrderGroup g, String symbol) {
+        if (symbol == null || symbol.isBlank()) return null;
+        String s = symbol.trim();
+        if (s.equalsIgnoreCase(g.symbol())) return g.symbol();
+        if (s.equalsIgnoreCase(g.symbolTo())) return g.symbolTo();
+        return null;
     }
 
     private static String upper(String s) {
@@ -317,12 +353,30 @@ public class SwitchService {
      * Record a leg decided on but not placed — which on a switch is the buy leg, nearly always, and
      * for days at a time.
      *
-     * <p>The side names the listing — Sell is the line being left, Buy the line being entered — so
-     * nothing extra is stored and the two can never drift apart.
+     * <p>The listing is asked for and stored. It used to be read off the side, which worked only
+     * while a switch sold one line and bought the other; now that either line can carry either side,
+     * the side says nothing about which market the leg's price belongs to, and guessing would price
+     * it against the wrong one — a sterling limit judged against a dollar quote.
+     *
+     * <p>A blank listing falls back to the old rule rather than failing, so the form keeps working
+     * for the ordinary one-way case. A listing that is neither of the pair is rejected: the pair is
+     * what the switch is, and there is no third line to put a leg on.
      */
-    public long addIntent(long switchId, String account, String side, BigDecimal quantity,
-                          BigDecimal price, String note) {
-        return groups.addIntent(switchId, account, side, quantity, price, note, LocalDate.now());
+    public long addIntent(long switchId, String account, String symbol, String side,
+                          BigDecimal quantity, BigDecimal price, String note) {
+        OrderGroup g = switchGroups().stream().filter(x -> x.id() == switchId).findFirst()
+                .orElseThrow(() -> new IllegalStateException("That switch is no longer on file."));
+        String listing = listingOnPair(g, symbol);
+        if (listing == null && symbol != null && !symbol.isBlank()) {
+            throw new IllegalStateException("A leg has to be on " + g.symbol() + " or "
+                    + g.symbolTo() + " — the two listings this switch covers.");
+        }
+        if (listing == null) {
+            listing = "sell".equalsIgnoreCase(side == null ? "" : side.trim())
+                    ? g.symbol() : g.symbolTo();
+        }
+        return groups.addIntent(switchId, account, listing, side, quantity, price, note,
+                LocalDate.now());
     }
 
     public void deleteIntent(long intentId) {
@@ -368,10 +422,10 @@ public class SwitchService {
      * @param offShape legs the user assigned that are not part of moving the holding one way —
      *                 kept and listed, counted in nothing.
      */
-    public record Switch(OrderGroup group, List<Rung> outLegs, List<Rung> inLegs,
+    public record Switch(OrderGroup group, List<Rung> sellLegs, List<Rung> buyLegs,
                          Switches.Summary summary, List<String> offShape) {
 
-        /** The line the holding is leaving. */
+        /** The line the holding is leaving — and the name it is counted under in the exposure views. */
         public String from() {
             return group.symbol();
         }
@@ -382,7 +436,25 @@ public class SwitchService {
         }
 
         public boolean hasLegs() {
-            return !outLegs.isEmpty() || !inLegs.isEmpty();
+            return !sellLegs.isEmpty() || !buyLegs.isEmpty();
+        }
+
+        /**
+         * True while this switch is the plain one-way move: everything being sold is on the line
+         * being left and everything being bought is on the line being entered.
+         *
+         * <p>Only the wording turns on it. A one-way switch can say "still in EQQQ" and "in EQQU",
+         * which is what the units actually mean there; a switch worked from both ends cannot, and
+         * says "still to sell" and "bought back" instead. Every figure is computed the same way
+         * either way — this decides what the labels are allowed to claim, and nothing else.
+         */
+        public boolean oneWay() {
+            return sellLegs.stream().allMatch(r -> on(r, from()))
+                    && buyLegs.stream().allMatch(r -> on(r, to()));
+        }
+
+        private static boolean on(Rung r, String symbol) {
+            return r.symbol() != null && r.symbol().equalsIgnoreCase(symbol);
         }
     }
 

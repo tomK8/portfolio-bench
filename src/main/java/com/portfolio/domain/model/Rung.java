@@ -16,6 +16,12 @@ import java.time.LocalDate;
  * @param key   what the UI addresses this rung by: the broker order identity for a real rung, or
  *              {@code intent:<id>} for an intended one. Distinct namespaces, so a remove button
  *              can never take the wrong kind.
+ * @param symbol the listing this rung trades. On a ladder every rung carries the group's one
+ *              security and the field says nothing new. On a share-class switch it is load-bearing:
+ *              the two sides are sells and buys, each of which may sit on <em>either</em> listing,
+ *              so the rung is the only thing that knows which market its price is measured against.
+ *              Null for a rung whose order carried no symbol, which leaves it out of the figures
+ *              that need one rather than guessing a listing for it.
  * @param order     the enriched order behind the rung — the live one for a working rung, the
  *                  synthetic one built for an intended rung and pushed through the <em>same</em>
  *                  enrichment pass. That is what makes "the same analytics" true by construction
@@ -31,7 +37,7 @@ import java.time.LocalDate;
  *                  before <em>this</em> expiry — and it is still one inch below. Null whenever the
  *                  rung could not be priced at all.
  */
-public record Rung(String key, Long intentId, String account, String side,
+public record Rung(String key, Long intentId, String account, String symbol, String side,
                    BigDecimal quantity, BigDecimal price, String currency,
                    State state, LocalDate closedAt, String note, OpenOrder order,
                    BigDecimal touchNear, BigDecimal touchFar) {
@@ -136,6 +142,7 @@ public record Rung(String key, Long intentId, String account, String side,
     /** A label for the rung in messages about what had to be left out of a total. */
     public String describe() {
         return account + " " + (side == null ? "?" : side)
+                + (symbol == null ? "" : " " + symbol)
                 + (quantity == null ? "" : " " + quantity.stripTrailingZeros().toPlainString())
                 + (price == null ? "" : " @ " + price.stripTrailingZeros().toPlainString());
     }

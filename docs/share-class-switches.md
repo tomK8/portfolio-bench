@@ -30,17 +30,25 @@ auto-promoted**. On a switch the buy leg is normally unplaceable for days, so an
 *ordinary* state rather than the exception, and a feed match that was sometimes right would attach
 one decision's reasoning to a different order. `markPlaced` is the only path across.
 
-## Which leg an order is on
+## Which side an order is on
 
-**By listing, never by side.** An order on the group's first symbol is on the leg being left; one on
-its second symbol is on the leg being entered. That is why an intent needs no symbol column: its
-*side* names the listing (selling is the line you leave, buying the line you enter), so the two can
-never drift apart.
+**By side; the listing decides only what it is measured against.** A sell is on the side being sold
+and a buy on the side being bought, and **either side may sit on either listing**. Limits go out on
+both lines at once in the ordinary way of working one of these — sells above on each, buys below on
+each — and which line a fill lands on is whichever was dearer on the day. The old rule (first symbol
+sells, second symbol buys) made that unrecordable, which is the case the panel is for.
 
-Direction is then checked rather than assumed. A buy of the old line or a sell of the new one is a
-real order the user assigned, so it is kept and shown — and counted in **nothing**, named in the
-panel. Absorbing it would make the progress read as further along, or further behind, than the
-holding actually is.
+The declared pair therefore no longer places legs. It does two other jobs: it is the **check** that
+an assigned order is one of the two listings, and its order names which listing the holding is
+counted under everywhere exposure is measured (below). An order on **neither** line is a
+mis-assignment — kept, because the user assigned it, named in the panel, counted in nothing. So is
+one whose export never said which way it goes. That is all `offShape` means now.
+
+Because the side no longer names a listing, an intent **stores** one (`order_group_intent.symbol`,
+additive and nullable). A row written before that carries none and is read under the rule it was
+written under — sell is the line being left, buy the line being entered — because re-reading it any
+other way would move an existing leg onto the other listing and price it against the wrong market.
+`anIntendedLegWithNoListingFallsBackToTheRuleItWasRecordedUnder` pins it.
 
 ## One yardstick
 
@@ -48,6 +56,17 @@ Two prices in two currencies say nothing side by side, so every figure converts 
 book's own currency, before comparing anything. The panel prints both: the native price, which is
 what the broker screen shows and what the user typed, and the GBP one, which is the only pair of
 numbers that can be read against each other.
+
+**A side that spans both listings has no native average**, and none is shown — £584.80 and $682.35
+have no mean, and a blended figure would print as money and be none. The GBP column still answers,
+which is the whole reason the two columns exist. The implied cross rate goes with it: a rate implied
+by *your two prices* needs one currency on each side. The leg tables are likewise **ordered on the
+yardstick**, not on the raw figure; £584.80 is *below* $682.35 once the rate is divided out, and
+sorting the printed numbers would stack every sterling row above every dollar one and call that a
+price order.
+
+Each leg converts on its own currency and the **GBP** figures are then averaged — not the other way
+round, which would need a currency the side may not have.
 
 Resting-and-intended legs and filled legs are averaged **separately**. Mixing a limit that has not
 traded with a price that has would be an average of nothing; the two answer different questions
@@ -71,8 +90,21 @@ tell them apart. With `S` the average on the line being sold, `B` on the line be
   basis        = Pin_gbp/Pout_gbp − 1   the two lines against the exchange rate
 ```
 
+where `Pout`/`Pin` are each **side's own** market price: the quantity-weighted blend, in GBP, of the
+listings actually on that side. On a one-way switch a side sits on one line, the blend *is* that
+line, and every figure is what it always was to the last decimal place
+(`aOneWaySwitchSplitsOnTheLinesExactlyAsItAlwaysDid`).
+
 That is an **identity**, not an approximation — substitute `B = (1+inVsMarket)·Pin` and the same for
-`S` and the terms cancel. `theThreeTermsMultiplyToTheTotalExactly` checks it numerically.
+`S` and the terms cancel, for *any* `Pout`/`Pin` used in both terms, which is exactly why the blend
+is safe. `theThreeTermsMultiplyToTheTotalExactly` checks it numerically, and
+`theThreeTermsStillMultiplyExactlyWhenASideSpansBothListings` checks it with both lines on one side.
+An approximation here would be the panel quietly attributing part of a gap the user *chose* to the
+exchange rate, which is the one thing it exists to separate.
+
+A leg on a listing that has never priced takes its **whole side's** market blend with it rather than
+being dropped from the blend alone: a blend over a different set of legs than the average it divides
+into would stop being an identity. The average still prints; only the comparison to market goes.
 
 Its three factors are exactly the three things that have to be told apart, and the third one is the
 FX term. On a genuine share-class pair it is ~0: the pair's price ratio *is* the rate, so once both
@@ -83,7 +115,10 @@ as well: *your two prices imply 1.3509 USD per GBP; the market is 1.3376*, and
 
 **The basis is the only live evidence the pair is the pair.** Nothing here stores an ISIN and nothing
 looks one up; two listings that move together at today's rate are the check, and it is self-checking
-rather than maintained. Past half a percent the panel says the two are not tracking and names the
+rather than maintained. The **block** that prints it is always the two declared *lines* against the
+rate, untouched by any leg — which is what keeps it evidence. The split's third term is the two
+*sides'* markets, identical to it whenever each side sits on one line; the two are carried
+separately so the three printed factors multiply to the headline exactly in both cases. Past half a percent the panel says the two are not tracking and names the
 three things it can be: a stale quote, a pair that is not the pair, or lines that are not one unit
 for one unit — which every figure counted in units assumes.
 
@@ -135,6 +170,14 @@ sold *and* the same number of units bought back. A sell that filled and a buy th
 nothing resting, and calling that complete would hide precisely the state the panel exists for
 (`nothingRestingIsNotTheSameAsComplete`).
 
+**Bought back more than went out** is reachable only on a switch worked from both ends, and it is not
+a switch state at all — the holding grew rather than moved, and the three shares stop summing to the
+whole. Named, never drawn: clamping it would paint a bar that says the move is finished
+(`buyingBackMoreThanWasSoldIsNamedRatherThanDrawn`). The legend likewise only claims "still in EQQQ"
+and "in EQQU" while the switch *is* one-way; worked from both ends it says "still to sell" and
+"bought back", which is what those units are doing. Same three figures either way — `Switch.oneWay()`
+decides what the label is allowed to claim and nothing else.
+
 ## One holding, everywhere exposure is measured
 
 Declaring a switch is the same statement as declaring that the two listings are one fund, so
@@ -170,9 +213,13 @@ dollar line hold exactly the same assets.
 
 ## Storage, and what is shared with ladders
 
-The same three tables. `order_group` gained one nullable `symbol_to` column — additive, so an
-existing database gets `ALTER TABLE ADD COLUMN` on open and no rebuild; every row already there is a
-ladder, whose second listing is null by definition. `GroupType.SHARE_CLASS_SWITCH` is the
+The same three tables. `order_group` gained one nullable `symbol_to` column and
+`order_group_intent` one nullable `symbol` — both additive, so an existing database gets
+`ALTER TABLE ADD COLUMN` on open and no rebuild. Every `order_group` row predating the first was a
+ladder, whose second listing is null by definition; every intent predating the second is read under
+the rule it was written under, which is what makes the null meaningful rather than missing. A ladder
+still writes null there — its rungs are the group's one security, and storing it per rung would be a
+second answer to a question the group already settles. `GroupType.SHARE_CLASS_SWITCH` is the
 discriminator the column was put there for, and a group whose type this build does not know is still
 dropped with a warning rather than read as one of the types that exist.
 
@@ -197,6 +244,10 @@ dropped with a warning rather than read as one of the types that exist.
 - **Quiet when there are none**: one line and a create form, like the Ladders block, and it sits
   **outside** the "no order files found" guard. A switch is nearly always half intended, so hiding it
   whenever no export happens to be in `~/Downloads` would hide it exactly when it is doing its job.
+- **Two tables, one per direction, and each row names its own listing.** The tables are the two
+  *sides*, not the two lines, so both listings appear in both — ordered by GBP price, the only axis
+  they share. The card's premise line says so, because a reader who skims must not read the tables
+  as the lines.
 - **Rendered from the same `OrdersReport` the table is**, so a leg's numbers are the row's numbers.
   Mutations re-render the block alone (`hx-target="#switches-result"`); `markPlaced` targets
   `#orders-result` for the ladder's reason — linking can move the intent's note onto the order, and
@@ -229,8 +280,10 @@ dropped with a warning rather than read as one of the types that exist.
   What it does move is the headline's other reading ("your two prices imply 1.3509 USD per GBP"), and
   that is exactly what it is for: an implied rate is a statement about where you have put your two
   limits.
-- **An intended leg's side is never touched by an edit.** A switch reads the listing off the side, so
-  a figure being tuned must not be able to move the leg onto the other line.
+- **An intended leg's side and listing are never touched by an edit.** Only price and quantity are
+  editable, so a figure being tuned cannot move the leg onto the other line or turn a sell into a
+  buy — either would re-price it against a different market while looking like a re-price against
+  the same one.
 - **Two adjacent columns measure in opposite directions**, deliberately and labelled: the yardstick's
   *Limit vs market* is where your price sits against the market, which is the term the split needs;
   the leg tables carry the orders table's own *vs mkt*, how far the market sits from the limit. Each

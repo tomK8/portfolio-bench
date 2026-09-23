@@ -102,7 +102,7 @@ class IntentEditsTest {
     }
 
     private static IntendedRung intent(BigDecimal quantity, BigDecimal price) {
-        return new IntendedRung(1L, 1L, "Roth IRA", "Buy", quantity, price, null,
+        return new IntendedRung(1L, 1L, "Roth IRA", null, "Buy", quantity, price, null,
                 LocalDate.parse("2026-09-01"));
     }
 }

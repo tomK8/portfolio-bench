@@ -17,7 +17,7 @@ class LaddersTest {
 
     private static Rung rung(String account, String side, String qty, String price,
                              Rung.State state) {
-        return new Rung(account + side + price, null, account, side, new BigDecimal(qty),
+        return new Rung(account + side + price, null, account, "NVDA", side, new BigDecimal(qty),
                 price == null ? null : new BigDecimal(price), "USD", state,
                 state == Rung.State.FILLED ? LocalDate.parse("2026-09-01") : null, null, null,
                 null, null);

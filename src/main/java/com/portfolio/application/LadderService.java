@@ -149,8 +149,8 @@ public class LadderService {
                 rungs.add(r);
             }
             for (IntendedRung i : intentRows.getOrDefault(g.id(), List.of())) {
-                rungs.add(GroupRungs.intendedRung(
-                        i, intentByKey.get(i.account() + "|" + i.reference()), touch));
+                rungs.add(GroupRungs.intendedRung(i, g.symbol(),
+                        intentByKey.get(i.account() + "|" + i.reference()), touch));
             }
 
             List<Rung> ordered = Ladders.byPrice(rungs);
@@ -217,7 +217,10 @@ public class LadderService {
 
     public long addIntent(long ladderId, String account, String side, BigDecimal quantity,
                           BigDecimal price, String note) {
-        return groups.addIntent(ladderId, account, side, quantity, price, note, LocalDate.now());
+        // Null listing: a ladder's rungs are the group's one security by definition, so storing
+        // it on every rung would be a second answer to a question the group already settles.
+        return groups.addIntent(ladderId, account, null, side, quantity, price, note,
+                LocalDate.now());
     }
 
     public void deleteIntent(long intentId) {

@@ -1410,8 +1410,8 @@ public class ExcelReportWriter {
         // switch is most easily lost in: those units are in neither line, they own nothing, and no
         // view that counts positions can see them. Dropping the column would lose exactly the fact
         // the panel exists to show.
-        String[] headers = {"Switch", "From", "To", "Declared units", "Still in from-line",
-                "Sold, not bought back", "In to-line", "Moved", "Complete",
+        String[] headers = {"Switch", "From", "To", "Declared units", "Still to sell",
+                "Sold, not bought back", "Bought back", "Moved", "Complete",
                 "From price", "From price GBP", "To price", "To price GBP",
                 "Lines apart (GBP)", "Lines tracking", "Market cross rate",
                 "Blocked on", "Blocker detail",
@@ -1475,9 +1475,16 @@ public class ExcelReportWriter {
         Map<String, CellStyle> money = new HashMap<>();
 
         CellStyle count = countStyle(wb);
+        // "Listing" is a side's listings joined: one on a one-way switch, both when limits are out
+        // on each line at once. "Average price" is then blank — pounds and dollars have no mean —
+        // and "Average price GBP" is the column that still answers, which is the whole argument for
+        // the pair of them. The side's own market price is written beside them because "Limit vs
+        // market" is measured against it and, on a mixed side, it is a blend a reader cannot
+        // reconstruct from anything else in the workbook.
         String[] headers = {"Switch", "Basis", "Leg", "Listing", "Legs", "Units", "Average price",
                 "Average price GBP", "Limit vs market", "Cost per unit GBP", "Cost",
-                "Matched units", "Cost over matched GBP", "Implied cross", "Market cross"};
+                "Matched units", "Cost over matched GBP", "Implied cross", "Market cross",
+                "Side market GBP", "FX term of the split"};
         header(sheet, headers, boldText);
 
         int rowNum = 1;
@@ -1495,8 +1502,8 @@ public class ExcelReportWriter {
                                        CellStyle qtyNum, CellStyle count, CellStyle signedPct,
                                        CellStyle rate, CellStyle boldText, Workbook wb,
                                        Map<String, CellStyle> money) {
-        rowNum = writeLegSide(sheet, rowNum, s, c.out(), basis, "Selling", text, qtyNum, count, signedPct, wb, money);
-        rowNum = writeLegSide(sheet, rowNum, s, c.in(), basis, "Buying", text, qtyNum, count, signedPct, wb, money);
+        rowNum = writeLegSide(sheet, rowNum, s, c.sellSide(), basis, "Selling", text, qtyNum, count, signedPct, wb, money);
+        rowNum = writeLegSide(sheet, rowNum, s, c.buySide(), basis, "Buying", text, qtyNum, count, signedPct, wb, money);
         // The net line only exists when both sides are present and priced. Writing it anyway with
         // blanks would put a row that looks like a comparison under two that are not one.
         if (!c.complete()) return rowNum;
@@ -1513,6 +1520,10 @@ public class ExcelReportWriter {
         // two numbers it is made of.
         if (c.impliedCross() != null) setRate(row, 13, c.impliedCross(), rate);
         if (c.marketCross() != null) setRate(row, 14, c.marketCross(), rate);
+        // The third factor of Cost = (1 + in vs market) / (1 + out vs market) x (1 + this). Written
+        // out because the other two are on the rows above and a reader checking the identity needs
+        // all three; on a one-way switch it is the same number as the summary sheet's "Lines apart".
+        if (c.splitBasisPct() != null) setStyled(row, 16, c.splitBasisPct(), signedPct);
         return rowNum;
     }
 
@@ -1530,6 +1541,7 @@ public class ExcelReportWriter {
         if (side.avgPrice() != null) setMoney(row, 6, side.avgPrice(), side.currency(), false, wb, money);
         if (side.avgPriceGbp() != null) setMoney(row, 7, side.avgPriceGbp(), "GBP", false, wb, money);
         if (side.vsMarketPct() != null) setStyled(row, 8, side.vsMarketPct(), signedPct);
+        if (side.marketGbp() != null) setMoney(row, 15, side.marketGbp(), "GBP", false, wb, money);
         return rowNum;
     }
 
@@ -1559,12 +1571,15 @@ public class ExcelReportWriter {
 
         int rowNum = 1;
         for (SwitchService.Switch s : switches) {
-            for (Rung r : s.outLegs()) {
-                writeSwitchLeg(sheet.createRow(rowNum++), s, r, "Selling " + s.from(), s.from(),
+            // The leg column is the side and the listing column is the rung's own, because either
+            // line can carry either side. Reading the listing off the side, as this once did, would
+            // now mislabel every row of a switch being worked from both ends.
+            for (Rung r : s.sellLegs()) {
+                writeSwitchLeg(sheet.createRow(rowNum++), s, r, "Selling",
                         text, qtyNum, signedPct, touchPct, wb, money);
             }
-            for (Rung r : s.inLegs()) {
-                writeSwitchLeg(sheet.createRow(rowNum++), s, r, "Buying " + s.to(), s.to(),
+            for (Rung r : s.buyLegs()) {
+                writeSwitchLeg(sheet.createRow(rowNum++), s, r, "Buying",
                         text, qtyNum, signedPct, touchPct, wb, money);
             }
         }
@@ -1572,12 +1587,12 @@ public class ExcelReportWriter {
     }
 
     private static void writeSwitchLeg(Row row, SwitchService.Switch s, Rung r, String leg,
-                                       String listing, CellStyle text, CellStyle qtyNum,
+                                       CellStyle text, CellStyle qtyNum,
                                        CellStyle signedPct, CellStyle touchPct, Workbook wb,
                                        Map<String, CellStyle> money) {
         styledCell(row, 0, s.group().name(), text);
         styledCell(row, 1, leg, text);
-        styledCell(row, 2, dashIfNull(listing), text);
+        styledCell(row, 2, dashIfNull(r.symbol()), text);
         if (r.price() != null) setMoney(row, 3, r.price(), r.currency(), false, wb, money);
         styledCell(row, 4, dashIfNull(r.side()), text);
         setNumeric(row, 5, r.quantity(), qtyNum);

@@ -37,7 +37,11 @@ class ExcelGroupWorkbooksTest {
 
     private static Rung rung(String account, String side, String qty, String price, String ccy,
                              Rung.State state) {
-        return new Rung(account + "|" + side + price, null, account, side,
+        // EQQQ is the sterling line and EQQU the dollar one, so the currency names the listing.
+        // A ladder's sheets read the group's symbol rather than the rung's, so this is only
+        // load-bearing for the switch workbook.
+        return new Rung(account + "|" + side + price, null, account,
+                "GBP".equals(ccy) ? "EQQQ" : "EQQU", side,
                 qty == null ? null : new BigDecimal(qty),
                 price == null ? null : new BigDecimal(price), ccy, state,
                 state == Rung.State.FILLED ? LocalDate.parse("2026-09-01") : null, null, null,
@@ -187,6 +191,48 @@ class ExcelGroupWorkbooksTest {
     }
 
     // ---- switches -----------------------------------------------------------
+
+    /** A leg on a named listing, for the sides that hold both. */
+    private static Rung on(String symbol, String account, String side, String qty, String price,
+                           String ccy, Rung.State state) {
+        return new Rung(account + "|" + symbol + side + price, null, account, symbol, side,
+                new BigDecimal(qty), new BigDecimal(price), ccy, state, null, null, null,
+                null, null);
+    }
+
+    /**
+     * A switch worked from both ends: the Legs sheet reads each row's own listing rather than the
+     * side's, and the Yardstick names both lines on a side that holds both.
+     *
+     * <p>The native average goes blank there and only the GBP one is written — the sheet has no
+     * tooltip to explain a blended figure, and a column of pounds with a dollar figure in it is how
+     * a reader reconciles a total and cannot.
+     */
+    @Test
+    void bothListingsOnOneSideTravelWithTheirOwnRows() throws Exception {
+        byte[] bytes = new ExcelReportWriter().switchesWorkbook(List.of(aSwitch(
+                List.of(on("EQQQ", "II SIPP", "Sell", "50", "530.00", "GBP", Rung.State.WORKING),
+                        on("EQQU", "Roth IRA", "Sell", "50", "716.00", "USD", Rung.State.WORKING)),
+                List.of(on("EQQU", "Roth IRA", "Buy", "100", "672.50", "USD", Rung.State.INTENDED)))));
+
+        try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
+            Sheet legs = wb.getSheet("Legs");
+            assertEquals("Selling", str(legs, 1, 1));
+            assertEquals("EQQQ", str(legs, 1, 2), "the rung's own listing, not the side's");
+            assertEquals("Selling", str(legs, 2, 1));
+            assertEquals("EQQU", str(legs, 2, 2), "the other line, on the same side");
+            assertEquals("Buying", str(legs, 3, 1));
+
+            Sheet y = wb.getSheet("Yardstick");
+            assertEquals("EQQQ / EQQU", str(y, 1, 3), "both lines named on the selling side");
+            assertEquals("", str(y, 1, 6), "two currencies have no average, so none is written");
+            assertEquals((50 * 530.00 + 50 * 716.00 / 1.345) / 100,
+                    y.getRow(1).getCell(7).getNumericCellValue(), 1e-4,
+                    "the GBP column still answers, which is why it is there");
+            assertEquals(500.00, y.getRow(1).getCell(15).getNumericCellValue(), 1e-4,
+                    "the side's own blended market, which Limit vs market is measured against");
+        }
+    }
 
     private static SwitchService.Switch aSwitch(List<Rung> out, List<Rung> in) {
         Switches.Summary summary = Switches.summarise(out, in,

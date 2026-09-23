@@ -30,6 +30,23 @@ import java.util.function.Predicate;
  * <b>one yardstick</b> — GBP, the book's own currency — before comparing anything, and the numbers
  * that matter are what is left <em>after</em> the exchange rate is divided out.
  *
+ * <h2>Two sides, not two lines</h2>
+ * A side here is a <b>direction</b> — what is being sold, and what is being bought — and each side
+ * may sit on <em>either</em> of the pair's two listings. Limits go out on both lines at once in the
+ * ordinary case: sells above on one, buys below on the other, and which line each ends up on is
+ * whichever was dearer on the day. Binding the sell side to one listing would have made that
+ * ordinary case unrecordable, and it is the case the panel is for.
+ *
+ * <p>So each leg is measured against <b>its own</b> listing's market price, and a side's market
+ * price is the quantity-weighted blend of the listings actually on it. The split below survives
+ * that unchanged — the identity holds for any {@code Pout}/{@code Pin} used in both terms — and
+ * when every leg of a side is on one listing the blend <em>is</em> that listing's price, so a
+ * one-way switch computes exactly what it always did, to the last decimal place.
+ *
+ * <p>What a mixed side does not have is a <b>native</b> average: £584.80 and $682.35 have no
+ * meaningful mean, so {@code avgPrice} and the implied cross rate go null and are printed as
+ * absent, never as a blended figure that would look like money and be none.
+ *
  * <h2>The split, and why it is exact</h2>
  * With {@code S} the average price on the line being sold, {@code B} on the line being bought,
  * {@code Pout}/{@code Pin} the two lines' current market prices and everything subscripted
@@ -113,21 +130,45 @@ public final class Switches {
     // ---- outputs ------------------------------------------------------------
 
     /**
-     * One side of the switch, averaged over whichever legs were asked for.
+     * One side of the switch — everything being sold, or everything being bought — averaged over
+     * whichever legs were asked for.
      *
-     * @param avgPrice     quantity-weighted, in the listing's own currency — what the broker screen
-     *                     shows
-     * @param avgPriceGbp  the same on the yardstick, so the two sides can be read against each other
-     * @param vsMarketPct  where that average sits against this line's own market price, as a signed
-     *                     fraction. Currency-free by construction (both sides converted), which is
-     *                     what lets it stand as the non-FX half of the split.
+     * @param symbol       the listings this side actually sits on, joined for display. Usually one;
+     *                     both when limits are out on each line at once. A side with no legs falls
+     *                     back to the line it would ordinarily be on, so an absent side still says
+     *                     which one is missing.
+     * @param listings     the same, unjoined, for a caller that needs them apart. Empty on a side
+     *                     with no legs, which is what {@link #mixed()} is careful to ask about.
+     * @param currency     the one currency every leg of this side quotes in, or <b>null</b> when
+     *                     the side spans both lines and therefore both currencies.
+     * @param avgPrice     quantity-weighted, in that currency — what the broker screen shows. Null
+     *                     on a mixed side: pounds and dollars have no mean, and inventing one is
+     *                     the error this whole class exists to prevent.
+     * @param avgPriceGbp  the same on the yardstick, so the two sides can be read against each
+     *                     other. Always available when anything on the side could be converted,
+     *                     which is why it and not {@code avgPrice} is what {@link #present()} asks
+     *                     about.
+     * @param marketGbp    this side's own market price in GBP: each leg's listing weighted by that
+     *                     leg's quantity, over exactly the legs in {@code avgPriceGbp}. Null when
+     *                     any of them sits on a listing that has never priced — the blend would
+     *                     otherwise be over a different set of legs than the average, and the split
+     *                     below would stop being an identity.
+     * @param vsMarketPct  where that average sits against {@code marketGbp}, as a signed fraction.
+     *                     Currency-free by construction (both sides converted), which is what lets
+     *                     it stand as the non-FX half of the split.
      */
-    public record LegSide(String symbol, String currency, BigDecimal quantity,
-                          BigDecimal avgPrice, BigDecimal avgPriceGbp, BigDecimal vsMarketPct,
-                          int legCount) {
+    public record LegSide(String symbol, List<String> listings, String currency,
+                          BigDecimal quantity, BigDecimal avgPrice, BigDecimal avgPriceGbp,
+                          BigDecimal marketGbp, BigDecimal vsMarketPct, int legCount) {
 
+        /** Something to compare: legs, and a price for them on the yardstick. */
         public boolean present() {
-            return legCount > 0 && avgPrice != null;
+            return legCount > 0 && avgPriceGbp != null;
+        }
+
+        /** This side has legs on both listings, so it has no single quote currency. */
+        public boolean mixed() {
+            return listings != null && listings.size() > 1;
         }
 
         public String currencySymbol() {
@@ -149,14 +190,24 @@ public final class Switches {
      * @param totalGbp      {@code perUnitGbp} over the matched quantity — the smaller of the two
      *                      sides, since the excess on the longer one has no counterpart to be
      *                      compared against.
+     * @param splitBasisPct the FX term of the split: the buy side's own market price against the
+     *                      sell side's, both in GBP. When each side sits on one listing this is the
+     *                      two <em>lines</em> against the exchange rate and is identical to
+     *                      {@link Basis#deviationPct()} — the un-editable evidence that the pair is
+     *                      the pair. When a side spans both lines it is the same figure blended
+     *                      across them, which on a genuine pair moves it by nothing, since the two
+     *                      lines in GBP are the same number. It is carried separately from
+     *                      {@code Basis} so the three printed terms multiply to {@code costPct}
+     *                      exactly in both cases.
      */
-    public record Comparison(LegSide out, LegSide in, BigDecimal perUnitGbp, BigDecimal costPct,
-                             BigDecimal matchedQuantity, BigDecimal totalGbp,
-                             BigDecimal impliedCross, BigDecimal marketCross) {
+    public record Comparison(LegSide sellSide, LegSide buySide, BigDecimal perUnitGbp,
+                             BigDecimal costPct, BigDecimal matchedQuantity, BigDecimal totalGbp,
+                             BigDecimal impliedCross, BigDecimal marketCross,
+                             BigDecimal splitBasisPct) {
 
         /** Both sides present and priced — otherwise there is no comparison, and no number is shown. */
         public boolean complete() {
-            return out.present() && in.present() && costPct != null;
+            return sellSide.present() && buySide.present() && costPct != null;
         }
 
         /** True when the switch is buying back above where it sells — the gap costs money. */
@@ -212,6 +263,24 @@ public final class Switches {
         /** Units sold and not yet bought back — the part of the holding that owns nothing right now. */
         public boolean outOfMarket() {
             return inFlight != null && inFlight.signum() > 0;
+        }
+
+        /**
+         * Units bought back <em>beyond</em> what was sold, which a switch worked from both ends can
+         * reach and a one-way one cannot.
+         *
+         * <p>It is not a switch state at all: more units came back than went out, so the holding
+         * grew rather than moved, and the three shares stop summing to the whole. Named instead of
+         * drawn — clamping it would paint a bar that says the move is finished, and dropping it
+         * would lose the one fact that makes the other numbers read oddly.
+         */
+        public BigDecimal overBought() {
+            return inFlight != null && inFlight.signum() < 0 ? inFlight.negate() : null;
+        }
+
+        /** Whether the three shares are a whole that can be drawn as one bar. */
+        public boolean representable() {
+            return known() && overBought() == null;
         }
 
         /** Share of the switch still in the old line, as a percentage — for the progress bar. */
@@ -282,15 +351,19 @@ public final class Switches {
     /**
      * Everything a switch comes to.
      *
-     * @param out      legs on the line being left — sells of the old listing
-     * @param in       legs on the line being entered — buys of the new listing
-     * @param outLine  the old listing's live price
-     * @param inLine   the new listing's live price
+     * @param sells    every leg being sold, on <em>either</em> listing
+     * @param buys     every leg being bought, on either listing
+     * @param outLine  the declared line being left, and its live price
+     * @param inLine   the declared line being entered, and its live price. The pair is still
+     *                 declared with a direction — it names which listing the holding is counted
+     *                 under everywhere exposure is measured — but the direction no longer decides
+     *                 which side a leg is on. These two are the pair, and a leg is measured against
+     *                 whichever of them it trades.
      * @param rates    the FX snapshot, units of foreign currency per 1 GBP (the app-wide convention)
      * @param cash     what the ledger says each account holds, for the sequencing step that asks
      *                 whether the buy can actually be funded
      */
-    public static Summary summarise(List<Rung> out, List<Rung> in, LinePrice outLine,
+    public static Summary summarise(List<Rung> sells, List<Rung> buys, LinePrice outLine,
                                     LinePrice inLine, Map<String, BigDecimal> rates,
                                     List<CashAvailability> cash) {
         List<String> excluded = new ArrayList<>();
@@ -299,14 +372,14 @@ public final class Switches {
         BigDecimal inLineGbp = toGbp(inLine.price(), inLine.currency(), rates);
         Basis basis = basis(outLine, inLine, outLineGbp, inLineGbp, rates);
 
-        Comparison resting = compare(out, in, Rung::remaining, outLine, inLine,
-                outLineGbp, inLineGbp, rates, excluded, "resting or intended");
-        Comparison filled = compare(out, in, Rung::filled, outLine, inLine,
-                outLineGbp, inLineGbp, rates, excluded, "filled");
+        Comparison resting = compare(sells, buys, Rung::remaining, outLine, inLine,
+                rates, excluded, "resting or intended");
+        Comparison filled = compare(sells, buys, Rung::filled, outLine, inLine,
+                rates, excluded, "filled");
 
-        Progress progress = progress(out, in, excluded);
-        List<Ladders.CashLine> cashLines = cashLines(out, in, excluded);
-        List<Step> steps = sequence(out, in, outLine, inLine, progress, cashLines, cash, rates);
+        Progress progress = progress(sells, buys, excluded);
+        List<Ladders.CashLine> cashLines = cashLines(sells, buys, excluded);
+        List<Step> steps = sequence(sells, buys, outLine, inLine, progress, cashLines, cash, rates);
         Step blocker = null;
         for (Step s : steps) {
             if (s.state().blocks()) {
@@ -328,43 +401,61 @@ public final class Switches {
         return new Basis(outLine, inLine, outGbp, inGbp, deviation, implied, market);
     }
 
-    private static Comparison compare(List<Rung> out, List<Rung> in, Predicate<Rung> which,
-                                      LinePrice outLine, LinePrice inLine, BigDecimal outLineGbp,
-                                      BigDecimal inLineGbp, Map<String, BigDecimal> rates,
+    private static Comparison compare(List<Rung> sells, List<Rung> buys, Predicate<Rung> which,
+                                      LinePrice outLine, LinePrice inLine,
+                                      Map<String, BigDecimal> rates,
                                       List<String> excluded, String what) {
-        LegSide sell = side(out, which, outLine, outLineGbp, rates, excluded, what);
-        LegSide buy = side(in, which, inLine, inLineGbp, rates, excluded, what);
+        LegSide sell = side(sells, which, outLine, inLine, outLine.symbol(), rates, excluded, what);
+        LegSide buy = side(buys, which, outLine, inLine, inLine.symbol(), rates, excluded, what);
 
         BigDecimal perUnit = null;
         BigDecimal costPct = null;
         BigDecimal matched = null;
         BigDecimal total = null;
-        if (sell.present() && buy.present() && sell.avgPriceGbp() != null
-                && buy.avgPriceGbp() != null && sell.avgPriceGbp().signum() != 0) {
+        if (sell.present() && buy.present() && sell.avgPriceGbp().signum() != 0) {
             perUnit = buy.avgPriceGbp().subtract(sell.avgPriceGbp());
             costPct = ratioLessOne(buy.avgPriceGbp(), sell.avgPriceGbp());
             matched = sell.quantity().min(buy.quantity());
             total = matched.multiply(perUnit);
         }
-        BigDecimal implied = sell.present() && buy.present() && sell.avgPrice().signum() != 0
+        // Native prices only: a side spanning both listings has no single currency, so it has no
+        // implied cross either. Absent, never blended — the whole point of the pair of columns.
+        BigDecimal implied = sell.avgPrice() != null && buy.avgPrice() != null
+                && sell.avgPrice().signum() != 0
                 ? buy.avgPrice().divide(sell.avgPrice(), SCALE, RoundingMode.HALF_UP) : null;
         BigDecimal market = cross(sell.currency(), buy.currency(), rates);
-        return new Comparison(sell, buy, perUnit, costPct, matched, total, implied, market);
+        // The split's own FX term, over the two sides' market prices rather than the two declared
+        // lines'. Identical to the Basis block whenever each side sits on one listing, which is
+        // what keeps a one-way switch computing exactly what it always did.
+        BigDecimal splitBasis = ratioLessOne(buy.marketGbp(), sell.marketGbp());
+        return new Comparison(sell, buy, perUnit, costPct, matched, total, implied, market,
+                splitBasis);
     }
 
     /**
-     * One side's quantity-weighted average, in its own currency and on the yardstick.
+     * One side's quantity-weighted average, in its own currency where it has one and on the
+     * yardstick always, together with the market price that average is judged against.
      *
      * <p>Weighted by quantity rather than averaged across legs: three rungs of 10, 10 and 300 units
      * are not three equal opinions about the price, and a plain mean of them would be a number about
      * no trade anyone is making.
+     *
+     * <p><b>Each leg converts on its own currency, then the GBP figures are averaged</b> — not the
+     * other way round, which would need a currency the side may not have. The market blend runs over
+     * <em>exactly</em> the legs the average ran over, with the same weights; that is what makes
+     * {@code avg / market} decomposable into the identity above rather than approximately so, and it
+     * is why a leg that cannot be converted leaves both figures rather than only one.
      */
-    private static LegSide side(List<Rung> rungs, Predicate<Rung> which, LinePrice line,
-                                BigDecimal lineGbp, Map<String, BigDecimal> rates,
+    private static LegSide side(List<Rung> rungs, Predicate<Rung> which, LinePrice outLine,
+                                LinePrice inLine, String ifEmpty, Map<String, BigDecimal> rates,
                                 List<String> excluded, String what) {
         BigDecimal qty = BigDecimal.ZERO;
-        BigDecimal value = BigDecimal.ZERO;
-        String currency = null;
+        BigDecimal valueNative = BigDecimal.ZERO;
+        BigDecimal valueGbp = BigDecimal.ZERO;
+        BigDecimal marketValueGbp = BigDecimal.ZERO;
+        Set<String> listings = new LinkedHashSet<>();
+        Set<String> currencies = new LinkedHashSet<>();
+        boolean everyLinePriced = true;
         int count = 0;
         for (Rung r : rungs) {
             if (!which.test(r)) continue;
@@ -374,19 +465,70 @@ public final class Switches {
                         + ", so the " + what + " average leaves it out");
                 continue;
             }
-            if (currency == null) currency = r.currency();
+            LinePrice line = lineFor(r.symbol(), outLine, inLine);
+            String ccy = r.currency() != null ? r.currency() : line.currency();
+            BigDecimal gbp = toGbp(r.price(), ccy, rates);
+            if (gbp == null) {
+                excluded.add(r.describe() + " — no currency yet (nothing has priced this listing), "
+                        + "so the " + what + " average leaves it out");
+                continue;
+            }
+            if (line.symbol() != null) listings.add(line.symbol());
+            currencies.add(ccy);
             qty = qty.add(r.quantity());
-            value = value.add(r.quantity().multiply(r.price()));
+            valueNative = valueNative.add(r.quantity().multiply(r.price()));
+            valueGbp = valueGbp.add(r.quantity().multiply(gbp));
+            BigDecimal lineGbp = toGbp(line.price(), line.currency(), rates);
+            if (lineGbp == null) everyLinePriced = false;
+            else marketValueGbp = marketValueGbp.add(r.quantity().multiply(lineGbp));
         }
-        if (currency == null) currency = line.currency();
-        if (count == 0 || qty.signum() <= 0 || currency == null) {
-            return new LegSide(line.symbol(), currency, qty.signum() > 0 ? qty : null, null, null,
-                    null, count);
+        String currency = currencies.size() == 1 ? currencies.iterator().next() : null;
+        List<String> lines = List.copyOf(listings);
+        // A side with nothing on it still names the line it would ordinarily be on, so the row reads
+        // "Buy EQQU  —  —" rather than "Buy —": which line is absent is the point of printing it.
+        String label = listings.isEmpty() ? ifEmpty : String.join(" / ", listings);
+        if (count == 0 || qty.signum() <= 0) {
+            return new LegSide(label, lines, currency, qty.signum() > 0 ? qty : null, null, null,
+                    null, null, count);
         }
-        BigDecimal avg = value.divide(qty, SCALE, RoundingMode.HALF_UP);
-        BigDecimal avgGbp = toGbp(avg, currency, rates);
-        return new LegSide(line.symbol(), currency, qty, avg, avgGbp,
-                ratioLessOne(avgGbp, lineGbp), count);
+        // Native only when the whole side quotes in one currency; pounds and dollars have no mean.
+        BigDecimal avg = currency == null ? null
+                : valueNative.divide(qty, SCALE, RoundingMode.HALF_UP);
+        BigDecimal avgGbp = valueGbp.divide(qty, SCALE, RoundingMode.HALF_UP);
+        BigDecimal marketGbp = everyLinePriced
+                ? marketValueGbp.divide(qty, SCALE, RoundingMode.HALF_UP) : null;
+        return new LegSide(label, lines, currency, qty, avg, avgGbp, marketGbp,
+                ratioLessOne(avgGbp, marketGbp), count);
+    }
+
+    /**
+     * A leg's limit on the yardstick — the only axis two listings' prices can be ordered on.
+     *
+     * <p>Public because the ordering of the leg tables belongs to the panel and the conversion
+     * belongs here: £584.80 above $682.35 is a statement about the exchange rate unless both are in
+     * GBP first, and a table sorted on the raw numbers would put every sterling row above every
+     * dollar one whatever the prices said.
+     */
+    public static BigDecimal gbpPrice(Rung r, LinePrice outLine, LinePrice inLine,
+                                      Map<String, BigDecimal> rates) {
+        if (r == null || r.price() == null) return null;
+        LinePrice line = lineFor(r.symbol(), outLine, inLine);
+        return toGbp(r.price(), r.currency() != null ? r.currency() : line.currency(), rates);
+    }
+
+    /**
+     * The listing a leg trades, out of the pair the switch declares.
+     *
+     * <p>A leg whose symbol matches neither is never placed on a switch in the first place, so this
+     * only has to settle which of the two it is. A leg with no symbol at all falls back to the line
+     * being left, which is where a pre-existing sell leg was already being measured.
+     */
+    private static LinePrice lineFor(String symbol, LinePrice outLine, LinePrice inLine) {
+        if (symbol != null && inLine.symbol() != null
+                && symbol.equalsIgnoreCase(inLine.symbol())) {
+            return inLine;
+        }
+        return outLine;
     }
 
     // ---- how far through it is ---------------------------------------------
@@ -493,42 +635,54 @@ public final class Switches {
      * balance for the account the proceeds land in, with the date that ledger was last imported, and
      * let the reader draw the obvious conclusion from a figure they can check.
      */
-    private static List<Step> sequence(List<Rung> out, List<Rung> in, LinePrice outLine,
+    private static List<Step> sequence(List<Rung> sells, List<Rung> buys, LinePrice outLine,
                                        LinePrice inLine, Progress progress,
                                        List<Ladders.CashLine> cashLines,
                                        List<CashAvailability> cash, Map<String, BigDecimal> rates) {
         List<Step> steps = new ArrayList<>();
-        Set<String> outAccounts = accounts(out);
-        Set<String> inAccounts = accounts(in);
-        String outCcy = currencyOf(out, outLine);
-        String inCcy = currencyOf(in, inLine);
+        Set<String> outAccounts = accounts(sells);
+        Set<String> inAccounts = accounts(buys);
+        // The listings each side is actually on, which is what the step titles have to name now
+        // that a side is a direction rather than a line.
+        String sellLines = listingLabel(sells, outLine, inLine, outLine.symbol());
+        String buyLines = listingLabel(buys, outLine, inLine, inLine.symbol());
+        Set<String> outCcy = currencies(sells, outLine, inLine);
+        Set<String> inCcy = currencies(buys, outLine, inLine);
 
         // 1. Sell.
-        if (out.isEmpty()) {
-            steps.add(new Step("Sell " + outLine.symbol(), StepState.UNKNOWN,
+        if (sells.isEmpty()) {
+            steps.add(new Step("Sell " + sellLines, StepState.UNKNOWN,
                     "No sell leg recorded yet. Assign the order, or record the one you mean to place."));
         } else if (!progress.known()) {
-            steps.add(new Step("Sell " + outLine.symbol(), StepState.UNKNOWN,
+            steps.add(new Step("Sell " + sellLines, StepState.UNKNOWN,
                     "A sell leg has no quantity, so how much this switch covers is unknown."));
         } else if (progress.inOldLine().signum() > 0) {
-            steps.add(new Step("Sell " + outLine.symbol(), StepState.WAITING,
+            steps.add(new Step("Sell " + sellLines, StepState.WAITING,
                     plain(progress.sold()) + " of " + plain(progress.declared()) + " units sold — "
-                            + plain(progress.inOldLine()) + " still in the old line."));
+                            + plain(progress.inOldLine()) + " still to sell."));
         } else {
-            steps.add(new Step("Sell " + outLine.symbol(), StepState.DONE,
+            steps.add(new Step("Sell " + sellLines, StepState.DONE,
                     "All " + plain(progress.declared()) + " units sold."));
         }
 
-        // 2. Settlement, reported from the ledger rather than asserted.
-        CashAvailability raised = find(cash, outAccounts, outCcy);
+        // 2. Settlement, reported from the ledger rather than asserted. One line per currency the
+        // sell side raises: two lines raising pounds and dollars are two separate balances, and
+        // netting them is the error this whole block exists to avoid.
+        List<String> raised = new ArrayList<>();
+        for (String ccy : outCcy) {
+            CashAvailability c = find(cash, outAccounts, ccy);
+            if (c != null) {
+                raised.add("Ledger shows " + money(c.available()) + " " + c.currency()
+                        + (c.asOf() == null ? "" : " as at " + c.asOf()));
+            }
+        }
         steps.add(new Step("Proceeds settle as cash" + (outAccounts.isEmpty() ? ""
                 : " in " + String.join(" / ", outAccounts)),
                 StepState.INFO,
-                raised == null
+                raised.isEmpty()
                         ? "No imported cash balance for that account and currency, so this tool "
                         + "cannot say what has landed."
-                        : "Ledger shows " + money(raised.available()) + " " + raised.currency()
-                        + (raised.asOf() == null ? "" : " as at " + raised.asOf())
+                        : String.join("; ", raised)
                         + ". Settlement itself is not in any export this tool reads."));
 
         // 3. Move between accounts — only when they really are different.
@@ -546,52 +700,96 @@ public final class Switches {
                             + "transfer you make, and it is the slow part."));
         }
 
-        // 4. Convert.
-        BigDecimal needed = needed(cashLines, inAccounts, inCcy);
-        if (outCcy == null || inCcy == null) {
-            steps.add(new Step("Convert the currency", StepState.UNKNOWN,
-                    "One of the two lines has never priced, so its currency is unknown."));
-        } else if (outCcy.equals(inCcy)) {
-            steps.add(new Step("Convert the currency", StepState.NOT_NEEDED,
-                    "Both lines trade in " + inCcy + "."));
-        } else {
-            BigDecimal rate = cross(outCcy, inCcy, rates);
-            steps.add(new Step("Convert " + outCcy + " to " + inCcy, StepState.WAITING,
-                    (needed == null ? "" : money(needed) + " " + inCcy + " needed — ")
-                            + (rate == null ? "no rate on file."
-                            : "about " + rate.setScale(4, RoundingMode.HALF_UP).toPlainString()
-                            + " " + inCcy + " per " + outCcy + " today.")));
-        }
+        // 4. Convert — one entry per currency the buy side needs that the sell side does not
+        // itself raise. A switch running both ways can need none of them, or both.
+        steps.add(convertStep(outCcy, inCcy, inAccounts, cashLines, rates));
 
-        // 5. Buy.
-        CashAvailability funds = find(cash, inAccounts, inCcy);
-        boolean anyPlaced = in.stream().anyMatch(r -> r.state() == Rung.State.WORKING);
-        boolean anyIntended = in.stream().anyMatch(Rung::intended);
-        BigDecimal shortfall = needed != null && funds != null
-                ? needed.subtract(funds.available()) : null;
-        if (in.isEmpty()) {
-            steps.add(new Step("Buy " + inLine.symbol(), StepState.UNKNOWN,
+        // 5. Buy, and whether the cash for it is there — asked per currency, since a buy side on
+        // both lines needs both, and being flush in one says nothing about the other.
+        List<String> shorts = new ArrayList<>();
+        List<String> needs = new ArrayList<>();
+        for (String ccy : inCcy) {
+            BigDecimal need = needed(cashLines, inAccounts, ccy);
+            if (need == null) continue;
+            needs.add(money(need) + " " + ccy);
+            CashAvailability funds = find(cash, inAccounts, ccy);
+            if (funds == null) continue;
+            BigDecimal shortfall = need.subtract(funds.available());
+            if (shortfall.signum() > 0) {
+                shorts.add("Needs " + money(need) + " " + ccy + "; "
+                        + String.join(" / ", inAccounts) + " holds " + money(funds.available())
+                        + " " + ccy + (funds.asOf() == null ? "" : " as at " + funds.asOf())
+                        + ". Short " + money(shortfall) + " " + ccy + ".");
+            }
+        }
+        boolean anyPlaced = buys.stream().anyMatch(r -> r.state() == Rung.State.WORKING);
+        boolean anyIntended = buys.stream().anyMatch(Rung::intended);
+        if (buys.isEmpty()) {
+            steps.add(new Step("Buy " + buyLines, StepState.UNKNOWN,
                     "No buy leg recorded yet. Record it as an intended leg — that is what it is "
                             + "until the cash is there."));
-        } else if (shortfall != null && shortfall.signum() > 0) {
-            steps.add(new Step("Buy " + inLine.symbol(), StepState.SHORT,
-                    "Needs " + money(needed) + " " + inCcy + "; " + String.join(" / ", inAccounts)
-                            + " holds " + money(funds.available()) + " " + inCcy
-                            + (funds.asOf() == null ? "" : " as at " + funds.asOf())
-                            + ". Short " + money(shortfall) + " " + inCcy + "."));
+        } else if (!shorts.isEmpty()) {
+            // One pair of sentences per currency. A buy side on both lines needs both, and being
+            // flush in one says nothing whatever about the other.
+            steps.add(new Step("Buy " + buyLines, StepState.SHORT, String.join(" ", shorts)));
         } else if (anyIntended && !anyPlaced) {
-            steps.add(new Step("Buy " + inLine.symbol(), StepState.WAITING,
-                    "Recorded but not placed at a broker."));
+            steps.add(new Step("Buy " + buyLines, StepState.WAITING,
+                    "Recorded but not placed at a broker."
+                            + (needs.isEmpty() ? "" : " Needs " + String.join(" and ", needs) + ".")));
         } else if (progress.known() && progress.inFlight() != null
                 && progress.inFlight().signum() > 0) {
-            steps.add(new Step("Buy " + inLine.symbol(), StepState.WAITING,
+            steps.add(new Step("Buy " + buyLines, StepState.WAITING,
                     plain(progress.bought()) + " of " + plain(progress.sold())
                             + " sold units bought back."));
         } else {
-            steps.add(new Step("Buy " + inLine.symbol(), StepState.DONE,
+            steps.add(new Step("Buy " + buyLines, StepState.DONE,
                     progress.known() ? plain(progress.bought()) + " units bought." : "Placed."));
         }
         return steps;
+    }
+
+    /**
+     * The conversion step, which on a two-way switch is no longer one conversion.
+     *
+     * <p>A currency the buy side needs and the sell side already raises needs no conversion at all,
+     * and saying so is worth as much as naming the ones that do — it is the difference between
+     * "waiting on the FX desk" and "the money is already in the right denomination".
+     */
+    private static Step convertStep(Set<String> outCcy, Set<String> inCcy, Set<String> inAccounts,
+                                    List<Ladders.CashLine> cashLines,
+                                    Map<String, BigDecimal> rates) {
+        if (outCcy.isEmpty() || inCcy.isEmpty()) {
+            return new Step("Convert the currency", StepState.UNKNOWN,
+                    "One of the two lines has never priced, so its currency is unknown.");
+        }
+        List<String> toConvert = new ArrayList<>();
+        for (String ccy : inCcy) {
+            if (!outCcy.contains(ccy)) toConvert.add(ccy);
+        }
+        if (toConvert.isEmpty()) {
+            return new Step("Convert the currency", StepState.NOT_NEEDED,
+                    inCcy.size() == 1 && outCcy.size() == 1
+                            ? "Both lines trade in " + inCcy.iterator().next() + "."
+                            : "Every currency the buy side needs is one the sell side already "
+                            + "raises (" + String.join(", ", inCcy) + ").");
+        }
+        List<String> detail = new ArrayList<>();
+        for (String ccy : toConvert) {
+            BigDecimal need = needed(cashLines, inAccounts, ccy);
+            StringBuilder line = new StringBuilder();
+            if (need != null) line.append(money(need)).append(' ').append(ccy).append(" needed");
+            for (String from : outCcy) {
+                BigDecimal rate = cross(from, ccy, rates);
+                if (rate == null) continue;
+                if (line.length() > 0) line.append(" — ");
+                line.append("about ").append(rate.setScale(4, RoundingMode.HALF_UP).toPlainString())
+                        .append(' ').append(ccy).append(" per ").append(from).append(" today");
+            }
+            if (line.length() > 0) detail.add(line.toString());
+        }
+        return new Step("Convert " + String.join(" / ", outCcy) + " to "
+                + String.join(" / ", toConvert), StepState.WAITING,
+                detail.isEmpty() ? "No rate on file." : String.join("; ", detail) + ".");
     }
 
     private static Set<String> accounts(List<Rung> rungs) {
@@ -602,12 +800,34 @@ public final class Switches {
         return out;
     }
 
-    private static String currencyOf(List<Rung> rungs, LinePrice line) {
+    /** The listings a side is actually on, joined — one on a one-way switch, both on a two-way one. */
+    private static String listingLabel(List<Rung> rungs, LinePrice outLine, LinePrice inLine,
+                                       String fallback) {
+        Set<String> out = new LinkedHashSet<>();
         for (Rung r : rungs) {
-            if (r.currency() != null) return r.currency();
+            if (r.gone()) continue;
+            String symbol = lineFor(r.symbol(), outLine, inLine).symbol();
+            if (symbol != null) out.add(symbol);
         }
-        return line.currency();
+        return out.isEmpty() ? dash(fallback) : String.join(" / ", out);
     }
+
+    /** Every currency a side quotes in — one per listing it sits on. */
+    private static Set<String> currencies(List<Rung> rungs, LinePrice outLine, LinePrice inLine) {
+        Set<String> out = new LinkedHashSet<>();
+        for (Rung r : rungs) {
+            if (r.gone()) continue;
+            String ccy = r.currency() != null ? r.currency()
+                    : lineFor(r.symbol(), outLine, inLine).currency();
+            if (ccy != null) out.add("GBp".equals(ccy) ? "GBP" : ccy);
+        }
+        return out;
+    }
+
+    private static String dash(String s) {
+        return s == null ? "—" : s;
+    }
+
 
     private static CashAvailability find(List<CashAvailability> cash, Set<String> accounts,
                                          String currency) {

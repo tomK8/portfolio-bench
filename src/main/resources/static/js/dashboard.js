@@ -6560,6 +6560,8 @@
         var wlFundamentals = null;      // symbol -> quoteSummary, cached from /portfolio-fundamentals
         var wlSortAttached = false;
         var wlCurrentSymbol = null;
+        var wlCurrentCurrency = null;   // the open popup's price currency, for the range cells
+        var wlSeriesToken = 0;          // newest /watchlist/series request; older replies are dropped
         var wlReturnsLoaded = false;
         var wlCurrentView = 'stats';    // 'stats' or 'returns'
 
@@ -7316,6 +7318,7 @@
 
         function openWlModal(r) {
             wlCurrentSymbol = r.symbol;
+            wlCurrentCurrency = r.currency;
             document.getElementById('wl-modal-title').textContent = r.symbol +
                 (r.currency ? ' · ' + r.currency : '');
             var today = r.todayPct == null ? '—' : (parseFloat(r.todayPct) * 100).toFixed(1) + '%';
@@ -7332,6 +7335,12 @@
             stats.appendChild(wlStat('30d', wlPctText(r.pct30d)));
             stats.appendChild(wlStat('52wk high', r.week52High == null ? '—' : fmtPrice(r.week52High, r.currency)));
             stats.appendChild(wlStat('52wk low', r.week52Low == null ? '—' : fmtPrice(r.week52Low, r.currency)));
+            // Placeholders for the selected window's own high/low — filled by applyWlRange when
+            // the series lands, and relabelled every time the window changes. They sit next to
+            // the fixed 52-week pair on purpose: the 52-week levels are the alert's yardstick and
+            // stay put, these two follow whatever the chart is showing.
+            stats.appendChild(wlRangeStat('high'));
+            stats.appendChild(wlRangeStat('low'));
             stats.appendChild(wlStat('% vs high', wlPctText(r.pctFromHigh)));
             if (r.priceAbove != null) stats.appendChild(wlStat('Above', fmtPrice(r.priceAbove, r.currency)));
             if (r.priceBelow != null) stats.appendChild(wlStat('Below', fmtPrice(r.priceBelow, r.currency)));
@@ -7393,14 +7402,67 @@
         function closeWlModal() {
             document.getElementById('wl-modal').classList.remove('open');
             wlCurrentSymbol = null;
+            wlCurrentCurrency = null;
             if (wlChart) { wlChart.destroy(); wlChart = null; }
         }
 
         function loadWlSeries(symbol, window) {
+            // (x || 0) + 1, not ++x: a loader that runs before this scope's var initialiser has
+            // executed would otherwise latch NaN and discard every reply from then on.
+            var token = wlSeriesToken = (wlSeriesToken || 0) + 1;
             fetch('/watchlist/series?symbol=' + encodeURIComponent(symbol) + '&window=' + window)
                 .then(function (r) { return r.json(); })
-                .then(function (s) { renderWlChart(s); })
+                .then(function (s) {
+                    // Drop a reply overtaken by a later window click or another row: clicking
+                    // 5D then 1Y must not repaint the 5D chart, nor label its high '1Y high'.
+                    if (token !== wlSeriesToken || wlCurrentSymbol !== symbol) return;
+                    renderWlChart(s);
+                    applyWlRange(s);
+                })
                 .catch(function () { /* leave prior chart */ });
+        }
+
+        // An empty range cell, labelled once the series says which window it belongs to.
+        function wlRangeStat(kind) {
+            var d = wlStat('', '—');
+            d.id = 'wl-range-' + kind;
+            return d;
+        }
+
+        /**
+         * Fill the two window high/low cells from the series just loaded. The figures are the
+         * highest and lowest price actually traded in the window — read from stored daily OHLC,
+         * not from the drawn line — so the high can sit slightly above the chart's visible peak.
+         * A range built from end-of-day closes alone (a gilt: the HL scrape stores no intraday
+         * range) is marked with an asterisk and says so on hover rather than passing itself off
+         * as the real high.
+         */
+        function applyWlRange(s) {
+            var range = s.range || {};
+            [['high', range.high, range.highDate, range.highCloseOnly],
+             ['low', range.low, range.lowDate, range.lowCloseOnly]]
+                .forEach(function (spec) {
+                    var el = document.getElementById('wl-range-' + spec[0]);
+                    if (!el) return;
+                    var kind = spec[0], value = spec[1], on = spec[2], closeOnly = spec[3];
+                    el.querySelector('.k').textContent = s.window + ' ' + kind;
+                    el.querySelector('.v').textContent = value == null ? '—'
+                        : fmtPrice(value, wlCurrentCurrency) + (closeOnly ? '*' : '');
+                    el.title = value == null
+                        ? 'No prices stored for this window.'
+                        : (closeOnly
+                            ? 'A closing price — nothing is stored about how that day traded, so '
+                              + 'the real ' + kind + ' may lie past it.'
+                            : 'The ' + kind + 'est price actually traded in the window, auctions '
+                              + 'included — not just a closing price, so it can sit outside the '
+                              + 'charted line.')
+                          + (on ? ' Set ' + wlRangeDate(on) + '.' : '');
+                });
+        }
+
+        function wlRangeDate(iso) {
+            var d = wlParseTs(iso);
+            return isNaN(d) ? iso : d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
         }
 
         function wlParseTs(ts) {

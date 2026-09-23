@@ -49,7 +49,12 @@ public class SwitchesController {
      * fund — which is what folds them into a single holding in the exposure views. Nothing infers
      * that from the tickers.
      *
-     * @param from the line the holding is leaving
+     * <p>The direction the pair is declared in no longer decides which side an order lands on —
+     * either listing takes sells and buys. It does one job: {@code from} is the name the holding is
+     * counted under in Allocation, Concentration and Currency, because it is the listing carrying
+     * the price history, the ticker mapping and the classification already.
+     *
+     * @param from the line the holding is leaving, and the name its holding keeps
      * @param to   the line it is moving into
      */
     @PostMapping("/switches/create")
@@ -91,16 +96,23 @@ public class SwitchesController {
      *
      * <p>Quantity and price are taken as text and parsed leniently, as the ladder's are: a half-typed
      * number must come back as "give it a quantity", not a 400.
+     *
+     * <p>The listing is its own field rather than being read off the side. Either line of the pair
+     * can carry either side now, so "Sell" no longer names a listing, and a leg priced against the
+     * wrong line would be a sterling limit judged against a dollar quote. Optional, and a blank one
+     * falls back to the one-way reading, so an older form still posts something valid.
      */
     @PostMapping("/switches/intents/add")
     public String addIntent(@RequestParam long id,
                             @RequestParam String account,
+                            @RequestParam(required = false) String symbol,
                             @RequestParam String side,
                             @RequestParam(required = false) String quantity,
                             @RequestParam(required = false) String price,
                             @RequestParam(required = false) String note,
                             Model model) {
-        switches.addIntent(id, account, side, decimalOrNull(quantity), decimalOrNull(price), note);
+        switches.addIntent(id, account, symbol, side, decimalOrNull(quantity),
+                decimalOrNull(price), note);
         return render(model);
     }
 

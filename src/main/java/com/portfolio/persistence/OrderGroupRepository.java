@@ -81,6 +81,7 @@ public class OrderGroupRepository {
                 id          INTEGER PRIMARY KEY,
                 group_id    INTEGER NOT NULL,
                 account     TEXT NOT NULL,
+                symbol      TEXT,
                 side        TEXT NOT NULL,
                 quantity    REAL,
                 price       REAL,
@@ -104,6 +105,11 @@ public class OrderGroupRepository {
             // Additive and nullable, so it needs no table rebuild and no data migration: every row
             // already there is a ladder, and a ladder's second symbol is null by definition.
             addColumnIfMissing(conn, "order_group", "symbol_to", "TEXT");
+            // A database created before a switch's two sides could each span both listings has no
+            // symbol on its intents. Additive and nullable for the same reason: a ladder's intent
+            // never needed one, and a switch's older rows are read under the rule they were
+            // recorded under — the side named the listing.
+            addColumnIfMissing(conn, "order_group_intent", "symbol", "TEXT");
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise the order-group tables", e);
         }
@@ -198,7 +204,8 @@ public class OrderGroupRepository {
         try (Connection conn = connections.open();
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery("""
-                     SELECT id, group_id, account, side, quantity, price, note, created_at
+                     SELECT id, group_id, account, side, quantity, price, note, created_at,
+                            symbol
                        FROM order_group_intent ORDER BY created_at, id""")) {
             while (rs.next()) {
                 out.computeIfAbsent(rs.getLong(2), k -> new ArrayList<>()).add(readIntent(rs));
@@ -214,7 +221,8 @@ public class OrderGroupRepository {
         if (!connections.dbExists()) return null;
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement("""
-                     SELECT id, group_id, account, side, quantity, price, note, created_at
+                     SELECT id, group_id, account, side, quantity, price, note, created_at,
+                            symbol
                        FROM order_group_intent WHERE id = ?""")) {
             ps.setLong(1, id);
             try (ResultSet rs = ps.executeQuery()) {
@@ -227,8 +235,9 @@ public class OrderGroupRepository {
     }
 
     private static IntendedRung readIntent(ResultSet rs) throws Exception {
-        return new IntendedRung(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getString(4),
-                decimal(rs, 5), decimal(rs, 6), rs.getString(7), LocalDate.parse(rs.getString(8)));
+        return new IntendedRung(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getString(9),
+                rs.getString(4), decimal(rs, 5), decimal(rs, 6), rs.getString(7),
+                LocalDate.parse(rs.getString(8)));
     }
 
     // ---- writes ------------------------------------------------------------
@@ -322,9 +331,15 @@ public class OrderGroupRepository {
         }
     }
 
-    /** Record a rung the user has decided on but not placed. Returns its id. */
-    public long addIntent(long groupId, String account, String side, BigDecimal quantity,
-                          BigDecimal price, String note, LocalDate today) {
+    /**
+     * Record a rung the user has decided on but not placed. Returns its id.
+     *
+     * @param symbol the listing the rung trades, or null to leave it unsaid. A ladder passes null —
+     *               its rungs are the group's one security. A switch passes the listing, because
+     *               either of its two lines can carry either side.
+     */
+    public long addIntent(long groupId, String account, String symbol, String side,
+                          BigDecimal quantity, BigDecimal price, String note, LocalDate today) {
         if (account == null || account.isBlank()) throw new IllegalStateException("Pick an account.");
         if (side == null || side.isBlank()) throw new IllegalStateException("Pick a side.");
         if (quantity == null || quantity.signum() <= 0) {
@@ -333,15 +348,16 @@ public class OrderGroupRepository {
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement("""
                      INSERT INTO order_group_intent
-                            (group_id, account, side, quantity, price, note, created_at)
-                     VALUES (?,?,?,?,?,?,?)""", Statement.RETURN_GENERATED_KEYS)) {
+                            (group_id, account, symbol, side, quantity, price, note, created_at)
+                     VALUES (?,?,?,?,?,?,?,?)""", Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, groupId);
             ps.setString(2, account.trim());
-            ps.setString(3, "sell".equalsIgnoreCase(side.trim()) ? "Sell" : "Buy");
-            setDecimal(ps, 4, quantity);
-            setDecimal(ps, 5, price);
-            ps.setString(6, note == null || note.isBlank() ? null : note.trim());
-            ps.setString(7, today.toString());
+            ps.setString(3, symbol == null || symbol.isBlank() ? null : symbol.trim().toUpperCase());
+            ps.setString(4, "sell".equalsIgnoreCase(side.trim()) ? "Sell" : "Buy");
+            setDecimal(ps, 5, quantity);
+            setDecimal(ps, 6, price);
+            ps.setString(7, note == null || note.isBlank() ? null : note.trim());
+            ps.setString(8, today.toString());
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 return keys.next() ? keys.getLong(1) : -1;

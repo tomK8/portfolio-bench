@@ -99,11 +99,17 @@ public final class GroupRungs {
                 r.reference());
     }
 
-    /** The intended rung itself, carrying whatever the enrichment pass made of its synthetic order. */
-    static Rung intendedRung(IntendedRung i, OpenOrder enriched, TouchPricer touch) {
-        return new Rung(i.reference(), i.id(), i.account(), i.side(), i.quantity(), i.price(),
-                enriched == null ? null : enriched.currency(), Rung.State.INTENDED, null, i.note(),
-                enriched, touch.at(enriched, NEAR_HORIZON_SESSIONS),
+    /**
+     * The intended rung itself, carrying whatever the enrichment pass made of its synthetic order.
+     *
+     * @param symbol the listing it trades, resolved by the caller — a ladder's one security, or the
+     *               line a switch's leg was recorded against. Passed in rather than read off the
+     *               enriched order, which is null whenever the listing has never priced.
+     */
+    static Rung intendedRung(IntendedRung i, String symbol, OpenOrder enriched, TouchPricer touch) {
+        return new Rung(i.reference(), i.id(), i.account(), symbol, i.side(), i.quantity(),
+                i.price(), enriched == null ? null : enriched.currency(), Rung.State.INTENDED, null,
+                i.note(), enriched, touch.at(enriched, NEAR_HORIZON_SESSIONS),
                 touch.at(enriched, FAR_HORIZON_SESSIONS));
     }
 
@@ -121,15 +127,15 @@ public final class GroupRungs {
                          Map<String, String> notes, TouchPricer touch) {
         OpenOrder o = live.get(key);
         if (o != null) {
-            return new Rung(key, null, o.broker(), o.side(), o.quantity(), o.price(), o.currency(),
-                    Rung.State.WORKING, null, notes.get(key), o,
+            return new Rung(key, null, o.broker(), o.symbol(), o.side(), o.quantity(), o.price(),
+                    o.currency(), Rung.State.WORKING, null, notes.get(key), o,
                     touch.at(o, NEAR_HORIZON_SESSIONS), touch.at(o, FAR_HORIZON_SESSIONS));
         }
         OrderHistoryRepository.HistoricalOrder h = closed.get(key);
         if (h == null) return null;
         // A closed rung is priced at nothing: it is not resting, so there is no fill to put odds on.
-        return new Rung(key, null, h.broker(), h.side(), h.quantity(), h.price(), h.currency(),
-                stateOf(h), LocalDate.parse(h.closedAt()), h.note(), null, null, null);
+        return new Rung(key, null, h.broker(), h.symbol(), h.side(), h.quantity(), h.price(),
+                h.currency(), stateOf(h), LocalDate.parse(h.closedAt()), h.note(), null, null, null);
     }
 
     /**

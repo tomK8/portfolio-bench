@@ -33,9 +33,20 @@ class SwitchesTest {
     private static final Switches.LinePrice EQQU =
             new Switches.LinePrice("EQQU", new BigDecimal("672.50"), "USD");
 
+    /**
+     * A leg on whichever line quotes in that currency — EQQQ is the sterling line and EQQU the
+     * dollar one, so the currency names the listing here and the helper stays a one-liner. Tests
+     * that put both lines on one side name the listing themselves with {@link #on}.
+     */
     private static Rung rung(String account, String side, String qty, String price, String ccy,
                              Rung.State state) {
-        return new Rung(account + "|" + side + price, null, account, side,
+        return on("GBP".equals(ccy) || "GBp".equals(ccy) ? "EQQQ" : "EQQU",
+                account, side, qty, price, ccy, state);
+    }
+
+    private static Rung on(String symbol, String account, String side, String qty, String price,
+                           String ccy, Rung.State state) {
+        return new Rung(account + "|" + symbol + side + price, null, account, symbol, side,
                 qty == null ? null : new BigDecimal(qty),
                 price == null ? null : new BigDecimal(price), ccy, state, null, null, null,
                 null, null);
@@ -56,8 +67,8 @@ class SwitchesTest {
 
         Switches.Comparison c = s.resting();
         assertTrue(c.complete());
-        assertEquals(530.00, c.out().avgPriceGbp().doubleValue(), 1e-6, "sterling line is already GBP");
-        assertEquals(716.00 / 1.345, c.in().avgPriceGbp().doubleValue(), 1e-6, "dollar line divided by the rate");
+        assertEquals(530.00, c.sellSide().avgPriceGbp().doubleValue(), 1e-6, "sterling line is already GBP");
+        assertEquals(716.00 / 1.345, c.buySide().avgPriceGbp().doubleValue(), 1e-6, "dollar line divided by the rate");
         assertEquals(0.0044188, c.costPct().doubleValue(), 1e-6);
         assertTrue(c.costly(), "buying above where it sells costs money");
     }
@@ -73,7 +84,7 @@ class SwitchesTest {
                 List.of(rung("II SIPP", "Sell", "10", "500.00", "GBP", Rung.State.WORKING)),
                 List.of(rung("Roth IRA", "Buy", "10", "672.50", "USD", Rung.State.WORKING)),
                 EQQQ, EQQU, RATES, List.of());
-        assertEquals(500.00, s.resting().in().avgPriceGbp().doubleValue(), 1e-6);
+        assertEquals(500.00, s.resting().buySide().avgPriceGbp().doubleValue(), 1e-6);
         assertEquals(0.0, s.resting().costPct().doubleValue(), 1e-9,
                 "the same fund level on both lines is no gap at all");
     }
@@ -92,10 +103,137 @@ class SwitchesTest {
                 EQQQ, EQQU, RATES, List.of());
 
         Switches.Comparison c = s.resting();
-        double inTerm = 1 + c.in().vsMarketPct().doubleValue();
-        double outTerm = 1 + c.out().vsMarketPct().doubleValue();
+        double inTerm = 1 + c.buySide().vsMarketPct().doubleValue();
+        double outTerm = 1 + c.sellSide().vsMarketPct().doubleValue();
         double basisTerm = 1 + s.basis().deviationPct().doubleValue();
         assertEquals(1 + c.costPct().doubleValue(), inTerm / outTerm * basisTerm, 1e-9);
+    }
+
+    // ---- worked from both ends ---------------------------------------------
+
+    /**
+     * The identity survives a side that spans both listings, which is the whole argument for
+     * blending the market price rather than pinning each side to one line.
+     *
+     * <p>{@code (1 + in vs market) / (1 + out vs market) x (1 + FX term)} is {@code 1 + cost} for
+     * <em>any</em> pair of market prices used in both terms, so defining each side's market as the
+     * quantity-weighted blend of the listings actually on it keeps the three printed factors exact
+     * rather than nearly right. An approximation here would be the panel quietly attributing part
+     * of a gap the user chose to the exchange rate, which is the one thing it exists to separate.
+     */
+    @Test
+    void theThreeTermsStillMultiplyExactlyWhenASideSpansBothListings() {
+        Switches.Summary s = Switches.summarise(
+                List.of(on("EQQQ", "II SIPP", "Sell", "60", "545.00", "GBP", Rung.State.WORKING),
+                        on("EQQU", "Roth IRA", "Sell", "40", "730.00", "USD", Rung.State.WORKING)),
+                List.of(on("EQQU", "Roth IRA", "Buy", "70", "660.00", "USD", Rung.State.INTENDED),
+                        on("EQQQ", "II SIPP", "Buy", "30", "492.00", "GBP", Rung.State.WORKING)),
+                EQQQ, EQQU, RATES, List.of());
+
+        Switches.Comparison c = s.resting();
+        double inTerm = 1 + c.buySide().vsMarketPct().doubleValue();
+        double outTerm = 1 + c.sellSide().vsMarketPct().doubleValue();
+        double fxTerm = 1 + c.splitBasisPct().doubleValue();
+        assertEquals(1 + c.costPct().doubleValue(), inTerm / outTerm * fxTerm, 1e-9);
+    }
+
+    /**
+     * A one-way switch computes exactly what it always did. The blend of a single listing is that
+     * listing, so the split's FX term is the two lines against the exchange rate — the same number
+     * the basis block prints, and the one an edit must not be able to move.
+     */
+    @Test
+    void aOneWaySwitchSplitsOnTheLinesExactlyAsItAlwaysDid() {
+        Switches.Summary s = Switches.summarise(
+                List.of(rung("II SIPP", "Sell", "100", "530.00", "GBP", Rung.State.WORKING)),
+                List.of(rung("Roth IRA", "Buy", "100", "716.00", "USD", Rung.State.INTENDED)),
+                EQQQ, EQQU, RATES, List.of());
+
+        assertEquals(s.basis().deviationPct().doubleValue(),
+                s.resting().splitBasisPct().doubleValue(), 1e-12,
+                "one listing a side, so the blend is the line itself");
+    }
+
+    /**
+     * Pounds and dollars have no mean, so a side on both listings has no native average and no
+     * implied cross rate. Absent and said so — a blended figure would print as money and be none,
+     * which is the error the GBP column exists to make unnecessary.
+     */
+    @Test
+    void aSideOnBothListingsHasNoNativeAverageAndNoImpliedCross() {
+        Switches.Summary s = Switches.summarise(
+                List.of(on("EQQQ", "II SIPP", "Sell", "50", "530.00", "GBP", Rung.State.WORKING),
+                        on("EQQU", "Roth IRA", "Sell", "50", "716.00", "USD", Rung.State.WORKING)),
+                List.of(on("EQQU", "Roth IRA", "Buy", "100", "672.50", "USD", Rung.State.INTENDED)),
+                EQQQ, EQQU, RATES, List.of());
+
+        Switches.LegSide sell = s.resting().sellSide();
+        assertTrue(sell.mixed());
+        assertNull(sell.currency(), "two currencies, so the side has none");
+        assertNull(sell.avgPrice(), "and therefore no native average");
+        assertNull(s.resting().impliedCross(), "an implied rate needs one currency each side");
+        assertEquals("EQQQ / EQQU", sell.symbol(), "both lines named, so the reader knows why");
+
+        // The yardstick still answers, which is the point: (50x530 + 50x716/1.345) / 100.
+        assertEquals((50 * 530.00 + 50 * 716.00 / 1.345) / 100,
+                sell.avgPriceGbp().doubleValue(), 1e-6);
+        assertNotNull(s.resting().costPct(), "the comparison is unaffected — it was always GBP");
+    }
+
+    /**
+     * A mixed side is judged against a blend of its own listings, weighted the same way its average
+     * was. Both lines sit at the same GBP level on a genuine pair, so the blend lands there too and
+     * the limit reads against the market exactly as a single-line side would.
+     */
+    @Test
+    void aMixedSideIsJudgedAgainstTheBlendOfItsOwnListings() {
+        Switches.Summary s = Switches.summarise(
+                List.of(on("EQQQ", "II SIPP", "Sell", "75", "500.00", "GBP", Rung.State.WORKING),
+                        on("EQQU", "Roth IRA", "Sell", "25", "672.50", "USD", Rung.State.WORKING)),
+                List.of(), EQQQ, EQQU, RATES, List.of());
+
+        Switches.LegSide sell = s.resting().sellSide();
+        assertEquals(500.00, sell.marketGbp().doubleValue(), 1e-6,
+                "both lines are £500 in GBP, so any weighting of them is £500");
+        assertEquals(0.0, sell.vsMarketPct().doubleValue(), 1e-9,
+                "every leg is at its own market, so the side is too");
+    }
+
+    /**
+     * Buying back more than went out is not a switch state, and the panel says so rather than
+     * clamping a bar that would read as finished. A one-way switch cannot reach it; one worked from
+     * both ends can, and then the holding has grown rather than moved.
+     */
+    @Test
+    void buyingBackMoreThanWasSoldIsNamedRatherThanDrawn() {
+        Switches.Summary s = Switches.summarise(
+                List.of(on("EQQQ", "II SIPP", "Sell", "40", "530.00", "GBP", Rung.State.FILLED)),
+                List.of(on("EQQU", "Roth IRA", "Buy", "70", "716.00", "USD", Rung.State.FILLED)),
+                EQQQ, EQQU, RATES, List.of());
+
+        Switches.Progress p = s.progress();
+        assertTrue(p.known());
+        assertFalse(p.representable(), "the three shares no longer make a whole");
+        assertEquals(0, new BigDecimal("30").compareTo(p.overBought()));
+        assertFalse(p.complete(), "more came back than went out — that is not a completed move");
+    }
+
+    /**
+     * A leg on a listing that has never priced takes the whole side's market blend with it, rather
+     * than leaving a blend over a different set of legs than the average it is divided into. The
+     * average still prints; only the comparison to market goes, which is the app-wide rule.
+     */
+    @Test
+    void oneUnpricedListingLeavesTheWholeSideWithNoMarketToSitAgainst() {
+        Switches.Summary s = Switches.summarise(
+                List.of(on("EQQQ", "II SIPP", "Sell", "50", "530.00", "GBP", Rung.State.WORKING),
+                        on("EQQU", "Roth IRA", "Sell", "50", "716.00", "USD", Rung.State.WORKING)),
+                List.of(), EQQQ, Switches.LinePrice.none("EQQU"), RATES, List.of());
+
+        Switches.LegSide sell = s.resting().sellSide();
+        assertNotNull(sell.avgPriceGbp(), "both legs still convert");
+        assertNull(sell.marketGbp(), "one of the two lines has no price");
+        assertNull(sell.vsMarketPct(), "so there is nothing to sit against");
     }
 
     /**
@@ -140,7 +278,7 @@ class SwitchesTest {
                 List.of(rung("Roth IRA", "Buy", "100", "716.00", "USD", Rung.State.INTENDED)),
                 EQQQ, Switches.LinePrice.none("EQQU"), RATES, List.of());
         assertNull(s.basis().deviationPct(), "nothing to compare the lines with");
-        assertNull(s.resting().in().vsMarketPct(), "no market to sit against");
+        assertNull(s.resting().buySide().vsMarketPct(), "no market to sit against");
         assertNotNull(s.resting().costPct(), "the two legs still convert — only the split is short");
     }
 
@@ -151,7 +289,7 @@ class SwitchesTest {
                 List.of(rung("II SIPP", "Sell", "10", "600.00", "GBP", Rung.State.WORKING),
                         rung("II SIPP", "Sell", "90", "500.00", "GBP", Rung.State.WORKING)),
                 List.of(), EQQQ, EQQU, RATES, List.of());
-        assertEquals(510.0, s.resting().out().avgPrice().doubleValue(), 1e-6);
+        assertEquals(510.0, s.resting().sellSide().avgPrice().doubleValue(), 1e-6);
     }
 
     // ---- progress -----------------------------------------------------------
@@ -280,9 +418,10 @@ class SwitchesTest {
     void aSwitchInsideOneAccountAndCurrencyHasNoTransferOrConversionToWaitFor() {
         Switches.LinePrice sterlingTwo =
                 new Switches.LinePrice("EQGB", new BigDecimal("500.00"), "GBP");
+        // Both lines quote in GBP here, so the currency cannot name the listing — each leg says.
         Switches.Summary resting = Switches.summarise(
-                List.of(rung("II SIPP", "Sell", "100", "500.00", "GBP", Rung.State.FILLED)),
-                List.of(rung("II SIPP", "Buy", "100", "500.00", "GBP", Rung.State.WORKING)),
+                List.of(on("EQQQ", "II SIPP", "Sell", "100", "500.00", "GBP", Rung.State.FILLED)),
+                List.of(on("EQGB", "II SIPP", "Buy", "100", "500.00", "GBP", Rung.State.WORKING)),
                 EQQQ, sterlingTwo, RATES, List.of());
 
         assertEquals(Switches.StepState.NOT_NEEDED, resting.sequence().get(2).state());
@@ -292,8 +431,8 @@ class SwitchesTest {
         assertEquals(Switches.StepState.WAITING, resting.blockedBy().state());
 
         Switches.Summary done = Switches.summarise(
-                List.of(rung("II SIPP", "Sell", "100", "500.00", "GBP", Rung.State.FILLED)),
-                List.of(rung("II SIPP", "Buy", "100", "500.00", "GBP", Rung.State.FILLED)),
+                List.of(on("EQQQ", "II SIPP", "Sell", "100", "500.00", "GBP", Rung.State.FILLED)),
+                List.of(on("EQGB", "II SIPP", "Buy", "100", "500.00", "GBP", Rung.State.FILLED)),
                 EQQQ, sterlingTwo, RATES, List.of());
         assertNull(done.blockedBy(), "nothing outstanding once both legs have traded");
     }
@@ -337,8 +476,8 @@ class SwitchesTest {
                 List.of(rung("Roth IRA", "Buy", "40", "700.00", "USD", Rung.State.FILLED),
                         rung("Roth IRA", "Buy", "60", "716.00", "USD", Rung.State.INTENDED)),
                 EQQQ, EQQU, RATES, List.of());
-        assertEquals(520.0, s.filled().out().avgPrice().doubleValue(), 1e-6);
-        assertEquals(545.0, s.resting().out().avgPrice().doubleValue(), 1e-6);
+        assertEquals(520.0, s.filled().sellSide().avgPrice().doubleValue(), 1e-6);
+        assertEquals(545.0, s.resting().sellSide().avgPrice().doubleValue(), 1e-6);
         assertEquals(40, s.filled().matchedQuantity().intValue());
         assertEquals(60, s.resting().matchedQuantity().intValue());
     }
@@ -382,7 +521,7 @@ class SwitchesTest {
         Switches.Summary s = Switches.summarise(
                 List.of(rung("II SIPP", "Sell", "100", "538.60", "GBP", Rung.State.WORKING)),
                 List.of(), pence, EQQU, RATES, List.of());
-        assertEquals(0.0, s.resting().out().vsMarketPct().doubleValue(), 1e-9,
+        assertEquals(0.0, s.resting().sellSide().vsMarketPct().doubleValue(), 1e-9,
                 "the limit is the market, and would be a hundredth of it unconverted");
     }
 }

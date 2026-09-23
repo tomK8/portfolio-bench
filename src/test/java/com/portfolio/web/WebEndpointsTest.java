@@ -1,5 +1,6 @@
 package com.portfolio.web;
 
+import com.portfolio.application.SwitchService;
 import com.portfolio.port.FxRateProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +20,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -32,6 +34,8 @@ class WebEndpointsTest {
     static Path dbDir;
     @Autowired
     MockMvc mvc;
+    @Autowired
+    SwitchService switches;
 
     @DynamicPropertySource
     static void temporaryDirs(DynamicPropertyRegistry registry) throws IOException {
@@ -121,6 +125,46 @@ class WebEndpointsTest {
                         containsString("/ladders/export"))))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         containsString("/switches/export"))));
+    }
+
+    /**
+     * A switch worked from both ends renders — every block of the card, on real data through the
+     * real engine.
+     *
+     * <p>Rendering is where a template fails, and it fails <em>late</em>: the response has already
+     * begun, so Spring cannot swap in an error page and the panel simply stops halfway down. The
+     * expression sweep in {@link TemplateExpressionsTest} catches a value that will not parse; this
+     * catches the other half — a property or method the card asks for that is not there — on the
+     * shape that has no other coverage, both listings on both sides.
+     */
+    @Test
+    void aSwitchWorkedFromBothEndsRenders() throws Exception {
+        long id = switches.createSwitch("Both ways", "EQQQ", "EQQU");
+        switches.addIntent(id, "II SIPP", "EQQQ", "Sell", new BigDecimal("50"),
+                new BigDecimal("584.80"), "the sterling line, high");
+        switches.addIntent(id, "II SIPP", "EQQU", "Sell", new BigDecimal("20"),
+                new BigDecimal("800.00"), null);
+        switches.addIntent(id, "II SIPP", "EQQU", "Buy", new BigDecimal("20"),
+                new BigDecimal("682.35"), null);
+        switches.addIntent(id, "II SIPP", "EQQQ", "Buy", new BigDecimal("10"),
+                new BigDecimal("500.00"), "buying the sterling line back");
+
+        try {
+            mvc.perform(get("/switches"))
+                    .andExpect(status().isOk())
+                    // Both tables carry both listings, and each row names its own.
+                    .andExpect(content().string(containsString("Listing")))
+                    .andExpect(content().string(containsString("the sterling line, high")))
+                    .andExpect(content().string(containsString("buying the sterling line back")))
+                    // Not one-way, so the legend stops claiming the units are in a named line.
+                    .andExpect(content().string(containsString("still to sell")))
+                    .andExpect(content().string(containsString("bought back")))
+                    .andExpect(content().string(not(containsString("still in EQQQ"))))
+                    // Nothing is off-shape: every leg is on the pair and has a side.
+                    .andExpect(content().string(not(containsString("counted in nothing"))));
+        } finally {
+            switches.deleteSwitch(id);
+        }
     }
 
     /**

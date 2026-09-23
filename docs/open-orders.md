@@ -541,8 +541,10 @@ pins it.
 
 **What it replaced.** Before this, moving a rung you had decided on but not placed meant deleting it
 and recording it again — which threw away the note, the one part of a rung that says *why* it is
-there and the reason intended rungs exist at all. Side and note are untouched by an edit: a figure
-being tuned is not a change of either, and on a switch the side is what names the listing.
+there and the reason intended rungs exist at all. Side, listing and note are untouched by an edit: a
+figure being tuned is not a change of any of them. On a switch that is load-bearing twice over — the
+side decides which of the two tables the leg is in, and the listing which of the pair's two markets
+it is priced against, so a re-price that could move either would silently be a different leg.
 
 **Nothing downstream is special-cased**, because a rung's figures were never stored anywhere but the
 intent. `LadderService.intendedOrders` rebuilds the synthetic order from what was just written and it

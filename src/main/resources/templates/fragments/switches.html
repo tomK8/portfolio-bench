@@ -113,7 +113,8 @@
             <p class="switch-premise">
                 Same fund, two listings — your exposure does not change. Counted as
                 <b th:text="${s.from()}">FROM</b> in Allocation, Concentration and Currency, never as
-                two positions.
+                two positions. Either listing takes sells and buys: the two tables below are the two
+                <em>directions</em>, not the two lines.
             </p>
 
             <p class="muted ladder-empty" th:unless="${s.hasLegs()}">
@@ -125,7 +126,7 @@
               How far through it is, in units. Three states and not two: sold-but-not-bought-back is
               neither line, and it is the state a half-finished switch is most easily lost in.
             -->
-            <div class="switch-progress" th:if="${p.known()}">
+            <div class="switch-progress" th:if="${p.representable()}">
                 <div class="switch-bar" th:title="${'Of ' + #numbers.formatDecimal(p.declared, 1, 'COMMA', 2, 'POINT') + ' units this switch covers.'}">
                     <span class="seg seg-old" th:if="${p.inOldLine.signum() > 0}"
                           th:style="'width:' + ${p.pctInOldLine()} + '%'"></span>
@@ -134,13 +135,18 @@
                     <span class="seg seg-new" th:if="${p.inNewLine.signum() > 0}"
                           th:style="'width:' + ${p.pctInNewLine()} + '%'"></span>
                 </div>
+                <!-- A one-way switch can name the lines, because that is where its units are. One
+                     worked from both ends cannot, and says what the units are doing instead. Same
+                     three figures either way; only the claim the label makes changes. -->
                 <div class="switch-legend">
                     <span><i class="key key-old"></i>
-                        <span th:text="${#numbers.formatDecimal(p.inOldLine, 1, 'COMMA', 2, 'POINT')} + ' still in ' + ${s.from()}">0</span></span>
+                        <span th:text="${#numbers.formatDecimal(p.inOldLine, 1, 'COMMA', 2, 'POINT')}
+                              + (${s.oneWay()} ? ' still in ' + ${s.from()} : ' still to sell')">0</span></span>
                     <span><i class="key key-flight"></i>
                         <span th:text="${#numbers.formatDecimal(p.inFlight, 1, 'COMMA', 2, 'POINT')} + ' sold, not yet bought back'">0</span></span>
                     <span><i class="key key-new"></i>
-                        <span th:text="${#numbers.formatDecimal(p.inNewLine, 1, 'COMMA', 2, 'POINT')} + ' in ' + ${s.to()}">0</span></span>
+                        <span th:text="${#numbers.formatDecimal(p.inNewLine, 1, 'COMMA', 2, 'POINT')}
+                              + (${s.oneWay()} ? ' in ' + ${s.to()} : ' bought back')">0</span></span>
                     <span class="muted"
                           th:text="'of ' + ${#numbers.formatDecimal(p.declared, 1, 'COMMA', 2, 'POINT')} + ' units'">of 0</span>
                 </div>
@@ -149,6 +155,13 @@
                 How much of the position has moved cannot be counted — a leg has no quantity, and a
                 partial sum here would read as a finished switch.
             </p>
+            <!-- Bought back more than went out: the holding grew rather than moved, so the three
+                 shares no longer make a whole and a bar drawn from them would say it is finished. -->
+            <p class="muted switch-note" th:if="${p.known() and p.overBought() != null}"
+               th:text="${#numbers.formatDecimal(p.bought, 1, 'COMMA', 2, 'POINT')} + ' units bought back against '
+                        + ${#numbers.formatDecimal(p.sold, 1, 'COMMA', 2, 'POINT')} + ' sold — '
+                        + ${#numbers.formatDecimal(p.overBought(), 1, 'COMMA', 2, 'POINT')}
+                        + ' more than went out, so this is not a move between the two lines but an addition to the holding. No progress bar: the three shares no longer make a whole.'">over-bought</p>
 
             <!--
               One yardstick. Two prices in two currencies say nothing side by side; both in GBP say
@@ -177,18 +190,22 @@
                 </div>
                 <p class="switch-rate" th:if="${c.impliedCross != null and c.marketCross != null}"
                    th:text="'Your two prices imply ' + ${#numbers.formatDecimal(c.impliedCross, 1, 'COMMA', 4, 'POINT')}
-                            + ' ' + ${c.in.currency} + ' per ' + ${c.out.currency}
+                            + ' ' + ${c.buySide.currency} + ' per ' + ${c.sellSide.currency}
                             + '; the market is ' + ${#numbers.formatDecimal(c.marketCross, 1, 'COMMA', 4, 'POINT')}
                             + '. Everything else in the gap between those two prices is the exchange rate.'">rate</p>
+                <!-- The third term is the comparison's own, not the basis block's. They are the
+                     same number whenever each side sits on one listing; when a side spans both, the
+                     term is that blend, and only the blend keeps the three factors multiplying to
+                     the headline exactly. -->
                 <ul class="switch-terms">
-                    <li th:if="${c.out.vsMarketPct != null}"
-                        th:text="'Selling ' + ${#numbers.formatDecimal(c.out.vsMarketPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')}
-                                 + '% ' + ${c.out.vsMarketPct.signum() >= 0 ? 'above' : 'below'} + ' the market on ' + ${s.from()}">sell term</li>
-                    <li th:if="${c.in.vsMarketPct != null}"
-                        th:text="'Buying ' + ${#numbers.formatDecimal(c.in.vsMarketPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')}
-                                 + '% ' + ${c.in.vsMarketPct.signum() >= 0 ? 'above' : 'below'} + ' the market on ' + ${s.to()}">buy term</li>
-                    <li th:if="${b.known()}" th:classappend="${b.wide()} ? 'switch-wide' : ''"
-                        th:text="'The two lines are ' + ${#numbers.formatDecimal(b.deviationPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')}
+                    <li th:if="${c.sellSide.vsMarketPct != null}"
+                        th:text="'Selling ' + ${#numbers.formatDecimal(c.sellSide.vsMarketPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')}
+                                 + '% ' + ${c.sellSide.vsMarketPct.signum() >= 0 ? 'above' : 'below'} + ' the market on ' + ${c.sellSide.symbol}">sell term</li>
+                    <li th:if="${c.buySide.vsMarketPct != null}"
+                        th:text="'Buying ' + ${#numbers.formatDecimal(c.buySide.vsMarketPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')}
+                                 + '% ' + ${c.buySide.vsMarketPct.signum() >= 0 ? 'above' : 'below'} + ' the market on ' + ${c.buySide.symbol}">buy term</li>
+                    <li th:if="${c.splitBasisPct != null}" th:classappend="${b.wide()} ? 'switch-wide' : ''"
+                        th:text="'The markets behind the two sides are ' + ${#numbers.formatDecimal(c.splitBasisPct.abs().multiply(100), 1, 'COMMA', 2, 'POINT')}
                                  + '% apart once both are in GBP — the exchange-rate term, and on a genuine pair it is ~0%'">basis term</li>
                 </ul>
                 <p class="muted switch-caveat">
@@ -273,10 +290,11 @@
                 <li th:each="x : ${s.offShape}" th:text="${x}">off shape</li>
             </ul>
 
-            <!-- The legs themselves, one table per side. Which side an order is on is read from its
-                 listing, so the two tables are the two lines and nothing has to be chosen. -->
-            <div th:replace="~{fragments/switches :: legs(${s.outLegs}, ${s.from()}, 'Selling', ${s})}"></div>
-            <div th:replace="~{fragments/switches :: legs(${s.inLegs}, ${s.to()}, 'Buying', ${s})}"></div>
+            <!-- The legs themselves, one table per side. Which side an order is on is read from
+                 its side; either listing can appear in either table, and each row names its own.
+                 Ordered by price in GBP, which is the only axis the two lines share. -->
+            <div th:replace="~{fragments/switches :: legs(${s.sellLegs}, 'Selling', ${s})}"></div>
+            <div th:replace="~{fragments/switches :: legs(${s.buyLegs}, 'Buying', ${s})}"></div>
 
             <div class="ladder-actions">
 
@@ -323,9 +341,16 @@
                         </label>
                         <label>Side
                             <select name="side"
-                                    title="The side names the listing: selling is the line you are leaving, buying the line you are moving into. Nothing else has to be chosen.">
-                                <option value="Buy" th:text="'Buy ' + ${s.to()}">Buy</option>
-                                <option value="Sell" th:text="'Sell ' + ${s.from()}">Sell</option>
+                                    title="Which way this leg goes. It no longer names a listing — both lines take sells and buys — so pick the listing beside it.">
+                                <option value="Buy">Buy</option>
+                                <option value="Sell">Sell</option>
+                            </select>
+                        </label>
+                        <label>Listing
+                            <select name="symbol"
+                                    title="Which of the pair this leg trades. It decides the market the price is judged against and the currency it is in, so a leg on the wrong line would be a sterling limit read against a dollar quote.">
+                                <option th:value="${s.to()}" th:text="${s.to()}">TO</option>
+                                <option th:value="${s.from()}" th:text="${s.from()}">FROM</option>
                             </select>
                         </label>
                         <label>Qty
@@ -352,23 +377,27 @@
   one is the only pair of numbers that can be compared.
 -->
 <div th:fragment="comparison(c, label, why, s)" class="switch-compare-block"
-     th:if="${c.out.present() or c.in.present()}">
+     th:if="${c.sellSide.present() or c.buySide.present()}">
     <div class="lbl" th:text="${label}" th:title="${why}">label</div>
     <table class="ladder-rungs switch-yardstick">
         <thead>
         <tr>
             <th class="txt">Leg</th>
             <th>Units</th>
-            <th>Price</th>
+            <th title="Blank when the side has legs on both listings: pounds and dollars have no average, and a blended figure would look like money and be none. The column beside it is the one that still answers.">Price</th>
             <th title="The same price converted at today's rate. This is the only column the two legs can be read against each other in.">In GBP</th>
             <th title="Where your own average sits against this listing's market price — a limit above the market is positive. Note the direction: the leg tables lower down carry the orders table's own 'vs mkt', which measures the opposite way, how far the market sits from the limit. Both are currency-free, which is what lets this one stand as the non-FX half of the split.">Limit vs market</th>
         </tr>
         </thead>
         <tbody>
-        <tr th:with="leg=${c.out}">
-            <td class="txt" th:text="'Sell ' + ${leg.symbol}">Sell</td>
+        <tr th:with="leg=${c.sellSide}">
+            <td class="txt" th:text="'Sell ' + ${leg.symbol != null ? leg.symbol : '—'}">Sell</td>
             <td th:text="${leg.quantity != null ? #numbers.formatDecimal(leg.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
-            <td th:text="${leg.avgPrice != null ? leg.currencySymbol() + #numbers.formatDecimal(leg.avgPrice, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:classappend="${leg.mixed()} ? 'muted' : ''"
+                th:title="${leg.mixed()} ? 'This side has legs on both listings, so it has no native average — two currencies have no mean. Read the GBP column.' : null"
+                th:text="${leg.avgPrice != null
+                         ? leg.currencySymbol() + #numbers.formatDecimal(leg.avgPrice, 1, 'COMMA', 2, 'POINT')
+                         : (leg.mixed() ? 'two currencies' : '—')}">—</td>
             <td th:text="${leg.avgPriceGbp != null ? '£' + #numbers.formatDecimal(leg.avgPriceGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
             <td th:classappend="${leg.vsMarketPct != null ? (leg.vsMarketPct.signum() > 0 ? 'val-pos' : 'val-neg') : ''}"
                 th:text="${leg.vsMarketPct != null
@@ -376,10 +405,14 @@
                            + #numbers.formatDecimal(leg.vsMarketPct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'
                          : '—'}">—</td>
         </tr>
-        <tr th:with="leg=${c.in}">
-            <td class="txt" th:text="'Buy ' + ${leg.symbol}">Buy</td>
+        <tr th:with="leg=${c.buySide}">
+            <td class="txt" th:text="'Buy ' + ${leg.symbol != null ? leg.symbol : '—'}">Buy</td>
             <td th:text="${leg.quantity != null ? #numbers.formatDecimal(leg.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
-            <td th:text="${leg.avgPrice != null ? leg.currencySymbol() + #numbers.formatDecimal(leg.avgPrice, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+            <td th:classappend="${leg.mixed()} ? 'muted' : ''"
+                th:title="${leg.mixed()} ? 'This side has legs on both listings, so it has no native average — two currencies have no mean. Read the GBP column.' : null"
+                th:text="${leg.avgPrice != null
+                         ? leg.currencySymbol() + #numbers.formatDecimal(leg.avgPrice, 1, 'COMMA', 2, 'POINT')
+                         : (leg.mixed() ? 'two currencies' : '—')}">—</td>
             <td th:text="${leg.avgPriceGbp != null ? '£' + #numbers.formatDecimal(leg.avgPriceGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
             <td th:classappend="${leg.vsMarketPct != null ? (leg.vsMarketPct.signum() > 0 ? 'val-pos' : 'val-neg') : ''}"
                 th:text="${leg.vsMarketPct != null
@@ -407,11 +440,13 @@
   are: everything the panel does with a leg is the same question for both, and the analytics come
   from the same enrichment pass.
 -->
-<div th:fragment="legs(rungs, symbol, verb, s)" class="switch-legs" th:if="${!#lists.isEmpty(rungs)}">
-    <div class="lbl" th:text="${verb} + ' ' + ${symbol}">Selling SYM</div>
+<div th:fragment="legs(rungs, verb, s)" class="switch-legs" th:if="${!#lists.isEmpty(rungs)}">
+    <div class="lbl" th:text="${verb}"
+         th:title="${verb} + ' — one side of the switch. Either listing can appear here; each row names its own, and the rows are ordered by price in GBP, which is the only axis two currencies share.'">Selling</div>
     <table class="ladder-rungs">
         <thead>
         <tr>
+            <th class="txt" title="Which of the pair this leg trades. It is what the price is quoted in and what the market price beside it is measured against — the side no longer says, because both lines take sells and buys.">Listing</th>
             <th title="Editable on an intended leg — which on a switch is usually the buy, for days at a time, so it is the leg most likely to need moving. Commit it (leave the box, or press Enter) and the whole switch re-prices around it: the GBP yardstick, all three terms of the split, the implied cross rate and what the buy still needs. A leg that came from a broker's export is fixed here: move it at the broker.">Price</th>
             <th title="Editable on an intended leg, like Price. Quantity moves the progress in units and the cash the buy leg needs, and changes no probability.">Qty</th>
             <th class="txt">Account</th>
@@ -431,7 +466,8 @@
                            + (r.filled() ? 'rung-filled ' : '')
                            + (r.gone() ? 'rung-gone ' : '')
                            + (r.sell() ? 'rung-sell' : 'rung-buy')}"
-            th:attr="data-symbol=${orders.chartableSymbols.contains(symbol) ? symbol : null}">
+            th:attr="data-symbol=${r.symbol != null and orders.chartableSymbols.contains(r.symbol) ? r.symbol : null}">
+            <td class="txt" th:text="${r.symbol != null ? r.symbol : '—'}">SYM</td>
             <td th:replace="~{fragments/rung-edit :: price(${r})}">—</td>
             <td th:replace="~{fragments/rung-edit :: qty(${r})}">—</td>
             <td class="txt" th:text="${r.account}">Account</td>

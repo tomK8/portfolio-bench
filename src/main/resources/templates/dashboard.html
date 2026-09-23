@@ -416,7 +416,12 @@
            up down the column. */
         .rung-edit-box { display: inline-flex; align-items: baseline; gap: 1px; justify-content: flex-end; }
         .rung-ccy { color: #888; font-size: 0.75rem; }
-        .rung-edit {
+        /* input.rung-edit, not .rung-edit: the page-wide input[type=text] rule is an element plus an
+           attribute and outranks a bare class, so the padding below was never the padding applied —
+           the box wore the form field's 0.35rem/0.5rem, which pushed an intended rung's digits ~9px
+           left of the column they sit in and made its row taller than every row around it. Both are
+           what this file says elsewhere it is trying to avoid. */
+        input.rung-edit {
             width: 5.4rem;
             text-align: right;
             border: 1px solid transparent;
@@ -424,7 +429,7 @@
             font: inherit;
             font-size: 0.8rem;
             font-variant-numeric: tabular-nums;
-            padding: 0 0.15rem;
+            padding: 0.1rem 1px;
             border-radius: 3px;
             color: inherit;
         }
@@ -536,14 +541,28 @@
         .switch-blocked { font-weight: 600; font-size: 0.8rem; margin: 0.2rem 0 0; color: #a9740a; }
         .switch-clear { color: #2ca02c; }
 
+        /* Both sides are sections of one table rather than a table each: the columns are the same
+           columns, the rows are read against each other, and two tables each sized to its own
+           contents lined up nowhere. The side's name is a row of that table for the same reason —
+           a heading outside it could not be one of its columns. */
         .switch-legs { margin-top: 0.4rem; }
-        .switch-legs .lbl { font-size: 0.76rem; color: #777; }
+        .legs-side td { font-size: 0.76rem; color: #777; border-bottom: none;
+            padding: 0.55rem 0.5rem 0.1rem; }
+        .switch-legs tbody:first-of-type .legs-side td { padding-top: 0.15rem; }
+        /* A leg row carries one column more than a ladder rung — the listing, which a ladder has no
+           use for — inside the same 960px page, and the picker is the cell that gives: it is already
+           an abbreviation of the order it names and opening it shows the whole of it. The wrapper is
+           the backstop for the rest (a long note, a long account name): the overflow scrolls inside
+           the card rather than hanging the row's buttons off the edge of the page. Both sides scroll
+           together because they are one table, which is the point. */
+        .switch-legs-wrap { overflow-x: auto; }
+        .switch-legs .rung-act select { max-width: 8rem; }
 
         html[data-theme="dark"] .switch-premise,
         html[data-theme="dark"] .switch-steps .step-detail { color: #9aa0a6; }
         html[data-theme="dark"] .switch-compare-block .lbl,
         html[data-theme="dark"] .switch-steps .lbl,
-        html[data-theme="dark"] .switch-legs .lbl,
+        html[data-theme="dark"] .legs-side td,
         html[data-theme="dark"] .switch-basis .lbl { color: #9aa0a6; }
         html[data-theme="dark"] .switch-bar { background: #26292e; }
         html[data-theme="dark"] .switch-net td { border-top-color: #3a3d42; }

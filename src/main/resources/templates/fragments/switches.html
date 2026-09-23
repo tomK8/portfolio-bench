@@ -113,8 +113,8 @@
             <p class="switch-premise">
                 Same fund, two listings — your exposure does not change. Counted as
                 <b th:text="${s.from()}">FROM</b> in Allocation, Concentration and Currency, never as
-                two positions. Either listing takes sells and buys: the two tables below are the two
-                <em>directions</em>, not the two lines.
+                two positions. Either listing takes sells and buys: the two sections below are the
+                two <em>directions</em>, not the two lines.
             </p>
 
             <p class="muted ladder-empty" th:unless="${s.hasLegs()}">
@@ -290,11 +290,22 @@
                 <li th:each="x : ${s.offShape}" th:text="${x}">off shape</li>
             </ul>
 
-            <!-- The legs themselves, one table per side. Which side an order is on is read from
-                 its side; either listing can appear in either table, and each row names its own.
-                 Ordered by price in GBP, which is the only axis the two lines share. -->
-            <div th:replace="~{fragments/switches :: legs(${s.sellLegs}, 'Selling', ${s})}"></div>
-            <div th:replace="~{fragments/switches :: legs(${s.buyLegs}, 'Buying', ${s})}"></div>
+            <!-- The legs themselves: one table, one section per side. The two sides carry the
+                 same columns and are read against each other — a sell at -1.04% beside a buy at
+                 +8.42%, both on the same P(10) — so they share one column geometry. As two tables
+                 each sized itself to its own contents and no column lined up with its opposite
+                 number: a side with an intended leg carries the "placed as…" picker and one
+                 without does not, which alone moves every column left of it.
+                 Which side an order is on is read from its side; either listing can appear in
+                 either section, and each row names its own. Ordered by price in GBP, which is the
+                 only axis the two lines share. -->
+            <div class="switch-legs-wrap" th:if="${s.hasLegs()}">
+                <table class="ladder-rungs switch-legs">
+                    <thead th:replace="~{fragments/switches :: legHead}"></thead>
+                    <tbody th:replace="~{fragments/switches :: legs(${s.sellLegs}, 'Selling', ${s})}"></tbody>
+                    <tbody th:replace="~{fragments/switches :: legs(${s.buyLegs}, 'Buying', ${s})}"></tbody>
+                </table>
+            </div>
 
             <div class="ladder-actions">
 
@@ -386,7 +397,7 @@
             <th>Units</th>
             <th title="Blank when the side has legs on both listings: pounds and dollars have no average, and a blended figure would look like money and be none. The column beside it is the one that still answers.">Price</th>
             <th title="The same price converted at today's rate. This is the only column the two legs can be read against each other in.">In GBP</th>
-            <th title="Where your own average sits against this listing's market price — a limit above the market is positive. Note the direction: the leg tables lower down carry the orders table's own 'vs mkt', which measures the opposite way, how far the market sits from the limit. Both are currency-free, which is what lets this one stand as the non-FX half of the split.">Limit vs market</th>
+            <th title="Where your own average sits against this listing's market price — a limit above the market is positive. Note the direction: the leg rows lower down carry the orders table's own 'vs mkt', which measures the opposite way, how far the market sits from the limit. Both are currency-free, which is what lets this one stand as the non-FX half of the split.">Limit vs market</th>
         </tr>
         </thead>
         <tbody>
@@ -435,110 +446,115 @@
     </table>
 </div>
 
+<!-- The column geometry both sides share. One header for the table, not one per side: the
+     columns are the same columns and saying so once is what keeps them the same width. -->
+<thead th:fragment="legHead">
+<tr>
+    <th class="txt" title="Which of the pair this leg trades. It is what the price is quoted in and what the market price beside it is measured against — the side no longer says, because both lines take sells and buys.">Listing</th>
+    <th title="Editable on an intended leg — which on a switch is usually the buy, for days at a time, so it is the leg most likely to need moving. Commit it (leave the box, or press Enter) and the whole switch re-prices around it: the GBP yardstick, all three terms of the split, the implied cross rate and what the buy still needs. A leg that came from a broker's export is fixed here: move it at the broker.">Price</th>
+    <th title="Editable on an intended leg, like Price. Quantity moves the progress in units and the cash the buy leg needs, and changes no probability.">Qty</th>
+    <th class="txt">Account</th>
+    <th class="txt">State</th>
+    <th title="How far the market sits from this leg's price. Positive = market above it.">vs mkt</th>
+    <th th:text="'P(' + ${T(com.portfolio.application.GroupRungs).NEAR_HORIZON_SESSIONS} + ')'"
+        title="Probability the market touches this leg's price at least once within 10 trading sessions — the same first-passage model and horizon-matched volatility forecast the orders table uses, on a horizon fixed across every leg so the two sides can be read against each other.">P(10)</th>
+    <th th:text="'P(' + ${T(com.portfolio.application.GroupRungs).FAR_HORIZON_SESSIONS} + ')'"
+        title="The same over 30 trading sessions. On a switch this is the sequencing question: how likely is the sell to fill, and how likely is the buy to be there when the cash finally arrives.">P(30)</th>
+    <th class="txt">Note</th>
+    <th></th>
+</tr>
+</thead>
+
 <!--
   One leg of the switch. A real order and an intended one are the same row, for the reason a ladder's
   are: everything the panel does with a leg is the same question for both, and the analytics come
   from the same enrichment pass.
+
+  A section of the shared table rather than a table of its own — see the caller. The side's name is
+  a row of that table for the same reason: a heading outside it could not be one of its columns.
 -->
-<div th:fragment="legs(rungs, verb, s)" class="switch-legs" th:if="${!#lists.isEmpty(rungs)}">
-    <div class="lbl" th:text="${verb}"
-         th:title="${verb} + ' — one side of the switch. Either listing can appear here; each row names its own, and the rows are ordered by price in GBP, which is the only axis two currencies share.'">Selling</div>
-    <table class="ladder-rungs">
-        <thead>
-        <tr>
-            <th class="txt" title="Which of the pair this leg trades. It is what the price is quoted in and what the market price beside it is measured against — the side no longer says, because both lines take sells and buys.">Listing</th>
-            <th title="Editable on an intended leg — which on a switch is usually the buy, for days at a time, so it is the leg most likely to need moving. Commit it (leave the box, or press Enter) and the whole switch re-prices around it: the GBP yardstick, all three terms of the split, the implied cross rate and what the buy still needs. A leg that came from a broker's export is fixed here: move it at the broker.">Price</th>
-            <th title="Editable on an intended leg, like Price. Quantity moves the progress in units and the cash the buy leg needs, and changes no probability.">Qty</th>
-            <th class="txt">Account</th>
-            <th class="txt">State</th>
-            <th title="How far the market sits from this leg's price. Positive = market above it.">vs mkt</th>
-            <th th:text="'P(' + ${T(com.portfolio.application.GroupRungs).NEAR_HORIZON_SESSIONS} + ')'"
-                title="Probability the market touches this leg's price at least once within 10 trading sessions — the same first-passage model and horizon-matched volatility forecast the orders table uses, on a horizon fixed across every leg so the two sides can be read against each other.">P(10)</th>
-            <th th:text="'P(' + ${T(com.portfolio.application.GroupRungs).FAR_HORIZON_SESSIONS} + ')'"
-                title="The same over 30 trading sessions. On a switch this is the sequencing question: how likely is the sell to fill, and how likely is the buy to be there when the cash finally arrives.">P(30)</th>
-            <th class="txt">Note</th>
-            <th></th>
-        </tr>
-        </thead>
-        <tbody>
-        <tr th:each="r : ${rungs}" class="ladder-rung"
-            th:classappend="${(r.intended() ? 'rung-intended ' : '')
-                           + (r.filled() ? 'rung-filled ' : '')
-                           + (r.gone() ? 'rung-gone ' : '')
-                           + (r.sell() ? 'rung-sell' : 'rung-buy')}"
-            th:attr="data-symbol=${r.symbol != null and orders.chartableSymbols.contains(r.symbol) ? r.symbol : null}">
-            <td class="txt" th:text="${r.symbol != null ? r.symbol : '—'}">SYM</td>
-            <td th:replace="~{fragments/rung-edit :: price(${r})}">—</td>
-            <td th:replace="~{fragments/rung-edit :: qty(${r})}">—</td>
-            <td class="txt" th:text="${r.account}">Account</td>
-            <td class="txt">
-                <span class="rung-state" th:classappend="'state-' + ${r.state.name().toLowerCase()}"
-                      th:text="${r.state.label()}"
-                      th:title="${r.intended()
-                            ? 'Decided but not placed — it exists only in this panel and never in the orders table. On a switch that is the ordinary state of the buy leg.'
-                            : (r.closedAt != null ? 'Closed ' + r.closedAt.toString() : 'Resting at the broker.')}">State</span>
-            </td>
-            <td th:with="o=${r.order}"
-                th:classappend="${o != null and o.distancePct != null
-                                ? (o.distancePct.signum() > 0 ? 'val-pos' : (o.distancePct.signum() < 0 ? 'val-neg' : '')) : ''}"
-                th:text="${o != null and o.distancePct != null
-                         ? (o.distancePct.signum() > 0 ? '+' : '')
-                           + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'
-                         : '—'}">—</td>
-            <td th:with="near=${T(com.portfolio.application.GroupRungs).NEAR_HORIZON_SESSIONS}"
-                th:classappend="${r.lapsesBefore(near)} ? 'rung-lapses' : ''"
-                th:title="${r.lapsesBefore(near)
-                          ? 'This order expires in ' + r.sessionsToExpiry() + ' sessions, inside the ' + near
-                            + '-session window — it cannot fill over the whole of it. The table below prices it to its own deadline.'
-                          : null}"
-                th:text="${r.touchNear != null
-                         ? (r.lapsesBefore(near) ? '~' : '')
-                           + #numbers.formatDecimal(r.touchNear.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
-                         : '—'}">—</td>
-            <td th:with="far=${T(com.portfolio.application.GroupRungs).FAR_HORIZON_SESSIONS}"
-                th:classappend="${r.lapsesBefore(far)} ? 'rung-lapses' : ''"
-                th:title="${r.lapsesBefore(far)
-                          ? 'This order expires in ' + r.sessionsToExpiry() + ' sessions, inside the ' + far
-                            + '-session window — it cannot fill over the whole of it. The table below prices it to its own deadline.'
-                          : null}"
-                th:text="${r.touchFar != null
-                         ? (r.lapsesBefore(far) ? '~' : '')
-                           + #numbers.formatDecimal(r.touchFar.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
-                         : '—'}">—</td>
-            <td class="txt rung-note" th:text="${r.note != null ? r.note : ''}"></td>
-            <td class="txt rung-act">
-                <!-- Targets the whole panel, not just this block: linking can move the note onto the
-                     order, and that note is a cell of the table below. -->
-                <form class="ladder-inline" th:if="${r.intended()}" hx-post="/switches/intents/placed"
-                      hx-target="#orders-result" hx-swap="innerHTML"
-                      th:with="cands=${orders.switches.assignableFor(s)}">
-                    <input type="hidden" name="intentId" th:value="${r.intentId}"/>
-                    <select name="orderKey" th:if="${!#lists.isEmpty(cands)}"
-                            title="Placed it? Name the order it became. The note moves across if that order has none of its own.">
-                        <option value="">placed as…</option>
-                        <option th:each="c : ${cands}" th:value="${c.key}"
-                                th:text="${c.broker} + ' ' + ${c.symbol} + ' ' + ${c.side} + ' @ '
-                                         + (${c.price} != null ? ${#numbers.formatDecimal(c.price, 1, 'COMMA', 2, 'POINT')} : '?')
-                                         + ' (' + ${c.state} + ')'">order</option>
-                    </select>
-                    <button type="submit" th:if="${!#lists.isEmpty(cands)}" title="Link this intended leg to the order it became">Link</button>
-                </form>
-                <form class="ladder-inline" th:if="${r.intended()}" hx-post="/switches/intents/delete"
-                      hx-target="#switches-result" hx-swap="innerHTML">
-                    <input type="hidden" name="intentId" th:value="${r.intentId}"/>
-                    <button type="submit" class="ladder-x" title="Delete this intended leg">×</button>
-                </form>
-                <form class="ladder-inline" th:unless="${r.intended()}" hx-post="/switches/legs/remove"
-                      hx-target="#switches-result" hx-swap="innerHTML">
-                    <input type="hidden" name="orderKey" th:value="${r.key}"/>
-                    <button type="submit" class="ladder-x"
-                            title="Take this order out of the switch. The order itself is untouched.">×</button>
-                </form>
-            </td>
-        </tr>
-        </tbody>
-    </table>
-</div>
+<tbody th:fragment="legs(rungs, verb, s)" th:if="${!#lists.isEmpty(rungs)}">
+<!-- colspan is legHead's column count; a column added there is a column added here. -->
+<tr class="legs-side">
+    <td class="txt" colspan="10" th:text="${verb}"
+        th:title="${verb} + ' — one side of the switch. Either listing can appear here; each row names its own, and the rows are ordered by price in GBP, which is the only axis two currencies share.'">Selling</td>
+</tr>
+<tr th:each="r : ${rungs}" class="ladder-rung"
+    th:classappend="${(r.intended() ? 'rung-intended ' : '')
+                   + (r.filled() ? 'rung-filled ' : '')
+                   + (r.gone() ? 'rung-gone ' : '')
+                   + (r.sell() ? 'rung-sell' : 'rung-buy')}"
+    th:attr="data-symbol=${r.symbol != null and orders.chartableSymbols.contains(r.symbol) ? r.symbol : null}">
+    <td class="txt" th:text="${r.symbol != null ? r.symbol : '—'}">SYM</td>
+    <td th:replace="~{fragments/rung-edit :: price(${r})}">—</td>
+    <td th:replace="~{fragments/rung-edit :: qty(${r})}">—</td>
+    <td class="txt" th:text="${r.account}">Account</td>
+    <td class="txt">
+        <span class="rung-state" th:classappend="'state-' + ${r.state.name().toLowerCase()}"
+              th:text="${r.state.label()}"
+              th:title="${r.intended()
+                    ? 'Decided but not placed — it exists only in this panel and never in the orders table. On a switch that is the ordinary state of the buy leg.'
+                    : (r.closedAt != null ? 'Closed ' + r.closedAt.toString() : 'Resting at the broker.')}">State</span>
+    </td>
+    <td th:with="o=${r.order}"
+        th:classappend="${o != null and o.distancePct != null
+                        ? (o.distancePct.signum() > 0 ? 'val-pos' : (o.distancePct.signum() < 0 ? 'val-neg' : '')) : ''}"
+        th:text="${o != null and o.distancePct != null
+                 ? (o.distancePct.signum() > 0 ? '+' : '')
+                   + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%'
+                 : '—'}">—</td>
+    <td th:with="near=${T(com.portfolio.application.GroupRungs).NEAR_HORIZON_SESSIONS}"
+        th:classappend="${r.lapsesBefore(near)} ? 'rung-lapses' : ''"
+        th:title="${r.lapsesBefore(near)
+                  ? 'This order expires in ' + r.sessionsToExpiry() + ' sessions, inside the ' + near
+                    + '-session window — it cannot fill over the whole of it. The table below prices it to its own deadline.'
+                  : null}"
+        th:text="${r.touchNear != null
+                 ? (r.lapsesBefore(near) ? '~' : '')
+                   + #numbers.formatDecimal(r.touchNear.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
+                 : '—'}">—</td>
+    <td th:with="far=${T(com.portfolio.application.GroupRungs).FAR_HORIZON_SESSIONS}"
+        th:classappend="${r.lapsesBefore(far)} ? 'rung-lapses' : ''"
+        th:title="${r.lapsesBefore(far)
+                  ? 'This order expires in ' + r.sessionsToExpiry() + ' sessions, inside the ' + far
+                    + '-session window — it cannot fill over the whole of it. The table below prices it to its own deadline.'
+                  : null}"
+        th:text="${r.touchFar != null
+                 ? (r.lapsesBefore(far) ? '~' : '')
+                   + #numbers.formatDecimal(r.touchFar.multiply(100), 1, 'COMMA', 1, 'POINT') + '%'
+                 : '—'}">—</td>
+    <td class="txt rung-note" th:text="${r.note != null ? r.note : ''}"></td>
+    <td class="txt rung-act">
+        <!-- Targets the whole panel, not just this block: linking can move the note onto the
+             order, and that note is a cell of the table below. -->
+        <form class="ladder-inline" th:if="${r.intended()}" hx-post="/switches/intents/placed"
+              hx-target="#orders-result" hx-swap="innerHTML"
+              th:with="cands=${orders.switches.assignableFor(s)}">
+            <input type="hidden" name="intentId" th:value="${r.intentId}"/>
+            <select name="orderKey" th:if="${!#lists.isEmpty(cands)}"
+                    title="Placed it? Name the order it became. The note moves across if that order has none of its own.">
+                <option value="">placed as…</option>
+                <option th:each="c : ${cands}" th:value="${c.key}"
+                        th:text="${c.broker} + ' ' + ${c.symbol} + ' ' + ${c.side} + ' @ '
+                                 + (${c.price} != null ? ${#numbers.formatDecimal(c.price, 1, 'COMMA', 2, 'POINT')} : '?')
+                                 + ' (' + ${c.state} + ')'">order</option>
+            </select>
+            <button type="submit" th:if="${!#lists.isEmpty(cands)}" title="Link this intended leg to the order it became">Link</button>
+        </form>
+        <form class="ladder-inline" th:if="${r.intended()}" hx-post="/switches/intents/delete"
+              hx-target="#switches-result" hx-swap="innerHTML">
+            <input type="hidden" name="intentId" th:value="${r.intentId}"/>
+            <button type="submit" class="ladder-x" title="Delete this intended leg">×</button>
+        </form>
+        <form class="ladder-inline" th:unless="${r.intended()}" hx-post="/switches/legs/remove"
+              hx-target="#switches-result" hx-swap="innerHTML">
+            <input type="hidden" name="orderKey" th:value="${r.key}"/>
+            <button type="submit" class="ladder-x"
+                    title="Take this order out of the switch. The order itself is untouched.">×</button>
+        </form>
+    </td>
+</tr>
+</tbody>
 
 </body>
 </html>

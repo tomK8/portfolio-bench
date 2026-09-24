@@ -70,3 +70,53 @@ because every held ETF has a `.L` ticker and would otherwise be mislabelled "not
   the half the EDGAR filing-date proxy (Swing §D) can't serve. Rosters are cached and degrade to
   last-known on a feed outage. 
 
+
+## The next-earnings date on the fundamentals snapshot
+
+The Fundamentals tab, the price popup's Fundamentals block and the watchlist column picker all
+show **one** date: the company's next scheduled results day. It is a third earnings source and
+deliberately not either of the two above — here is the whole map, because the three answer
+different questions and are wired to different feeds:
+
+| Source | Direction | Universe | Lives in |
+|---|---|---|---|
+| `EarningsCalendarProvider` (EDGAR) | backward — "which past dates did X file?" | SEC filers | `earnings_dates`, Swing §D |
+| `EarningsCalendarFeed` (Nasdaq) | forward — "who reports on day D?" | US market-wide | `earnings_calendar`, Earnings tab |
+| `calendarEvents` (Yahoo quoteSummary) | forward — "when does X next report?" | whatever Yahoo lists | `fundamentals_snapshot.labels_json` |
+
+- **It costs no request.** `calendarEvents` is one more module on the quoteSummary URL the
+  fundamentals refresh already fetches per symbol, so the date arrives with the P/E and the margins
+  and lands in the same cached row. Every reader is a SQLite read; nothing on a render path waits
+  on Yahoo for a date, which is the whole reason it is not wired to the Nasdaq feed instead.
+- **It rides in `labels`, not a column.** `earningsDate`, `earningsDateEnd`, `earningsDateEstimate` —
+  three keys in the flat string blob `sector` and `industry` already share, so there was no
+  migration and `col_key` stayed opaque to the server (the bargain `extra_json` already strikes,
+  see [watchlist.md](watchlist.md)). Nothing queries on the date, so a column would buy nothing.
+- **Its coverage is wider than the Earnings tab's**, which is why the two do not merge. LGEN.L,
+  BNP.PA and TSCO.L all answer here; the US-only Nasdaq feed reports them `NOT_COVERED`, and the
+  holdings section of the Earnings tab still does. Funds and bonds answer with nothing, and
+  nothing is what gets stored — **absent, not a zero date**.
+- **Estimated is not announced, and the display says which.** Yahoo's `isEarningsDateEstimate`
+  separates a day it inferred from the past reporting rhythm from one the company published; an
+  estimated day can move by weeks. The cell carries a trailing `~` for it — the same
+  "not confirmed" marker the popup's high/low cells use for a close-only extreme — and a
+  two-element `earningsDate` array is a window Yahoo has not narrowed to a day at all, printed as
+  both ends. Showing either as a plain fixed date would be the same mistake as absorbing a
+  figure we could not value.
+- **The day comes from Yahoo's `fmt`, not from `raw`.** The raw epoch is the scheduled *instant*:
+  MRVL's `1796155200` is 20:00 UTC, an after-the-close US report on 1 December, and a report
+  scheduled late enough in the US evening falls on the following UTC date. Yahoo's own label
+  already names the trading day — the same anchor-on-the-trading-day rule the
+  [Live tab](live-tab.md) applies to Day Δ. `raw` is only the fallback for a payload with no label.
+- **It is as fresh as the snapshot**, i.e. the 4-hour `FundamentalsFetchJob` cycle. Between a
+  company reporting and the next refresh the stored date is the one just passed, since Yahoo only
+  rolls it forward on its side; it corrects itself, and **Refresh** on the Fundamentals tab forces
+  it. That staleness is the price of never blocking a render on the network, and a date that
+  moves on a scale of weeks can afford it.
+
+`fundamentalsFieldGroups()` in `dashboard.js` stays the single home: the field tuple grew a
+seventh slot, `source`, naming which bag on the row holds the value (`'labels'` here, the numeric
+`extra` map by default), and `fmtSnapValue` grew a `date` type. That is all the picker, the popup
+and the Snapshot-diff modal needed — the watchlist column `f:earningsDate` came with them. Its
+cell carries the day's own epoch as `data-sort-value`, because `parseFloat` on an ISO day reads
+the year alone and would shuffle a whole quarter together.

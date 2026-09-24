@@ -25,18 +25,21 @@ import java.security.KeyStore;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Pulls a current-state fundamentals snapshot for a single ticker from Yahoo's
  * {@code v10/finance/quoteSummary} endpoint. One HTTP call returns market cap, trailing /
  * forward P/E, PEG, dividend yield, margins, balance-sheet ratios, analyst target,
- * sector, 52-week change vs S&P, moving averages and a few dozen other fields. Free,
- * no key, same browser-UA dance as {@link YahooPriceFetcher}.
+ * sector, 52-week change vs S&P, moving averages, the next scheduled earnings date and a
+ * few dozen other fields. Free, no key, same browser-UA dance as {@link YahooPriceFetcher}.
  *
  * <p>Modules requested cover everything the Snapshot tab surfaces; unused modules cost a
  * few KB extra per response and one fewer round-trip if we add columns later. Fields are
@@ -55,7 +58,7 @@ public class YahooQuoteSummaryFetcher {
                     "?modules=price,summaryDetail,defaultKeyStatistics,financialData,summaryProfile" +
                     ",topHoldings" +
                     ",cashflowStatementHistoryQuarterly,incomeStatementHistoryQuarterly" +
-                    ",balanceSheetHistoryQuarterly,earningsTrend" +
+                    ",balanceSheetHistoryQuarterly,earningsTrend,calendarEvents" +
                     "&crumb=%s";
     private static final String CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb";
     // Bootstrap host for the A1/A3 session cookies the crumb endpoint requires. fc.yahoo.com is
@@ -67,6 +70,8 @@ public class YahooQuoteSummaryFetcher {
     private static final String USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(20);
+    /** Yahoo's own day label, when it has given us one. */
+    private static final Pattern ISO_DAY = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
 
     // Yahoo's quoteSummary endpoint requires a session crumb + matching cookie (anti-scraping,
     // introduced ~2024). HttpClient's CookieManager stores Set-Cookie headers from the
@@ -231,6 +236,7 @@ public class YahooQuoteSummaryFetcher {
         JsonNode issQ = r.path("incomeStatementHistoryQuarterly").path("incomeStatementHistory");
         JsonNode bsQ = r.path("balanceSheetHistoryQuarterly").path("balanceSheetStatements");
         JsonNode et = r.path("earningsTrend").path("trend");
+        JsonNode cal = r.path("calendarEvents").path("earnings");
 
         // Core columns (visible in the table)
         BigDecimal currentPrice = firstNonNull(num(price, "regularMarketPrice"), num(fin, "currentPrice"));
@@ -325,6 +331,7 @@ public class YahooQuoteSummaryFetcher {
         labels.put("industry", text(prof, "industry"));
         labels.put("recommendationKey", text(fin, "recommendationKey"));
         labels.put("country", text(prof, "country"));
+        putNextEarnings(labels, cal);
 
         return new QuoteSummary(ticker, currency, currentPrice, marketCap, trailingPe, forwardPe,
                 pegRatio, beta, week52High, week52Low, targetMeanPrice, extra, labels,
@@ -536,6 +543,52 @@ public class YahooQuoteSummaryFetcher {
 
     private static void putIf(Map<String, BigDecimal> map, String key, BigDecimal v) {
         if (v != null) map.put(key, v);
+    }
+
+    /**
+     * Next scheduled earnings report, from the {@code calendarEvents} module. It rides the one
+     * quoteSummary call the snapshot already makes, so the date costs no extra request and lands
+     * in {@code fundamentals_snapshot} with everything else — the tab and the watchlist read it
+     * from SQLite like any other cached field and never wait on Yahoo for it.
+     *
+     * <p>Coverage is wider than the market-wide Nasdaq calendar behind the Earnings tab, which is
+     * US-only: LGEN.L, BNP.PA and TSCO.L all answer here. An instrument with no earnings at all
+     * (every ETF tried) returns nothing, and nothing is what gets stored — absent, not a zero date.
+     *
+     * <p>Yahoo publishes {@code earningsDate} as an <b>array</b>: one entry once a date is
+     * announced, two when the feed only knows a window ("some time between the 24th and the 1st").
+     * Both ends are kept, because a window is a different fact from a day, and
+     * {@code isEarningsDateEstimate} separates Yahoo's own guess from the company's announcement —
+     * an estimated date can move by weeks, so publishing it as if it were fixed would be the same
+     * mistake as absorbing an unpriced holding into a total.
+     *
+     * <p><b>The day comes from Yahoo's {@code fmt}, not from {@code raw}.</b> The raw epoch is the
+     * scheduled <em>instant</em> — 1796155200 is 20:00 UTC, i.e. MRVL reporting after the US close
+     * on 1 December — and a report scheduled late enough in the US evening lands on the following
+     * UTC date. Yahoo's own label already names the trading day it belongs to; the epoch is only
+     * the fallback for a payload that carries no label, the same anchor-on-the-trading-day rule
+     * the Live tab's Day delta follows.
+     */
+    private static void putNextEarnings(Map<String, String> labels, JsonNode earnings) {
+        JsonNode dates = earnings.path("earningsDate");
+        if (!dates.isArray() || dates.isEmpty()) return;
+        String first = isoDay(dates.get(0));
+        if (first == null) return;
+        labels.put("earningsDate", first);
+        String last = isoDay(dates.get(dates.size() - 1));
+        if (last != null && !last.equals(first)) labels.put("earningsDateEnd", last);
+        JsonNode estimate = earnings.path("isEarningsDateEstimate");
+        if (estimate.isBoolean()) labels.put("earningsDateEstimate", Boolean.toString(estimate.asBoolean()));
+    }
+
+    /** Yahoo's {@code fmt} day label when it is one, else its {@code raw} epoch second in UTC. */
+    private static String isoDay(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) return null;
+        String fmt = node.path("fmt").asText(null);
+        if (fmt != null && ISO_DAY.matcher(fmt).matches()) return fmt;
+        JsonNode raw = node.isObject() ? node.path("raw") : node;
+        if (!raw.isNumber()) return null;
+        return Instant.ofEpochSecond(raw.asLong()).atZone(ZoneOffset.UTC).toLocalDate().toString();
     }
 
     /**

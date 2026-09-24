@@ -62,9 +62,13 @@ touches an order.
   prefixed `f:` — so adding a metric to the picker needs no migration, the same bargain
   `fundamentals_snapshot.extra_json` already strikes.
   - **The menu was already written.** `fundamentalsFieldGroups()` (`dashboard.js`) is the single
-    home of the fundamentals grouping — label, format type, prose tooltip, glossary anchor — and
-    the picker is generated from it, so a metric added there appears here fully described.
-    `fmtSnapValue` formats the cell. Built-ins get a parallel `WL_BUILTIN_GROUPS`; `Row` already
+    home of the fundamentals grouping — label, format type, prose tooltip, glossary anchor, and
+    which bag on the row holds the value — and the picker is generated from it, so a metric added
+    there appears here fully described. `fmtSnapValue` formats the cell. The tuple's `source` slot
+    is what lets a non-numeric field join: `f:earningsDate` reads the string `labels` blob rather
+    than the numeric `extra` map, and its cell carries the day's own epoch as `data-sort-value`
+    because `parseFloat` on an ISO day reads the year alone
+    (see [earnings.md](earnings.md)). Built-ins get a parallel `WL_BUILTIN_GROUPS`; `Row` already
     carried `pct10d`, `beta` and `gainPct`, which the table never showed — three columns for free.
   - **Values are joined client-side** from the `/portfolio-fundamentals` snapshot the price popup
     already caches per session (`ensureWlFundamentals`), so an `f:` column costs no new endpoint

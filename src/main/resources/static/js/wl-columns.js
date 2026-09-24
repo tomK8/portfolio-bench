@@ -8,8 +8,9 @@
  * set — a table of no columns is never what anyone meant, and without the fallback one bad row
  * in watchlist_column would leave a list permanently blank with no way back through the UI.
  *
- * Symbol and the ↑↓× actions cell are NOT part of a layout. They are pinned either side of it,
- * so no stored order can lose the one column that names the row or the one that edits it.
+ * Symbol (which carries the drag grip) and the ↑↓× actions cell are NOT part of a layout. They
+ * are pinned either side of it, so no stored order can lose the one column that names the row,
+ * the handle that reorders it, or the one that edits it.
  *
  * This module is deliberately free of the DOM and of the network so it can be unit-tested under
  * plain node (see src/test/js/wl-columns.test.mjs). dashboard.js owns the DOM wiring.
@@ -21,7 +22,8 @@
 })(typeof self !== 'undefined' ? self : this, function () {
     'use strict';
 
-    /** Pinned first — it names the row, and the sticky-left cell the rest scrolls under. */
+    /** Pinned first — it names the row, carries the drag grip, and is the sticky-left
+     *  cell the rest scrolls under. */
     var FIRST = 'sym';
     /** Pinned last — ↑ ↓ ×. */
     var LAST = 'actions';
@@ -88,6 +90,24 @@
         return out;
     }
 
+    /**
+     * Move one key to an absolute position — the drag-and-drop counterpart of `move`, which
+     * steps one place at a time. `index` is read against the list with `key` already taken out,
+     * which is what makes "drop it where that chip is" mean the same thing whether the key came
+     * from above or below the target. Out-of-range clamps to an end; an unknown key is a no-op.
+     */
+    function moveTo(keys, key, index) {
+        var out = (keys || []).slice();
+        var i = out.indexOf(key);
+        if (i < 0) return out;
+        out.splice(i, 1);
+        var j = index;
+        if (!(typeof j === 'number') || isNaN(j) || j < 0) j = 0;
+        if (j > out.length) j = out.length;
+        out.splice(j, 0, key);
+        return out;
+    }
+
     /** Add a key at the front (right after Symbol, where a comparison column wants to be). */
     function addFirst(keys, key) {
         if (isPinned(key)) return (keys || []).slice();
@@ -112,6 +132,7 @@
         DEFAULTS: DEFAULTS,
         resolve: resolve,
         move: move,
+        moveTo: moveTo,
         addFirst: addFirst,
         remove: remove,
         isDefault: isDefault

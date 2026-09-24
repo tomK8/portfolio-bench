@@ -144,6 +144,63 @@ class WatchlistListRepositoryTest {
     }
 
     @Test
+    void aDropWritesTheWholeOrderAtOnce(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long chips = repo.createList("chips");
+        long ai = repo.createList("ai");
+        for (long list : List.of(chips, ai)) {
+            for (String s : List.of("AMD", "MU", "NVDA", "TSM")) repo.add(s, null, null, null, null, list);
+        }
+
+        // What a drag of TSM to the top posts: the rows as displayed, all of them.
+        repo.reorder(List.of("TSM", "AMD", "MU", "NVDA"), chips);
+        assertEquals(List.of("TSM", "AMD", "MU", "NVDA"), symbols(repo, chips));
+        assertEquals(List.of("AMD", "MU", "NVDA", "TSM"), symbols(repo, ai),
+                "a drop on one list must not disturb another showing the same names");
+    }
+
+    @Test
+    void aDropThatRacedAnAddKeepsTheNameItCouldNotHaveSeen(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long first = repo.firstListId();
+        for (String s : List.of("AMD", "MU", "NVDA")) repo.add(s, null, null, null, null, first);
+
+        // The screen was showing two rows when the drag started; NVDA arrived meanwhile. Dropping
+        // must reorder what was posted without un-listing the name the client never had.
+        repo.reorder(List.of("MU", "AMD"), first);
+        assertEquals(List.of("MU", "AMD", "NVDA"), symbols(repo, first));
+    }
+
+    @Test
+    void aDropOrdersOnly_itNeverAddsRemovesOrDuplicates(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long first = repo.firstListId();
+        repo.add("AMD", null, null, null, null, first);
+        repo.add("MU", null, null, null, null, first);
+
+        repo.reorder(List.of("MU", "NOTHELD", "AMD", "MU", ""), first);
+        assertEquals(List.of("MU", "AMD"), symbols(repo, first),
+                "a name the list does not hold is ignored, and a repeat is used once");
+        assertEquals(List.of("AMD", "MU"), allSymbols(repo), "ordering must not touch the symbol universe");
+        assertEquals(List.of("AMD", "MU"), mirror(dir));
+    }
+
+    @Test
+    void theButtonsAndTheDragAgreeAfterEither(@TempDir Path dir) {
+        // move() and reorder() write through one renumbering path, so a swap after a drop (or the
+        // other way round) starts from the order actually on screen rather than from stale gaps.
+        WatchlistRepository repo = repo(dir);
+        long first = repo.firstListId();
+        for (String s : List.of("AMD", "MU", "NVDA")) repo.add(s, null, null, null, null, first);
+
+        repo.reorder(List.of("NVDA", "MU", "AMD"), first);
+        repo.move("AMD", true, first);
+        assertEquals(List.of("NVDA", "AMD", "MU"), symbols(repo, first));
+        repo.move("NVDA", false, first);
+        assertEquals(List.of("AMD", "NVDA", "MU"), symbols(repo, first));
+    }
+
+    @Test
     void reAddingASymbolLeavesItWhereTheUserPutIt(@TempDir Path dir) {
         WatchlistRepository repo = repo(dir);
         long first = repo.firstListId();

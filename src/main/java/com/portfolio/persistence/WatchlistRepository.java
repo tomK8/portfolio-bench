@@ -368,8 +368,8 @@ public class WatchlistRepository {
     }
 
     /**
-     * Move a symbol one place up or down within one list by swapping its {@code display_order}
-     * with its neighbour's. No-op at the ends of the list or if the symbol isn't in it.
+     * Move a symbol one place up or down within one list. No-op at the ends of the list or if
+     * the symbol isn't in it.
      *
      * <p>The order is <b>per list</b>: the same name can sit third in {@code chips} and first in
      * {@code ai}. Membership is unchanged, so no KV re-mirror is needed.
@@ -377,38 +377,76 @@ public class WatchlistRepository {
     public void move(String symbol, boolean up, long listId) {
         String sym = normalise(symbol);
         try (Connection conn = connections.open()) {
-            List<String> syms = new ArrayList<>();
-            List<Long> orders = new ArrayList<>();
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT symbol, display_order FROM watchlist_member " +
-                            "WHERE list_id = ? ORDER BY display_order, symbol")) {
-                ps.setLong(1, listId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        syms.add(rs.getString(1));
-                        orders.add(rs.getLong(2));
-                    }
-                }
-            }
+            List<String> syms = memberSymbols(conn, listId);
             int idx = syms.indexOf(sym);
             if (idx < 0) return;
             int neighbour = up ? idx - 1 : idx + 1;
             if (neighbour < 0 || neighbour >= syms.size()) return;    // already at an end
-            setOrder(conn, listId, syms.get(idx), orders.get(neighbour));
-            setOrder(conn, listId, syms.get(neighbour), orders.get(idx));
+            syms.set(idx, syms.get(neighbour));
+            syms.set(neighbour, sym);
+            writeOrder(conn, listId, syms);
         } catch (Exception e) {
             throw new IllegalStateException("Could not reorder " + sym + " on the watchlist.", e);
         }
     }
 
-    private static void setOrder(Connection conn, long listId, String symbol, long order)
+    /**
+     * Set one list's order outright, from the order the screen is showing — the drag-and-drop
+     * path, where {@link #move} swaps a single pair on a button press.
+     *
+     * <p>The caller posts what it can see, which is not necessarily the whole list: a name added
+     * from another tab (or by the add box mid-drag) may not be in it. So the named members are
+     * numbered first, in the order given, and <b>every member the caller didn't name keeps its
+     * place after them</b> rather than being dropped — a drop that raced an add must not un-list
+     * the new name. Names that aren't members are ignored for the mirror of the same reason: this
+     * writes order, and only order. Membership and the alert settings are untouched, so no KV
+     * re-mirror is needed.
+     */
+    public void reorder(List<String> symbols, long listId) {
+        try (Connection conn = connections.open()) {
+            List<String> members = memberSymbols(conn, listId);
+            List<String> ordered = new ArrayList<>();
+            for (String s : symbols == null ? List.<String>of() : symbols) {
+                String sym = normalise(s);
+                if (members.contains(sym) && !ordered.contains(sym)) ordered.add(sym);
+            }
+            for (String m : members) if (!ordered.contains(m)) ordered.add(m);
+            writeOrder(conn, listId, ordered);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not save the watchlist order.", e);
+        }
+    }
+
+    /** One list's members in their current order — what both reorder paths start from. */
+    private static List<String> memberSymbols(Connection conn, long listId) throws java.sql.SQLException {
+        List<String> syms = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT symbol FROM watchlist_member WHERE list_id = ? ORDER BY display_order, symbol")) {
+            ps.setLong(1, listId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) syms.add(rs.getString(1));
+            }
+        }
+        return syms;
+    }
+
+    /**
+     * Renumber a list 0..n-1 in the given order. The single writer of
+     * {@code watchlist_member.display_order}, so the button and the drag can't drift apart:
+     * both decide an order in memory and hand it here.
+     */
+    private static void writeOrder(Connection conn, long listId, List<String> ordered)
             throws java.sql.SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
                 "UPDATE watchlist_member SET display_order = ? WHERE list_id = ? AND symbol = ?")) {
-            ps.setLong(1, order);
-            ps.setLong(2, listId);
-            ps.setString(3, symbol);
-            ps.executeUpdate();
+            int order = 0;
+            for (String sym : ordered) {
+                ps.setInt(1, order++);
+                ps.setLong(2, listId);
+                ps.setString(3, sym);
+                ps.addBatch();
+            }
+            ps.executeBatch();
         }
     }
 

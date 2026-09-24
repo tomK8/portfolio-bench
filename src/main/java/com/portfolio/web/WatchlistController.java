@@ -184,6 +184,22 @@ public class WatchlistController {
         return watchlistService.view(listId);
     }
 
+    /**
+     * Save one list's order wholesale — the drag-and-drop drop. The client posts the rows in the
+     * order they are displayed, which is deliberately what gets stored: if a column sort is
+     * active, dragging a row is how that arrangement becomes the manual order. The ↑↓ buttons
+     * keep their own single-swap path (they are also the only reorder a keyboard or a touch
+     * screen can reach, where HTML5 drag events never fire).
+     */
+    @PostMapping("/watchlist/reorder")
+    @ResponseBody
+    public WatchlistView reorder(@RequestParam("symbols") java.util.List<String> symbols,
+                                 @RequestParam(name = "list", required = false) Long list) {
+        long listId = listOrFirst(list);
+        watchlistRepo.reorder(symbols, listId);
+        return watchlistService.view(listId);
+    }
+
     // ---- list management -------------------------------------------------------
 
     @PostMapping("/watchlist/lists/create")

@@ -1235,6 +1235,10 @@
             margin: 0.15rem 0;
             background: #fafafa;
         }
+        .wl-cols-chip { cursor: grab; }
+        .wl-cols-chip:active { cursor: grabbing; }
+        .wl-cols-chip .grip { color: #c4c4c4; font-size: 0.85rem; line-height: 1; }
+        .wl-cols-chip.wl-cols-dragging { opacity: 0.4; }
         .wl-cols-chip .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .wl-cols-chip button { border: 0; background: none; cursor: pointer; color: #999; padding: 0 2px; line-height: 1; }
         .wl-cols-chip button:hover { color: #1f77b4; }
@@ -1276,6 +1280,12 @@
         .wl-actions { white-space: nowrap; }
         .wl-move { border: 0; background: none; cursor: pointer; font-size: 0.95rem; line-height: 1; color: #999; padding: 0 2px; }
         .wl-move:hover { color: #1f77b4; }
+        /* Only the grip is draggable, so it is the only thing that advertises it. */
+        .wl-grip { border: 0; background: none; cursor: grab; font-size: 0.9rem; line-height: 1; color: #c4c4c4; padding: 0 3px 0 0; }
+        .wl-grip:active { cursor: grabbing; }
+        .wl-grip:hover { color: #1f77b4; }
+        #watchlist-table tbody tr.wl-dragging { opacity: 0.4; }
+        html[data-theme="dark"] .wl-grip, html[data-theme="dark"] .wl-cols-chip .grip { color: #565b63; }
         #wl-modal .modal-box { max-width: 1180px; width: 96vw; max-height: 92vh; overflow-y: auto; }
         /* Fundamentals laid out in balanced columns; groups never split across a column break. */
         .wl-fund-cols { column-width: 250px; column-gap: 2rem; }
@@ -4323,8 +4333,8 @@
         <h3>Columns<span id="wl-cols-listname" class="muted" style="font-weight:400;"></span></h3>
         <p class="muted" style="margin-top:0; font-size:0.85rem;">
             Tick a column to add it — new columns go in <b>right after Symbol</b>, where a
-            comparison wants them. Reorder with ↑ ↓. Symbol and the row actions are always
-            first and last. This layout applies to this watchlist only.
+            comparison wants them. Reorder by dragging a column, or with ↑ ↓. Symbol and the row
+            actions are always first and last. This layout applies to this watchlist only.
         </p>
         <div class="wl-cols-body">
             <div class="wl-cols-groups" id="wl-cols-groups"></div>

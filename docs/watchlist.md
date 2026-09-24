@@ -26,6 +26,35 @@ touches an order.
     keeping its manual order. The backfill is guarded on *having just created* that list, not on
     the member table being empty — otherwise a deliberately emptied list would be resurrected by
     the next restart.
+- **Drag to reorder, rows and columns.** A grip (⠿) in each row's Symbol cell drags the row; a
+  chip in the column picker drags the column. The ↑↓ buttons stay beside both — they are the
+  keyboard path and the touch path (HTML5 drag events never fire on a touch screen), and a
+  one-place nudge is still quicker by button. Drag is the addition for a name that has to travel.
+  - **A drop saves the order it shows.** `POST /watchlist/reorder` takes the whole visible order
+    and `WatchlistRepository.reorder` renumbers the list `0..n-1` from it; `move` (the buttons)
+    swaps a pair in memory and hands the result to the **same** renumbering writer, so the two
+    can never leave the table in an order neither of them meant. The table is also sortable by
+    header, and a sort is not the stored order — posting what is displayed is what keeps the
+    screen and the database from disagreeing, so dragging under a sort is how that arrangement
+    *becomes* the manual order.
+  - **The post is not the membership.** `reorder` numbers the names it was given and then keeps
+    every member it wasn't, after them; names that aren't members are ignored. A drop that raced
+    an add from another tab therefore reorders what the user saw without un-listing the name they
+    never had — it writes order, and only order, so the KV mirror is untouched.
+  - **No drop, no save.** `dragover` reflows the rows live under the cursor, which means a drag
+    cancelled with Escape has already moved them; `dragend` restores the order captured at
+    `dragstart` unless a real `drop` landed. A failed save re-loads from the server rather than
+    leaving the screen showing an order that was never stored. The picker's chips follow the same
+    rule against the *draft* — nothing there reaches the server until Save, which already posts
+    the whole ordered key list, so columns needed no new endpoint at all.
+  - Only the grip is `draggable`, never the `<tr>`: a draggable ancestor stops text being selected
+    inside the threshold inputs in WebKit, and the row's own click opens the price popup (the grip
+    is a `<button>`, which that handler already ignores). It sits in the **Symbol** cell because
+    that is the sticky-left column — a handle out at the actions end would need a horizontal
+    scroll to reach. The name is patched through its own `.wl-sym-name` span so the 30s poll
+    rewriting the cell can't discard the grip's listener, and a render landing mid-drag places
+    only rows that aren't in the table yet.
+
 - **Per-list columns.** `watchlist_column` (`(list_id, col_key)` PK + display_order) stores an
   ordered list of keys; **no rows means the default set**, which is what lets an untouched list
   and a brand-new one render identically without either owning a row. `col_key` is deliberately

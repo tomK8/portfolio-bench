@@ -91,6 +91,24 @@ public class WatchlistRepository {
                 PRIMARY KEY (list_id, symbol)
             )""";
 
+    /**
+     * The columns one list shows, in order. Deliberately opaque: a {@code col_key} is either a
+     * built-in ({@code price}, {@code vol30d}, …) or a fundamentals field prefixed {@code f:},
+     * and the client owns that vocabulary. Storing it as text means adding a metric to the
+     * picker needs no migration here — the same bargain {@code fundamentals_snapshot.extra_json}
+     * already strikes.
+     *
+     * <p><b>No rows means the default set</b>, not "no columns". That is what makes an existing
+     * list and a brand-new one render identically without writing a row for either.
+     */
+    private static final String CREATE_COLUMN_TABLE = """
+            CREATE TABLE IF NOT EXISTS watchlist_column (
+                list_id       INTEGER NOT NULL,
+                col_key       TEXT    NOT NULL,
+                display_order INTEGER NOT NULL,
+                PRIMARY KEY (list_id, col_key)
+            )""";
+
     private static final String CREATE_MEMBER_INDEX =
             "CREATE INDEX IF NOT EXISTS idx_watchlist_member_list ON watchlist_member (list_id, display_order)";
 
@@ -115,6 +133,7 @@ public class WatchlistRepository {
             ddl.execute(CREATE_LIST_NAME_INDEX);
             ddl.execute(CREATE_MEMBER_TABLE);
             ddl.execute(CREATE_MEMBER_INDEX);
+            ddl.execute(CREATE_COLUMN_TABLE);
             migrateToLists(conn, ddl);
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise watchlist table", e);
@@ -470,6 +489,10 @@ public class WatchlistRepository {
                 ps.executeUpdate();
             }
             st.execute("DELETE FROM watchlist WHERE symbol NOT IN (SELECT symbol FROM watchlist_member)");
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM watchlist_column WHERE list_id = ?")) {
+                ps.setLong(1, id);
+                ps.executeUpdate();
+            }
             try (PreparedStatement ps = conn.prepareStatement("DELETE FROM watchlist_list WHERE id = ?")) {
                 ps.setLong(1, id);
                 ps.executeUpdate();
@@ -521,6 +544,53 @@ public class WatchlistRepository {
     }
 
     public record WatchList(long id, String name, int size) {
+    }
+
+    // ---- per-list columns ------------------------------------------------------
+
+    /** The list's chosen columns in order, or empty for "use the default set". */
+    public List<String> columnsFor(long listId) {
+        List<String> out = new ArrayList<>();
+        if (!connections.dbExists()) return out;
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT col_key FROM watchlist_column WHERE list_id = ? ORDER BY display_order")) {
+            ps.setLong(1, listId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) out.add(rs.getString(1));
+            }
+        } catch (Exception e) {
+            log.warn("Could not load watchlist columns for list {}", listId, e);
+        }
+        return out;
+    }
+
+    /**
+     * Replace a list's columns wholesale. An empty list clears the rows, which restores the
+     * default set rather than blanking the table — "reset to default" needs no separate verb.
+     */
+    public void saveColumns(long listId, List<String> keys) {
+        try (Connection conn = connections.open()) {
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM watchlist_column WHERE list_id = ?")) {
+                ps.setLong(1, listId);
+                ps.executeUpdate();
+            }
+            if (keys == null || keys.isEmpty()) return;
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "INSERT INTO watchlist_column (list_id, col_key, display_order) VALUES (?, ?, ?)")) {
+                int order = 0;
+                for (String k : keys) {
+                    if (k == null || k.isBlank()) continue;
+                    ps.setLong(1, listId);
+                    ps.setString(2, k.trim());
+                    ps.setInt(3, order++);
+                    ps.addBatch();
+                }
+                ps.executeBatch();
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not save the column layout.", e);
+        }
     }
 
     private void mirrorKv() {

@@ -6591,7 +6591,6 @@
         var wlModalInited = false;      // popup listeners — bound by the Watchlist tab or the Live table
         var wlChart = null;
         var wlFundamentals = null;      // symbol -> quoteSummary, cached from /portfolio-fundamentals
-        var wlSortAttached = false;
         var wlCurrentSymbol = null;
         var wlCurrentCurrency = null;   // the open popup's price currency, for the range cells
         var wlSeriesToken = 0;          // newest /watchlist/series request; older replies are dropped
@@ -6611,6 +6610,7 @@
                 document.getElementById('wl-view-stats').addEventListener('click', function () { switchWlView('stats'); });
                 document.getElementById('wl-view-returns').addEventListener('click', function () { switchWlView('returns'); });
                 setupWatchlistLists();
+                setupWatchlistColumns();
                 loadGiltHints();
             }
             var switched = listId != null && String(listId) !== String(wlListId);
@@ -6731,6 +6731,230 @@
                     ? 'This is the only watchlist — rename it or empty it instead'
                     : 'Delete this watchlist';
             }
+        }
+
+        // ---- column picker --------------------------------------------------
+        //
+        // Draft-then-commit: every change edits wlColsDraft, and only Save writes it. Cancel
+        // therefore costs nothing and the grid never rebuilds mid-edit.
+
+        var wlColsDraft = null;
+        var wlColsGroup = null;         // the group whose fields are listed in the middle pane
+        var wlColsEscBound = false;     // document-level, so it can't go through bindOnce
+
+        function setupWatchlistColumns() {
+            bindOnce(document.getElementById('wl-cols-btn'), 'click', openWlColsModal);
+            bindOnce(document.getElementById('wl-cols-cancel'), 'click', closeWlColsModal);
+            bindOnce(document.getElementById('wl-cols-save'), 'click', saveWlColumns);
+            bindOnce(document.getElementById('wl-cols-reset'), 'click', function () {
+                // An empty layout is stored as "no rows", which the resolver reads as the
+                // default set — so reset and save are the same call, not a second verb.
+                wlColsDraft = WlColumns.DEFAULTS.slice();
+                renderWlColsChosen();
+                renderWlColsFields();
+            });
+            bindOnce(document.getElementById('wl-cols-search'), 'input', renderWlColsFields);
+
+            var modal = document.getElementById('wl-cols-modal');
+            bindOnce(modal, 'click', function (e) {
+                if (e.target.id === 'wl-cols-modal') closeWlColsModal();
+            });
+            if (!wlColsEscBound) {
+                wlColsEscBound = true;
+                document.addEventListener('keydown', function (e) {
+                    if (e.key === 'Escape' && modal.classList.contains('open')) closeWlColsModal();
+                });
+            }
+        }
+
+        function openWlColsModal() {
+            wlColsDraft = wlCols.slice();
+            var reg = wlColumnRegistry();
+            if (!wlColsGroup || !reg.groups.some(function (g) { return g.title === wlColsGroup; })) {
+                wlColsGroup = reg.groups[0].title;
+            }
+            document.getElementById('wl-cols-listname').textContent =
+                wlListId == null ? '' : ' — ' + wlListName(wlListId);
+            document.getElementById('wl-cols-search').value = '';
+            renderWlColsGroups();
+            renderWlColsFields();
+            renderWlColsChosen();
+            document.getElementById('wl-cols-modal').classList.add('open');
+            // Coverage marks need the snapshot; re-render once it lands rather than blocking the
+            // modal on it.
+            ensureWlFundamentals().then(function (ok) {
+                if (ok && document.getElementById('wl-cols-modal').classList.contains('open')) {
+                    renderWlColsFields();
+                }
+            }).catch(function () {});
+        }
+
+        /**
+         * How many symbols on this list actually have a value for a fundamentals column.
+         *
+         * <p>Worth showing, because several metrics are empty for whole asset classes — an ETF
+         * has no FCF margin, a bank no EV/EBITDA — and two (ROIC, FCF Growth YoY) are currently
+         * empty for everything, since Yahoo stopped returning the quarterly statements they are
+         * derived from. Picking one of those blind and finding a column of dashes is a wasted
+         * trip; the count says so before the click. Null while the snapshot is still loading.
+         */
+        function wlColCoverage(key) {
+            if (key.indexOf('f:') !== 0 || !wlFundamentals) return null;
+            var tbody = document.querySelector('#watchlist-table tbody');
+            if (!tbody || !tbody.children.length) return null;
+            var have = 0, total = 0;
+            Array.prototype.forEach.call(tbody.children, function (tr) {
+                if (!tr.dataset.sym) return;
+                total++;
+                if (wlFundValue(tr.dataset.sym, key) != null) have++;
+            });
+            return total ? { have: have, total: total } : null;
+        }
+
+        function closeWlColsModal() {
+            document.getElementById('wl-cols-modal').classList.remove('open');
+            wlColsDraft = null;
+        }
+
+        function renderWlColsGroups() {
+            var host = document.getElementById('wl-cols-groups');
+            host.innerHTML = '';
+            wlColumnRegistry().groups.forEach(function (g) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.textContent = g.title;
+                b.className = g.title === wlColsGroup ? 'active' : '';
+                b.addEventListener('click', function () {
+                    wlColsGroup = g.title;
+                    document.getElementById('wl-cols-search').value = '';
+                    renderWlColsGroups();
+                    renderWlColsFields();
+                });
+                host.appendChild(b);
+            });
+        }
+
+        /** The middle pane: the active group's fields, or — while searching — every match. */
+        function renderWlColsFields() {
+            var reg = wlColumnRegistry();
+            var host = document.getElementById('wl-cols-list');
+            var q = (document.getElementById('wl-cols-search').value || '').trim().toLowerCase();
+            host.innerHTML = '';
+            var keys = [];
+            if (q) {
+                // Search spans every group — hunting for "FCF" should not need the right pane first.
+                reg.groups.forEach(function (g) {
+                    g.keys.forEach(function (k) {
+                        if ((reg.byKey[k].label || '').toLowerCase().indexOf(q) >= 0) keys.push(k);
+                    });
+                });
+            } else {
+                var g = reg.groups.filter(function (x) { return x.title === wlColsGroup; })[0];
+                keys = g ? g.keys : [];
+            }
+            if (!keys.length) {
+                host.innerHTML = '<p class="muted" style="font-size:0.85rem">No matching column.</p>';
+                return;
+            }
+            keys.forEach(function (k) {
+                var m = reg.byKey[k];
+                var label = document.createElement('label');
+                if (m.title) label.title = m.title;
+                var cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = wlColsDraft.indexOf(k) >= 0;
+                cb.addEventListener('change', function () {
+                    wlColsDraft = cb.checked ? WlColumns.addFirst(wlColsDraft, k)
+                                             : WlColumns.remove(wlColsDraft, k);
+                    renderWlColsChosen();
+                });
+                label.appendChild(cb);
+                label.appendChild(document.createTextNode(m.label));
+                var cov = wlColCoverage(k);
+                if (cov && cov.have < cov.total) {
+                    var note = document.createElement('span');
+                    note.className = 'muted';
+                    note.style.fontSize = '0.75rem';
+                    note.textContent = cov.have === 0
+                        ? '  · no data for this list'
+                        : '  · ' + cov.have + '/' + cov.total;
+                    label.appendChild(note);
+                }
+                if (q) {
+                    var grp = document.createElement('span');
+                    grp.className = 'muted';
+                    grp.style.fontSize = '0.75rem';
+                    grp.textContent = '  · ' + m.group;
+                    label.appendChild(grp);
+                }
+                host.appendChild(label);
+            });
+        }
+
+        /** The right pane: the chosen columns in order, between the two pinned ones. */
+        function renderWlColsChosen() {
+            var reg = wlColumnRegistry().byKey;
+            var host = document.getElementById('wl-cols-chosen');
+            host.innerHTML = '';
+            if (!wlColsDraft.length) {
+                host.innerHTML = '<p class="muted" style="font-size:0.8rem">No columns — saving now restores the default set.</p>';
+                return;
+            }
+            wlColsDraft.forEach(function (k) {
+                var m = reg[k] || { label: k };
+                var chip = document.createElement('div');
+                chip.className = 'wl-cols-chip';
+                var nm = document.createElement('span');
+                nm.className = 'nm';
+                nm.textContent = m.label;
+                if (m.title) chip.title = m.title;
+                chip.appendChild(nm);
+                [['↑', true], ['↓', false]].forEach(function (d) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.textContent = d[0];
+                    b.title = d[1] ? 'Move left' : 'Move right';
+                    b.addEventListener('click', function () {
+                        wlColsDraft = WlColumns.move(wlColsDraft, k, d[1]);
+                        renderWlColsChosen();
+                    });
+                    chip.appendChild(b);
+                });
+                var rm = document.createElement('button');
+                rm.type = 'button';
+                rm.className = 'rm';
+                rm.textContent = '×';
+                rm.title = 'Remove this column';
+                rm.addEventListener('click', function () {
+                    wlColsDraft = WlColumns.remove(wlColsDraft, k);
+                    renderWlColsChosen();
+                    renderWlColsFields();
+                });
+                chip.appendChild(rm);
+                host.appendChild(chip);
+            });
+        }
+
+        function saveWlColumns() {
+            var body = new URLSearchParams();
+            wlAddList(body);
+            wlColsDraft.forEach(function (k) { body.append('keys', k); });
+            fetch('/watchlist/columns', { method: 'POST', body: body })
+                .then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                    return r.json();
+                })
+                .then(function (keys) {
+                    wlApplyColumns(keys);
+                    closeWlColsModal();
+                    // Rebuild from the rows already in hand: the column set changed, so every
+                    // cell is new and there is nothing to reconcile against.
+                    wlResetGrid();
+                    loadWatchlist();
+                })
+                .catch(function (err) {
+                    wlSetStatus(err && err.message ? err.message : 'Could not save the column layout.');
+                });
         }
 
         /** Empty the grid so the incoming list is built fresh instead of diffed against the old one. */
@@ -6914,17 +7138,47 @@
             wlReturnsLoaded = false;                         //  otherwise flap Loading…/could-not-load)
             if (wlCurrentView === 'returns') loadWlReturns(false);  // refresh the visible heatmap too
             wlSetStatus('Loading…');
-            fetch('/watchlist' + wlListParam()).then(function (r) {
+            // Columns first, so the grid is built once in its final shape rather than painted in
+            // the default layout and immediately rebuilt. Cached per list: only a list switch or
+            // a save in the picker invalidates it.
+            wlLoadColumns().then(function () {
+            return fetch('/watchlist' + wlListParam()).then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             }).then(function (view) {
                 renderWatchlist(view.rows || []);          // sets wlLoadedOk
                 wlSetStatus('');
+            });
             }).catch(function (err) {
                 wlLoadedOk = false;                         // the poll will retry the full load
                 var detail = err && err.message ? ' (' + err.message + ')' : '';
                 wlSetStatus('Could not load watchlist' + detail + ' — retrying shortly.');
             }).finally(function () { wlFullLoadInFlight = false; });
+        }
+
+        var wlColsLoadedFor = null;     // the list id wlCols currently describes
+
+        /**
+         * Fetch this list's column layout, unless it is already the one in hand. A failure keeps
+         * whatever layout is loaded rather than blanking the grid — the rows still matter.
+         */
+        function wlLoadColumns() {
+            if (wlColsLoadedFor != null && String(wlColsLoadedFor) === String(wlListId)) {
+                return Promise.resolve();
+            }
+            return fetch('/watchlist/columns' + wlListParam())
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (keys) { wlApplyColumns(keys); })
+                .catch(function () { wlColsLoadedFor = wlListId; });
+        }
+
+        function wlApplyColumns(keys) {
+            wlCols = WlColumns.resolve(keys, wlColumnRegistry().byKey);
+            wlColsLoadedFor = wlListId;
+            wlRenderedCols = null;                          // force the header to be rebuilt
         }
 
         // ── Near-real-time poll ─────────────────────────────────────────────────
@@ -7346,35 +7600,213 @@
 
         // Full cell markup for a brand-new row. data-f tags let wlPatchRow find each cell later.
         // Threshold inputs seed from resolve() so the optimistic overlay wins over a stale read.
-        function wlRowCellsHtml(r) {
-            var price = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
-            var pe = r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1);
+        // ---- the column registry --------------------------------------------------
+        //
+        // One entry per column the picker can offer: its label, its sort type, and how to render
+        // a cell from the server Row. Built-ins read the Row directly; an `f:` column reads the
+        // per-session fundamentals cache instead, which is why its cell can be built before that
+        // cache has landed and patched afterwards (wlPatchFundCells).
+        //
+        // Every cell carries data-f, so wlPatchRow finds cells by name rather than by index and
+        // the whole reconcile/poll machinery is indifferent to the column order.
+
+        var WL_BUILTIN_GROUPS = [
+            { title: 'Price & momentum', fields: [
+                ['price', 'Price', 'Latest price in the instrument\'s own currency'],
+                ['todayPct', 'Today %', 'Live move vs the previous session\'s close (1 trading session)'],
+                ['pct2d', '2d %', 'Return over the last 2 trading sessions (today + the previous session)'],
+                ['pct3d', '3d %', 'Return over the last 3 trading sessions'],
+                ['pct5d', '5d %', 'Return over the last 5 trading sessions'],
+                ['pct10d', '10d %', 'Return over the last 10 trading sessions'],
+                ['pct30d', '30d %', 'Return over the last 30 trading sessions']
+            ]},
+            { title: '52-week range', fields: [
+                ['pctFromHigh', '% vs High', 'Distance from 52-week high (negative = below)'],
+                ['pctFromLow', '% vs Low', 'Distance above 52-week low']
+            ]},
+            { title: 'Realized volatility', fields: [
+                ['vol5d', 'Vol 5D', 'Annualised realized volatility, 5-day (from 1-minute intraday returns)'],
+                ['vol10d', 'Vol 10D', 'Annualised realized volatility, 10-day (from 1-minute intraday returns)'],
+                ['vol30d', 'Vol 30D', 'Annualised realized volatility, 30-day (from daily closes)'],
+                ['vol1y', 'Vol 1Y', 'Annualised realized volatility, 1-year (from daily closes)']
+            ]},
+            { title: 'Your position', fields: [
+                ['trailingPe', 'P/E', 'Trailing twelve-month price/earnings, from the fundamentals cache'],
+                ['beta', 'Beta', 'Sensitivity to the wider market, from the fundamentals cache'],
+                ['position', 'Pos £', 'Market value of your holding, GBP (blank if not held)'],
+                ['gain', 'Gain', 'Unrealized gain on the holding, GBP'],
+                ['gainPct', 'Gain %', 'Unrealized gain on the holding, per cent']
+            ]},
+            { title: 'Alert triggers', fields: [
+                ['thrHigh', 'Near-hi %', 'Alert when within this % of the 52-week high'],
+                ['thrMove', 'Move %', 'Alert when |today\'s move| exceeds this %'],
+                ['thrAbove', 'Above', 'Alert when the price rises to or above this level (price\'s own currency)'],
+                ['thrBelow', 'Below', 'Alert when the price falls to or below this level (price\'s own currency)']
+            ]}
+        ];
+
+        /**
+         * The quoteSummary fields that sit at the top level of the record rather than inside its
+         * `extra` map. Price, P/E and beta are deliberately absent: the Row already carries them,
+         * so they are built-ins and offering a second copy here would be two columns of one fact.
+         */
+        var WL_FUND_TOP = {
+            marketCap: ['Market cap', 'cap', 'Share price × shares outstanding.'],
+            forwardPe: ['Fwd P/E', 'ratio', 'Price ÷ next year\'s consensus earnings per share.'],
+            pegRatio: ['PEG', 'ratio', 'Forward P/E ÷ expected earnings growth. Below 1 is often read as growth being under-priced.'],
+            targetMeanPrice: ['Analyst target', 'price', 'Mean of analysts\' 12-month price targets, in the instrument\'s own currency.'],
+            week52High: ['52w high', 'price', 'Highest price over the past 52 weeks.'],
+            week52Low: ['52w low', 'price', 'Lowest price over the past 52 weeks.']
+        };
+
+        var wlRegistryCache = null;
+
+        /**
+         * key -> { label, title, group, type, builtin }. Fundamentals entries are derived from
+         * fundamentalsFieldGroups() — the same single home the Fundamentals tab and the popup
+         * read — so a metric added there appears in this picker with its label, format and
+         * tooltip already written.
+         */
+        function wlColumnRegistry() {
+            if (wlRegistryCache) return wlRegistryCache;
+            var reg = {};
+            var groups = [];
+            WL_BUILTIN_GROUPS.forEach(function (g) {
+                var keys = [];
+                g.fields.forEach(function (f) {
+                    reg[f[0]] = { label: f[1], title: f[2], group: g.title, builtin: true };
+                    keys.push(f[0]);
+                });
+                groups.push({ title: g.title, keys: keys });
+            });
+
+            var topKeys = [];
+            Object.keys(WL_FUND_TOP).forEach(function (k) {
+                var d = WL_FUND_TOP[k];
+                var key = 'f:' + k;
+                reg[key] = { label: d[0], title: d[2], group: 'Fundamentals — headline', type: d[1], top: true };
+                topKeys.push(key);
+            });
+            groups.push({ title: 'Fundamentals — headline', keys: topKeys });
+
+            fundamentalsFieldGroups().forEach(function (g) {
+                var keys = [];
+                g.fields.forEach(function (f) {
+                    var key = 'f:' + f[0];
+                    reg[key] = { label: f[1], title: f[3], group: g.title, type: f[2], anchor: f[5] };
+                    keys.push(key);
+                });
+                groups.push({ title: g.title, keys: keys });
+            });
+            wlRegistryCache = { byKey: reg, groups: groups };
+            return wlRegistryCache;
+        }
+
+        /** The columns this list is showing, between the pinned Symbol and actions cells. */
+        var wlCols = WlColumns.DEFAULTS.slice();
+        var wlRenderedCols = null;      // what the <thead> currently holds, to avoid needless rebuilds
+
+        /**
+         * One fundamentals value for a symbol, or null. Null is rendered '—' rather than 0 —
+         * an ETF has no FCF margin, and a nil is not a zero.
+         */
+        function wlFundValue(symbol, key) {
+            var q = wlFundamentals && wlFundamentals[symbol];
+            if (!q || q.missing) return null;
+            var bare = key.slice(2);
+            var v = WL_FUND_TOP[bare] ? q[bare] : (q.extra ? q.extra[bare] : null);
+            return v == null ? null : v;
+        }
+
+        /** A fundamentals cell: formatted text plus the raw number for the sorter. */
+        function wlFundCell(r, key) {
+            var meta = wlColumnRegistry().byKey[key] || {};
+            var v = wlFundValue(r.symbol, key);
+            if (v == null) return '<td class="na" data-f="' + key + '">—</td>';
+            var n = parseFloat(v);
+            // The rendered text carries %, £ and T/B/M suffixes; parseVal copes, but handing the
+            // sorter the raw number is exact and free.
+            return '<td data-f="' + key + '" data-sort-value="' + n + '">' +
+                fmtSnapValue(v, meta.type || 'ratio', r.currency) + '</td>';
+        }
+
+        function wlThrCell(r, kind, extraCls) {
             var thr = WlEditSync.resolve(r, wlPending[r.symbol]).values;
-            return '<td data-f="sym">' + wlSymHtml(r) + '</td>' +
-                '<td data-f="price">' + price + '</td>' +
-                wlPctCell(r.todayPct, true, 'todayPct') +
-                wlPctCell(r.pct2d, true, 'pct2d') +
-                wlPctCell(r.pct3d, true, 'pct3d') +
-                wlPctCell(r.pct5d, true, 'pct5d') +
-                wlPctCell(r.pct30d, true, 'pct30d') +
-                wlPctCell(r.pctFromHigh, false, 'pctFromHigh') +
-                wlPctCell(r.pctFromLow, false, 'pctFromLow') +
-                wlVolCell(r.vol5d, 'vol5d') +
-                wlVolCell(r.vol10d, 'vol10d') +
-                wlVolCell(r.vol30d, 'vol30d') +
-                wlVolCell(r.vol1y, 'vol1y') +
-                '<td data-f="pe">' + pe + '</td>' +
-                wlGbpCell(r.held ? r.positionValueGbp : null, false, 'position') +
-                wlGbpCell(r.held ? r.gainGbp : null, true, 'gain') +
-                '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="high" type="text" value="' + thr.high + '"/></td>' +
-                '<td><input class="wl-thr-input" data-sym="' + r.symbol + '" data-kind="move" type="text" value="' + thr.move + '"/></td>' +
-                '<td><input class="wl-thr-input wl-price-input" data-sym="' + r.symbol + '" data-kind="above" type="text" value="' + thr.above + '"/></td>' +
-                '<td><input class="wl-thr-input wl-price-input" data-sym="' + r.symbol + '" data-kind="below" type="text" value="' + thr.below + '"/></td>' +
+            return '<td><input class="wl-thr-input' + (extraCls || '') + '" data-sym="' + r.symbol +
+                '" data-kind="' + kind + '" type="text" value="' + thr[kind] + '"/></td>';
+        }
+
+        /** Render one column's <td> for one row. */
+        function wlCellHtml(r, key) {
+            if (key.indexOf('f:') === 0) return wlFundCell(r, key);
+            switch (key) {
+                case 'price':
+                    return '<td data-f="price">' +
+                        (r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency)) + '</td>';
+                case 'todayPct': return wlPctCell(r.todayPct, true, 'todayPct');
+                case 'pct2d': return wlPctCell(r.pct2d, true, 'pct2d');
+                case 'pct3d': return wlPctCell(r.pct3d, true, 'pct3d');
+                case 'pct5d': return wlPctCell(r.pct5d, true, 'pct5d');
+                case 'pct10d': return wlPctCell(r.pct10d, true, 'pct10d');
+                case 'pct30d': return wlPctCell(r.pct30d, true, 'pct30d');
+                case 'pctFromHigh': return wlPctCell(r.pctFromHigh, false, 'pctFromHigh');
+                case 'pctFromLow': return wlPctCell(r.pctFromLow, false, 'pctFromLow');
+                case 'vol5d': return wlVolCell(r.vol5d, 'vol5d');
+                case 'vol10d': return wlVolCell(r.vol10d, 'vol10d');
+                case 'vol30d': return wlVolCell(r.vol30d, 'vol30d');
+                case 'vol1y': return wlVolCell(r.vol1y, 'vol1y');
+                case 'trailingPe':
+                    return '<td data-f="pe">' +
+                        (r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1)) + '</td>';
+                case 'beta':
+                    return '<td data-f="beta">' +
+                        (r.beta == null ? '—' : parseFloat(r.beta).toFixed(2)) + '</td>';
+                case 'position': return wlGbpCell(r.held ? r.positionValueGbp : null, false, 'position');
+                case 'gain': return wlGbpCell(r.held ? r.gainGbp : null, true, 'gain');
+                case 'gainPct': return wlPctCell(r.held ? r.gainPct : null, true, 'gainPct');
+                case 'thrHigh': return wlThrCell(r, 'high');
+                case 'thrMove': return wlThrCell(r, 'move');
+                case 'thrAbove': return wlThrCell(r, 'above', ' wl-price-input');
+                case 'thrBelow': return wlThrCell(r, 'below', ' wl-price-input');
+                default: return '<td class="na">—</td>';
+            }
+        }
+
+        function wlRowCellsHtml(r) {
+            var html = '<td data-f="sym">' + wlSymHtml(r) + '</td>';
+            wlCols.forEach(function (key) { html += wlCellHtml(r, key); });
+            return html +
                 '<td class="wl-actions">' +
                     '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="up" title="Move up">↑</button>' +
                     '<button class="wl-move" data-sym="' + r.symbol + '" data-dir="down" title="Move down">↓</button>' +
                     '<button class="wl-remove" data-sym="' + r.symbol + '" title="Remove">×</button>' +
                 '</td>';
+        }
+
+        /**
+         * Rebuild the header to match wlCols, but only when it has actually changed — a rebuild
+         * discards the <th> nodes and with them the sort listeners and the active sort marker.
+         */
+        function wlSyncHeader() {
+            if (wlRenderedCols && wlRenderedCols.join('\u0001') === wlCols.join('\u0001')) return;
+            var table = document.getElementById('watchlist-table');
+            if (!table) return;
+            var reg = wlColumnRegistry().byKey;
+            var html = '<tr><th data-sort="text">Symbol</th>';
+            wlCols.forEach(function (key) {
+                var m = reg[key] || { label: key };
+                // The four alert inputs are not values, so they opt out of sorting the same way
+                // they always have — by carrying no data-sort.
+                var sortable = key.indexOf('thr') !== 0;
+                html += '<th' + (sortable ? ' data-sort="num"' : '') +
+                    (m.title ? ' title="' + escapeHtml(m.title) + '"' : '') + '>' +
+                    escapeHtml(m.label) + '</th>';
+            });
+            html += '<th></th></tr>';
+            table.querySelector('thead').innerHTML = html;
+            wlRenderedCols = wlCols.slice();
+            // New <th> nodes carry no listeners, so this re-attaches rather than double-binds.
+            attachSort(table);
         }
 
         // Create one fully-wired row. Its click/change/keydown/button listeners are attached once
@@ -7476,6 +7908,12 @@
             toggle.style.display = '';
             if (wlCurrentView === 'stats') wrap.style.display = '';    // only shown in stats view
 
+            wlSyncHeader();
+            // Any f: column needs the snapshot; ask for it now and patch those cells when it
+            // arrives, so the grid is never held up waiting for it.
+            if (wlCols.some(function (k) { return k.indexOf('f:') === 0; })) {
+                ensureWlFundamentals().then(function (ok) { if (ok) wlPatchFundCells(); }).catch(function () {});
+            }
             var existing = wlRowMap(tbody);
             var seen = {};
             rows.forEach(function (r, i) {
@@ -7488,7 +7926,8 @@
                 if (!seen[sym]) existing[sym].remove();     // symbol no longer on the list
             });
 
-            if (!wlSortAttached) { wlSortAttached = true; attachSort(table); }
+            // Sorting is bound by wlSyncHeader, which owns the <th> nodes: a one-shot latch here
+            // would have left the listeners on header cells a column change had already discarded.
         }
 
         function rowAlertClass(r) {
@@ -7732,23 +8171,66 @@
             }
             if (wlFundamentals) { render(); return; }
             body.innerHTML = '<p class="muted">Loading fundamentals…</p>';
-            fetch('/portfolio-fundamentals').then(function (r) {
+            ensureWlFundamentals().then(function (ok) {
+                if (!ok) {
+                    body.innerHTML = '<p class="muted">No fundamentals available yet — reopen the popup to retry.</p>';
+                    return;
+                }
+                render();
+            }).catch(function () {
+                body.innerHTML = '<p class="muted">Could not load fundamentals — reopen the popup to retry.</p>';
+            });
+        }
+
+        var wlFundPromise = null;
+
+        /**
+         * Load the whole fundamentals snapshot once per page and keep it by symbol. Shared by the
+         * popup's disclosure and by any `f:` column in the grid, so a tab that shows FCF Margin
+         * and a popup opened from it cost one request between them.
+         *
+         * <p>An empty response is <b>not</b> cached: a degraded read would otherwise poison the
+         * session and every later popup would say "no fundamentals" without ever retrying.
+         */
+        function ensureWlFundamentals() {
+            if (wlFundamentals) return Promise.resolve(true);
+            if (wlFundPromise) return wlFundPromise;
+            wlFundPromise = fetch('/portfolio-fundamentals').then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             }).then(function (snap) {
                 var rows = snap.rows || [];
-                // Only cache a non-empty snapshot: caching a degraded/empty response would
-                // poison the session cache — every later popup would say "no fundamentals"
-                // and never retry.
-                if (!rows.length) {
-                    body.innerHTML = '<p class="muted">No fundamentals available yet — reopen the popup to retry.</p>';
-                    return;
-                }
+                if (!rows.length) { wlFundPromise = null; return false; }
                 wlFundamentals = {};
                 rows.forEach(function (row) { wlFundamentals[row.symbol] = row; });
-                render();
-            }).catch(function () {
-                body.innerHTML = '<p class="muted">Could not load fundamentals — reopen the popup to retry.</p>';
+                return true;
+            }).catch(function (e) {
+                wlFundPromise = null;                       // let the next caller retry
+                throw e;
+            });
+            return wlFundPromise;
+        }
+
+        /**
+         * Fill in the `f:` cells once the snapshot lands. The grid is rendered from the server Row
+         * alone, which carries no fundamentals, so those cells start as '—' and are patched here
+         * rather than triggering a whole re-render — an in-progress threshold edit keeps its focus.
+         */
+        function wlPatchFundCells() {
+            var fundCols = wlCols.filter(function (k) { return k.indexOf('f:') === 0; });
+            if (!fundCols.length) return;
+            var tbody = document.querySelector('#watchlist-table tbody');
+            if (!tbody) return;
+            Array.prototype.forEach.call(tbody.children, function (tr) {
+                var r = tr._wlRow;
+                if (!r) return;
+                fundCols.forEach(function (key) {
+                    var td = tr.querySelector('[data-f="' + key + '"]');
+                    if (!td) return;
+                    var tmp = document.createElement('tr');
+                    tmp.innerHTML = wlFundCell(r, key);
+                    tr.replaceChild(tmp.firstChild, td);
+                });
             });
         }
 

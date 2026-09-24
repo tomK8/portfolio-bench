@@ -161,6 +161,60 @@ class YahooQuoteSummaryFetcherTest {
     }
 
     @Test
+    void storesTheNextEarningsDateFromCalendarEvents() throws Exception {
+        // MRVL's real shape: a single announced day, flagged as Yahoo's own estimate. The raw
+        // epoch is 20:00 UTC (an after-the-close US report), so only the fmt label names the
+        // trading day the report belongs to.
+        String json = """
+                {"quoteSummary":{"result":[{"calendarEvents":{"earnings":{
+                  "earningsDate":[{"raw":1796155200,"fmt":"2026-12-01"}],
+                  "isEarningsDateEstimate":true}}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("MRVL", json);
+        assertEquals("2026-12-01", q.labels().get("earningsDate"));
+        assertEquals("true", q.labels().get("earningsDateEstimate"));
+        assertNull(q.labels().get("earningsDateEnd"), "one announced day is not a window");
+    }
+
+    @Test
+    void keepsBothEndsOfAnUnconfirmedEarningsWindow() throws Exception {
+        // Two entries mean Yahoo knows only a window. A window is a different fact from a day,
+        // so both ends are stored rather than the start standing in for the whole thing.
+        String json = """
+                {"quoteSummary":{"result":[{"calendarEvents":{"earnings":{
+                  "earningsDate":[{"raw":1772064000,"fmt":"2026-02-24"},
+                                  {"raw":1772496000,"fmt":"2026-03-01"}],
+                  "isEarningsDateEstimate":false}}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("XYZ", json);
+        assertEquals("2026-02-24", q.labels().get("earningsDate"));
+        assertEquals("2026-03-01", q.labels().get("earningsDateEnd"));
+        assertEquals("false", q.labels().get("earningsDateEstimate"));
+    }
+
+    @Test
+    void fallsBackToTheRawEpochWhenYahooSendsNoDayLabel() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{"calendarEvents":{"earnings":{
+                  "earningsDate":[{"raw":1791981000}]}}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("ASML", json);
+        assertEquals("2026-10-14", q.labels().get("earningsDate"));
+        assertNull(q.labels().get("earningsDateEstimate"), "no flag from Yahoo ⇒ no claim either way");
+    }
+
+    @Test
+    void noEarningsDateIsAbsentRatherThanBlank() throws Exception {
+        // Every ETF tried answers with an empty earnings block. Absent is not a zero date.
+        String json = """
+                {"quoteSummary":{"result":[{"calendarEvents":{"earnings":{
+                  "earningsDate":[],"earningsAverage":{}}}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("EQQQ.L", json);
+        assertFalse(q.labels().containsKey("earningsDate"));
+
+        // The committed fixture predates the module entirely — the same silence, one level up.
+        assertFalse(new YahooQuoteSummaryFetcher().parse("AAPL", sample())
+                .labels().containsKey("earningsDate"));
+    }
+
+    @Test
     void returnsEmptyOnUnknownTickerResponse() throws Exception {
         // Yahoo returns {"result":null,"error":{...}} for unknown tickers.
         String unknown = "{\"quoteSummary\":{\"result\":null,\"error\":{\"code\":\"Not Found\"}}}";

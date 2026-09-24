@@ -3849,6 +3849,7 @@
                 tr.appendChild(td(fmtMarketCap(row.marketCap, row.currency)));
                 tr.appendChild(td(fmtPrice(row.week52Low, row.currency)));
                 tr.appendChild(td(fmtPrice(row.week52High, row.currency)));
+                tr.appendChild(earningsTd(row));
                 tr.addEventListener('click', function () { openSnapshotDetail(idx); });
                 tbody.appendChild(tr);
             });
@@ -3889,6 +3890,18 @@
             return c;
         }
 
+        /**
+         * Next-earnings cell. td() sorts on its rendered text, which for a date would order
+         * alphabetically by month name, so the cell carries the day's own epoch instead.
+         */
+        function earningsTd(row) {
+            var iso = (row.labels || {}).earningsDate;
+            if (!iso) return td(null);
+            var c = td(fmtEarningsDate(iso, row));
+            c.dataset.sortValue = Date.parse(iso);
+            return c;
+        }
+
         function fmtRatio(v) {
             if (v == null) return null;
             var n = parseFloat(v);
@@ -3925,11 +3938,16 @@
         }
 
         // Single home for the fundamentals field grouping (label, type, tooltip, anchor).
-        // Field tuple: [key, label, type, tooltip, noFinancial?, glossaryAnchor?].
+        // Field tuple: [key, label, type, tooltip, noFinancial?, glossaryAnchor?, source?].
         // Group: { title, fields, noFinancial? } — noFinancial skips the whole group for
         // banks/insurers where EV/Net Debt/EBITDA/FCF don't apply.
+        // `source` names which bag on the quoteSummary row holds the value: the default is the
+        // numeric `extra` map, 'labels' the string one (see fundFieldValue).
         function fundamentalsFieldGroups() {
             return [
+                { title: 'Earnings', fields: [
+                    ['earningsDate', 'Next earnings', 'date', 'The next scheduled results date, from Yahoo\'s company calendar. A trailing ~ means Yahoo is estimating it from the past reporting rhythm rather than repeating an announcement, so it can still move by weeks; two dates are a window Yahoo has not narrowed to a single day. "(passed)" means Yahoo has published no forward date and this is the most recent one it knows. Funds and bonds have none.', false, null, 'labels']
+                ]},
                 { title: 'Valuation', fields: [
                     ['enterpriseToEbitda', 'EV/EBITDA', 'ratio', 'Enterprise Value ÷ EBITDA (TTM). Measures how expensive the business is relative to cash earnings before interest, taxes, depreciation and amortisation. Lower = cheaper; negative means EBITDA is negative.', true, 'ev-ebitda'],
                     ['priceToBook', 'P/B', 'ratio', 'Price ÷ Book Value per share. Compares market cap to net assets on the balance sheet. Below 1 may indicate undervaluation; most meaningful for asset-heavy businesses and financials.', false, 'pb'],
@@ -3996,14 +4014,14 @@
                 g.fields.forEach(function (f) {
                     var key = f[0], label = f[1], type = f[2], tip = f[3], noFin = f[4], anchor = f[5];
                     if (isFinancial && noFin) return;
-                    var v = row.extra ? row.extra[key] : null;
+                    var v = fundFieldValue(row, key, f[6]);
                     if (v == null) return;
                     var anchorAttr = anchor ? ' data-anchor="' + anchor + '"' : '';
                     var labelHtml = tip
                         ? '<span class="snap-tip" data-tip="' + tip.replace(/"/g, '&quot;') + '"' + anchorAttr + '>' + label + '</span>'
                         : label;
                     inner += '<div class="snap-kv"><span class="k">' + labelHtml + '</span>' +
-                            '<span class="v">' + fmtSnapValue(v, type, row.currency) + '</span></div>';
+                            '<span class="v">' + fmtSnapValue(v, type, row.currency, row) + '</span></div>';
                 });
                 if (inner) {
                     html += '<div class="snap-group"><div class="snap-group-title">' + g.title +
@@ -4042,7 +4060,77 @@
             document.getElementById('snapshot-detail-modal').classList.add('open');
         }
 
-        function fmtSnapValue(v, type, ccy) {
+        /**
+         * One field's raw value off a quoteSummary row. Numbers live in the `extra` map; a field
+         * the feed publishes as text — the earnings date — rides in `labels`, the same flat blob
+         * sector and industry already use, so it needed neither a column of its own nor a
+         * migration. Blank is treated as absent: a field Yahoo answered with "" is not a value.
+         */
+        function fundFieldValue(row, key, source) {
+            if (!row) return null;
+            var bag = source === 'labels' ? row.labels : row.extra;
+            var v = bag ? bag[key] : null;
+            return (v == null || v === '') ? null : v;
+        }
+
+        /** Today as an ISO day, in the viewer's own zone — the basis every stored day is judged on. */
+        function todayIso() {
+            var d = new Date();
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                String(d.getDate()).padStart(2, '0');
+        }
+
+        /**
+         * An ISO day as a readable date. Anchored at local noon — the same trick wlParseTs uses —
+         * so a date-only value can't slip a day for a browser sitting west of UTC.
+         */
+        function fmtDayLabel(iso) {
+            var d = new Date(iso + 'T12:00:00');
+            return isNaN(d) ? iso
+                : d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+        }
+
+        /**
+         * The next earnings date as one cell. Three things ride along with the day itself and all
+         * three change what it means, so none is dropped:
+         *  - a window Yahoo has not narrowed to a single day prints both ends;
+         *  - a day Yahoo inferred from the past reporting rhythm, rather than one the company
+         *    announced, carries a trailing '~' — the same "not confirmed" marker the popup's
+         *    high/low cells use for a close-only extreme. An estimated date can move by weeks,
+         *    and printing it as though it were fixed is the same mistake as reporting a figure
+         *    we could not value;
+         *  - a day that has already gone says so. When Yahoo has no forward date it publishes the
+         *    most recent one it knows — 7 of the 58 held names carrying a date on the day this
+         *    shipped, UK reporters especially — and printing that under "Next earnings" states
+         *    something false. It is still stored exactly as the feed gave it: what Yahoo knows is
+         *    the fact, what the column claims about it is ours. "(passed)" replaces the estimate
+         *    marker rather than joining it, because a date already behind us is not a date whose
+         *    firmness is still the question.
+         */
+        function fmtEarningsDate(iso, row) {
+            var labels = (row && row.labels) || {};
+            var end = labels.earningsDateEnd;
+            var text;
+            if (end && end !== iso) {
+                // "24 Feb – 1 Mar 2026": the year is printed once when both ends share it, and
+                // dropped from the start by formatting without it rather than by trimming the
+                // rendered string, which is locale-dependent.
+                var startDate = new Date(iso + 'T12:00:00');
+                text = (end.slice(0, 4) === iso.slice(0, 4) && !isNaN(startDate)
+                        ? startDate.toLocaleDateString([], { day: 'numeric', month: 'short' })
+                        : fmtDayLabel(iso))
+                    + ' – ' + fmtDayLabel(end);
+            } else {
+                text = fmtDayLabel(iso);
+            }
+            if ((end || iso) < todayIso()) return text + ' (passed)';
+            return labels.earningsDateEstimate === 'true' ? text + '~' : text;
+        }
+
+        function fmtSnapValue(v, type, ccy, row) {
+            // A date is not a number, so this branch has to precede the numeric guard below —
+            // which would otherwise reject every ISO day as '—'.
+            if (type === 'date') return fmtEarningsDate(v, row);
             var n = parseFloat(v);
             if (!isFinite(n)) return '—';
             if (type === 'pct') return (n * 100).toFixed(2) + '%';
@@ -7835,7 +7923,8 @@
                 var keys = [];
                 g.fields.forEach(function (f) {
                     var key = 'f:' + f[0];
-                    reg[key] = { label: f[1], title: f[3], group: g.title, type: f[2], anchor: f[5] };
+                    reg[key] = { label: f[1], title: f[3], group: g.title, type: f[2], anchor: f[5],
+                                 source: f[6] };
                     keys.push(key);
                 });
                 groups.push({ title: g.title, keys: keys });
@@ -7853,11 +7942,17 @@
          * an ETF has no FCF margin, and a nil is not a zero.
          */
         function wlFundValue(symbol, key) {
-            var q = wlFundamentals && wlFundamentals[symbol];
-            if (!q || q.missing) return null;
+            var q = wlFundRow(symbol);
+            if (!q) return null;
             var bare = key.slice(2);
-            var v = WL_FUND_TOP[bare] ? q[bare] : (q.extra ? q.extra[bare] : null);
-            return v == null ? null : v;
+            if (WL_FUND_TOP[bare]) return q[bare] == null ? null : q[bare];
+            return fundFieldValue(q, bare, (wlColumnRegistry().byKey[key] || {}).source);
+        }
+
+        /** The cached fundamentals row behind a watchlist symbol, or null while it is unusable. */
+        function wlFundRow(symbol) {
+            var q = wlFundamentals && wlFundamentals[symbol];
+            return (!q || q.missing) ? null : q;
         }
 
         /** A fundamentals cell: formatted text plus the raw number for the sorter. */
@@ -7865,11 +7960,14 @@
             var meta = wlColumnRegistry().byKey[key] || {};
             var v = wlFundValue(r.symbol, key);
             if (v == null) return '<td class="na" data-f="' + key + '">—</td>';
-            var n = parseFloat(v);
+            var type = meta.type || 'ratio';
             // The rendered text carries %, £ and T/B/M suffixes; parseVal copes, but handing the
-            // sorter the raw number is exact and free.
-            return '<td data-f="' + key + '" data-sort-value="' + n + '">' +
-                fmtSnapValue(v, meta.type || 'ratio', r.currency) + '</td>';
+            // sorter the raw number is exact and free. A date sorts on its own epoch: parseFloat
+            // on an ISO day reads the year alone, which would shuffle a whole quarter together.
+            var n = type === 'date' ? Date.parse(v) : parseFloat(v);
+            return '<td data-f="' + key + '"' +
+                (isFinite(n) ? ' data-sort-value="' + n + '"' : '') + '>' +
+                fmtSnapValue(v, type, r.currency, wlFundRow(r.symbol)) + '</td>';
         }
 
         function wlThrCell(r, kind, extraCls) {

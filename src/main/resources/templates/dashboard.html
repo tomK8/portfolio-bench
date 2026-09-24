@@ -3989,8 +3989,8 @@
         <p class="muted" style="margin-top: 0">
             Current-state fundamentals for every currently-held symbol (plus any watchlist names
             and any ticker you add below, owned or not) — P/E, forward P/E,
-            EV/EBITDA, PEG, market cap, 52-week range, beta and analyst target, all from Yahoo's
-            <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Data is
+            EV/EBITDA, PEG, market cap, 52-week range, beta, analyst target and the next
+            scheduled earnings date, all from Yahoo's <code>quoteSummary</code> endpoint. Bonds/gilts are skipped (no coverage). Data is
             cached in SQLite and refreshed by a background job on startup and every 4 hours, so
             the table renders instantly. Click <b>Refresh</b> to force an immediate
             background re-fetch (the table updates as rows come in, ~30s for a full portfolio).
@@ -4017,6 +4017,7 @@
                 <th data-sort="num">Market Cap</th>
                 <th data-sort="num">52w Low</th>
                 <th data-sort="num">52w High</th>
+                <th data-sort="num" title="Next scheduled results date. A trailing ~ means Yahoo is estimating it rather than repeating an announcement.">Next earnings</th>
             </tr></thead>
             <tbody></tbody>
         </table>

@@ -139,6 +139,17 @@ different questions and are wired to different feeds:
   two-element `earningsDate` array is a window Yahoo has not narrowed to a day at all, printed as
   both ends. Showing either as a plain fixed date would be the same mistake as absorbing a
   figure we could not value.
+- **A date already behind us is set in muted italics, not labelled.** When Yahoo has no forward
+  date it leaves the most recent one in place — 7 of the 58 held names on the day this shipped,
+  UK half-year reporters especially — and printing that under "Next earnings" in the same face as
+  a forward date states something false. The styling is the whole marker: the earlier `(passed)`
+  spent a third of the column's width again on a word, in a table where the label already sets
+  the width (see [watchlist.md](watchlist.md)). The date itself stays rather than being blanked,
+  for the same reason the holdings strip prints *last 2026-07-30* — "reported in July, nothing
+  scheduled since" and "this name never reports" are different silences, and a blank cell tells
+  them apart from neither. It replaces the estimate `~` rather than joining it: a date already
+  behind us is not a date whose firmness is still the question. `fmtEarningsDate` therefore
+  returns HTML, and `earningsTd` sets it as `innerHTML`.
 - **The day comes from Yahoo's `fmt`, not from `raw`.** The raw epoch is the scheduled *instant*:
   MRVL's `1796155200` is 20:00 UTC, an after-the-close US report on 1 December, and a report
   scheduled late enough in the US evening falls on the following UTC date. Yahoo's own label

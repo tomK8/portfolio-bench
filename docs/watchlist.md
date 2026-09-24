@@ -257,6 +257,16 @@ touches an order.
     (measured: thead 309px down the viewport after a 600px page scroll, not 0). With
     `max-height` + `overflow: auto` the header sticks again and the Symbol column pins left on
     the same footing — the corner cell outranks both axes or whichever slides under it wins.
+  - **The header wraps; the data does not.** With twenty-odd columns the *label* is what sets
+    the width — `% Held by Institutions` is 123px over a column of `15.48%` figures, and six such
+    labels cost ~160px of screen between them. Each label therefore renders inside its own
+    `<span class="wl-th">`: `max-width` on a `<th>` is ignored by an auto-layout table, so the cap
+    has to sit on a box inside it. The span pairs that cap with `width: max-content`, which is
+    what stops the column being squeezed *below* the cap into one word per line — short labels
+    keep a single line, long ones take exactly two, and nothing lands tighter than the cap. Only
+    the span relaxes `white-space`; the `th[data-sort]` nowrap stays, which is what keeps the sort
+    arrow (an `::after` on the th, outside the span) on the label's last line instead of dropping
+    to one of its own. `vertical-align: bottom` then sits every label on the same baseline.
   Click a row for a
   popup: same fields + a price chart with a 1D/3D/5D/10D/15D (intraday) + 30D…MAX (daily) window
   toggle, the **selected window's own high/low** beside the fixed 52-week pair, + a collapsible

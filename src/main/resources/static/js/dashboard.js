@@ -3897,7 +3897,8 @@
         function earningsTd(row) {
             var iso = (row.labels || {}).earningsDate;
             if (!iso) return td(null);
-            var c = td(fmtEarningsDate(iso, row));
+            var c = td('');
+            c.innerHTML = fmtEarningsDate(iso, row);   // a past date carries its own markup
             c.dataset.sortValue = Date.parse(iso);
             return c;
         }
@@ -3946,7 +3947,7 @@
         function fundamentalsFieldGroups() {
             return [
                 { title: 'Earnings', fields: [
-                    ['earningsDate', 'Next earnings', 'date', 'The next scheduled results date, from Yahoo\'s company calendar. A trailing ~ means Yahoo is estimating it from the past reporting rhythm rather than repeating an announcement, so it can still move by weeks; two dates are a window Yahoo has not narrowed to a single day. "(passed)" means Yahoo has published no forward date and this is the most recent one it knows. Funds and bonds have none.', false, null, 'labels']
+                    ['earningsDate', 'Next earnings', 'date', 'The next scheduled results date, from Yahoo\'s company calendar. A trailing ~ means Yahoo is estimating it from the past reporting rhythm rather than repeating an announcement, so it can still move by weeks; two dates are a window Yahoo has not narrowed to a single day. A date in muted italics has already been reported: Yahoo has published no forward date and this is the most recent one it knows. Funds and bonds have none.', false, null, 'labels']
                 ]},
                 { title: 'Valuation', fields: [
                     ['enterpriseToEbitda', 'EV/EBITDA', 'ratio', 'Enterprise Value ÷ EBITDA (TTM). Measures how expensive the business is relative to cash earnings before interest, taxes, depreciation and amortisation. Lower = cheaper; negative means EBITDA is negative.', true, 'ev-ebitda'],
@@ -4099,13 +4100,18 @@
          *    high/low cells use for a close-only extreme. An estimated date can move by weeks,
          *    and printing it as though it were fixed is the same mistake as reporting a figure
          *    we could not value;
-         *  - a day that has already gone says so. When Yahoo has no forward date it publishes the
-         *    most recent one it knows — 7 of the 58 held names carrying a date on the day this
-         *    shipped, UK reporters especially — and printing that under "Next earnings" states
-         *    something false. It is still stored exactly as the feed gave it: what Yahoo knows is
-         *    the fact, what the column claims about it is ours. "(passed)" replaces the estimate
-         *    marker rather than joining it, because a date already behind us is not a date whose
-         *    firmness is still the question.
+         *  - a day that has already gone is set in muted italics. When Yahoo has no forward date
+         *    it publishes the most recent one it knows — 7 of the 58 held names carrying a date
+         *    on the day this shipped, UK reporters especially — and printing that under "Next
+         *    earnings" in the same face as a forward date states something false. It is still
+         *    stored exactly as the feed gave it: what Yahoo knows is the fact, what the column
+         *    claims about it is ours. The date itself stays rather than being blanked, because
+         *    "reported in August, nothing scheduled since" and "this name never reports" are two
+         *    different facts and a blank cell would tell them apart from neither. The styling
+         *    replaces the estimate marker rather than joining it: a date already behind us is not
+         *    a date whose firmness is still the question.
+         *
+         * Returns HTML, not text — `earningsTd` sets it as innerHTML for that reason.
          */
         function fmtEarningsDate(iso, row) {
             var labels = (row && row.labels) || {};
@@ -4123,7 +4129,10 @@
             } else {
                 text = fmtDayLabel(iso);
             }
-            if ((end || iso) < todayIso()) return text + ' (passed)';
+            if ((end || iso) < todayIso()) {
+                return '<span class="earn-past" title="Already reported — Yahoo has published no ' +
+                    'forward date, so this is the most recent one it knows">' + text + '</span>';
+            }
             return labels.earningsDateEstimate === 'true' ? text + '~' : text;
         }
 
@@ -7884,7 +7893,7 @@
             marketCap: ['Market cap', 'cap', 'Share price × shares outstanding.'],
             forwardPe: ['Fwd P/E', 'ratio', 'Price ÷ next year\'s consensus earnings per share.'],
             pegRatio: ['PEG', 'ratio', 'Forward P/E ÷ expected earnings growth. Below 1 is often read as growth being under-priced.'],
-            targetMeanPrice: ['Analyst target', 'price', 'Mean of analysts\' 12-month price targets, in the instrument\'s own currency.'],
+            targetMeanPrice: ['Target', 'price', 'Mean of analysts\' 12-month price targets, in the instrument\'s own currency.'],
             week52High: ['52w high', 'price', 'Highest price over the past 52 weeks.'],
             week52Low: ['52w low', 'price', 'Lowest price over the past 52 weeks.']
         };
@@ -8044,9 +8053,12 @@
                 // The four alert inputs are not values, so they opt out of sorting the same way
                 // they always have — by carrying no data-sort.
                 var sortable = key.indexOf('thr') !== 0;
+                // The label sits in a span of its own so it can wrap inside a width the CSS
+                // caps — a <th> in an auto-layout table ignores max-width, and without the cap a
+                // label like '% Held by Institutions' sets the whole column's width.
                 html += '<th' + (sortable ? ' data-sort="num"' : '') +
                     (m.title ? ' title="' + escapeHtml(m.title) + '"' : '') + '>' +
-                    escapeHtml(m.label) + '</th>';
+                    '<span class="wl-th">' + escapeHtml(m.label) + '</span></th>';
             });
             html += '<th></th></tr>';
             table.querySelector('thead').innerHTML = html;

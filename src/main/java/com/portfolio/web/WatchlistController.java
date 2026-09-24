@@ -62,17 +62,27 @@ public class WatchlistController {
         this.watchlistAlertJob = watchlistAlertJob;
     }
 
+    /**
+     * The named lists that make up the Tools tab strip. Always at least one — the repository
+     * migration promotes a pre-lists watchlist into the first.
+     */
+    @GetMapping("/watchlist/lists")
+    @ResponseBody
+    public java.util.List<WatchlistRepository.WatchList> lists() {
+        return watchlistRepo.lists();
+    }
+
     @GetMapping("/watchlist")
     @ResponseBody
-    public WatchlistView watchlist() {
-        return watchlistService.view();
+    public WatchlistView watchlist(@RequestParam(name = "list", required = false) Long list) {
+        return watchlistService.view(listOrFirst(list));
     }
 
     /** Lightweight near-real-time refresh (see {@link WatchlistService#quotes()}) — polled by the dashboard. */
     @GetMapping("/watchlist/quotes")
     @ResponseBody
-    public QuoteView quotes() {
-        return watchlistService.quotes();
+    public QuoteView quotes(@RequestParam(name = "list", required = false) Long list) {
+        return watchlistService.quotes(listOrFirst(list));
     }
 
     /**
@@ -92,14 +102,16 @@ public class WatchlistController {
                              @RequestParam(name = "highPct", required = false) String highPct,
                              @RequestParam(name = "movePct", required = false) String movePct,
                              @RequestParam(name = "priceAbove", required = false) String priceAbove,
-                             @RequestParam(name = "priceBelow", required = false) String priceBelow) {
+                             @RequestParam(name = "priceBelow", required = false) String priceBelow,
+                             @RequestParam(name = "list", required = false) Long list) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase();
         if (sym.isEmpty()) throw new IllegalArgumentException("Symbol is required.");
+        long listId = listOrFirst(list);
         watchlistRepo.add(sym, parsePct(highPct, "high threshold"), parsePct(movePct, "move threshold"),
-                parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
+                parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"), listId);
         watchlistAlertJob.clearFiredFor(sym);   // new/changed triggers re-arm today (no stale dedup)
         backfillInBackground(sym);
-        return watchlistService.view();
+        return watchlistService.view(listId);
     }
 
     @PostMapping("/watchlist/threshold")
@@ -108,20 +120,25 @@ public class WatchlistController {
                                    @RequestParam(name = "highPct", required = false) String highPct,
                                    @RequestParam(name = "movePct", required = false) String movePct,
                                    @RequestParam(name = "priceAbove", required = false) String priceAbove,
-                                   @RequestParam(name = "priceBelow", required = false) String priceBelow) {
+                                   @RequestParam(name = "priceBelow", required = false) String priceBelow,
+                                   @RequestParam(name = "list", required = false) Long list) {
+        // Thresholds are global to the symbol, so this writes one row however many lists hold it;
+        // the list param only says which rows to send back.
         watchlistRepo.updateThresholds(symbol, parsePct(highPct, "high threshold"),
                 parsePct(movePct, "move threshold"),
                 parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
         watchlistAlertJob.clearFiredFor(symbol);   // a corrected target re-arms same-day
-        return watchlistService.view();
+        return watchlistService.view(listOrFirst(list));
     }
 
     @PostMapping("/watchlist/remove")
     @ResponseBody
-    public WatchlistView remove(@RequestParam("symbol") String symbol) {
-        watchlistRepo.remove(symbol);
+    public WatchlistView remove(@RequestParam("symbol") String symbol,
+                                @RequestParam(name = "list", required = false) Long list) {
+        long listId = listOrFirst(list);
+        watchlistRepo.remove(symbol, listId);
         watchlistAlertJob.clearFiredFor(symbol);   // drop any fired flags for a symbol no longer watched
-        return watchlistService.view();
+        return watchlistService.view(listId);
     }
 
     /**
@@ -150,19 +167,70 @@ public class WatchlistController {
 
     @GetMapping("/watchlist/returns")
     @ResponseBody
-    public WatchlistService.ReturnsGrid returns() {
-        return watchlistService.returns();
+    public WatchlistService.ReturnsGrid returns(@RequestParam(name = "list", required = false) Long list) {
+        return watchlistService.returns(listOrFirst(list));
     }
 
     @PostMapping("/watchlist/move")
     @ResponseBody
     public WatchlistView move(@RequestParam("symbol") String symbol,
-                              @RequestParam("dir") String dir) {
+                              @RequestParam("dir") String dir,
+                              @RequestParam(name = "list", required = false) Long list) {
         boolean up = "up".equalsIgnoreCase(dir == null ? "" : dir.trim());
         boolean down = "down".equalsIgnoreCase(dir == null ? "" : dir.trim());
         if (!up && !down) throw new IllegalArgumentException("dir must be 'up' or 'down'.");
-        watchlistRepo.move(symbol, up);
-        return watchlistService.view();
+        long listId = listOrFirst(list);
+        watchlistRepo.move(symbol, up, listId);
+        return watchlistService.view(listId);
+    }
+
+    // ---- list management -------------------------------------------------------
+
+    @PostMapping("/watchlist/lists/create")
+    @ResponseBody
+    public java.util.List<WatchlistRepository.WatchList> createList(@RequestParam("name") String name) {
+        watchlistRepo.createList(name);
+        return watchlistRepo.lists();
+    }
+
+    @PostMapping("/watchlist/lists/rename")
+    @ResponseBody
+    public java.util.List<WatchlistRepository.WatchList> renameList(@RequestParam("list") long list,
+                                                                    @RequestParam("name") String name) {
+        watchlistRepo.renameList(list, name);
+        return watchlistRepo.lists();
+    }
+
+    /** Deleting a list also drops any symbol it held that no other list holds. */
+    @PostMapping("/watchlist/lists/delete")
+    @ResponseBody
+    public java.util.List<WatchlistRepository.WatchList> deleteList(@RequestParam("list") long list) {
+        watchlistRepo.deleteList(list);
+        return watchlistRepo.lists();
+    }
+
+    @PostMapping("/watchlist/lists/move")
+    @ResponseBody
+    public java.util.List<WatchlistRepository.WatchList> moveList(@RequestParam("list") long list,
+                                                                  @RequestParam("dir") String dir) {
+        boolean up = "up".equalsIgnoreCase(dir == null ? "" : dir.trim());
+        boolean down = "down".equalsIgnoreCase(dir == null ? "" : dir.trim());
+        if (!up && !down) throw new IllegalArgumentException("dir must be 'up' or 'down'.");
+        watchlistRepo.moveList(list, up);
+        return watchlistRepo.lists();
+    }
+
+    /**
+     * A missing or unknown {@code list} means the first one. The dashboard always sends an id, so
+     * this covers a bookmarked URL and — more usefully — a tab still open on a list another
+     * window has just deleted: it falls back rather than erroring.
+     */
+    private long listOrFirst(Long requested) {
+        if (requested == null) return watchlistRepo.firstListId();
+        for (WatchlistRepository.WatchList l : watchlistRepo.lists()) {
+            if (l.id() == requested) return requested;
+        }
+        return watchlistRepo.firstListId();
     }
 
     /**

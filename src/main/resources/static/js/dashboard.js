@@ -11167,59 +11167,106 @@
         }
 
         /**
-         * The holdings section: positions ranked by size, with the coverage caveat spelled out.
-         * A UK/EU listing that the US-only Nasdaq feed cannot see is labelled "not covered" rather
-         * than silently omitted — otherwise a large position with an unknown date looks exactly
-         * like one with nothing due.
+         * The holdings section: every position ranked by size, with which source dated it made
+         * plain. Two groups share one table, so one weight ranking runs down the whole thing:
+         *
+         *  - **Reporting** — dated by the market calendar, inside the look-ahead, with a session
+         *    and a consensus estimate. These are the prints that land next.
+         *  - **Expected** — dated only by the cached fundamentals snapshot. Nearly always past the
+         *    look-ahead and carrying no estimate, so the weaker columns stay blank rather than
+         *    borrowing the stronger group's geometry to look like something they are not.
+         *
+         * A UK/EU listing the US-only feed cannot see is still labelled "not covered" rather than
+         * silently omitted — but only when the snapshot has nothing either, which is now the rare
+         * case. Where the snapshot's date has already gone, the row says when it last reported:
+         * Yahoo leaves that date in place until it learns the next one, and "last reported in July"
+         * is a different silence from "we have never had a date".
          */
         function renderEarningsHoldings(rep) {
             var rows = rep.holdings || [];
             var reporting = rows.filter(function (r) { return r.state === 'REPORTING'; });
+            var expected = rows.filter(function (r) { return r.state === 'EXPECTED'; });
             var notCovered = rows.filter(function (r) { return r.state === 'NOT_COVERED'; });
             var quiet = rows.filter(function (r) { return r.state === 'NONE_SCHEDULED'; });
 
             var html = '';
-            if (reporting.length) {
+            if (reporting.length || expected.length) {
                 html += '<tr><th class="lbl">Symbol</th><th class="lbl">Company</th><th>Weight</th>'
                     + '<th>Value</th><th>Date</th><th>When</th><th>EPS est</th><th>LY EPS</th></tr>';
+            }
+            if (reporting.length) {
+                html += eaHoldingsHeader('Reporting in the next ' + (rep.holdingsForwardDays || 21)
+                    + ' days', 'From the market calendar, with session and consensus estimate.');
                 reporting.forEach(function (r) {
-                    // Anything at or above 2% of the book is a position whose print actually
-                    // moves the portfolio — worth making findable at a glance.
-                    var big = r.pctOfPortfolio != null && parseFloat(r.pctOfPortfolio) >= 0.02;
-                    html += '<tr' + (big ? ' style="font-weight:600;"' : '') + '>'
-                        + '<td class="lbl">' + escapeHtml(r.symbol) + '</td>'
-                        + '<td class="lbl">' + escapeHtml(r.companyName || '—') + '</td>'
-                        + '<td>' + fmtPct(r.pctOfPortfolio) + '</td>'
-                        + '<td>' + (r.gbpValue == null ? '—' : fmtMoney(parseFloat(r.gbpValue))) + '</td>'
-                        + '<td>' + escapeHtml(r.date || '—') + '</td>'
+                    html += eaHoldingRow(r,
+                        '<td>' + escapeHtml(r.date || '—') + '</td>'
                         + '<td>' + eaTimeBadge(r.time) + '</td>'
                         + '<td>' + eaEps(r.epsForecast) + '</td>'
-                        + '<td>' + eaEps(r.lastYearEps) + '</td>'
-                        + '</tr>';
+                        + '<td>' + eaEps(r.lastYearEps) + '</td>');
                 });
-            } else {
-                html = '<tr><td class="muted">None of your holdings report in the next '
-                    + (rep.holdingsForwardDays || 21) + ' days.</td></tr>';
+            }
+            if (expected.length) {
+                html += eaHoldingsHeader('Expected later',
+                    'From the cached company calendar on the fundamentals snapshot — a date only, '
+                    + 'usually past the window above, with no session and no consensus estimate. '
+                    + 'A trailing ~ is Yahoo estimating the day rather than repeating an '
+                    + 'announcement.');
+                expected.forEach(function (r) {
+                    html += eaHoldingRow(r,
+                        '<td>' + escapeHtml(r.expectedDate)
+                            + (r.expectedDateEstimate === true ? '~' : '') + '</td>'
+                        + '<td class="muted">—</td><td class="muted">—</td><td class="muted">—</td>');
+                });
+            }
+            if (!html) {
+                html = '<tr><td class="muted">No date for any holding — neither the calendar nor '
+                    + 'the fundamentals snapshot has one.</td></tr>';
             }
             document.getElementById('ea-holdings-table').innerHTML = html;
 
             var other = '';
             if (notCovered.length) {
-                other += '<div class="mo-banner"><b>Not covered by the US calendar</b> — these are '
-                    + 'non-US listings this feed never carries, so a blank here means "unknown", '
-                    + 'not "nothing due": '
-                    + notCovered.map(function (r) {
-                        return escapeHtml(r.symbol) + ' <span class="muted">('
-                            + fmtPct(r.pctOfPortfolio) + ')</span>';
-                    }).join(' · ') + '</div>';
+                other += '<div class="mo-banner"><b>No date from either source</b> — non-US '
+                    + 'listings this feed never carries, with nothing cached for them either, so a '
+                    + 'blank here means "unknown", not "nothing due": '
+                    + notCovered.map(eaSilentName).join(' · ') + '</div>';
             }
             if (quiet.length) {
                 other += '<div class="muted" style="font-size:0.78rem;margin-top:0.35rem;">'
-                    + 'Covered, nothing scheduled in the window: '
-                    + quiet.map(function (r) { return escapeHtml(r.symbol); }).join(', ')
+                    + 'Covered, nothing scheduled and no cached date: '
+                    + quiet.map(eaSilentName).join(' · ')
                     + '</div>';
             }
             document.getElementById('ea-holdings-other').innerHTML = other;
+        }
+
+        /** A full-width divider naming one group of the holdings table and what dated it. */
+        function eaHoldingsHeader(title, tip) {
+            return '<tr class="ea-group"><td colspan="8" title="' + escapeHtml(tip) + '">'
+                + escapeHtml(title) + '</td></tr>';
+        }
+
+        /** The five columns both groups share; `tail` is the four the source decides. */
+        function eaHoldingRow(r, tail) {
+            // Anything at or above 2% of the book is a position whose print actually moves the
+            // portfolio — worth making findable at a glance.
+            var big = r.pctOfPortfolio != null && parseFloat(r.pctOfPortfolio) >= 0.02;
+            return '<tr' + (big ? ' style="font-weight:600;"' : '') + '>'
+                + '<td class="lbl">' + escapeHtml(r.symbol) + '</td>'
+                + '<td class="lbl">' + escapeHtml(r.companyName || '—') + '</td>'
+                + '<td>' + fmtPct(r.pctOfPortfolio) + '</td>'
+                + '<td>' + (r.gbpValue == null ? '—' : fmtMoney(parseFloat(r.gbpValue))) + '</td>'
+                + tail + '</tr>';
+        }
+
+        /**
+         * A name in one of the two "no forward date" strips. A snapshot date that has passed is
+         * shown as the last report we know of — the one thing separating a company whose rhythm we
+         * can see from one we have never had a date for at all.
+         */
+        function eaSilentName(r) {
+            return escapeHtml(r.symbol) + ' <span class="muted">(' + fmtPct(r.pctOfPortfolio)
+                + (r.expectedDate ? ', last ' + escapeHtml(r.expectedDate) : '') + ')</span>';
         }
 
         function renderEarnings() {
@@ -11271,7 +11318,10 @@
             document.getElementById('ea-days').innerHTML = html;
             document.getElementById('ea-source').textContent =
                 'Source: ' + (rep.source || 'Nasdaq')
-                + '. Estimates are consensus; BMO=before open, AMC=after close, TBD=unspecified.';
+                + ' for the calendar below and the "reporting" group above; estimates are '
+                + 'consensus, BMO=before open, AMC=after close, TBD=unspecified. The "expected" '
+                + 'group is the cached Yahoo company calendar from the fundamentals snapshot — a '
+                + 'date only, refreshed every 4 hours.';
         }
 
     }());

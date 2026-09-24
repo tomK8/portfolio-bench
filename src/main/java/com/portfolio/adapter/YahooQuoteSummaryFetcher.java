@@ -331,6 +331,13 @@ public class YahooQuoteSummaryFetcher {
         labels.put("industry", text(prof, "industry"));
         labels.put("recommendationKey", text(fin, "recommendationKey"));
         labels.put("country", text(prof, "country"));
+        // The listing's own name. Cheap (the `price` module is already requested) and the only
+        // name a row dated purely from this snapshot can carry — the market calendar is not
+        // there to supply one. `longName` is the clean form across markets; `shortName` is the
+        // exchange's ("BARCLAYS PLC ORD 25P", "RHEINMETALL AG                I") and is the
+        // fallback only because a name is better than none.
+        String name = text(price, "longName");
+        labels.put("companyName", name != null ? name : text(price, "shortName"));
         putNextEarnings(labels, cal);
 
         return new QuoteSummary(ticker, currency, currentPrice, marketCap, trailingPe, forwardPe,

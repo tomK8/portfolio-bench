@@ -40,6 +40,14 @@ import java.util.TreeSet;
  * persists after each /sync. Non-US listings never appear on the US calendar, so matching held
  * internal symbols (which equal their US tickers) against the feed's symbols is sufficient — no FX,
  * no ticker map.
+ *
+ * <p><b>The holdings section reads two sources, the calendar and then the fundamentals snapshot.</b>
+ * The calendar is stronger — a session, a consensus estimate, and authority over the window — but
+ * it is US-only and window-bounded, which between them left most rows blank. The snapshot's
+ * per-symbol {@code calendarEvents} date ({@link FundamentalsRepository}, cached by the
+ * quoteSummary refresh) fills those in as {@code EXPECTED}: no estimate, usually beyond the window,
+ * and never overriding a calendar event. See {@link #holdingState} for the precedence and
+ * {@code docs/earnings.md} for why the two stay separate feeds rather than merging.
  */
 public class EarningsCalendarService {
 
@@ -149,7 +157,7 @@ public class EarningsCalendarService {
 
         PositionSizes sizes = positionSizes(warnings);
         List<EarningsCalendarReport.HoldingRow> holdings =
-                holdingRows(held, mine, sizes, warnings);
+                holdingRows(held, mine, sizes, today);
 
         List<String> heldList = new ArrayList<>(new TreeSet<>(held));
         return new EarningsCalendarReport(today, b, f, hf, minMarketCap, days, heldList, mine,
@@ -157,12 +165,25 @@ public class EarningsCalendarService {
     }
 
     /**
-     * Ranks every held position by size and says, for each, whether the feed has a date for it,
-     * cannot see it at all, or simply has nothing due. Funds and bonds are dropped outright — they
-     * have no earnings, so listing them would be noise.
+     * Ranks every held position by size and says, for each, when it next reports and which source
+     * knows that. Funds and bonds are dropped outright — they have no earnings, so listing them
+     * would be noise.
+     *
+     * <p><b>Two sources, in order of strength.</b> The market calendar is asked first: it is the
+     * only one that carries a session and a consensus estimate, and it is authoritative about the
+     * window. When it has nothing, the fundamentals snapshot is consulted — the per-symbol
+     * {@code calendarEvents} date the quoteSummary refresh already caches, read out of the
+     * {@code loadAll()} map this method loads anyway, so the fallback costs no query and no fetch.
+     *
+     * <p>That fallback is what makes the section answer its own question. Before it, 39 of 42
+     * rows here were blank: 22 US names the calendar covers but has nothing due for inside the
+     * look-ahead, and 17 non-US listings it cannot see at all. The snapshot has a forward date for
+     * 32 of those 42. It is applied to <b>both</b> groups rather than only to the non-US one that
+     * prompted it — the cached date exists either way, and a table that dated BARC at 2.5% while
+     * leaving GOOG at 5.7% blank would be drawing a line the data does not.
      */
     private List<EarningsCalendarReport.HoldingRow> holdingRows(
-            Set<String> held, List<EarningsEvent> mine, PositionSizes sizes, List<String> warnings) {
+            Set<String> held, List<EarningsEvent> mine, PositionSizes sizes, LocalDate today) {
 
         Map<String, EarningsEvent> eventBySymbol = new LinkedHashMap<>();
         for (EarningsEvent e : mine) {
@@ -177,6 +198,7 @@ public class EarningsCalendarService {
         Map<String, FundamentalsRepository.Cached> cache = fundamentalsRepo.loadAll();
         List<EarningsCalendarReport.HoldingRow> rows = new ArrayList<>();
         int notCovered = 0;
+        int expected = 0;
 
         for (String symbol : universe) {
             if (Instruments.isBond(symbol)) continue;
@@ -189,19 +211,18 @@ public class EarningsCalendarService {
             if (gbp != null && gbp.signum() <= 0) continue;
 
             EarningsEvent e = eventBySymbol.get(symbol.toUpperCase());
-            String state;
-            if (e != null) {
-                state = "REPORTING";
-            } else if (isNonUsListing(symbol)) {
-                state = "NOT_COVERED";
-                notCovered++;
-            } else {
-                state = "NONE_SCHEDULED";
-            }
+            // Only consulted when the calendar came back empty for this name — the stronger
+            // source keeps its own fields, and no row ever carries two competing dates.
+            LocalDate snapshot = e == null ? snapshotDate(c) : null;
+            String state = holdingState(e != null, snapshot, today, isNonUsListing(symbol));
+            if ("NOT_COVERED".equals(state)) notCovered++;
+            if ("EXPECTED".equals(state)) expected++;
 
             rows.add(new EarningsCalendarReport.HoldingRow(
                     symbol,
-                    e == null ? null : e.companyName(),
+                    // The calendar names the company when it dated the row; otherwise the
+                    // snapshot does, so an EXPECTED row is not a column of dashes.
+                    e == null ? snapshotLabel(c, "companyName") : e.companyName(),
                     e == null ? null : e.date(),
                     e == null ? null : e.time(),
                     e == null ? null : e.epsForecast(),
@@ -209,7 +230,9 @@ public class EarningsCalendarService {
                     e == null ? null : e.lastYearEps(),
                     gbp,
                     share(gbp, sizes.totalGbp()),
-                    state));
+                    state,
+                    snapshot,
+                    snapshot == null ? null : snapshotDateEstimate(c)));
         }
 
         rows.sort(Comparator.comparing(
@@ -217,11 +240,59 @@ public class EarningsCalendarService {
                         r.gbpValue() == null ? BigDecimal.ZERO : r.gbpValue()).reversed()
                 .thenComparing(EarningsCalendarReport.HoldingRow::symbol));
 
-        if (notCovered > 0) {
-            warnings.add(notCovered + " held position(s) are non-US listings that this US calendar "
-                    + "never carries — they are listed as \"not covered\", not as having nothing due.");
-        }
+        // No warning for the NOT_COVERED rows. The section names every one of them in its own
+        // strip, with its weight and the last date we do have, which is strictly more than a count
+        // could say — and a second banner repeating it would blunt the warnings area, where
+        // everything else is an actual failure (a fetch that died, a snapshot that would not value).
+        log.debug("Earnings holdings: {} row(s), {} expected from the fundamentals snapshot, "
+                + "{} with no date at all", rows.size(), expected, notCovered);
         return rows;
+    }
+
+    /**
+     * Which of the four states a row is in, given what each source knows. Pure and package-visible
+     * so the precedence can be pinned directly: the calendar outranks the snapshot, a snapshot date
+     * only counts while it is still ahead, and the listing's market is the tie-breaker between the
+     * two kinds of silence.
+     *
+     * <p>A snapshot date that has already passed deliberately does <b>not</b> yield
+     * {@code EXPECTED}. Yahoo leaves the last date it knows in place until it learns the next one,
+     * so a passed date says "this is where the rhythm was", not "this is when it next reports" —
+     * and a state that claimed otherwise would be exactly the blank-row conflation the states exist
+     * to prevent. The date still travels with the row as context.
+     */
+    static String holdingState(boolean calendarEvent, LocalDate snapshotDate, LocalDate today,
+                               boolean nonUsListing) {
+        if (calendarEvent) return "REPORTING";
+        if (snapshotDate != null && !snapshotDate.isBefore(today)) return "EXPECTED";
+        return nonUsListing ? "NOT_COVERED" : "NONE_SCHEDULED";
+    }
+
+    /**
+     * The next-earnings date cached on the fundamentals row, or null. Parsing degrades: a blob that
+     * somehow holds a non-date costs this one row its date, never the tab.
+     */
+    private static LocalDate snapshotDate(FundamentalsRepository.Cached c) {
+        String iso = snapshotLabel(c, "earningsDate");
+        if (iso == null) return null;
+        try {
+            return LocalDate.parse(iso);
+        } catch (java.time.format.DateTimeParseException ex) {
+            log.warn("Unparseable cached earnings date {}", iso);
+            return null;
+        }
+    }
+
+    /** Yahoo's estimate flag for that date — null when it said nothing either way. */
+    private static Boolean snapshotDateEstimate(FundamentalsRepository.Cached c) {
+        String flag = snapshotLabel(c, "earningsDateEstimate");
+        return flag == null ? null : Boolean.valueOf("true".equalsIgnoreCase(flag));
+    }
+
+    private static String snapshotLabel(FundamentalsRepository.Cached c, String key) {
+        if (c == null || c.quote() == null || c.quote().labels() == null) return null;
+        String v = c.quote().labels().get(key);
+        return (v == null || v.isBlank()) ? null : v;
     }
 
     /**

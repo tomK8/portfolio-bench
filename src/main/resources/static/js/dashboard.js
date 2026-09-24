@@ -28,25 +28,28 @@
 
         function attachSort(table) {
             var ths = Array.from(table.querySelectorAll('thead th[data-sort]'));
-            var sortCol = -1, sortAsc = true;
-            // A marker already present means a re-render restored the user's ordering (see
-            // restoreOrdersSort). Seed the toggle state from it, or the next click on that same
-            // column would restart at ascending instead of flipping to descending.
-            ths.forEach(function (h, i) {
-                if (h.dataset.sortDir) { sortCol = i; sortAsc = h.dataset.sortDir === 'asc'; }
-            });
-            ths.forEach(function (th, idx) {
+            ths.forEach(function (th) {
                 th.addEventListener('click', function () {
-                    var type = th.dataset.sort;
-                    sortAsc = sortCol === idx ? !sortAsc : true;
-                    sortCol = idx;
-                    ths.forEach(function (h) {
-                        delete h.dataset.sortDir;
-                    });
-                    th.dataset.sortDir = sortAsc ? 'asc' : 'desc';
-                    sortBody(table, idx, type, sortAsc);
+                    // The direction is read from the marker in the DOM rather than remembered in
+                    // this closure. A marker can be put there by a re-render (restoreOrdersSort)
+                    // or taken away from outside (the watchlist drops it when a drag makes the
+                    // visible order the manual one), and a closure that had not seen either would
+                    // flip the next click the wrong way.
+                    var asc = th.dataset.sortDir !== 'asc';
+                    ths.forEach(function (h) { delete h.dataset.sortDir; });
+                    th.dataset.sortDir = asc ? 'asc' : 'desc';
+                    sortBody(table, sortCellIndex(th), th.dataset.sort, asc);
                 });
             });
+        }
+
+        // Which cell this header sorts on. NOT its position among the sortable headers: a table
+        // may carry a column that opts out of sorting — the watchlist's four alert inputs do —
+        // and from the first such column onwards the two indices part company, which would sort
+        // the table by its neighbour. sortBody reads tr.cells[idx], so cellIndex is the one that
+        // lines up. (No sortable thead spans columns, so cellIndex is the visual column too.)
+        function sortCellIndex(th) {
+            return th.cellIndex;
         }
 
         // Ordering by one column, for a flat table or a grouped one. The Cash-ledger table gains
@@ -180,8 +183,8 @@
             ordersSort = th.dataset.sortDir ? {idx: ths.indexOf(th), dir: th.dataset.sortDir} : null;
         });
 
-        // Put the marker back on the rebuilt thead and re-sort — before attachSort reads it, so
-        // the seeded toggle state and the rendered order agree.
+        // Put the marker back on the rebuilt thead and re-sort. attachSort reads the marker at
+        // click time, so the restored order and the next click's direction agree by construction.
         function restoreOrdersSort() {
             var table = document.getElementById('orders-table');
             if (!ordersSort || !table) return;    // nothing stored, or no open orders to sort
@@ -3870,7 +3873,7 @@
             var sortIdx = -1, sortAsc = true, sortType = 'txt';
             for (var i = 0; i < ths.length; i++) {
                 if (ths[i].dataset.sortDir) {
-                    sortIdx = i;
+                    sortIdx = sortCellIndex(ths[i]);
                     sortAsc = ths[i].dataset.sortDir === 'asc';
                     sortType = ths[i].dataset.sort;
                     break;
@@ -7404,6 +7407,45 @@
                 var tr = map[q.symbol];                     // absent → symbol set changed since last full load
                 if (tr) wlPatchQuoteCells(tr, q);
             });
+            wlReapplySort();                                // new prices, same claim in the header
+        }
+
+        /**
+         * Put the table back in the order its header claims. Every update here lands *in place* —
+         * a new price, a fundamentals cell that arrives a moment after the grid, a whole reconcile
+         * that re-imposes the stored order — so the value a sort was built on changes underneath
+         * a row that does not move, and the ▲ on the header goes on claiming an order the table no
+         * longer has. Sorting is a property of the table, not a thing that happened once.
+         *
+         * Two states are left alone. A drag owns the order until it drops (and a drop makes the
+         * visible order the manual one, marker and all — see wlClearSort). And focus inside the
+         * table means a threshold edit is in progress: moving a focused <input> in the DOM blurs
+         * it, which would eat the keystroke. The next quote tick re-sorts once the edit is done.
+         */
+        /** Is a column sort in force? The marker in the header is the only record of it. */
+        function wlSortActive() {
+            return !!document.querySelector('#watchlist-table thead th[data-sort-dir]');
+        }
+
+        function wlReapplySort() {
+            if (wlDragSym) return;
+            var table = document.getElementById('watchlist-table');
+            if (!table || table.contains(document.activeElement)) return;
+            reapplyActiveSort(table);
+        }
+
+        /**
+         * Drop the header's sort marker. Hand-placing a row — a drag, or the ↑↓ buttons that are
+         * its keyboard and touch equivalent — is what turns the visible arrangement into the
+         * stored one; leaving the marker would let the very next render sort the row straight
+         * back out of the place it was just put.
+         */
+        function wlClearSort() {
+            var table = document.getElementById('watchlist-table');
+            if (!table) return;
+            table.querySelectorAll('thead th[data-sort-dir]').forEach(function (th) {
+                delete th.dataset.sortDir;
+            });
         }
 
         function wlPatchPct(tr, field, frac, colour) {
@@ -7534,6 +7576,7 @@
         }
 
         function moveWatchlistSymbol(sym, dir) {
+            wlClearSort();                  // ↑↓ nudge the stored order, so that is what to show
             var body = new URLSearchParams(); body.set('symbol', sym); body.set('dir', dir);
             wlAddList(body);
             fetch('/watchlist/move', { method: 'POST', body: body })
@@ -7618,7 +7661,10 @@
                 wlDropCommitted = false;
                 if (!dropped) { wlApplyOrder(tbody, before); return; }
                 var now = wlVisibleOrder();
-                if (before && now.join('\u0001') !== before.join('\u0001')) saveWatchlistOrder(now);
+                if (before && now.join('\u0001') !== before.join('\u0001')) {
+                    wlClearSort();          // this arrangement IS the manual order now
+                    saveWatchlistOrder(now);
+                }
             });
         }
 
@@ -8192,10 +8238,15 @@
                 var tr = existing[r.symbol];
                 if (tr) wlPatchRow(tr, r); else tr = wlBuildRow(r);
                 seen[r.symbol] = true;
-                // A render landing mid-drag must not yank the row out from under the cursor, so
-                // while a drag is in flight only a row that isn't in the table yet is placed;
-                // the drop's own save is what settles the order a moment later.
-                if (tbody.children[i] !== tr && (!wlDragSym || tr.parentNode !== tbody)) {
+                // The stored order is the order to display only when nothing else owns it. A
+                // render landing mid-drag must not yank the row out from under the cursor, and
+                // under a column sort this placement is undone by wlReapplySort below anyway —
+                // except in the one case that matters, a render arriving while the caret is in a
+                // threshold input, where re-sorting stands down and this would be left showing
+                // manual order under a header still claiming the sort. In both, only a row that
+                // isn't in the table yet is placed.
+                var ownsOrder = wlDragSym || wlSortActive();
+                if (tbody.children[i] !== tr && (!ownsOrder || tr.parentNode !== tbody)) {
                     tbody.insertBefore(tr, tbody.children[i] || null);
                 }
             });
@@ -8205,6 +8256,12 @@
 
             // Sorting is bound by wlSyncHeader, which owns the <th> nodes: a one-shot latch here
             // would have left the listeners on header cells a column change had already discarded.
+            //
+            // The loop above puts every row at its *stored* index, which is the right starting
+            // point and the wrong finishing one whenever a column sort is active: a Refresh, an
+            // add, a remove or a threshold save would otherwise drop the table back into manual
+            // order while the header still showed the ▲ it was sorted by.
+            wlReapplySort();
         }
 
         function rowAlertClass(r) {
@@ -8509,6 +8566,9 @@
                     tr.replaceChild(tmp.firstChild, td);
                 });
             });
+            // Sorting by an f: column before the snapshot lands sorts a column of '—' — i.e. does
+            // nothing — and the values then appear in whatever order the rows were already in.
+            wlReapplySort();
         }
 
         function wlKv(label, value) {

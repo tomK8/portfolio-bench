@@ -81,9 +81,27 @@ touches an order.
     nothing** — without that, one bad row leaves a list permanently blank with no picker reachable
     to fix it. Symbol and the ↑↓× cell are pinned either side and never stored, so no layout can
     lose the column that names the row or the one that edits it.
-  - **`attachSort` is re-run by `wlSyncHeader`, not latched once.** It binds per `<th>` and closes
-    over the header cells **by index**; the old one-shot `wlSortAttached` flag would have left the
-    listeners on nodes a column change had already discarded.
+  - **`attachSort` is re-run by `wlSyncHeader`, not latched once.** It binds per `<th>`; the old
+    one-shot `wlSortAttached` flag would have left the listeners on nodes a column change had
+    already discarded. It binds by `cellIndex` rather than by position among the sortable headers
+    — with a threshold column anywhere but last the two disagree, and the click sorted by the
+    neighbouring `<input>` cell, which parses as null on every row: the header moved nothing at
+    all (see [ui-conventions.md](ui-conventions.md)).
+  - **The sort survives everything that lands afterwards.** Every update here is in place — a new
+    price from the 30s quote poll, an `f:` cell that arrives when the snapshot lands, a whole
+    reconcile that re-imposes the stored order — so without `wlReapplySort` the value a sort was
+    built on changes under a row that does not move, and the ▲ goes on claiming an order the
+    table no longer has. A Refresh, an add, a remove or a threshold save dropped it back to
+    manual order outright. Under an active sort the reconcile no longer places rows at their
+    stored index at all: the sort owns the order, and placing them would only be undone.
+    - It stands down in exactly two states. **A drag owns the order until it drops.** And
+      **focus inside the table means a threshold edit is in progress** — moving a focused
+      `<input>` in the DOM blurs it, so a re-sort mid-keystroke would eat the edit; the poll
+      leaves the rows alone and the next tick after the caret leaves puts them in order.
+    - **Hand-placing a row clears the marker** (`wlClearSort`) — a drop, or the ↑↓ buttons that
+      are its keyboard and touch equivalent. Dragging under a sort is how that arrangement
+      becomes the manual one, and the marker has to go with it: left in place, the re-render that
+      follows the save would sort the row straight back out of the spot it was just put in.
   - The picker marks each fundamentals field with how many symbols **on this list** have a value
     (`13/18`, or "no data for this list"). Several metrics are empty for whole asset classes — an
     ETF has no FCF margin, a bank no EV/EBITDA — and picking one blind to find a column of dashes

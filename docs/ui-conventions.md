@@ -59,3 +59,28 @@ to another tab and back. A loader reached by restore must therefore never assume
 library is initialised, and must report rather than swallow the case: `loadOrders` now ends in
 the same `.catch` → `panelLoadFailed` every other loader has.
 
+
+## Sortable tables
+
+`attachSort(table)` wires every `<th data-sort>` in a thead; `sortBody` does the ordering and
+`reapplyActiveSort(table)` re-runs whatever the header currently claims. Three rules hold
+wherever they are used:
+
+- **The marker in the DOM is the sort.** `th.dataset.sortDir` is the single record of which
+  column and which direction, and the click handler reads it at click time rather than keeping
+  the state in its closure. That is what lets a sort be restored onto a rebuilt thead
+  (`restoreOrdersSort`, after an htmx swap) or cleared from outside (the watchlist does it when a
+  drag makes the visible order the manual one) without the next click flipping the wrong way.
+- **Index by `cellIndex`, never by position among the sortable headers.** A table may carry a
+  column that opts out of sorting — the watchlist's four alert-threshold inputs carry no
+  `data-sort` — and from the first such column rightwards the two indices part company.
+  `sortBody` reads `tr.cells[idx]`, so sorting by the filtered index silently sorted by the
+  neighbouring column; where that neighbour was an `<input>` cell every row parsed as null and
+  the click did visibly nothing. Only `cellIndex` lines the two up. (No sortable thead spans
+  columns, so it is the visual column too.)
+- **A sort is a property of the table, not an event that happened.** Any code that re-renders or
+  patches rows in place has to call `reapplyActiveSort` afterwards, or the values move while the
+  rows stay put and the header goes on claiming an order the table no longer has. The Live tab
+  does it after a group layout, the fundamentals snapshot after a background refresh, and the
+  watchlist after every quote poll, fundamentals fill and reconcile (see
+  [watchlist.md](watchlist.md) for the two states where it stands down).

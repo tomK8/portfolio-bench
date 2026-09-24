@@ -71,6 +71,50 @@ to manual accounts (unlike `deleteManualRow`) and safely so: a `TRANSFER` row ex
 export, so no import can re-create or collide with it. It asserts `type = 'TRANSFER'` in the
 statement and rolls back unless exactly two rows match — half a transfer is worse than none.
 
+**Loading the row is not replaying it.** Three engines replay the ledger per `(account, symbol)` —
+`CashLedgerReconstructor`, `PositionDetailService.LotEngine` and `DividendAttributor.Timeline` — and
+`loadDividendTransactions()` hands the `TRANSFER` rows to all three. Only the first acted on them.
+The other two dropped the type on their opening guard (`if (t.type() != TRANSACTION) return;`, and a
+`switch` with no `TRANSFER` arm), so for them the shares never left the losing account and never
+arrived at the gaining one. Nothing failed loudly, because a transfer both legs ignore is
+self-consistent: the totals still reconcile, the position simply sits in the wrong account. It
+became visible only when a transferred position was **sold at its new account** — INTC: 300 bought
+at AJ Bell, 200 sold there, 100 moved to II on 2026-08-20, all 100 sold on 2026-09-17.
+
+- **Position tab.** AJ Bell still held the 100, so the II sale found no lots to consume and emitted
+  no closed lot. The exit dropped out of Realized (£3,267 rather than £9,744) and the shares stayed
+  on the books as £7,570 of unrealized gain on a position that no longer existed. The chart drew
+  the sale anyway — markers come straight from the ledger, not from the lot engine — so the tab
+  showed a sale its own table denied, which is what the report was.
+- **Dividend attribution.** The gaining account held no lots, so a dividend it received on
+  transferred shares divided by a zero share count and was "attributed to nothing": GOOG's £48.95
+  of 2026-09-15, silently, with no reconciliation warning because the losing account's phantom
+  shares still made the symbol's total come out right.
+
+**The lots travel; they are not closed and re-opened.** Both engines now hand the consumed lot
+slices across the pair, so the gaining account keeps each slice's original open date, its own
+per-share cost and its native currency. Closing at the source and opening one blended lot at the
+destination would book a fake disposal, re-date every lot to the day of the move and average away
+lots bought at different prices. `DividendAttributor` carries one thing further: each slice brings
+the dividend per share it had accrued, re-based onto the gaining timeline's cumulative — shares that
+moved were not sold, so they do not forfeit what they earned. Both replay in **ledger order** rather
+than timeline by timeline, which is what guarantees the legs are seen leaving-first whichever
+account happens to appear in the ledger first.
+
+**A dividend can arrive after the shares have gone.** The payer pays whoever held the stock on the
+record date, and that can precede the move by weeks: AJ Bell was paid £16.87 on MSFT on 2026-09-10
+for 25 shares that had left on 2026-08-20. Attributing it where it landed would attribute it to
+nothing, so a payment reaching a timeline the transfer **emptied** follows the shares to their new
+home. A timeline that still holds the name — it bought it again, or moved only part of it — is the
+holder of record itself and keeps its own payment.
+
+**A position the ledger has fully exited is measured at zero, not unknown.** "Absent is never zero"
+governs a figure we could not obtain; nothing held is a figure we have. So on zero shares the
+Position tab reports market value £0 and unrealized £0, and Total return is realized + dividends —
+where before it showed `—`, because market value came back null and dropped total return with it. A
+position we *do* hold whose value cannot be established stays null exactly as it was: the test is
+whether shares are held, never whether the number happens to be zero.
+
 **In-flight is handled by recording early, not by a new state.** Enter the transfer the day you
 initiate it and the ledger says the destination immediately; until the shares arrive, the Reconcile
 tab reports the position as present in the ledger and absent from the destination's export, which

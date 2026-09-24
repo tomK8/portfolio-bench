@@ -35,6 +35,14 @@ import java.util.Map;
  * quantity and inverse-scale its cost-per-share so cost basis is invariant — same model as
  * {@link com.portfolio.domain.CashLedgerReconstructor}.
  *
+ * <p>An in-specie {@code TRANSFER} <b>moves lots between those timelines</b> rather than
+ * closing them: the losing account hands the consumed lot slices to the gaining one, which
+ * keeps each slice's original open date, its own per-share cost and its native currency. A
+ * transfer is not a disposal, so it emits no {@link ClosedLot} and no realized gain. Ignoring
+ * the type is what produced the INTC phantom: the losing account went on reporting shares it
+ * no longer had, and the gaining account's later sale found no lots to close, so the exit was
+ * dropped from the realized total while the shares stayed on the books as an unrealized gain.
+ *
  * <p>The price chart series shows <b>raw close in the listing currency</b>:
  * {@code priceBar.close × priceBar.splitFactor}. Yahoo's stored close is split-adjusted to
  * today's basis; multiplying by {@code splitFactor} recovers the close the user actually saw
@@ -116,10 +124,17 @@ public class PositionDetailService {
 
         BigDecimal currentPriceNative = ip == null ? null : BigDecimal.valueOf(ip.close());
         String priceCcy = ip == null ? null : ip.currency();
-        BigDecimal marketValueGbp = positionValueGbp(symbol, shares, ip, rates);
+        // A position the ledger has fully exited is *measured* at zero, not unknown: nothing is
+        // held, so market value and unrealized are exactly zero and total return is realized +
+        // dividends. Only a position still held can have an unknown value (no quote, no FX, no
+        // cost basis) — that stays null rather than reading as a loss of the whole cost.
+        boolean flat = shares.signum() == 0;
+        BigDecimal marketValueGbp = flat
+                ? BigDecimal.ZERO : positionValueGbp(symbol, shares, ip, rates);
 
-        BigDecimal unrealized = (marketValueGbp == null || costBasis.signum() == 0)
-                ? null : marketValueGbp.subtract(costBasis);
+        BigDecimal unrealized = flat ? BigDecimal.ZERO
+                : (marketValueGbp == null || costBasis.signum() == 0)
+                        ? null : marketValueGbp.subtract(costBasis);
         BigDecimal totalReturn = (unrealized == null)
                 ? null : realized.add(unrealized).add(lifetimeDivs);
 
@@ -238,13 +253,34 @@ public class PositionDetailService {
         return kept;
     }
 
-    /** Visible for testing. */
+    /**
+     * Replays every row in ledger order, dispatching each to its account's engine.
+     *
+     * <p>{@code inFlight} is the hand-off between the two legs of an in-specie transfer: the
+     * leaving leg parks the lot slices it detached, the arriving leg picks them up. Ledger
+     * order guarantees the pair is seen leaving-first ({@code saveTransfer} writes the legs in
+     * one transaction, so the out leg holds the lower rowid on the same date).
+     *
+     * <p>Visible for testing.
+     */
     static Lots reconstruct(List<CashTransaction> rows) {
         Map<String, LotEngine> byAccount = new LinkedHashMap<>();
+        Map<String, Deque<OpenLotState>> inFlight = new LinkedHashMap<>();
         for (CashTransaction t : rows) {
-            byAccount.computeIfAbsent(t.account().dbValue(), k -> new LotEngine(k)).accept(t);
+            byAccount.computeIfAbsent(t.account().dbValue(), LotEngine::new).accept(t, inFlight);
         }
         return new Lots(byAccount);
+    }
+
+    /**
+     * Identifies one transfer pair. Both legs carry the same date, symbol and absolute
+     * quantity — the account and the sign are what differ.
+     */
+    private static String parcelKey(CashTransaction t) {
+        return t.transactionDate()
+                + "|" + (t.symbol() == null ? "" : t.symbol().toUpperCase())
+                + "|" + BigDecimal.valueOf(Math.abs(t.quantity()))
+                        .stripTrailingZeros().toPlainString();
     }
 
     private static BigDecimal money(BigDecimal v) {
@@ -262,7 +298,11 @@ public class PositionDetailService {
             this.account = account;
         }
 
-        void accept(CashTransaction t) {
+        void accept(CashTransaction t, Map<String, Deque<OpenLotState>> inFlight) {
+            if (t.type() == TransactionType.TRANSFER) {
+                transfer(t, inFlight);
+                return;
+            }
             if (t.type() != TransactionType.TRANSACTION) return;
             BigDecimal qty = BigDecimal.valueOf(Math.abs(t.quantity()));
             if (qty.signum() == 0) {
@@ -282,6 +322,59 @@ public class PositionDetailService {
             } else {
                 split(BigDecimal.valueOf(t.quantity()));
             }
+        }
+
+        /**
+         * Shares leaving for, or arriving from, another account. Positive amount = leaving,
+         * negative = arriving — the {@code TRANSACTION} sign convention, see docs/transfers.md.
+         *
+         * <p>The lots travel intact. Closing them at the source and re-opening one blended lot
+         * at the destination would book a fake disposal, lose every original open date and
+         * average away lots bought at different prices; nothing was sold, so nothing closes.
+         */
+        private void transfer(CashTransaction t, Map<String, Deque<OpenLotState>> inFlight) {
+            BigDecimal qty = BigDecimal.valueOf(Math.abs(t.quantity()));
+            if (qty.signum() == 0) return;
+            String key = parcelKey(t);
+            if (t.amount() > 0) {
+                inFlight.computeIfAbsent(key, k -> new ArrayDeque<>()).addAll(detach(qty));
+                return;
+            }
+            if (t.amount() == 0) return;
+            Deque<OpenLotState> parcel = inFlight.get(key);
+            if (parcel == null || parcel.isEmpty()) {
+                // No parcel waiting: the losing account's rows are out of view, or only half the
+                // pair was recorded. Fall back to one lot at the cost that travelled with the
+                // shares, which is what the leg itself carries.
+                BigDecimal cps = BigDecimal.valueOf(Math.abs(t.amountGbp()))
+                        .divide(qty, SCALE, RoundingMode.HALF_UP);
+                BigDecimal cpsNative = BigDecimal.valueOf(Math.abs(t.amount()))
+                        .divide(qty, SCALE, RoundingMode.HALF_UP);
+                open.addLast(new OpenLotState(t.transactionDate(), qty, cps, cpsNative, t.currency()));
+                return;
+            }
+            while (!parcel.isEmpty()) open.addLast(parcel.removeFirst());
+            inFlight.remove(key);
+        }
+
+        /**
+         * Removes {@code qty} shares oldest-first and returns the slices removed, each keeping
+         * the open date and per-share costs of the lot it came from. The mirror of
+         * {@link #sell} with no proceeds and no {@link ClosedLot}.
+         */
+        private List<OpenLotState> detach(BigDecimal qty) {
+            List<OpenLotState> moved = new ArrayList<>();
+            BigDecimal remaining = qty;
+            while (remaining.signum() > 0 && !open.isEmpty()) {
+                OpenLotState head = open.peekFirst();
+                BigDecimal use = head.qty.min(remaining);
+                moved.add(new OpenLotState(head.openDate, use, head.costPerShareGbp,
+                        head.costPerShareNative, head.currency));
+                head.qty = head.qty.subtract(use);
+                remaining = remaining.subtract(use);
+                if (head.qty.signum() == 0) open.removeFirst();
+            }
+            return moved;
         }
 
         private void sell(String date, BigDecimal qty, BigDecimal pricePerShareGbp) {

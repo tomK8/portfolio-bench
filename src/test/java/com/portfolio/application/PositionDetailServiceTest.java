@@ -215,6 +215,102 @@ class PositionDetailServiceTest {
     }
 
     @Test
+    void transferMovesLotsToTheGainingAccountAndClosesNothing() {
+        // The live INTC case. Bought 300 at AJ Bell, sold 200 there, moved the remaining 100
+        // to II in-specie, sold all 100 at II. Ignoring TRANSFER left AJ Bell holding a phantom
+        // 100 shares and dropped the II sale entirely: it found no lots to consume.
+        List<CashTransaction> rows = List.of(
+                buy("2024-08-02", "INTC", 300, 4986.06, Account.AJBELL),
+                sell("2026-03-06", "INTC", 200, 6590.79, Account.AJBELL),
+                transferOut("2026-08-20", "INTC", 100, 1662.02, Account.AJBELL),
+                transferIn("2026-08-20", "INTC", 100, 1662.02, Account.II),
+                sell("2026-09-17", "INTC", 100, 8139.20, Account.II)
+        );
+        Lots lots = PositionDetailService.reconstruct(rows);
+
+        // Fully exited: nothing held, nothing left to cost.
+        assertEquals(0, lots.totalOpenShares().compareTo(BigDecimal.ZERO));
+        assertEquals(0, lots.totalOpenCostGbp().compareTo(BigDecimal.ZERO));
+        assertTrue(lots.openForDisplay().isEmpty());
+
+        // Both sales realize, against the same £16.6202/share basis: the transfer moved the
+        // cost with the shares rather than restating it.
+        // AJBell: 6590.79 - 200 × 16.6202 = +3266.75. II: 8139.20 - 100 × 16.6202 = +6477.18.
+        List<ClosedLot> closed = lots.closedForDisplay();
+        assertEquals(2, closed.size());
+        assertEquals("AJBell", closed.get(0).account());
+        assertEquals(0, closed.get(0).realizedGbp().compareTo(new BigDecimal("3266.75")));
+        assertEquals("II", closed.get(1).account());
+        assertEquals(0, closed.get(1).costGbp().compareTo(new BigDecimal("1662.02")));
+        assertEquals(0, closed.get(1).realizedGbp().compareTo(new BigDecimal("6477.18")));
+        assertEquals(0, lots.totalRealizedGbp().compareTo(new BigDecimal("9743.93")));
+
+        // The transfer itself is not a disposal — the II lot keeps the 2024 buy date.
+        assertEquals("2024-08-02", closed.get(1).openDate());
+    }
+
+    @Test
+    void transferredButUnsoldKeepsOriginalLotDatesAndPrices() {
+        // Two buys at different prices, both moved. The gaining account must receive two lots
+        // at their own costs, not one blended lot dated the day of the move.
+        List<CashTransaction> rows = List.of(
+                buy("2024-01-10", "T", 50, 500.00, Account.AJBELL),
+                buy("2024-06-10", "T", 50, 1000.00, Account.AJBELL),
+                transferOut("2026-08-20", "T", 100, 1500.00, Account.AJBELL),
+                transferIn("2026-08-20", "T", 100, 1500.00, Account.II)
+        );
+        Lots lots = PositionDetailService.reconstruct(rows);
+
+        assertEquals(0, lots.totalOpenShares().compareTo(new BigDecimal("100")));
+        assertEquals(0, lots.totalOpenCostGbp().compareTo(new BigDecimal("1500.00")));
+        assertEquals(0, lots.totalRealizedGbp().compareTo(BigDecimal.ZERO));
+        assertTrue(lots.closedForDisplay().isEmpty(), "a transfer closes nothing");
+
+        List<OpenLot> open = lots.openForDisplay();
+        assertEquals(2, open.size());
+        assertEquals("2024-01-10", open.get(0).openDate());
+        assertEquals(0, open.get(0).costPerShareGbp().compareTo(new BigDecimal("10.000000")));
+        assertEquals("2024-06-10", open.get(1).openDate());
+        assertEquals(0, open.get(1).costPerShareGbp().compareTo(new BigDecimal("20.000000")));
+        assertEquals("II", open.get(0).account(), "both lots now sit at the gaining account");
+        assertEquals("II", open.get(1).account());
+    }
+
+    @Test
+    void partialTransferLeavesTheRemainderBehind() {
+        // FIFO takes the oldest shares. 100 bought Jan + 100 bought Jun, 100 moved:
+        // the Jan lot leaves, the Jun lot stays.
+        List<CashTransaction> rows = List.of(
+                buy("2024-01-10", "P", 100, 1000.00, Account.AJBELL),
+                buy("2024-06-10", "P", 100, 3000.00, Account.AJBELL),
+                transferOut("2026-08-20", "P", 100, 1000.00, Account.AJBELL),
+                transferIn("2026-08-20", "P", 100, 1000.00, Account.II)
+        );
+        Lots lots = PositionDetailService.reconstruct(rows);
+
+        assertEquals(0, lots.totalOpenShares().compareTo(new BigDecimal("200")));
+        assertEquals(0, lots.totalOpenCostGbp().compareTo(new BigDecimal("4000.00")));
+        List<OpenLot> open = lots.openForDisplay();
+        assertEquals(2, open.size());
+        assertEquals("II", open.get(0).account());      // 2024-01-10, the transferred lot
+        assertEquals("AJBell", open.get(1).account());  // 2024-06-10, the remainder
+    }
+
+    @Test
+    void arrivingLegWithoutItsPairOpensALotAtTheCostThatTravelled() {
+        // Half a pair — the losing account's rows are out of view. The position must still
+        // exist at the gaining account, valued at the cost the leg carries.
+        List<CashTransaction> rows = List.of(
+                transferIn("2026-08-20", "L", 100, 1662.02, Account.II)
+        );
+        Lots lots = PositionDetailService.reconstruct(rows);
+
+        assertEquals(0, lots.totalOpenShares().compareTo(new BigDecimal("100")));
+        assertEquals(0, lots.totalOpenCostGbp().compareTo(new BigDecimal("1662.02")));
+        assertEquals("2026-08-20", lots.openForDisplay().get(0).openDate());
+    }
+
+    @Test
     void emptyRowsAreNoOp() {
         Lots lots = PositionDetailService.reconstruct(List.of());
         assertEquals(0, lots.totalOpenShares().compareTo(BigDecimal.ZERO));
@@ -238,6 +334,20 @@ class PositionDetailServiceTest {
         return new CashTransaction(date, account, TransactionType.TRANSACTION,
                 sym, qty, proceeds, account == Account.AJBELL ? "GBP" : "USD",
                 1.0, proceeds, null, null, "sell");
+    }
+
+    /** Shares leaving an account in-specie: positive amount, magnitude = the FIFO cost moving. */
+    private static CashTransaction transferOut(String date, String sym, double qty,
+                                               double costGbp, Account account) {
+        return new CashTransaction(date, account, TransactionType.TRANSFER,
+                sym, qty, costGbp, "GBP", 1.0, costGbp, null, null, "transfer out");
+    }
+
+    /** The matching arriving leg: same date, symbol and quantity, negative amount. */
+    private static CashTransaction transferIn(String date, String sym, double qty,
+                                              double costGbp, Account account) {
+        return new CashTransaction(date, account, TransactionType.TRANSFER,
+                sym, qty, -costGbp, "GBP", 1.0, -costGbp, null, null, "transfer in");
     }
 
     private static CashTransaction split(String date, String sym, double qtyDelta,

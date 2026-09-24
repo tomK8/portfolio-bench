@@ -57,6 +57,23 @@ class YahooQuoteSummaryFetcherTest {
     }
 
     @Test
+    void carriesTheListingsOwnName() throws Exception {
+        // longName is the clean form across markets; shortName is the exchange's and is only a
+        // fallback, because a row dated from this snapshot alone has no other source for a name.
+        String json = """
+                {"quoteSummary":{"result":[{"price":{
+                  "longName":"Barclays PLC","shortName":"BARCLAYS PLC ORD 25P"}}],"error":null}}""";
+        assertEquals("Barclays PLC",
+                new YahooQuoteSummaryFetcher().parse("BARC.L", json).labels().get("companyName"));
+
+        String noLong = """
+                {"quoteSummary":{"result":[{"price":{
+                  "shortName":"BARCLAYS PLC ORD 25P"}}],"error":null}}""";
+        assertEquals("BARCLAYS PLC ORD 25P",
+                new YahooQuoteSummaryFetcher().parse("BARC.L", noLong).labels().get("companyName"));
+    }
+
+    @Test
     void missingFieldsBecomeNullsNotErrors() throws Exception {
         // Minimal response: only the price block. Everything else should be null but the
         // record itself must construct cleanly so partial responses are usable.

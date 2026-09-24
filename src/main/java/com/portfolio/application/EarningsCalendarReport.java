@@ -28,16 +28,32 @@ public record EarningsCalendarReport(
         List<String> warnings) {
 
     /**
-     * One held position in the holdings section, ranked by size. {@code state} separates three
-     * things a blank row would conflate:
+     * One held position in the holdings section, ranked by size. {@code state} separates four
+     * things a blank row would conflate, and names <b>which source</b> knows the date:
      *
      * <ul>
-     *   <li>{@code REPORTING} — a date was found on the calendar</li>
-     *   <li>{@code NOT_COVERED} — a non-US listing the US feed cannot see at all, so its silence
-     *       says nothing. Without this the #2 and #3 single-name positions here (both UK/EU) would
-     *       look identical to a name with genuinely nothing due.</li>
-     *   <li>{@code NONE_SCHEDULED} — covered by the feed, nothing due in the window</li>
+     *   <li>{@code REPORTING} — the market calendar has it inside the window, with a session and
+     *       a consensus EPS estimate. {@code date}/{@code time}/{@code epsForecast} are that
+     *       event.</li>
+     *   <li>{@code EXPECTED} — the calendar has nothing in the window, but the fundamentals
+     *       snapshot carries a date still ahead ({@code expectedDate}). A weaker answer, and
+     *       deliberately a separate state rather than a second kind of {@code REPORTING}: it is
+     *       usually beyond the window, and it comes with no session and no estimate.</li>
+     *   <li>{@code NOT_COVERED} — neither source has a forward date <em>and</em> the listing is
+     *       one the US-only calendar never carries, so its silence says nothing. Without this a
+     *       large UK/EU position with an unknown date would look identical to one with genuinely
+     *       nothing due.</li>
+     *   <li>{@code NONE_SCHEDULED} — the calendar covers it, nothing is due in the window, and the
+     *       snapshot has no forward date either.</li>
      * </ul>
+     *
+     * <p>{@code expectedDate} is the fundamentals snapshot's date whenever the calendar had no
+     * event for the row — <b>including one that has already passed</b>, which is what Yahoo
+     * publishes for a company whose next date it has not learnt yet. A passed date does not make
+     * the row {@code EXPECTED} (it is not a forward date), but it still rides along, because "last
+     * reported in July" is a different and more useful silence than "we have never had a date".
+     * {@code expectedDateEstimate} is Yahoo's own flag for a day it inferred from the past
+     * reporting rhythm rather than one the company announced; null means it said nothing either way.
      *
      * Funds and bonds never appear at all: they have no earnings, so listing them as "not
      * reporting" would be noise rather than information.
@@ -55,7 +71,9 @@ public record EarningsCalendarReport(
             Double lastYearEps,
             BigDecimal gbpValue,
             BigDecimal pctOfPortfolio,
-            String state) {
+            String state,
+            LocalDate expectedDate,
+            Boolean expectedDateEstimate) {
     }
 
     /**

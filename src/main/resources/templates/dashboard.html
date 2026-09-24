@@ -1180,6 +1180,71 @@
         html[data-theme="dark"] #watchlist-table tbody tr.wl-price-above td:first-child { background: #2c2617; }
         html[data-theme="dark"] #watchlist-table tbody tr.wl-price-below td:first-child { background: #241f2e; }
 
+        /* Column picker: three panes — groups, the group's fields, the chosen order. */
+        .wl-cols-body {
+            display: grid;
+            grid-template-columns: 11rem 1fr 15rem;
+            gap: 0.75rem;
+            max-height: 60vh;
+            min-height: 20rem;
+        }
+        @media (max-width: 800px) { .wl-cols-body { grid-template-columns: 1fr; max-height: none; } }
+        .wl-cols-groups, .wl-cols-fields, .wl-cols-order { overflow-y: auto; }
+        .wl-cols-groups { border-right: 1px solid #eee; padding-right: 0.5rem; }
+        .wl-cols-groups button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            border: 0;
+            background: none;
+            padding: 0.3rem 0.45rem;
+            cursor: pointer;
+            font-size: 0.85rem;
+            border-radius: 4px;
+            color: inherit;
+        }
+        .wl-cols-groups button.active { background: #e8f1f8; color: #1f77b4; font-weight: 600; }
+        .wl-cols-fields label {
+            display: block;
+            padding: 0.22rem 0.3rem;
+            font-size: 0.85rem;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .wl-cols-fields label:hover { background: #f5f5f5; }
+        .wl-cols-fields input { margin-right: 0.45rem; }
+        #wl-cols-search { width: 100%; margin-bottom: 0.4rem; padding: 0.3rem 0.4rem; }
+        .wl-cols-order { border-left: 1px solid #eee; padding-left: 0.6rem; }
+        .wl-cols-order-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 0.4rem; }
+        .wl-cols-pinned {
+            font-size: 0.8rem;
+            color: #999;
+            padding: 0.25rem 0.4rem;
+            border: 1px dashed #ddd;
+            border-radius: 4px;
+            margin: 0.15rem 0;
+        }
+        .wl-cols-chip {
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-size: 0.8rem;
+            padding: 0.2rem 0.4rem;
+            border: 1px solid #e3e3e3;
+            border-radius: 4px;
+            margin: 0.15rem 0;
+            background: #fafafa;
+        }
+        .wl-cols-chip .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .wl-cols-chip button { border: 0; background: none; cursor: pointer; color: #999; padding: 0 2px; line-height: 1; }
+        .wl-cols-chip button:hover { color: #1f77b4; }
+        .wl-cols-chip button.rm:hover { color: #c0392b; }
+        html[data-theme="dark"] .wl-cols-groups, html[data-theme="dark"] .wl-cols-order { border-color: #2e3137; }
+        html[data-theme="dark"] .wl-cols-groups button.active { background: #1a242c; }
+        html[data-theme="dark"] .wl-cols-fields label:hover { background: #23262b; }
+        html[data-theme="dark"] .wl-cols-chip { background: #1e2026; border-color: #2e3137; }
+        html[data-theme="dark"] .wl-cols-pinned { border-color: #2e3137; }
+
         #watchlist-table { font-size: 0.78rem; }
         #watchlist-table th, #watchlist-table td { padding: 0.1rem 0.35rem; }
         #watchlist-table tbody tr { cursor: pointer; }
@@ -2972,6 +3037,7 @@
         <label title="Alert when the price falls to or below this level (price's own currency)">Below: <input id="wl-add-below" type="text" size="6" placeholder="—"/></label>
         <button id="wl-add-btn" type="button">Add</button>
         <button id="wl-refresh-btn" type="button">Refresh</button>
+        <button id="wl-cols-btn" type="button" title="Choose and order this watchlist's columns">Columns…</button>
         <button id="wl-list-rename" type="button" title="Rename this watchlist">Rename</button>
         <button id="wl-list-delete" type="button" title="Delete this watchlist">Delete list</button>
         <span id="wl-view-toggle" class="wl-view-toggle" style="display:none;">
@@ -4247,6 +4313,40 @@
     </p>
 </section>
 
+<!--
+  Column picker. Body level for the same reason as the price popup below — a modal nested in a
+  .tab-panel is hidden along with it — and because it is opened from whichever watchlist tab is
+  active, which is not a fixed panel.
+-->
+<div id="wl-cols-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal-box" style="max-width: 900px; width: 92vw;">
+        <h3>Columns<span id="wl-cols-listname" class="muted" style="font-weight:400;"></span></h3>
+        <p class="muted" style="margin-top:0; font-size:0.85rem;">
+            Tick a column to add it — new columns go in <b>right after Symbol</b>, where a
+            comparison wants them. Reorder with ↑ ↓. Symbol and the row actions are always
+            first and last. This layout applies to this watchlist only.
+        </p>
+        <div class="wl-cols-body">
+            <div class="wl-cols-groups" id="wl-cols-groups"></div>
+            <div class="wl-cols-fields">
+                <input type="text" id="wl-cols-search" placeholder="Search a column…" autocomplete="off"/>
+                <div id="wl-cols-list"></div>
+            </div>
+            <div class="wl-cols-order">
+                <div class="wl-cols-order-title">Column order</div>
+                <div class="wl-cols-pinned">Symbol</div>
+                <div id="wl-cols-chosen"></div>
+                <div class="wl-cols-pinned">↑ ↓ ×</div>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button type="button" id="wl-cols-reset">Reset to default</button>
+            <button type="button" id="wl-cols-cancel">Cancel</button>
+            <button type="button" id="wl-cols-save" class="primary">Save</button>
+        </div>
+    </div>
+</div>
+
 <!-- Price popup. Lives at body level rather than inside a tab panel: it is opened from
      both the Watchlist table and the Live positions table, and a modal nested in a
      hidden .tab-panel is hidden along with it. -->
@@ -4285,6 +4385,7 @@
 
 <script src="/js/wl-edit-sync.js"></script>
 <script src="/js/wl-poll.js"></script>
+<script src="/js/wl-columns.js"></script>
 <script src="/js/dashboard.js"></script>
 </body>
 </html>

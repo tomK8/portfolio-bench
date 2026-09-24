@@ -26,6 +26,39 @@ touches an order.
     keeping its manual order. The backfill is guarded on *having just created* that list, not on
     the member table being empty — otherwise a deliberately emptied list would be resurrected by
     the next restart.
+- **Per-list columns.** `watchlist_column` (`(list_id, col_key)` PK + display_order) stores an
+  ordered list of keys; **no rows means the default set**, which is what lets an untouched list
+  and a brand-new one render identically without either owning a row. `col_key` is deliberately
+  opaque to the server — a built-in (`price`, `vol30d`, `thrAbove`) or a fundamentals field
+  prefixed `f:` — so adding a metric to the picker needs no migration, the same bargain
+  `fundamentals_snapshot.extra_json` already strikes.
+  - **The menu was already written.** `fundamentalsFieldGroups()` (`dashboard.js`) is the single
+    home of the fundamentals grouping — label, format type, prose tooltip, glossary anchor — and
+    the picker is generated from it, so a metric added there appears here fully described.
+    `fmtSnapValue` formats the cell. Built-ins get a parallel `WL_BUILTIN_GROUPS`; `Row` already
+    carried `pct10d`, `beta` and `gainPct`, which the table never showed — three columns for free.
+  - **Values are joined client-side** from the `/portfolio-fundamentals` snapshot the price popup
+    already caches per session (`ensureWlFundamentals`), so an `f:` column costs no new endpoint
+    and no change to `Row`. The grid is built from the server Row alone and those cells start
+    `—`, then `wlPatchFundCells` fills them when the snapshot lands — patched, not re-rendered,
+    so an in-progress threshold edit keeps its focus and caret.
+  - **Resolution is `wl-columns.js`**, a DOM- and network-free UMD module beside `wl-poll.js` and
+    `wl-edit-sync.js` (unit-tested under plain node). It drops keys this build no longer offers
+    rather than rendering empty cells, and **falls back to the defaults when a layout resolves to
+    nothing** — without that, one bad row leaves a list permanently blank with no picker reachable
+    to fix it. Symbol and the ↑↓× cell are pinned either side and never stored, so no layout can
+    lose the column that names the row or the one that edits it.
+  - **`attachSort` is re-run by `wlSyncHeader`, not latched once.** It binds per `<th>` and closes
+    over the header cells **by index**; the old one-shot `wlSortAttached` flag would have left the
+    listeners on nodes a column change had already discarded.
+  - The picker marks each fundamentals field with how many symbols **on this list** have a value
+    (`13/18`, or "no data for this list"). Several metrics are empty for whole asset classes — an
+    ETF has no FCF margin, a bank no EV/EBITDA — and picking one blind to find a column of dashes
+    is a wasted trip. Two are currently empty for *everything*: `roic` and `fcfGrowthYoy` are
+    computed from the `*HistoryQuarterly` quoteSummary modules, which Yahoo has stopped
+    returning — 0 of 71 stored rows carry either, while every `financialData`-derived metric is
+    fine. The computation is correct and will start working if the feed does; the coverage mark
+    is what stops that being a surprise.
 - `WatchlistRepository` — `watchlist` table (symbol PK + two thresholds + added_at). The
   symbol set is **mirrored** to `KeyValueStore` under `watchlist_symbols` on every mutation,
   so `PriceFetchSupport.tickersToFetch` and `PortfolioFundamentalsService` union watchlist

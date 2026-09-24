@@ -216,6 +216,51 @@ class WatchlistListRepositoryTest {
     }
 
     @Test
+    void columnsAreSavedPerListAndReadBackInOrder(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long chips = repo.createList("chips");
+        long banks = repo.createList("banks");
+
+        assertEquals(List.of(), repo.columnsFor(chips), "never customised means no rows, not no columns");
+
+        repo.saveColumns(chips, List.of("f:fcfMarginTtm", "price", "todayPct"));
+        repo.saveColumns(banks, List.of("f:payoutRatio", "price"));
+
+        assertEquals(List.of("f:fcfMarginTtm", "price", "todayPct"), repo.columnsFor(chips));
+        assertEquals(List.of("f:payoutRatio", "price"), repo.columnsFor(banks),
+                "each list keeps its own layout");
+    }
+
+    @Test
+    void savingColumnsReplacesTheLayoutRatherThanAddingToIt(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long first = repo.firstListId();
+        repo.saveColumns(first, List.of("price", "todayPct", "vol30d"));
+        repo.saveColumns(first, List.of("todayPct", "price"));
+        assertEquals(List.of("todayPct", "price"), repo.columnsFor(first));
+    }
+
+    @Test
+    void savingNoColumnsClearsTheRows_whichIsHowResetToDefaultWorks(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long first = repo.firstListId();
+        repo.saveColumns(first, List.of("price"));
+        repo.saveColumns(first, List.of());
+        assertEquals(List.of(), repo.columnsFor(first),
+                "an empty layout is stored as no rows, which the client reads as the default set");
+    }
+
+    @Test
+    void deletingAListTakesItsColumnLayoutWithIt(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long chips = repo.createList("chips");
+        repo.saveColumns(chips, List.of("f:roic", "price"));
+        repo.deleteList(chips);
+        assertEquals(List.of(), repo.columnsFor(chips),
+                "a later list reusing the id must not inherit a dead layout");
+    }
+
+    @Test
     void anUnknownListReadsAsEmptyRatherThanThrowing(@TempDir Path dir) {
         WatchlistRepository repo = repo(dir);
         repo.add("AMD", null, null, null, null, repo.firstListId());

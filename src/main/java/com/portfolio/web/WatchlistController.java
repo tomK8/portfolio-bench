@@ -221,6 +221,29 @@ public class WatchlistController {
     }
 
     /**
+     * The column layout for one list: an ordered list of keys, empty when the list has never
+     * been customised (which the client reads as "use the default set").
+     */
+    @GetMapping("/watchlist/columns")
+    @ResponseBody
+    public java.util.List<String> columns(@RequestParam(name = "list", required = false) Long list) {
+        return watchlistRepo.columnsFor(listOrFirst(list));
+    }
+
+    /**
+     * Replace one list's columns. Sending none clears the rows, which restores the default set —
+     * so "reset to default" is the same call with an empty selection rather than a second verb.
+     */
+    @PostMapping("/watchlist/columns")
+    @ResponseBody
+    public java.util.List<String> saveColumns(@RequestParam(name = "list", required = false) Long list,
+                                              @RequestParam(name = "keys", required = false) java.util.List<String> keys) {
+        long listId = listOrFirst(list);
+        watchlistRepo.saveColumns(listId, keys == null ? java.util.List.of() : keys);
+        return watchlistRepo.columnsFor(listId);
+    }
+
+    /**
      * A missing or unknown {@code list} means the first one. The dashboard always sends an id, so
      * this covers a bookmarked URL and — more usefully — a tab still open on a list another
      * window has just deleted: it falls back rather than erroring.

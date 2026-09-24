@@ -1117,6 +1117,14 @@
         html[data-theme="dark"] .snap-group-title { color: #999; border-bottom-color: #2e3137; }
         html[data-theme="dark"] .snap-kv .k { color: #b4b4b4; }
 
+        /* An earnings date that has already been reported — Yahoo publishes the most recent one
+           when it has no forward date. Muted italics say "this is not a forward date" in the
+           column's own width, where the word "(passed)" cost a third of it again; the date stays
+           rather than being blanked because "reported in August, nothing scheduled since" and
+           "this name never reports" are different facts and a blank cell tells neither. */
+        .earn-past { font-style: italic; color: #999; }
+        html[data-theme="dark"] .earn-past { color: #8b8f96; }
+
         /* Watchlist: alert row colours. Today-move fires green (up) / red (down) by direction;
            near-52-week-high fires blue; when both fire the row pulses between blue and the
            move's direction colour. Colours are applied as a left border + tinted background so
@@ -1251,6 +1259,23 @@
 
         #watchlist-table { font-size: 0.78rem; }
         #watchlist-table th, #watchlist-table td { padding: 0.1rem 0.35rem; }
+        /* Long fundamentals labels ('% Held by Institutions', 'Earnings Growth') are several
+           times wider than the figures under them, so the header, not the data, is what sets the
+           column width — and at twenty-odd columns that is the difference between reading the
+           table and scrolling it. The label wraps inside a capped span: max-width alone on a <th>
+           does nothing in an auto-layout table, and `width: max-content` under that cap is what
+           stops the column being squeezed *below* the cap into one word per line — short labels
+           keep their single line, long ones take two, and nothing lands super-tight.
+           The nowrap th[data-sort] inherits stays, and only the span relaxes it: that is what
+           keeps the sort arrow — which hangs off the th, after the span — on the label's last
+           line instead of dropping to one of its own. */
+        #watchlist-table thead th { vertical-align: bottom; }
+        #watchlist-table thead th .wl-th {
+            display: inline-block;
+            white-space: normal;
+            width: max-content;
+            max-width: 4rem;
+        }
         #watchlist-table tbody tr { cursor: pointer; }
         #watchlist-table tbody tr.wl-move-up   { background: rgba(44, 160, 44, 0.14);  box-shadow: inset 3px 0 0 #2ca02c; }
         #watchlist-table tbody tr.wl-move-down { background: rgba(192, 57, 43, 0.14);  box-shadow: inset 3px 0 0 #c0392b; }

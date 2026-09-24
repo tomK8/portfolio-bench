@@ -6891,6 +6891,9 @@
             });
         }
 
+        var wlColDragKey = null;        // column key being dragged in the picker, null when idle
+        var wlColDropped = false;       // a real drop landed; without one the drag was cancelled
+
         /** The right pane: the chosen columns in order, between the two pinned ones. */
         function renderWlColsChosen() {
             var reg = wlColumnRegistry().byKey;
@@ -6904,6 +6907,12 @@
                 var m = reg[k] || { label: k };
                 var chip = document.createElement('div');
                 chip.className = 'wl-cols-chip';
+                chip.draggable = true;                  // the whole chip: it holds buttons, no text input
+                chip.dataset.key = k;
+                var grip = document.createElement('span');
+                grip.className = 'grip';
+                grip.textContent = '\u283f';
+                chip.appendChild(grip);
                 var nm = document.createElement('span');
                 nm.className = 'nm';
                 nm.textContent = m.label;
@@ -6931,7 +6940,41 @@
                     renderWlColsFields();
                 });
                 chip.appendChild(rm);
+                chip.addEventListener('dragstart', function (e) {
+                    wlColDragKey = k;
+                    wlColDropped = false;
+                    chip.classList.add('wl-cols-dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', k);      // Firefox drags nothing without it
+                });
+                chip.addEventListener('dragend', function () {
+                    chip.classList.remove('wl-cols-dragging');
+                    if (!wlColDragKey) return;
+                    // Where the chip ended up among its siblings is the new index. Nothing has
+                    // been saved: this edits the draft, and Save is still the only write. A
+                    // cancelled drag re-renders from the untouched draft, which is the undo.
+                    var order = Array.prototype.indexOf.call(host.children, chip);
+                    var dropped = wlColDropped;
+                    wlColDragKey = null;
+                    wlColDropped = false;
+                    if (dropped) wlColsDraft = WlColumns.moveTo(wlColsDraft, k, order);
+                    renderWlColsChosen();
+                });
                 host.appendChild(chip);
+            });
+            bindOnce(host, 'dragover', function (e) {
+                if (!wlColDragKey) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                var dragged = host.querySelector('.wl-cols-dragging');
+                if (!dragged) return;
+                var before = wlDropBefore(host, e.clientY, '.wl-cols-chip', 'wl-cols-dragging');
+                if (before !== dragged) host.insertBefore(dragged, before);
+            });
+            bindOnce(host, 'drop', function (e) {
+                if (!wlColDragKey) return;
+                e.preventDefault();
+                wlColDropped = true;
             });
         }
 
@@ -7207,6 +7250,7 @@
 
         function wlPollTick() {
             if (document.hidden) return;                   // browser tab backgrounded
+            if (wlDragSym) return;                         // a row is mid-drag; don't reload under it
             var panel = document.getElementById('panel-watchlist');
             if (!panel || !panel.classList.contains('active')) return;   // not the visible tab
             if (document.getElementById('wl-modal').classList.contains('open')) return;  // user in the popup
@@ -7404,6 +7448,104 @@
                 .catch(function (err) {
                     var detail = err && err.message ? ' — ' + err.message : '';
                     wlSetStatus('Could not reorder ' + sym + detail + ' — try again.');
+                });
+        }
+
+        // ---- drag to reorder ---------------------------------------------------
+        //
+        // The ↑↓ buttons stay: they are the keyboard path, the touch path (HTML5 drag events
+        // never fire on a touch screen), and a one-place nudge is still quicker by button. Drag is
+        // the addition for a name that has to travel.
+        //
+        // The drop posts the order *as displayed*. If a column sort is active the table is not in
+        // stored order, and posting the visible order is what keeps the screen and the database
+        // from disagreeing — dragging under a sort is how that arrangement becomes the manual one.
+
+        var wlDragSym = null;              // symbol being dragged, null when no drag is in flight
+        var wlDragRow = null;              // its <tr>, held so dragover doesn't re-index on every pixel
+        var wlDragOrderAtStart = null;     // visible order when the drag began — nothing to save if unchanged
+        var wlDropCommitted = false;       // a real drop landed; without one the drag was cancelled
+
+        /** The symbols in the order the table is showing, which is what a drop saves. */
+        function wlVisibleOrder() {
+            var tbody = document.querySelector('#watchlist-table tbody');
+            if (!tbody) return [];
+            return Array.prototype.map.call(tbody.children, function (tr) { return tr.dataset.sym; })
+                .filter(function (sym) { return !!sym; });
+        }
+
+        /**
+         * The element the dragged one should be inserted before for a pointer at `y`, or null to
+         * append. Judged by each candidate's midpoint, so the list opens up under the cursor
+         * rather than waiting for the pointer to clear a whole row. Shared by the table and the
+         * column picker's chips — both are a vertical list of equal-status items.
+         */
+        function wlDropBefore(container, y, selector, draggingClass) {
+            var best = null, bestOffset = Number.NEGATIVE_INFINITY;
+            Array.prototype.forEach.call(container.querySelectorAll(selector), function (el) {
+                if (el.classList.contains(draggingClass)) return;
+                var box = el.getBoundingClientRect();
+                var offset = y - box.top - box.height / 2;
+                if (offset < 0 && offset > bestOffset) { bestOffset = offset; best = el; }
+            });
+            return best;
+        }
+
+        // Bound on the <tbody>, not per row: rows come and go with every reconcile, and the tbody
+        // node itself is never replaced. bindOnce keeps a re-render from stacking listeners.
+        function wlEnsureRowDnd(tbody) {
+            bindOnce(tbody, 'dragover', function (e) {
+                if (!wlDragSym) return;                    // some other drag passing through
+                e.preventDefault();                        // without this the drop never fires
+                e.dataTransfer.dropEffect = 'move';
+                if (!wlDragRow) return;
+                var before = wlDropBefore(tbody, e.clientY, 'tr[data-sym]', 'wl-dragging');
+                if (before !== wlDragRow) tbody.insertBefore(wlDragRow, before);   // live reflow; the drop commits
+            });
+            bindOnce(tbody, 'drop', function (e) {
+                if (!wlDragSym) return;
+                e.preventDefault();
+                wlDropCommitted = true;
+            });
+            // dragend fires on the source (and bubbles here) whether the drop landed or not, so
+            // the save and the cleanup live here and nowhere else. dragover has already reflowed
+            // the rows, so a drag cancelled with Escape has to put them back: no drop, no save.
+            bindOnce(tbody, 'dragend', function () {
+                if (!wlDragSym) return;
+                if (wlDragRow) wlDragRow.classList.remove('wl-dragging');
+                var before = wlDragOrderAtStart;
+                var dropped = wlDropCommitted;
+                wlDragSym = null;
+                wlDragRow = null;
+                wlDragOrderAtStart = null;
+                wlDropCommitted = false;
+                if (!dropped) { wlApplyOrder(tbody, before); return; }
+                var now = wlVisibleOrder();
+                if (before && now.join('\u0001') !== before.join('\u0001')) saveWatchlistOrder(now);
+            });
+        }
+
+        /** Put the rows back in a known order — the undo for a drag the user cancelled. */
+        function wlApplyOrder(tbody, order) {
+            if (!order) return;
+            var map = wlRowMap(tbody);
+            order.forEach(function (sym) { if (map[sym]) tbody.appendChild(map[sym]); });
+        }
+
+        function saveWatchlistOrder(order) {
+            var body = new URLSearchParams();
+            order.forEach(function (sym) { body.append('symbols', sym); });
+            wlAddList(body);
+            fetch('/watchlist/reorder', { method: 'POST', body: body })
+                .then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                    return r.json();
+                })
+                .then(function (view) { renderWatchlist(view.rows || []); })
+                .catch(function (err) {
+                    var detail = err && err.message ? ' — ' + err.message : '';
+                    wlSetStatus('Could not save the new order' + detail + ' — restoring.');
+                    loadWatchlist();                       // the server is the truth; put the rows back
                 });
         }
 
@@ -7773,7 +7915,13 @@
         }
 
         function wlRowCellsHtml(r) {
-            var html = '<td data-f="sym">' + wlSymHtml(r) + '</td>';
+            // The grip sits in the Symbol cell, not out at the actions end: Symbol is the sticky
+            // column, so the handle stays reachable however far right the table is scrolled. The
+            // name lives in its own span because wlPatchRow rewrites it on every poll tick, and
+            // rewriting the whole cell would throw away the grip's dragstart listener with it.
+            var html = '<td data-f="sym">' +
+                '<button class="wl-grip" draggable="true" title="Drag to reorder">⠿</button>' +
+                '<span class="wl-sym-name">' + wlSymHtml(r) + '</span></td>';
             wlCols.forEach(function (key) { html += wlCellHtml(r, key); });
             return html +
                 '<td class="wl-actions">' +
@@ -7829,6 +7977,19 @@
             tr.querySelectorAll('.wl-move').forEach(function (btn) {
                 btn.addEventListener('click', function () { moveWatchlistSymbol(this.dataset.sym, this.dataset.dir); });
             });
+            // Only the grip is draggable, never the <tr>: a draggable ancestor stops text being
+            // selected inside the threshold inputs in WebKit, and the row's own click opens the
+            // popup. The drag image is set to the row so what moves under the cursor is the row.
+            tr.querySelector('.wl-grip').addEventListener('dragstart', function (e) {
+                wlDragSym = tr.dataset.sym;
+                wlDragRow = tr;
+                wlDropCommitted = false;
+                wlDragOrderAtStart = wlVisibleOrder();
+                tr.classList.add('wl-dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', tr.dataset.sym);   // Firefox drags nothing without it
+                if (e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(tr, 12, 10);
+            });
             tr.querySelectorAll('.wl-thr-input').forEach(function (inp) {
                 inp.addEventListener('change', function () {
                     var row = this.closest('tr');
@@ -7873,8 +8034,8 @@
         // Patch every cell of an existing row in place: fast cells + slow columns + inputs.
         function wlPatchRow(tr, r) {
             tr._wlRow = r;
-            var symCell = tr.querySelector('td[data-f="sym"]');
-            if (symCell) symCell.innerHTML = wlSymHtml(r);
+            var symName = tr.querySelector('td[data-f="sym"] .wl-sym-name');
+            if (symName) symName.innerHTML = wlSymHtml(r);   // not the whole cell: the grip stays
             wlPatchQuoteCells(tr, r);                       // price, momentum, 5D/10D vol, colour
             wlPatchVol(tr, 'vol30d', r.vol30d);
             wlPatchVol(tr, 'vol1y', r.vol1y);
@@ -7896,6 +8057,7 @@
             var empty = document.getElementById('wl-empty');
             var toggle = document.getElementById('wl-view-toggle');
             var tbody = table.querySelector('tbody');
+            wlEnsureRowDnd(tbody);                         // idempotent; the tbody node is never replaced
 
             if (!rows.length) {
                 while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
@@ -7920,7 +8082,12 @@
                 var tr = existing[r.symbol];
                 if (tr) wlPatchRow(tr, r); else tr = wlBuildRow(r);
                 seen[r.symbol] = true;
-                if (tbody.children[i] !== tr) tbody.insertBefore(tr, tbody.children[i] || null);
+                // A render landing mid-drag must not yank the row out from under the cursor, so
+                // while a drag is in flight only a row that isn't in the table yet is placed;
+                // the drop's own save is what settles the order a moment later.
+                if (tbody.children[i] !== tr && (!wlDragSym || tr.parentNode !== tbody)) {
+                    tbody.insertBefore(tr, tbody.children[i] || null);
+                }
             });
             Object.keys(existing).forEach(function (sym) {
                 if (!seen[sym]) existing[sym].remove();     // symbol no longer on the list

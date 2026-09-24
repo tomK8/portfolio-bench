@@ -91,6 +91,30 @@ test('remove drops the key and leaves the rest in order', () => {
     assert.deepEqual(WlColumns.remove(['a', 'b'], 'zz'), ['a', 'b']);
 });
 
+test('moveTo drops a key at an absolute position, counted without the key itself', () => {
+    // Dragging 'a' onto 'c' puts it where 'c' was: index 2 is read against ['b','c','d'].
+    assert.deepEqual(WlColumns.moveTo(['a', 'b', 'c', 'd'], 'a', 2), ['b', 'c', 'a', 'd']);
+    // The same target index from below lands in the same place — which is the whole point of
+    // removing first: a drop means "here", not "here, unless you came from above".
+    assert.deepEqual(WlColumns.moveTo(['b', 'c', 'a', 'd'], 'a', 2), ['b', 'c', 'a', 'd']);
+    assert.deepEqual(WlColumns.moveTo(['a', 'b', 'c'], 'c', 0), ['c', 'a', 'b']);
+});
+
+test('moveTo clamps an out-of-range index to an end rather than losing the key', () => {
+    assert.deepEqual(WlColumns.moveTo(['a', 'b', 'c'], 'a', 99), ['b', 'c', 'a']);
+    assert.deepEqual(WlColumns.moveTo(['a', 'b', 'c'], 'c', -4), ['c', 'a', 'b']);
+    assert.deepEqual(WlColumns.moveTo(['a', 'b', 'c'], 'b', NaN), ['b', 'a', 'c']);
+    assert.deepEqual(WlColumns.moveTo(['a', 'b', 'c'], 'b', undefined), ['b', 'a', 'c']);
+});
+
+test('moveTo is a no-op for a key the layout does not hold, and never mutates its input', () => {
+    const src = ['a', 'b', 'c'];
+    assert.deepEqual(WlColumns.moveTo(src, 'zz', 0), ['a', 'b', 'c']);
+    assert.deepEqual(WlColumns.moveTo(src, 'c', 0), ['c', 'a', 'b']);
+    assert.deepEqual(src, ['a', 'b', 'c'], 'the caller keeps its own copy until it assigns');
+    assert.deepEqual(WlColumns.moveTo(null, 'a', 0), []);
+});
+
 test('isDefault recognises the shipped set and nothing else', () => {
     assert.equal(WlColumns.isDefault(WlColumns.DEFAULTS.slice()), true);
     assert.equal(WlColumns.isDefault(WlColumns.DEFAULTS.slice().reverse()), false);

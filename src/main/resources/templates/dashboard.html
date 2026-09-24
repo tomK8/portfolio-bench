@@ -1122,6 +1122,64 @@
            move's direction colour. Colours are applied as a left border + tinted background so
            the number columns stay legible. */
         /* Compact row density for the stats table specifically */
+        /* Watchlist tabs lead the Tools strip; the rule separates "my lists" from the fixed tools
+           without a second strip (which would need its own data-group and its own memory). */
+        .tab-sep {
+            align-self: center;
+            width: 1px;
+            height: 1.1rem;
+            margin: 0 0.45rem;
+            background: #ccc;
+        }
+        html[data-theme="dark"] .tab-sep { background: #444; }
+        .wl-tab-add { font-weight: 600; padding-left: 0.6rem; padding-right: 0.6rem; }
+
+        /* Plain centred .full-bleed, as the correlation heatmap uses. The left-anchored variant
+           Trend/Range use was tried and gives the table only (100vw - 320px) to live in, which
+           this one already overflows at 21 columns — centring is what actually reclaims the
+           width, and it is the only variant that keeps growing with the column set.
+
+           It also has to scroll VERTICALLY, which .full-bleed alone does not. `overflow-x: auto`
+           makes this div the nearest scroll container, and `position: sticky; top: 0` resolves
+           against that container rather than the viewport — so the moment the table was wrapped,
+           .sticky-head silently stopped working and the column labels scrolled away (measured:
+           thead sat 309px down the viewport after a 600px page scroll, not 0). Giving the
+           wrapper a height of its own puts the header back on a surface that actually scrolls,
+           and buys the sticky Symbol column below the same footing. */
+        #watchlist-wrap {
+            max-height: calc(100vh - 7rem);
+            overflow: auto;
+            overscroll-behavior: contain;
+        }
+        /* Symbol stays put while the rest scrolls; needs an opaque background of its own or the
+           scrolled cells show through, same as the returns heatmap's first column. */
+        #watchlist-table tbody td:first-child,
+        #watchlist-table thead th:first-child {
+            position: sticky;
+            left: 0;
+            z-index: 2;
+            background: #fff;
+        }
+        /* The corner cell is sticky on both axes and must outrank each of them, or it is painted
+           over by whichever row or column slides underneath it. */
+        #watchlist-table thead th:first-child { z-index: 3; }
+        #watchlist-table tbody tr:nth-child(even) td:first-child { background: #f8f8f8; }
+        html[data-theme="dark"] #watchlist-table tbody td:first-child,
+        html[data-theme="dark"] #watchlist-table thead th:first-child { background: #17191d; }
+        html[data-theme="dark"] #watchlist-table tbody tr:nth-child(even) td:first-child { background: #1e2026; }
+        /* An alert-coloured row must keep its colour in the sticky cell too, or the one column
+           that is always visible is the one that never shows the alert. */
+        #watchlist-table tbody tr.wl-move-up    td:first-child { background: #eaf5ea; }
+        #watchlist-table tbody tr.wl-move-down  td:first-child { background: #fbecea; }
+        #watchlist-table tbody tr.wl-near-high  td:first-child { background: #e8f1f8; }
+        #watchlist-table tbody tr.wl-price-above td:first-child { background: #fdf4e0; }
+        #watchlist-table tbody tr.wl-price-below td:first-child { background: #f2edfa; }
+        html[data-theme="dark"] #watchlist-table tbody tr.wl-move-up    td:first-child { background: #1c2a1c; }
+        html[data-theme="dark"] #watchlist-table tbody tr.wl-move-down  td:first-child { background: #2c1d1b; }
+        html[data-theme="dark"] #watchlist-table tbody tr.wl-near-high  td:first-child { background: #1a242c; }
+        html[data-theme="dark"] #watchlist-table tbody tr.wl-price-above td:first-child { background: #2c2617; }
+        html[data-theme="dark"] #watchlist-table tbody tr.wl-price-below td:first-child { background: #241f2e; }
+
         #watchlist-table { font-size: 0.78rem; }
         #watchlist-table th, #watchlist-table td { padding: 0.1rem 0.35rem; }
         #watchlist-table tbody tr { cursor: pointer; }
@@ -1984,10 +2042,21 @@
     <button class="tab" data-panel="panel-range" type="button">Range floor</button>
 </div>
 
+<!--
+  The watchlists lead the strip so a named list is one click from Tools rather than two. Every
+  one of them targets the SAME panel and is told apart by data-list: one table, one set of
+  listeners, one poll — switching list re-fetches rather than building a second grid. That is
+  also why PANEL_TO_GROUP still works untouched; it keys on data-panel, which they share.
+-->
 <div class="tabs tabs-secondary" data-group="group-tools">
+    <button class="tab wl-tab" type="button" th:each="wl : ${watchlists}"
+            data-panel="panel-watchlist"
+            th:attr="data-list=${wl.id}" th:text="${wl.name}">Watchlist</button>
+    <button class="tab wl-tab-add" id="wl-list-add" type="button"
+            title="New watchlist">+</button>
+    <span class="tab-sep" aria-hidden="true"></span>
     <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-trades" type="button">Journal</button>
-    <button class="tab" data-panel="panel-watchlist" type="button">Watchlist</button>
     <button class="tab" data-panel="panel-earnings" type="button">Earnings</button>
     <button class="tab" data-panel="panel-manual" type="button">Manual positions</button>
     <button class="tab" data-panel="panel-transfers" type="button">Transfers</button>
@@ -2903,6 +2972,8 @@
         <label title="Alert when the price falls to or below this level (price's own currency)">Below: <input id="wl-add-below" type="text" size="6" placeholder="—"/></label>
         <button id="wl-add-btn" type="button">Add</button>
         <button id="wl-refresh-btn" type="button">Refresh</button>
+        <button id="wl-list-rename" type="button" title="Rename this watchlist">Rename</button>
+        <button id="wl-list-delete" type="button" title="Delete this watchlist">Delete list</button>
         <span id="wl-view-toggle" class="wl-view-toggle" style="display:none;">
             <button type="button" id="wl-view-stats" class="active">Stats</button>
             <button type="button" id="wl-view-returns">Returns</button>
@@ -2916,7 +2987,8 @@
 
     <div id="wl-returns-panel" style="display:none;"></div>
 
-    <table id="watchlist-table" class="annual-table sticky-head" style="margin-top: 0.4rem; display: none;">
+    <div id="watchlist-wrap" class="full-bleed" style="display: none;">
+    <table id="watchlist-table" class="annual-table sticky-head" style="margin-top: 0.4rem;">
         <thead><tr>
             <th data-sort="str">Symbol</th>
             <th data-sort="num">Price</th>
@@ -2942,6 +3014,7 @@
         </tr></thead>
         <tbody></tbody>
     </table>
+    </div>
 </section>
 
 <section class="tab-panel" id="panel-swing">

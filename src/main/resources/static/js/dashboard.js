@@ -751,6 +751,10 @@
 
         var TAB_KEY = 'portfolio-bench.active-tab';
         var GROUP_KEY_PREFIX = 'portfolio-bench.last-sub.';
+        // Which named watchlist the one watchlist panel is showing. Kept apart from TAB_KEY
+        // because the panel id alone no longer identifies the view: every list tab points at
+        // panel-watchlist and is told apart by data-list.
+        var WL_LIST_KEY = 'portfolio-bench.watchlist-list';
 
         // Derived from the secondary tab strips below. Single source of truth so renames
         // don't drift: each strip already lists its panels via [data-panel].
@@ -767,9 +771,14 @@
             GROUP_DEFAULT_PANEL[g] = first;
         });
 
-        function activatePanel(panelId, persist) {
+        /**
+         * `listId` is only meaningful for the watchlist panel, whose tabs all share one
+         * data-panel and differ by data-list. Null means "whichever list was last open".
+         */
+        function activatePanel(panelId, persist, listId) {
             var group = PANEL_TO_GROUP[panelId];
             if (!group) return;
+            if (panelId === 'panel-watchlist') listId = resolveWlList(listId);
 
             document.querySelectorAll('#portfolio-groups .tab').forEach(function (b) {
                 b.classList.toggle('active', b.getAttribute('data-group') === group);
@@ -778,7 +787,11 @@
                 strip.classList.toggle('active', strip.getAttribute('data-group') === group);
             });
             document.querySelectorAll('.tabs-secondary .tab').forEach(function (b) {
-                b.classList.toggle('active', b.getAttribute('data-panel') === panelId);
+                var on = b.getAttribute('data-panel') === panelId;
+                // Several tabs may name the same panel; the one that owns a list must also match
+                // it, or every watchlist tab would light up at once.
+                if (on && b.hasAttribute('data-list')) on = b.getAttribute('data-list') === String(listId);
+                b.classList.toggle('active', on);
             });
             document.querySelectorAll('.tab-panel').forEach(function (p) {
                 p.classList.toggle('active', p.id === panelId);
@@ -793,7 +806,7 @@
             if (panelId === 'panel-dividends') loadDividends();
             if (panelId === 'panel-position') setupPosition();
             if (panelId === 'panel-correlations') setupCorrelations();
-            if (panelId === 'panel-watchlist') setupWatchlist();
+            if (panelId === 'panel-watchlist') setupWatchlist(listId);
             if (panelId === 'panel-swing') setupSwing();
             if (panelId === 'panel-trend') setupTrend();
             if (panelId === 'panel-momentum') setupMomentum();
@@ -815,12 +828,32 @@
                 try {
                     localStorage.setItem(TAB_KEY, panelId);
                     localStorage.setItem(GROUP_KEY_PREFIX + group, panelId);
+                    if (listId != null) localStorage.setItem(WL_LIST_KEY, String(listId));
                 } catch (e) {}
             }
         }
 
-        document.querySelectorAll('.tabs-secondary .tab').forEach(function (btn) {
-            btn.addEventListener('click', function () { activatePanel(btn.dataset.panel, true); });
+        /**
+         * Settle on a watchlist to show: the one asked for, else the one last open, else the
+         * first tab. Falling back rather than erroring is what makes a stale remembered list —
+         * deleted in another window, or gone with a restored database — land somewhere sensible.
+         */
+        function resolveWlList(listId) {
+            var tabs = document.querySelectorAll('.wl-tab[data-list]');
+            if (!tabs.length) return null;
+            var known = {};
+            tabs.forEach(function (t) { known[t.getAttribute('data-list')] = true; });
+            if (listId != null && known[String(listId)]) return String(listId);
+            var saved = null;
+            try { saved = localStorage.getItem(WL_LIST_KEY); } catch (e) {}
+            if (saved && known[saved]) return saved;
+            return tabs[0].getAttribute('data-list');
+        }
+
+        document.querySelectorAll('.tabs-secondary .tab[data-panel]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                activatePanel(btn.dataset.panel, true, btn.dataset.list);
+            });
         });
 
         document.querySelectorAll('#portfolio-groups .tab').forEach(function (btn) {
@@ -6564,8 +6597,9 @@
         var wlSeriesToken = 0;          // newest /watchlist/series request; older replies are dropped
         var wlReturnsLoaded = false;
         var wlCurrentView = 'stats';    // 'stats' or 'returns'
+        var wlListId = null;            // the named list on screen; every /watchlist call is scoped to it
 
-        function setupWatchlist() {
+        function setupWatchlist(listId) {
             ensureWlModalInited();
             if (!watchlistInited) {
                 watchlistInited = true;
@@ -6573,13 +6607,156 @@
                 document.getElementById('wl-add-symbol').addEventListener('keydown', function (e) {
                     if (e.key === 'Enter') addWatchlistSymbol();
                 });
-                document.getElementById('wl-refresh-btn').addEventListener('click', loadWatchlist);
+                document.getElementById('wl-refresh-btn').addEventListener('click', function () { loadWatchlist(); });
                 document.getElementById('wl-view-stats').addEventListener('click', function () { switchWlView('stats'); });
                 document.getElementById('wl-view-returns').addEventListener('click', function () { switchWlView('returns'); });
+                setupWatchlistLists();
                 loadGiltHints();
+            }
+            var switched = listId != null && String(listId) !== String(wlListId);
+            if (listId != null) wlListId = String(listId);
+            if (switched) {
+                // A different list is a different row set: drop the grid rather than reconcile
+                // one list's symbols against another's, and re-arm the returns heatmap.
+                wlResetGrid();
+                // The heatmap only reloads itself when the view is switched into, so a list
+                // change while it is already showing would otherwise leave the old list's grid up.
+                if (wlCurrentView === 'returns') loadWlReturns(false);
             }
             loadWatchlist();
             wlStartPolling();
+        }
+
+        // ---- named lists ---------------------------------------------------
+        //
+        // The tab strip is server-rendered (PANEL_TO_GROUP is derived from the DOM before any
+        // fetch could return), so these handlers keep the DOM and the server in step themselves
+        // rather than reloading the page for every rename.
+
+        function setupWatchlistLists() {
+            // The strip arrives server-rendered, so seed the delete button's state from it.
+            var initial = document.querySelectorAll('.wl-tab[data-list]');
+            var del = document.getElementById('wl-list-delete');
+            if (del && initial.length <= 1) {
+                del.disabled = true;
+                del.title = 'This is the only watchlist — rename it or empty it instead';
+            }
+
+            bindOnce(document.getElementById('wl-list-add'), 'click', function () {
+                var name = window.prompt('Name the new watchlist (e.g. chips, banks):', '');
+                if (name == null) return;                     // Cancel, as distinct from an empty name
+                wlListAction('/watchlist/lists/create', { name: name }, function (lists) {
+                    var created = wlNewestList(lists);
+                    if (created) activatePanel('panel-watchlist', true, created.id);
+                });
+            });
+
+            bindOnce(document.getElementById('wl-list-rename'), 'click', function () {
+                if (wlListId == null) return;
+                var name = window.prompt('Rename this watchlist:', wlListName(wlListId));
+                if (name == null) return;
+                wlListAction('/watchlist/lists/rename', { list: wlListId, name: name }, null);
+            });
+
+            bindOnce(document.getElementById('wl-list-delete'), 'click', function () {
+                if (wlListId == null) return;
+                // Say what is actually lost: membership always, the symbol itself only where no
+                // other list holds it — and with it that symbol's alert settings.
+                if (!window.confirm('Delete the "' + wlListName(wlListId) + '" watchlist?\n\n' +
+                        'Symbols that are only on this list stop being watched and lose their alert ' +
+                        'settings. Symbols on another list are unaffected.')) return;
+                wlListAction('/watchlist/lists/delete', { list: wlListId }, function (lists) {
+                    if (lists.length) activatePanel('panel-watchlist', true, lists[0].id);
+                });
+            });
+        }
+
+        /**
+         * POST a list mutation, rebuild the tab strip from the response, then hand the new list
+         * set to `after`. The server is the single source of the strip's contents, so a rejected
+         * name (blank, duplicate, the last list) simply leaves the tabs as they were.
+         */
+        function wlListAction(url, params, after) {
+            var body = new URLSearchParams();
+            Object.keys(params).forEach(function (k) { body.set(k, params[k]); });
+            wlSetStatus('');
+            fetch(url, { method: 'POST', body: body })
+                .then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                    return r.json();
+                })
+                .then(function (lists) {
+                    renderWlTabs(lists);
+                    if (after) after(lists);
+                })
+                .catch(function (err) {
+                    wlSetStatus(err && err.message ? err.message : 'Could not update the watchlists.');
+                });
+        }
+
+        /** The one the server just made: highest id, since ids are monotonic. */
+        function wlNewestList(lists) {
+            var best = null;
+            lists.forEach(function (l) { if (!best || l.id > best.id) best = l; });
+            return best;
+        }
+
+        /**
+         * Rebuild the list tabs in place, leaving every other tab in the strip alone. Buttons are
+         * recreated rather than patched, so each one's click handler is bound exactly once here
+         * — the page-load binding pass has long since run.
+         */
+        function renderWlTabs(lists) {
+            var strip = document.querySelector('.tabs-secondary[data-group="group-tools"]');
+            if (!strip) return;
+            var addBtn = document.getElementById('wl-list-add');
+            strip.querySelectorAll('.wl-tab[data-list]').forEach(function (t) { t.remove(); });
+            lists.forEach(function (l) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'tab wl-tab';
+                b.setAttribute('data-panel', 'panel-watchlist');
+                b.setAttribute('data-list', l.id);
+                b.textContent = l.name;
+                b.addEventListener('click', function () {
+                    activatePanel('panel-watchlist', true, l.id);
+                });
+                strip.insertBefore(b, addBtn);
+            });
+            // Only one list left means the delete would be refused; say so before it is clicked.
+            var del = document.getElementById('wl-list-delete');
+            if (del) {
+                del.disabled = lists.length <= 1;
+                del.title = del.disabled
+                    ? 'This is the only watchlist — rename it or empty it instead'
+                    : 'Delete this watchlist';
+            }
+        }
+
+        /** Empty the grid so the incoming list is built fresh instead of diffed against the old one. */
+        function wlResetGrid() {
+            var tbody = document.querySelector('#watchlist-table tbody');
+            if (tbody) while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+            wlReturnsLoaded = false;
+            wlLoadedOk = false;
+            wlPending = {};             // an unsaved edit belongs to the row it was typed in
+            wlSetStatus('');
+        }
+
+        /** `?list=` for every list-scoped call, so a poll can never patch another list's rows in. */
+        function wlListParam(prefix) {
+            return wlListId == null ? '' : (prefix || '?') + 'list=' + encodeURIComponent(wlListId);
+        }
+
+        /** Same list scoping for a form-encoded POST body. */
+        function wlAddList(body) {
+            if (wlListId != null) body.set('list', wlListId);
+            return body;
+        }
+
+        function wlListName(id) {
+            var tab = document.querySelector('.wl-tab[data-list="' + id + '"]');
+            return tab ? tab.textContent.trim() : 'this watchlist';
         }
 
         // The popup's own listeners, bound independently of the Watchlist tab's: the Live table
@@ -6674,7 +6851,9 @@
             var isStats = view === 'stats';
             document.getElementById('wl-view-stats').classList.toggle('active', isStats);
             document.getElementById('wl-view-returns').classList.toggle('active', !isStats);
-            var table = document.getElementById('watchlist-table');
+            // The full-bleed wrapper is what shows and hides, not the table: hiding the table
+            // alone would leave its breakout div holding open a viewport-wide empty band.
+            var table = document.getElementById('watchlist-wrap');
             var panel = document.getElementById('wl-returns-panel');
             if (isStats) {
                 panel.style.display = 'none';
@@ -6698,7 +6877,7 @@
             wlReturnsLoading = true;
             var panel = document.getElementById('wl-returns-panel');
             panel.innerHTML = '<p class="muted" style="padding:0.5rem">Loading…</p>';
-            fetch('/watchlist/returns').then(function (r) {
+            fetch('/watchlist/returns' + wlListParam()).then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             }).then(function (data) {
@@ -6735,7 +6914,7 @@
             wlReturnsLoaded = false;                         //  otherwise flap Loading…/could-not-load)
             if (wlCurrentView === 'returns') loadWlReturns(false);  // refresh the visible heatmap too
             wlSetStatus('Loading…');
-            fetch('/watchlist').then(function (r) {
+            fetch('/watchlist' + wlListParam()).then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             }).then(function (view) {
@@ -6784,7 +6963,7 @@
                 if (!wlReturnsLoaded) loadWlReturns(true); // but self-heal it if its load failed
                 return;
             }
-            fetch('/watchlist/quotes').then(function (r) {
+            fetch('/watchlist/quotes' + wlListParam()).then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             }).then(function (view) {
@@ -6902,6 +7081,7 @@
             if (move) body.set('movePct', move);
             if (above) body.set('priceAbove', above);
             if (below) body.set('priceBelow', below);
+            wlAddList(body);
             wlSetStatus('Adding ' + sym + ' — fetching prices…');
             fetch('/watchlist/add', { method: 'POST', body: body })
                 .then(function (r) {
@@ -6936,7 +7116,10 @@
         // seeing a dead button. The existing rows keep their wired listeners (no re-render on failure),
         // so a retry works as soon as the DB is free.
         function removeWatchlistSymbol(sym) {
+            // Scoped to this list: × takes the name off the list you are looking at, and the
+            // server drops it from the watchlist entirely only if no other list still holds it.
             var body = new URLSearchParams(); body.set('symbol', sym);
+            wlAddList(body);
             delete wlPending[sym];                          // gone — no overlay to defend
             // Optimistically drop the row now so × feels instant; the reconcile confirms on success,
             // and a failure re-syncs from the server so a wrongly-removed row comes straight back.
@@ -6957,6 +7140,7 @@
 
         function moveWatchlistSymbol(sym, dir) {
             var body = new URLSearchParams(); body.set('symbol', sym); body.set('dir', dir);
+            wlAddList(body);
             fetch('/watchlist/move', { method: 'POST', body: body })
                 .then(function (r) {
                     if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
@@ -6976,6 +7160,7 @@
             body.set('movePct', movePct);
             body.set('priceAbove', priceAbove == null ? '' : priceAbove);
             body.set('priceBelow', priceBelow == null ? '' : priceBelow);
+            wlAddList(body);
             // Record the optimistic truth BEFORE the request goes out. Until a render carries these
             // values back from the server, any reload is treated as a stale read and must not revert
             // the inputs (see wl-edit-sync.js resolve). Replaced by the next save; cleared on failure.
@@ -7275,20 +7460,21 @@
         function renderWatchlist(rows) {
             wlLoadedOk = true;                             // reaching a render means the fetch succeeded
             var table = document.getElementById('watchlist-table');
+            var wrap = document.getElementById('watchlist-wrap');
             var empty = document.getElementById('wl-empty');
             var toggle = document.getElementById('wl-view-toggle');
             var tbody = table.querySelector('tbody');
 
             if (!rows.length) {
                 while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-                table.style.display = 'none';
+                wrap.style.display = 'none';
                 empty.style.display = 'block';
                 toggle.style.display = 'none';
                 return;
             }
             empty.style.display = 'none';
             toggle.style.display = '';
-            if (wlCurrentView === 'stats') table.style.display = '';   // only shown in stats view
+            if (wlCurrentView === 'stats') wrap.style.display = '';    // only shown in stats view
 
             var existing = wlRowMap(tbody);
             var seen = {};

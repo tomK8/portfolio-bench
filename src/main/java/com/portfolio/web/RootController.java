@@ -4,6 +4,7 @@ import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.application.BackupService;
 import com.portfolio.application.LedgerGroupingService;
 import com.portfolio.persistence.KeyValueStore;
+import com.portfolio.persistence.WatchlistRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -22,6 +23,7 @@ public class RootController {
 
     private final KeyValueStore settings;
     private final LedgerGroupingService groupingService;
+    private final WatchlistRepository watchlistRepo;
 
     /**
      * Whether this instance is running on generated demo data. Set on the command line by
@@ -42,9 +44,11 @@ public class RootController {
     public RootController(KeyValueStore settings, LedgerGroupingService groupingService,
                           HoldingFileLocator fileLocator,
                           BackupService backupService,
+                          WatchlistRepository watchlistRepo,
                           @Value("${portfolio.demo:false}") boolean demo) {
         this.settings = settings;
         this.groupingService = groupingService;
+        this.watchlistRepo = watchlistRepo;
         this.demo = demo;
         this.inputDir = abbreviateHome(fileLocator.inputDir().toString());
         this.backupDir = abbreviateHome(backupService.destination().toString());
@@ -63,6 +67,10 @@ public class RootController {
         // The Cash-ledger grouping dropdown is generated from the enum rather than hand-written
         // in the template, so a new key type is a constant plus a resolver and nothing else.
         model.addAttribute("groupOptions", groupingService.options());
+        // The watchlists are rendered server-side because the tab machinery derives PANEL_TO_GROUP
+        // from the DOM while dashboard.js runs — a strip filled in later by fetch() would be empty
+        // at that moment, and the restored-tab path would find no group for the saved panel.
+        model.addAttribute("watchlists", watchlistRepo.lists());
         return "dashboard";
     }
 

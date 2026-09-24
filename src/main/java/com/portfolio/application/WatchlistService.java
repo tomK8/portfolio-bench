@@ -107,8 +107,21 @@ public class WatchlistService {
         this.unresolved = unresolved;
     }
 
+    /**
+     * Every watched symbol across every list. This is what {@link WatchlistAlertJob} evaluates:
+     * a trigger fires on where the price is, not on which list the name happens to sit in, and a
+     * symbol in two lists must still be considered exactly once.
+     */
     public WatchlistView view() {
-        List<Entry> entries = watchlistRepo.loadAll();
+        return view(watchlistRepo.loadAll());
+    }
+
+    /** One list's rows, in that list's own manual order — what the screen renders. */
+    public WatchlistView view(long listId) {
+        return view(watchlistRepo.loadAll(listId));
+    }
+
+    private WatchlistView view(List<Entry> entries) {
         if (entries.isEmpty()) return new WatchlistView(List.of());
 
         // One-shot shared inputs.
@@ -137,7 +150,15 @@ public class WatchlistService {
      * external FX call is made on the polling cadence.
      */
     public QuoteView quotes() {
-        List<Entry> entries = watchlistRepo.loadAll();
+        return quotes(watchlistRepo.loadAll());
+    }
+
+    /** The same poll payload, scoped to one list — the tab only patches the rows it is showing. */
+    public QuoteView quotes(long listId) {
+        return quotes(watchlistRepo.loadAll(listId));
+    }
+
+    private QuoteView quotes(List<Entry> entries) {
         if (entries.isEmpty()) return new QuoteView(List.of());
 
         Map<String, Cached> fundamentals = fundamentalsRepo.loadAll();
@@ -827,7 +848,15 @@ public class WatchlistService {
      * daily price move. Aligns all symbols to a shared date set; missing days get {@code null}.
      */
     public ReturnsGrid returns() {
-        List<Entry> entries = watchlistRepo.loadAll();
+        return returns(watchlistRepo.loadAll());
+    }
+
+    /** One list's daily-returns heatmap, in that list's own row order. */
+    public ReturnsGrid returns(long listId) {
+        return returns(watchlistRepo.loadAll(listId));
+    }
+
+    private ReturnsGrid returns(List<Entry> entries) {
         if (entries.isEmpty()) return new ReturnsGrid(List.of(), List.of());
 
         LocalDate today = LocalDate.now();

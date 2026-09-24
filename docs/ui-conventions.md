@@ -19,8 +19,16 @@ built by scanning `.tabs-secondary[data-group]` strips, so moving a panel betwee
 HTML-only edit (no JS to keep in sync). A saved tab whose group changed still restores correctly:
 the per-group memory is validated with `PANEL_TO_GROUP[last] === g` before use. Groups are
 Holdings / Performance / Risk / Quality / **Strategies** (the five backtests: Swing stats, Trend
-filter, Momentum, Mom. signals, Range floor) / Tools (Reconcile, Journal, Watchlist, Earnings,
-Manual positions, Transfers).
+filter, Momentum, Mom. signals, Range floor) / Tools (the named watchlists and a `+`, then a
+rule, then Reconcile, Journal, Earnings, Manual positions, Transfers).
+
+The watchlist tabs are the one place a *panel* is not one *tab*: they are server-rendered from
+`watchlist_list` and every one carries `data-panel="panel-watchlist"`, differing only in
+`data-list`. The derivation is untouched by that — it keys on `data-panel` — but the
+active-marking loop must compare `data-list` **when the attribute is present**, or every list
+tab lights up at once; tabs without it are unaffected. They are rendered server-side precisely
+because the derivation runs while `dashboard.js` executes: a strip filled in later by `fetch()`
+would be empty at that moment, and the restored-tab path would find no group for the saved panel.
 
 
 ## Lazy chart loaders

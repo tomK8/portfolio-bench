@@ -4,6 +4,28 @@
 Monitor-and-nudge tool for opportunistic trimming/rebuying — it emails alerts and never
 touches an order.
 
+- **Named lists.** `watchlist_list` (id + name + display_order) and `watchlist_member`
+  (`(list_id, symbol)` PK + per-list display_order) turn the one watchlist into any number of
+  them — chips, banks — each its own tab at the head of the Tools strip. `watchlist` itself is
+  unchanged and stays the symbol universe: it is the **only** home of the alert settings, one
+  row per symbol however many lists hold it.
+  - **Alerts are global to the symbol, membership is not.** A name in both `chips` and `ai` has
+    one set of triggers; editing Move % on either tab edits the one row. That is what keeps
+    `WatchlistAlertJob` — which dedups on `SYMBOL|TRIGGER|date` and knows nothing about lists —
+    from mailing the same signal twice, and what leaves `/watchlist/row` (a linear scan for the
+    first match, serving five other tables) with a single answer to whose thresholds to show.
+    `WatchlistService.view()` stays list-agnostic for the job; `view(listId)` serves the screen.
+  - **Two invariants tie the tables together**, enforced in the repository rather than by a
+    foreign key: every member names a symbol with a `watchlist` row, and every `watchlist` row
+    is in at least one list. So `×` removes from *this* list, and deletes the symbol outright
+    only when it was the last — an orphan would otherwise keep drawing daily prices and a
+    fundamentals refresh for ever, invisible to the screen that could stop it. Deleting a list
+    does the same sweep. **The last list cannot be deleted**: the tab strip has nowhere to send
+    the user, and emptying it reaches the same place without discarding every alert setting.
+  - A pre-lists database is promoted on first start: the flat watchlist becomes the first list,
+    keeping its manual order. The backfill is guarded on *having just created* that list, not on
+    the member table being empty — otherwise a deliberately emptied list would be resurrected by
+    the next restart.
 - `WatchlistRepository` — `watchlist` table (symbol PK + two thresholds + added_at). The
   symbol set is **mirrored** to `KeyValueStore` under `watchlist_symbols` on every mutation,
   so `PriceFetchSupport.tickersToFetch` and `PortfolioFundamentalsService` union watchlist
@@ -118,8 +140,9 @@ touches an order.
     it gets, which is the more reason to say what they are.
   - Ordering is latched (`wlSeriesToken`): clicking 5D then 1Y must not let the slower 5D reply
     repaint the chart, nor label its high `1Y high`.
-- **Manual order:** `watchlist.display_order` + `POST /watchlist/move?dir=up|down` swap
-  neighbours; rows render in that order (↑/↓ buttons per row). Add-backfills run on a
+- **Manual order:** `watchlist_member.display_order` + `POST /watchlist/move?dir=up|down&list=`
+  swap neighbours; rows render in that order (↑/↓ buttons per row). The order is **per list**,
+  so the same name can sit third in `chips` and first in `ai`. Add-backfills run on a
   single-thread executor in `WatchlistController` so two quick adds queue rather than racing
   SQLite writes.
 - `WatchlistAlertJob` — runs every 5 min (`PriceFetchScheduler`). Dedups **once per day per
@@ -139,8 +162,17 @@ touches an order.
 
 ## Panel overview
 
-- **Watchlist** — `GET /watchlist` → JSON, rendered as a table under the Tools group. A
-  user-maintained set of symbols (owned or not — *not* unioned with holdings, kept lean by
+- **Watchlist** — `GET /watchlist?list=` → JSON, rendered as a table under the Tools group.
+  One tab per named list, at the **head** of the strip with a `+` and a rule separating them
+  from the fixed tools, so a list is one click from Tools rather than two. Every list tab points
+  at the **same** `panel-watchlist` and is told apart by `data-list`: one table, one set of
+  listeners, one poll — switching list re-fetches rather than building a second grid, which is
+  also why `PANEL_TO_GROUP` needed no change (it keys on `data-panel`, which they share).
+  `activatePanel` takes the list as a third argument and the active-marking loop compares
+  `data-list` when present; a tab without the attribute — every other tab in the app — is
+  unaffected. The active list is remembered under its own key, and an unknown one (deleted in
+  another window) falls back to the first rather than erroring.
+  A user-maintained set of symbols (owned or not — *not* unioned with holdings, kept lean by
   design) for volatility trading. Each row joins live price + today's move + trailing
   momentum (5d/30d) + a realized-vol term structure (5D/10D/30D/1Y annualised) + 52-wk
   high/low distances + P/E/beta
@@ -148,7 +180,18 @@ touches an order.
   thresholds/levels: proximity to the 52-week high, |today's move|, and absolute price
   targets (≥ above and ≤ below, in the price's native currency). Row colour = alert state
   (green/red today-move by direction, blue near-high, amber ≥-target, purple ≤-target,
-  pulsing when both near-high + big-move). Click a row for a
+  pulsing when both near-high + big-move).
+  - **The grid is its own scroll surface.** `#watchlist-wrap` is a centred `.full-bleed` — the
+    same breakout the correlation heatmap uses — so the table escapes the 960px body cap and
+    scrolls sideways only when even the full viewport can't hold it. The left-anchored variant
+    Trend/Range use was tried first and leaves the table just `100vw - 320px`, which 21 columns
+    already overflow. The wrapper also needs a height of its own: `overflow-x` makes it the
+    nearest scroll container, so `.sticky-head`'s `top: 0` resolves against *it*, not the
+    viewport, and the column labels silently stopped sticking the moment the table was wrapped
+    (measured: thead 309px down the viewport after a 600px page scroll, not 0). With
+    `max-height` + `overflow: auto` the header sticks again and the Symbol column pins left on
+    the same footing — the corner cell outranks both axes or whichever slides under it wins.
+  Click a row for a
   popup: same fields + a price chart with a 1D/3D/5D/10D/15D (intraday) + 30D…MAX (daily) window
   toggle, the **selected window's own high/low** beside the fixed 52-week pair, + a collapsible
   Fundamentals section. 

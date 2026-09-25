@@ -816,6 +816,7 @@
             if (panelId === 'panel-mosig') setupMomentumSignals();
             if (panelId === 'panel-range') setupRange();
             if (panelId === 'panel-earnings') setupEarnings();
+            if (panelId === 'panel-reminders') setupReminders();
             if (panelId === 'panel-manual') setupManualPositions();
             if (panelId === 'panel-transfers') setupTransfers();
             if (panelId === 'panel-period') setupPeriodDiff();
@@ -11168,6 +11169,255 @@
                 + '<th>Date</th><th>Symbol</th><th>Shares</th><th>From</th><th>To</th>'
                 + '<th title="cost basis carried with the shares — not cash, not market value">Cost £</th>'
                 + '<th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+        }
+
+        // -- Calendar reminders --------------------------------------------------
+        // Two tables from one payload: the reminders the user typed (stored, fully editable) and
+        // the earnings ones (derived from what they hold/watch/have resting, with only the on-off
+        // switch stored). Reuses the manual-positions helpers (mpVal/mpPost) -- same shape of
+        // screen, a form that writes rows and tables that list what is due.
+        var rmInit = false;
+
+        function setupReminders() {
+            if (rmInit) return;
+            rmInit = true;
+            var d = document.getElementById('rm-date');
+            if (d && !d.value) d.value = new Date().toISOString().slice(0, 10);
+
+            bindOnce(document.getElementById('rm-save'), 'click', addReminder);
+
+            // Delegated: both tables are replaced wholesale on every reload, so per-row handlers
+            // would not survive one.
+            bindOnce(document.getElementById('rm-list'), 'click', onReminderListClick);
+            bindOnce(document.getElementById('rm-earnings'), 'click', function (ev) {
+                var btn = ev.target.closest('button[data-esym]');
+                if (!btn) return;
+                mpPost('/reminders/earnings/toggle',
+                        {symbol: btn.dataset.esym, enabled: btn.dataset.enable})
+                    .then(loadReminders)
+                    .catch(function (err) { window.alert(String(err.message || err)); });
+            });
+
+            loadReminders();
+        }
+
+        function loadReminders() {
+            clearPanelError('panel-reminders');
+            return fetch('/reminders')
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(renderReminders)
+                .catch(function (err) {
+                    // Latch stays set: the retry re-runs the fetch, and re-running setup would
+                    // stack a second set of handlers on the form.
+                    panelLoadFailed('panel-reminders', err, loadReminders);
+                });
+        }
+
+        function addReminder() {
+            var status = document.getElementById('rm-status');
+            status.textContent = 'Saving…';
+            status.style.color = '';
+            mpPost('/reminders/add', {
+                symbol: mpVal('rm-symbol'), date: mpVal('rm-date'),
+                rule: mpVal('rm-rule'), action: mpVal('rm-action')
+            }).then(function (res) {
+                status.textContent = res.message;
+                status.style.color = res.ok ? '#2ca02c' : '#c0392b';
+                if (res.ok) {
+                    ['rm-symbol', 'rm-rule', 'rm-action'].forEach(function (id) {
+                        var el = document.getElementById(id);
+                        if (el) el.value = '';
+                    });
+                    loadReminders();
+                }
+            }).catch(function (err) {
+                status.textContent = String(err.message || err);
+                status.style.color = '#c0392b';
+            });
+        }
+
+        function onReminderListClick(ev) {
+            var btn = ev.target.closest('button[data-rid]');
+            if (!btn) return;
+            var id = btn.dataset.rid, act = btn.dataset.act;
+            var row = btn.closest('tr');
+            if (act === 'delete') {
+                if (!window.confirm('Delete this reminder? It stops for good.')) return;
+                mpPost('/reminders/delete', {id: id})
+                    .then(loadReminders)
+                    .catch(function (err) { window.alert(String(err.message || err)); });
+                return;
+            }
+            if (act === 'toggle') {
+                mpPost('/reminders/toggle', {id: id, enabled: btn.dataset.enable})
+                    .then(loadReminders)
+                    .catch(function (err) { window.alert(String(err.message || err)); });
+                return;
+            }
+            if (act === 'save') {
+                var cell = row.querySelector('.rm-status');
+                cell.textContent = 'Saving…';
+                cell.style.color = '';
+                mpPost('/reminders/update', {
+                    id: id,
+                    date: row.querySelector('.rm-e-date').value,
+                    rule: row.querySelector('.rm-e-rule').value,
+                    // A cleared action is sent as nothing and read as nothing: mpPost drops empty
+                    // values and the endpoint treats an absent action as "no action", so emptying
+                    // the box actually empties it rather than leaving the old text behind.
+                    action: row.querySelector('.rm-e-action').value
+                }).then(function (res) {
+                    cell.textContent = res.ok ? 'Saved' : res.message;
+                    cell.style.color = res.ok ? '#2ca02c' : '#c0392b';
+                    if (res.ok) loadReminders();
+                }).catch(function (err) {
+                    cell.textContent = String(err.message || err);
+                    cell.style.color = '#c0392b';
+                });
+            }
+        }
+
+        function renderReminders(report) {
+            renderReminderDelivery(report);
+            renderReminderWarnings(report.warnings);
+            renderReminderList(report);
+            renderReminderEarnings(report);
+            renderReminderUndated(report);
+        }
+
+        // The screen's own honesty check. With no SMTP configured every row here is a note on a
+        // page that will never mail anything, and a due row that silently sends nothing is exactly
+        // the failure a reminder tool cannot afford -- so it is said at the top, not in a log.
+        function renderReminderDelivery(report) {
+            var box = document.getElementById('rm-delivery');
+            if (!box) return;
+            if (report.deliveryEnabled) {
+                box.innerHTML = 'Delivery is <b>on</b> — due reminders are emailed once a day, '
+                    + 'checked every half hour so a reminder lands soon after the laptop is next '
+                    + 'opened rather than being skipped for the day.';
+            } else {
+                box.innerHTML = '<b style="color:#c0392b">Nothing is being sent.</b> Email delivery '
+                    + 'is off, so these reminders are a list on this page only. Set '
+                    + '<code>portfolio.alert.mail.*</code> in <code>~/.portfolio-bench.properties</code> '
+                    + '(the same settings the watchlist alerts use) to turn it on.';
+            }
+        }
+
+        function renderReminderWarnings(warnings) {
+            var box = document.getElementById('rm-warnings');
+            if (!box) return;
+            box.innerHTML = (warnings && warnings.length)
+                ? '<div class="value-warnings pending"><ul style="margin:0;padding-left:1.1rem">'
+                    + warnings.map(function (w) { return '<li>' + escapeHtml(w) + '</li>'; }).join('')
+                    + '</ul></div>'
+                : '';
+        }
+
+        function renderReminderList(report) {
+            var box = document.getElementById('rm-list');
+            var list = report.manual || [];
+            if (!list.length) {
+                box.innerHTML = '<p class="muted">None yet.</p>';
+                return;
+            }
+            var rows = list.map(function (r) {
+                return '<tr' + (r.enabled ? '' : ' class="rm-off"') + '>'
+                    + '<td class="lbl">' + escapeHtml(r.symbol || '—') + '</td>'
+                    + '<td><input class="rm-e-date" type="date" value="' + escapeHtml(r.dueDate) + '"/></td>'
+                    + '<td class="lbl">' + rmWhen(r) + '</td>'
+                    + '<td><input class="rm-e-rule" type="text" size="26" value="'
+                        + escapeHtml(r.rule || '') + '"/></td>'
+                    + '<td><input class="rm-e-action" type="text" size="26" value="'
+                        + escapeHtml(r.action || '') + '"/></td>'
+                    + '<td class="lbl">'
+                        + '<button type="button" data-rid="' + r.id + '" data-act="save">Save</button> '
+                        + '<button type="button" data-rid="' + r.id + '" data-act="toggle" data-enable="'
+                        + (r.enabled ? 'false' : 'true') + '">' + (r.enabled ? 'Off' : 'On') + '</button> '
+                        + '<button type="button" data-rid="' + r.id + '" data-act="delete">Delete</button>'
+                    + '</td>'
+                    + '<td class="lbl muted rm-status"></td>'
+                    + '</tr>';
+            }).join('');
+            box.innerHTML = '<table class="swing-tbl"><thead><tr>'
+                + '<th class="lbl">Symbol</th><th class="lbl">Date</th><th class="lbl">Status</th>'
+                + '<th class="lbl">Rule</th><th class="lbl">Action</th>'
+                + '<th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+        }
+
+        // Says what the row is doing today rather than only what it was set for: "sending daily"
+        // is the state that matters, and a date on its own does not show it.
+        function rmWhen(r) {
+            if (!r.enabled) return '<span class="muted">off</span>';
+            if (r.due) {
+                var d = r.daysUntil;
+                var since = (d == null || d === 0) ? 'from today'
+                    : (d === -1 ? 'since yesterday' : 'for ' + (-d) + ' days');
+                return '<b>sending daily</b> <span class="muted">' + since + '</span>';
+            }
+            return '<span class="muted">' + rmIn(r.daysUntil) + '</span>';
+        }
+
+        function rmIn(days) {
+            if (days == null) return '';
+            if (days === 0) return 'today';
+            if (days === 1) return 'tomorrow';
+            return 'in ' + days + ' days';
+        }
+
+        function renderReminderEarnings(report) {
+            var box = document.getElementById('rm-earnings');
+            var list = report.earnings || [];
+            if (!list.length) {
+                box.innerHTML = '<p class="muted">No reporting dates known for anything held, '
+                    + 'watched or under an order.</p>';
+                return;
+            }
+            var rows = list.map(function (r) {
+                // The date's firmness travels with it. An estimated day can move by weeks and a
+                // snapshot date carries no session, so neither is dressed up as a confirmed one.
+                var date = escapeHtml(r.date) + (r.estimate === true
+                    ? '<span title="Yahoo inferred this from the past reporting rhythm - it can move by weeks">~</span>'
+                    : '');
+                var session = (r.time && r.time !== 'TBD') ? escapeHtml(r.time) : '—';
+                return '<tr' + (r.enabled ? '' : ' class="rm-off"') + '>'
+                    + '<td class="lbl">' + escapeHtml(r.symbol) + '</td>'
+                    + '<td class="lbl muted">' + escapeHtml(r.companyName || '—') + '</td>'
+                    + '<td class="lbl">' + date + '</td>'
+                    + '<td class="lbl">' + session + '</td>'
+                    + '<td class="lbl">' + (r.enabled
+                        ? (r.due ? '<b>sending daily</b>' : '<span class="muted">' + rmIn(r.daysUntil) + '</span>')
+                        : '<span class="muted">off</span>') + '</td>'
+                    + '<td class="lbl muted" title="which source dated this row">'
+                        + escapeHtml(r.source) + '</td>'
+                    + '<td class="lbl"><button type="button" data-esym="' + escapeHtml(r.symbol)
+                        + '" data-enable="' + (r.enabled ? 'false' : 'true') + '">'
+                        + (r.enabled ? 'Off' : 'On') + '</button></td>'
+                    + '</tr>';
+            }).join('');
+            box.innerHTML = '<table class="swing-tbl"><thead><tr>'
+                + '<th class="lbl" data-sort="str">Symbol</th>'
+                + '<th class="lbl" data-sort="str">Company</th>'
+                + '<th class="lbl" data-sort="str">Reports</th>'
+                + '<th class="lbl" title="BMO before the open, AMC after the close">Session</th>'
+                + '<th class="lbl">Status</th><th class="lbl" data-sort="str">Source</th>'
+                + '<th></th></tr></thead><tbody>'
+                + rows + '</tbody></table>';
+            attachSort(box.querySelector('table'));
+        }
+
+        // Named, not dropped. A company neither earnings source can date will never produce a
+        // reminder, and a table that simply left it out would look identical to one where
+        // everything is covered. Funds and bonds are not here -- they report no earnings, so their
+        // silence is an answer rather than a gap.
+        function renderReminderUndated(report) {
+            var box = document.getElementById('rm-undated');
+            var list = report.undated || [];
+            if (!list.length) { box.innerHTML = ''; return; }
+            box.innerHTML = '<p class="muted" style="font-size: 0.82rem;"><b>No reporting date for '
+                + list.length + ' name' + (list.length === 1 ? '' : 's') + '</b> — they will '
+                + 'never trigger an earnings reminder: ' + list.map(escapeHtml).join(', ')
+                + '. Neither the market calendar nor the cached fundamentals snapshot has a date '
+                + 'still ahead for them.</p>';
         }
 
         function mpNum(v, dp) {

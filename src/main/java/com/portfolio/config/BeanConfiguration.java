@@ -40,6 +40,7 @@ import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.persistence.SnapshotRepository;
+import com.portfolio.persistence.ReminderRepository;
 import com.portfolio.persistence.TradeNotesRepository;
 import com.portfolio.persistence.WatchlistRepository;
 import com.portfolio.port.AlertNotifier;
@@ -855,6 +856,35 @@ public class BeanConfiguration {
                                                AlertNotifier alertNotifier,
                                                KeyValueStore keyValueStore) {
         return new WatchlistAlertJob(watchlistService, alertNotifier, keyValueStore);
+    }
+
+    // ---- Calendar reminders -------------------------------------------------
+
+    @Bean
+    public ReminderRepository reminderRepository(JdbcConnectionFactory connections) {
+        return new ReminderRepository(connections);
+    }
+
+    /**
+     * Depends on {@link EarningsCalendarService} for the "when does this next report" lookup rather
+     * than reaching for the feeds itself — that service already owns the precedence between the
+     * market calendar and the fundamentals snapshot, and a second copy of it would be a second
+     * answer to the same question.
+     */
+    @Bean
+    public ReminderService reminderService(ReminderRepository reminderRepository,
+                                           EarningsCalendarService earningsCalendarService,
+                                           KeyValueStore keyValueStore,
+                                           AlertNotifier alertNotifier) {
+        return new ReminderService(reminderRepository, earningsCalendarService, keyValueStore,
+                alertNotifier);
+    }
+
+    @Bean
+    public ReminderJob reminderJob(ReminderService reminderService,
+                                   AlertNotifier alertNotifier,
+                                   KeyValueStore keyValueStore) {
+        return new ReminderJob(reminderService, alertNotifier, keyValueStore);
     }
 
     // ---- Swing-strategy validation statistics -------------------------------

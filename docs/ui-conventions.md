@@ -20,7 +20,7 @@ HTML-only edit (no JS to keep in sync). A saved tab whose group changed still re
 the per-group memory is validated with `PANEL_TO_GROUP[last] === g` before use. Groups are
 Holdings / Performance / Risk / Quality / **Strategies** (the five backtests: Swing stats, Trend
 filter, Momentum, Mom. signals, Range floor) / Tools (the named watchlists and a `+`, then a
-rule, then Reconcile, Journal, Earnings, Manual positions, Transfers).
+rule, then Reconcile, Journal, Earnings, Reminders, Manual positions, Transfers).
 
 The watchlist tabs are the one place a *panel* is not one *tab*: they are server-rendered from
 `watchlist_list` and every one carries `data-panel="panel-watchlist"`, differing only in

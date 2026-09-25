@@ -689,6 +689,14 @@
             font-weight: 600;
         }
 
+        /* A switched-off reminder: still listed, visibly not firing. Muted rather than hidden,
+           because "be quiet about this" is a standing instruction and one you should be able to
+           see you gave — an earnings mute in particular outlives the print it was given before. */
+        #panel-reminders tbody tr.rm-off { opacity: 0.55; }
+        #panel-reminders tbody tr.rm-off td:first-child { text-decoration: line-through; }
+        #panel-reminders table input[type="text"],
+        #panel-reminders table input[type="date"] { font: inherit; padding: 1px 3px; }
+
         /* A resting order already through its own limit — same amber left-bar idiom as the
            watchlist's price-target rows. It means "check this", not "this is wrong". */
         #orders-table tbody tr.order-through {
@@ -2161,6 +2169,7 @@
     <button class="tab" data-panel="panel-recon" type="button">Reconcile</button>
     <button class="tab" data-panel="panel-trades" type="button">Journal</button>
     <button class="tab" data-panel="panel-earnings" type="button">Earnings</button>
+    <button class="tab" data-panel="panel-reminders" type="button">Reminders</button>
     <button class="tab" data-panel="panel-manual" type="button">Manual positions</button>
     <button class="tab" data-panel="panel-transfers" type="button">Transfers</button>
 </div>
@@ -3664,6 +3673,56 @@
     <div id="ea-warnings" style="margin-top: 0.5rem;"></div>
     <div id="ea-days" style="margin-top: 0.6rem;"></div>
     <div id="ea-source" class="muted" style="font-size: 0.78rem; margin-top: 0.6rem;"></div>
+</section>
+
+<section class="tab-panel" id="panel-reminders">
+    <p class="muted" style="margin-top: 0">
+        <b>Things to look at again on a given day</b>, and a week's notice before anything you hold,
+        watch or have an order resting on reports its earnings. Both arrive as one email a day, and
+        keep arriving every day until you switch them off — a reminder that said itself once and
+        went quiet would be a reminder you can miss by being busy on the wrong morning.
+    </p>
+    <p class="muted" style="margin-top: 0.4rem; font-size: 0.82rem;">
+        The <b>rule</b> and the <b>action</b> are your own words and nothing here reads them. That is
+        the whole difference from the <b>watchlist</b>, whose triggers <em>are</em> evaluated against
+        live prices and fire when the market says so: these fire when the <b>calendar</b> says so, and
+        the judgement stays yours. Use the watchlist for "tell me if it drops 8%", and this for
+        "on the 14th, decide whether the thesis still holds".
+    </p>
+
+    <div id="rm-delivery" class="muted" style="margin-top: 0.5rem; font-size: 0.82rem;"></div>
+    <div id="rm-warnings" style="margin-top: 0.5rem;"></div>
+
+    <h3 style="margin-top: 1rem; font-size: 1rem;">Add a reminder</h3>
+    <div class="benchmark-controls">
+        <label title="optional — leave blank for a reminder about the portfolio rather than a position">Symbol:
+            <input id="rm-symbol" type="text" size="8" placeholder="optional" autocomplete="off"/></label>
+        <label>Date: <input id="rm-date" type="date"/></label>
+        <label>Rule: <input id="rm-rule" type="text" size="30" placeholder="what are you watching for?"/></label>
+        <label>Action: <input id="rm-action" type="text" size="30" placeholder="what will you do about it?"/></label>
+        <button id="rm-save" type="button">Add</button>
+        <span id="rm-status" class="muted" style="font-size: 0.85rem;"></span>
+    </div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Your reminders</h3>
+    <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">
+        Date, rule and action are editable in place — press <b>Save</b> on the row. The symbol is not:
+        a reminder about a different position is a different reminder, and re-pointing this one would
+        carry its history onto a name it was never about.
+    </p>
+    <div id="rm-list" style="margin-top: 0.4rem;"></div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Earnings</h3>
+    <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">
+        Every symbol in the <b>portfolio</b>, on a <b>watchlist</b>, or named by an <b>open order</b>,
+        for which a reporting date is known. These rows are <b>derived, not stored</b> — the symbol
+        comes from what you actually hold and watch, and the date from the earnings feeds, so both
+        follow along on their own. The only thing saved is which ones you have switched off, and those
+        stay listed rather than disappearing, so a standing "be quiet about this" is visible and one
+        click to lift.
+    </p>
+    <div id="rm-earnings" style="margin-top: 0.4rem;"></div>
+    <div id="rm-undated" style="margin-top: 0.6rem;"></div>
 </section>
 
 <section class="tab-panel" id="panel-transfers">

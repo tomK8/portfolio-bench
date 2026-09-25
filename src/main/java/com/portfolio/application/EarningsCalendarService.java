@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.TextStyle;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -332,6 +333,94 @@ public class EarningsCalendarService {
         static PositionSizes empty() {
             return new PositionSizes(Map.of(), null);
         }
+    }
+
+    /**
+     * When each of {@code symbols} next reports, as far as the two cached sources know — the lookup
+     * behind the earnings reminders.
+     *
+     * <p><b>Reads only what is already stored.</b> No fetch, no clamp, no window walk: this is
+     * called from a background job that runs every half hour, and a hundred symbols behind a live
+     * feed would be a hundred HTTP calls to answer a question that changes once a quarter. The
+     * calendar cache is kept current by {@link #warmForward} on its own schedule, and the
+     * fundamentals snapshot by its own four-hourly refresh.
+     *
+     * <p><b>Same precedence as the holdings section, for the same reason.</b> The market calendar
+     * is asked first — it is the stronger source, carrying the session and the consensus estimate
+     * — and the snapshot's {@code calendarEvents} date answers for everything it cannot see, which
+     * is every non-US listing and every US name beyond the warmed window. A snapshot date that has
+     * already passed is dropped rather than returned: Yahoo leaves the last date it knows in place
+     * until it learns the next one, so a passed date is where the rhythm was, not a forward date.
+     *
+     * <p><b>Three outcomes, not two.</b> A dated symbol lands in {@link Lookup#dated}; one the two
+     * sources cannot date lands in {@link Lookup#undated}, so the caller can name it rather than
+     * absorb it. Funds and bonds land in <b>neither</b> — they report no earnings, so a reminder
+     * about theirs could only be a reminder about nothing, and calling that a gap would bury the
+     * real gaps under every gilt in the ledger. That is why the two lists come back separately
+     * instead of being read off the map's absences: only this method knows which silence is which.
+     *
+     * @param lookaheadDays how far ahead to consider a cached calendar row; clamped to
+     *                      {@link #MAX_FORWARD}
+     */
+    public Lookup nextEarnings(Collection<String> symbols, int lookaheadDays) {
+        Map<String, NextEarnings> out = new LinkedHashMap<>();
+        List<String> undated = new ArrayList<>();
+        if (symbols == null || symbols.isEmpty()) return new Lookup(out, undated);
+
+        LocalDate today = LocalDate.now();
+        LocalDate horizon = today.plusDays(clamp(lookaheadDays, 0, MAX_FORWARD));
+        Map<String, EarningsEvent> calendar = repo.earliestPerSymbol(today, horizon);
+        Map<String, FundamentalsRepository.Cached> cache = fundamentalsRepo.loadAll();
+
+        for (String raw : symbols) {
+            if (raw == null || raw.isBlank()) continue;
+            String symbol = raw.trim().toUpperCase();
+            if (Instruments.isBond(symbol)) continue;
+            FundamentalsRepository.Cached c = cache.get(symbol);
+            // A non-empty sectorWeights is what marks a fund — the same test the holdings section
+            // uses, and the reason a held ETF is not reported as an undated company.
+            if (c != null && !c.quote().sectorWeights().isEmpty()) continue;
+
+            EarningsEvent e = calendar.get(symbol);
+            if (e != null) {
+                out.put(symbol, new NextEarnings(symbol, e.companyName(), e.date(), e.time(),
+                        "calendar", null));
+                continue;
+            }
+            LocalDate snapshot = snapshotDate(c);
+            if (snapshot != null && !snapshot.isBefore(today)) {
+                out.put(symbol, new NextEarnings(symbol, snapshotLabel(c, "companyName"), snapshot,
+                        null, "snapshot", snapshotDateEstimate(c)));
+            } else {
+                undated.add(symbol);
+            }
+        }
+        undated.sort(null);
+        return new Lookup(out, undated);
+    }
+
+    /**
+     * What the lookup could and could not answer, kept as two lists rather than one map with holes.
+     *
+     * <p>The split is the point. {@code undated} is a company the two sources have no forward date
+     * for — a real gap, and the caller is expected to say so by name. A bond or a fund is in
+     * <b>neither</b> list: it reports no earnings at all, so its silence is the correct answer and
+     * reporting it as a gap would bury the genuine ones under every gilt in the ledger. Only the
+     * method that knows which is which can draw that line, which is why the caller is handed the
+     * answer instead of re-deriving it from the map's absences.
+     */
+    public record Lookup(Map<String, NextEarnings> dated, List<String> undated) {
+    }
+
+    /**
+     * One symbol's next reporting date and which source knew it. {@code time} is the session
+     * (BMO/AMC/TBD) and only the calendar carries one; {@code estimate} is Yahoo's flag for a day
+     * it inferred from the past reporting rhythm rather than one the company announced, and only
+     * the snapshot carries that. Each stays null on the other source rather than being filled in
+     * with a plausible default — a weaker answer must not borrow the stronger one's geometry.
+     */
+    public record NextEarnings(String symbol, String companyName, LocalDate date, String time,
+                               String source, Boolean estimate) {
     }
 
     /**

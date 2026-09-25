@@ -11,7 +11,9 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Cache of the Nasdaq earnings calendar so the Earnings tab is fast and resilient — a repeat view or
@@ -156,6 +158,48 @@ public class EarningsCalendarRepository {
             }
         } catch (Exception e) {
             log.warn("Could not read earnings dates for {}", symbol, e);
+        }
+        return out;
+    }
+
+    /**
+     * The soonest cached report per symbol inside {@code [from, to]} — the whole window in one
+     * query, because the reminder job asks about every symbol you hold, watch or have an order
+     * resting on and a query each would be a hundred round trips for one screen.
+     *
+     * <p>Reads only what has been fetched, exactly like {@link #datesForSymbol}: a symbol missing
+     * from the result has no <em>cached</em> print in the window, which is not the same as having
+     * none due. The caller pairs this with the fundamentals snapshot rather than reading the
+     * silence as an answer.
+     */
+    public Map<String, EarningsEvent> earliestPerSymbol(LocalDate from, LocalDate to) {
+        Map<String, EarningsEvent> out = new LinkedHashMap<>();
+        if (from == null || to == null || to.isBefore(from) || !connections.dbExists()) return out;
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT date, symbol, company, time, market_cap, eps_forecast, num_estimates, "
+                             + "last_year_eps FROM earnings_calendar "
+                             + "WHERE date >= ? AND date <= ? ORDER BY date")) {
+            ps.setString(1, from.toString());
+            ps.setString(2, to.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String symbol = rs.getString("symbol");
+                    if (symbol == null || symbol.isBlank()) continue;
+                    // Ordered by date, so the first row seen for a symbol is its soonest print.
+                    out.putIfAbsent(symbol.toUpperCase(), new EarningsEvent(
+                            LocalDate.parse(rs.getString("date")),
+                            symbol,
+                            rs.getString("company"),
+                            rs.getString("time"),
+                            nullableLong(rs, "market_cap"),
+                            nullableDouble(rs, "eps_forecast"),
+                            nullableInt(rs, "num_estimates"),
+                            nullableDouble(rs, "last_year_eps")));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not read the earnings calendar for {}..{}", from, to, e);
         }
         return out;
     }

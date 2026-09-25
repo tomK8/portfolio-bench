@@ -161,6 +161,22 @@ different questions and are wired to different feeds:
   it. That staleness is the price of never blocking a render on the network, and a date that
   moves on a scale of weeks can afford it.
 
+## A third reader: the reminders tab
+
+`EarningsCalendarService.nextEarnings(symbols, lookahead)` answers "when does each of these next
+report" for the [reminders](reminders.md) job, over the union of held/watched/ordered symbols rather
+than just the held ones. It is the **same precedence** as `holdingState` above — calendar first,
+snapshot second, a passed snapshot date dropped — deliberately reusing this service rather than
+growing a second answer to the same question elsewhere.
+
+Two things make it different from `report()`. It **reads only the cache**: no fetch, no window walk,
+because it is called from a half-hourly background job and a hundred symbols behind a live feed would
+be a hundred HTTP calls for a fact that changes once a quarter. And it returns a `Lookup` of **two
+lists**, `dated` and `undated`, instead of a map with holes — funds and bonds belong to neither, so
+only this method can tell the silence that is an answer from the silence that is a gap, and handing
+the caller both lists is what stops every gilt in the ledger being reported as an undated company.
+`EarningsCalendarRepository.earliestPerSymbol` is the one-query window read behind it.
+
 `fundamentalsFieldGroups()` in `dashboard.js` stays the single home: the field tuple grew a
 seventh slot, `source`, naming which bag on the row holds the value (`'labels'` here, the numeric
 `extra` map by default), and `fmtSnapValue` grew a `date` type. That is all the picker, the popup

@@ -69,6 +69,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `DividendAttributor` (FIFO), `CashLedgerReconstructor` (FIFO position-from-ledger
   reconstruction), `Irr` (the app's only XIRR solver) + `PositionIrr`, `Instruments`
   (`isBond`, `giltId`, `couponOf`, `assetClassOf` — single home of all four), `DividendYield`,
+  `Reminders` (when a reminder is due, and the once-a-day key),
   `VolForecast` + `AssetClass` (the open-orders touch model), `Ladders` (rung layout + per-account
   cash), `Switches` (share-class switch: one yardstick, the index/FX split, progress in units),
   `ShareClasses` (the declared one-holding pairs), `PriceStats`, `StyleClassifier`,
@@ -76,7 +77,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `domain.momentum` / `domain.range` hold the four backtest engines, `domain.grouping` the
   table-grouping keys. `domain.model`: `Holding` (Builder; many nullable fields), `AggHolding`,
   `CashTransaction`, `OpenOrder` + `OrderStatus`, `OrderGroup` + `GroupType` + `IntendedRung` +
-  `Rung` (ladders and share-class switches), `EarningsEvent`, `Account` + `TransactionType` enums,
+  `Rung` (ladders and share-class switches), `EarningsEvent`, `Reminder`, `Account` + `TransactionType` enums,
   `PriceBar`, `IntradayBar`, `IntradayPrice`.
 - `port` — `FxRateProvider`, `HistoricalFxRateProvider`, `EarningsCalendarProvider`,
   `EarningsCalendarFeed`, `AlertNotifier` (interfaces, faked in tests).
@@ -93,11 +94,13 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `SwitchService` + `GroupRungs` (what both group types share) + `ShareClassRegistry`
   + `IntentEdits` (the editable price/qty cells — intended rungs only),
   `LivePricesService`, `UnresolvedSymbols`,
-  `WatchlistService`, the five `*AnalysisService` backtests, `PriceFetchJob` +
+  `WatchlistService`, `ReminderService` + `ReminderJob` (calendar reminders — hand-entered ones
+  stored, earnings ones derived from the held/watched/ordered union),
+  the five `*AnalysisService` backtests, `PriceFetchJob` +
   `IntradayPriceFetchJob` (share `PriceFetchSupport`).
 - `web` — ~19 thin controllers (`RootController`, `ChartsController`, `AnalysisController`,
   `OperationsController`, `OrdersController`, `LaddersController`, `SwitchesController`,
-  `LiveDashboardController`, `WatchlistController`,
+  `LiveDashboardController`, `WatchlistController`, `RemindersController`,
   the five strategy controllers, …), plus `GlobalExceptionAdvice`
   (`@ExceptionHandler(IllegalStateException)` renders `fragments/error` instead of HTTP 500),
   `PriceFetchScheduler` and `WebSupport`.
@@ -108,7 +111,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 Logging is SLF4J + Logback (`logback-spring.xml`); no `System.out` in production code.
 
 UI is server-rendered Thymeleaf + htmx + Chart.js, all **vendored** — see
-[docs/ui-conventions.md](docs/ui-conventions.md). 28 tab panels in six groups
+[docs/ui-conventions.md](docs/ui-conventions.md). 29 tab panels in six groups
 (Holdings / Performance / Risk / Quality / Strategies / Tools). Tools also carries one tab per
 named watchlist, all pointing at the single `panel-watchlist` and told apart by `data-list`.
 
@@ -224,6 +227,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [allocation-breakdowns.md](docs/allocation-breakdowns.md) | change sector, style or AI/Tech | The sector table is a partition, the AI/Tech tile an **overlay** — never sum them; `Instruments` owns the wrapper sets, properties files must not redeclare them; unclassified is three states |
 | [excel-exports.md](docs/excel-exports.md) | touch any Download Excel button | `setForceFormulaRecalculation(true)` or every formula opens blank; an empty view writes literals, not `SUM` over an empty range; the Ladders/Switches sheets carry no formula at all — a cash column total *is* the netting across accounts both panels forbid |
 | [watchlist.md](docs/watchlist.md) | change the watchlist, alerts or the shared price popup | The popup lives at body level, not inside a tab panel; an unwatched symbol gets every trigger **disabled**; five tables open it and `data-symbol` is the only test of whether a row can; the per-window high/low is the **traded** range over the span the label claims — every window sees the live session, so they nest; the close-only `*` is judged per extreme, not per window; a stored `0.0` is absent, not a price; lists are membership only — **alerts are global to the symbol** — and a symbol in no list is deleted, never left orphaned in the fetch universe; a column layout that resolves to nothing falls back to the defaults, never to a blank table; the header label wraps inside a capped span (a `<th>` ignores `max-width`) and the data never wraps; an active sort is re-applied after every in-place patch and owns the reconcile's order, and hand-placing a row is what clears it; a drop saves the order it shows and a cancelled drag saves nothing |
+| [reminders.md](docs/reminders.md) | change the Reminders tab, a reminder rule or the send job | Nothing here is evaluated — a watchlist trigger fires when the market says so, a reminder when the **calendar** does, and `rule`/`action` are free text nothing parses; a hand-entered reminder is open-ended (only a person stops it) while an earnings one is a window whose **lower** bound is what keeps a stale snapshot date from mailing a print that already happened; earnings reminders are **derived, never stored** — only the mute is, and it is a standing instruction about the symbol, not one print; `nextEarnings` returns three outcomes (dated / undated / not applicable) because a gilt's silence is an answer and a company's is a gap; "daily" is the per-day dedup key, not the schedule, and the sent-set is written only after the mail actually goes |
 | [earnings.md](docs/earnings.md) | change the earnings calendar, the holdings section, or the next-earnings date on a fundamentals row | Three-valued feed: `[]` is a successful empty read, `null` is a failure; three earnings sources answer three different questions, and the holdings section reads two of them in a fixed order — the calendar outranks the snapshot, a snapshot date counts only while still ahead, and `REPORTING`/`EXPECTED`/`NOT_COVERED`/`NONE_SCHEDULED` are four distinct silences; the snapshot's date rides the quoteSummary call already being made and stores **no** date rather than a zero, an estimated day is marked, never shown as fixed, and a day already reported is muted, never blanked and never relabelled |
 | [manual-positions.md](docs/manual-positions.md) | change hand-entered positions | Each acquisition is **two** rows; `OPENING_BALANCE`, not `CONTRIBUTION`; balances are recomputed, never supplied |
 | [transfers.md](docs/transfers.md) | change in-specie transfers, or any per-account lot engine | Both legs or neither; the magnitude is the source account's **FIFO cost**, not market value and not the broker's pooled figure; **every per-`(account, symbol)` lot engine must replay `TRANSFER`** — loading the row is not replaying it, and the two that ignored it showed a sold-out position as still held; lots travel with their open date, cost and accrued dividend, and a payment reaching an emptied timeline follows the shares |
@@ -315,6 +319,10 @@ beyond the code, so treat the source as the specification.
 | `POST /watchlist/lists/{create,rename,delete,move}` | Watchlist | the named lists; the last one cannot be deleted |
 | `GET`/`POST /watchlist/columns` (`?list=`) | Watchlist | the per-list column layout; **no rows = the default set**, so saving none is "reset to default" |
 | `GET /earnings` | Earnings | `EarningsCalendarService` |
+| `GET /reminders` | Reminders | `ReminderService` — stored reminders + the derived earnings ones in one payload; `deliveryEnabled` says whether anything is actually being mailed |
+| `POST /reminders/{add,update,delete,toggle}` | Reminders | the hand-entered half; **date, rule and action are the editable fields — the symbol is not**, and a blank date or rule is refused rather than defaulted |
+| `POST /reminders/earnings/toggle` | Reminders | the mute, keyed by **symbol** (there is no row) — a muted symbol stays listed, never hidden |
+| `POST /reminders/send` | Reminders | `ReminderJob` on demand; same per-day dedup, so it cannot double-send |
 | `GET /positions/manual`, `POST /positions/manual/{buy,sell,withdraw,delete}` | ManualPositions | `ManualPositionService` |
 | `GET /transfers`, `POST /transfers/{record,delete}` | Transfers | `AssetTransferService` |
 | `GET /swing`, `POST /swing/{symbols,backfill}` | Swing | `SwingAnalysisService` |

@@ -68,6 +68,8 @@ public class BackupService {
             "order_group_intent",
             "trade_notes",            // hand-written, keyed to ledger rowids
             "watchlist",              // symbols + thresholds
+            "reminder",               // hand-typed dates, rules and actions: no feed supplies these
+            "reminder_mute",          // which earnings reminders were switched off — a standing instruction
             "instrument_aliases",     // hand-curated; a rename re-keys ledger rows, not undoable
             "ticker_mappings",
             "portfolio_snapshots");

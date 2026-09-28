@@ -374,6 +374,126 @@ class PriceStatsTest {
         assertTrue(p60 <= 1.0);
     }
 
+    // ---- the round trip: two barriers, in order, inside one window ---------
+
+    @Test
+    void sequentialTouch_reproducesTheClosedFormWhenTheSecondBarrierIsWhereTheFirstIs() {
+        // The quadrature's validation. Put the second barrier exactly on the first and its passage
+        // is instant — F ≡ 1 — so the convolution collapses to ∫f, which must be the single-barrier
+        // CDF. Everything the numerical integration could get wrong (the t^{-3/2} singularity at
+        // zero, the panel count, the endpoint weights) shows up here as a gap.
+        double start = 100.0;
+        for (double first : new double[]{100.5, 104, 110, 130, 160, 99.5, 96, 90, 70, 50}) {
+            for (double sigma : new double[]{0.002, 0.005, 0.01, 0.02, 0.05, 0.15, 0.3, 0.6}) {
+                for (int n : new int[]{1, 5, 21, 63, 126, 252, 504, 1250}) {
+                    double convolved = PriceStats.sequentialTouchRaw(start, first, first, sigma, n, 0.0);
+                    double closed = PriceStats.driftlessTouchRaw(start, first, sigma, n);
+                    assertEquals(closed, convolved, 5e-4,
+                            "∫f must be the first-passage CDF (barrier " + first + ", σ " + sigma
+                                    + ", N " + n + ")");
+                }
+            }
+        }
+    }
+
+    @Test
+    void sequentialTouch_theDensityIntegratesToItsOwnCdf() {
+        // The same statement one level down, against the two helpers directly and with drift on,
+        // where the defective density (mass < 1, because a drift away from the barrier means it may
+        // never be reached at all) is the thing that could be got wrong.
+        double sigma = 0.02;
+        for (double b : new double[]{0.04, -0.04, 0.2, -0.2}) {
+            for (double nu : new double[]{0.0, 0.0005, -0.0005}) {
+                int n = 126;
+                double h = n / 4000.0;
+                double sum = 0.0;
+                for (int i = 1; i < 4000; i++) {
+                    sum += ((i % 2 == 0) ? 2.0 : 4.0) * PriceStats.firstPassageDensity(b, sigma, i * h, nu);
+                }
+                assertEquals(PriceStats.firstPassageCdf(b, sigma, n, nu), sum * h / 3.0, 1e-4,
+                        "the first-passage density must integrate to its CDF (b " + b + ", ν " + nu + ")");
+            }
+        }
+    }
+
+    @Test
+    void sequentialTouch_isBelowTheProductOfTheTwoLegsTakenSeparately() {
+        // The whole reason the figure is computed rather than eyeballed. Multiplying the two legs'
+        // own probabilities assumes each gets the full window; in a round trip the second gets only
+        // what the first leaves, so the naive product is an upper bound and always an optimistic
+        // one. {T₁+T₂ ≤ N} ⊂ {T₁ ≤ N} ∩ {T₂ ≤ N}, and the two are independent, so this is an
+        // inclusion rather than an empirical observation.
+        double start = 100.0, sell = 106.0, buy = 98.0, sigma = 0.02;
+        for (int n : new int[]{10, 21, 63, 126, 252}) {
+            double trip = PriceStats.sequentialTouchRaw(start, sell, buy, sigma, n, 0.0);
+            double leg1 = PriceStats.driftlessTouchRaw(start, sell, sigma, n);
+            double leg2 = PriceStats.driftlessTouchRaw(sell, buy, sigma, n);
+            assertTrue(trip < leg1 * leg2,
+                    "a round trip must price below the product of its legs (N " + n + ")");
+            assertTrue(trip < leg1, "and below either leg alone (N " + n + ")");
+        }
+    }
+
+    @Test
+    void sequentialTouch_growsWithTheHorizonAndStaysAProbability() {
+        BigDecimal start = new BigDecimal("100");
+        List<BigDecimal> path = List.of(new BigDecimal("106"), new BigDecimal("98"));
+        BigDecimal sigma = new BigDecimal("0.02");
+        double previous = -1;
+        for (int n : new int[]{5, 10, 21, 42, 63, 126, 252, 504}) {
+            double p = PriceStats.sequentialTouchProbability(start, path, sigma, n, null).doubleValue();
+            assertTrue(p >= previous, "more time can never make a round trip less likely (N " + n + ")");
+            assertTrue(p >= 0.0 && p <= 1.0);
+            previous = p;
+        }
+    }
+
+    @Test
+    void sequentialTouch_oneBarrierIsTheOrdinarySinglePassage() {
+        // A part-executed ladder has one leg left, and it must be priced by exactly the model the
+        // rung above it is priced by — not by a second implementation that happens to agree today.
+        BigDecimal start = new BigDecimal("100"), limit = new BigDecimal("95");
+        BigDecimal sigma = new BigDecimal("0.02");
+        assertEquals(PriceStats.touchProbabilityDrifted(start, limit, sigma, 63, null),
+                PriceStats.sequentialTouchProbability(start, List.of(limit), sigma, 63, null));
+    }
+
+    @Test
+    void sequentialTouch_guards() {
+        BigDecimal start = new BigDecimal("100"), sigma = new BigDecimal("0.02");
+        List<BigDecimal> two = List.of(new BigDecimal("106"), new BigDecimal("98"));
+        // Nothing left to wait for is certainty, not an absent answer: it is the ladder whose
+        // remaining legs are both already through the market.
+        assertEquals(0, BigDecimal.ONE.compareTo(
+                PriceStats.sequentialTouchProbability(start, List.of(), sigma, 63, null)));
+        // Three legs would be another nested convolution. Null rather than a number that looks
+        // like the others and is worse than them.
+        assertNull(PriceStats.sequentialTouchProbability(start, List.of(new BigDecimal("106"),
+                new BigDecimal("98"), new BigDecimal("104")), sigma, 63, null));
+        assertNull(PriceStats.sequentialTouchProbability(null, two, sigma, 63, null));
+        assertNull(PriceStats.sequentialTouchProbability(start, two, null, 63, null));
+        assertNull(PriceStats.sequentialTouchProbability(start, two, sigma, 0, null));
+        assertNull(PriceStats.sequentialTouchProbability(start, two, BigDecimal.ZERO, 63, null));
+    }
+
+    @Test
+    void sequentialTouch_driftSignsTheLegsAgainstEachOther() {
+        // Drift cannot help both legs of a round trip, and the model has to show that. An upward
+        // drift makes the sell leg likelier and the buy-back leg less so; the round trip it lands on
+        // is the balance of the two, not the sum of two improvements.
+        double start = 100.0, sell = 106.0, buy = 98.0, sigma = 0.02;
+        int n = 126;
+        double flat = PriceStats.sequentialTouchRaw(start, sell, buy, sigma, n, 0.0);
+        double up = PriceStats.sequentialTouchRaw(start, sell, buy, sigma, n, 0.0008);
+        assertTrue(PriceStats.firstPassageCdf(Math.log(sell / start), sigma, n, 0.0008)
+                        > PriceStats.firstPassageCdf(Math.log(sell / start), sigma, n, 0.0),
+                "an upward drift must make the sell leg likelier");
+        assertTrue(PriceStats.firstPassageCdf(Math.log(buy / sell), sigma, n, 0.0008)
+                        < PriceStats.firstPassageCdf(Math.log(buy / sell), sigma, n, 0.0),
+                "and the buy-back leg less likely");
+        assertTrue(up < flat, "so the round trip as a whole comes down");
+    }
+
     @Test
     void pctChange_basics() {
         assertEquals(0.10, PriceStats.pctChange(110.0, 100.0).doubleValue(), 1e-9);

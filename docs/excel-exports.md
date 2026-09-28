@@ -49,13 +49,19 @@ sheet whose grain it states, and **the group's name is the leading column of eve
 the join, and it is what lets a reader pivot the file back into the cards they saw. Nothing is summed
 across groups anywhere, because neither panel sums across them either.
 
-- **`Ladders-{date}.xlsx`** — `Rungs`, `Ladders`, `Cash`. The rungs sheet carries a **`Side of
+- **`Ladders-{date}.xlsx`** — `Rungs`, `Ladders`, `Round trips`, `Cash`. The rungs sheet carries a **`Side of
   market`** column (`Above market` / `Below market`) because the on-screen axis is an *ordering*,
   and a spreadsheet loses an ordering the moment anyone sorts it: the fact the ordering encodes has
   to become a value or it is gone. Blank when the security has no live price — the panel draws no
   marker rather than inventing a position, and neither does the column. **`Lapses before P(30)`** is
   the sheet's version of the amber `~`: the caveat gets a column instead of a cell tint, since the
-  probability beside it prices a window the order will not survive.
+  probability beside it prices a window the order will not survive. **`Round trips` is keyed by
+  ladder *and direction***, not by ladder: sell-then-buy and buy-then-sell are two paths with two
+  answers, and one row each is the only shape that does not lose which one the ladder is actually
+  in. Its horizon is a column rather than a title, because it is a stored setting that can move
+  between downloads and a probability that does not say what window it is over cannot be compared
+  with the file taken last month. A ladder with no round trip to price still gets a row carrying
+  why — a missing row would read as "this ladder was not in the file", which is the opposite fact.
 - **`Share-Class Switches-{date}.xlsx`** — `Switches`, `Yardstick`, `Legs`, `Sequence`, `Cash`. Five
   grains: per switch, per side of a comparison, per leg, per step, per account. The summary sheet
   keeps **three** progress columns, not two — `Sold, not bought back` is the exposure a half-finished

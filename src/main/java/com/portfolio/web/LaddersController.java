@@ -154,6 +154,25 @@ public class LaddersController {
     }
 
     /**
+     * Set the horizon the round-trip probability is priced over.
+     *
+     * <p>A stored, app-wide setting rather than browser state, and for the reason the drift switch
+     * is one: the block, the Excel export and any later read of either have to be asked the same
+     * question. A horizon living only in the {@code <select>} would let a downloaded sheet be priced
+     * over a window the screen it came from never showed.
+     *
+     * <p>Out-of-range values are clamped rather than refused. This is a view control with a fixed
+     * list of choices, so anything else arriving is a stale tab or a hand-made request, and the
+     * useful answer to those is the nearest priceable horizon rather than an error page over a
+     * panel that was working.
+     */
+    @PostMapping("/ladders/horizon")
+    public String horizon(@RequestParam int sessions, Model model) {
+        openOrdersService.setRoundTripSessions(sessions);
+        return render(model);
+    }
+
+    /**
      * Writes the whole Ladders block to a date-stamped workbook in the output directory
      * (~/Documents, beside the portfolio exports — not the browser's download folder) and renders
      * the shared export fragment naming the file.

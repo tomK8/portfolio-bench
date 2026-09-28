@@ -1174,4 +1174,43 @@ class OpenOrdersServiceTest {
         assertEquals("", OpenOrdersService.exchangeSuffix("EUR"), "EUR spans three exchanges — no guess");
     }
 
+
+    /**
+     * The round-trip horizon is one stored, app-wide setting, on the same argument the drift switch
+     * is: the panel and the Excel download have to be asked the same question, and a horizon living
+     * in the browser's {@code <select>} would let a downloaded sheet be priced over a window the
+     * screen it came from never showed.
+     */
+    @Test
+    void theRoundTripHorizonIsStoredAndClampedRatherThanRefused(@TempDir Path dir) {
+        KeyValueStore kv = new KeyValueStore(dir.resolve("db"));
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), dir,
+                null, null, new YahooTickerMap(), kv);
+
+        assertEquals(OpenOrdersService.DEFAULT_ROUND_TRIP_SESSIONS, service.roundTripSessions(),
+                "a quarter is the shipped default");
+
+        service.setRoundTripSessions(126);
+        assertEquals(126, service.roundTripSessions(), "stored, not held in the request");
+
+        // A read degrades rather than failing: a value from an older build or a hand-edited settings
+        // file comes back as the nearest horizon that can be priced.
+        service.setRoundTripSessions(0);
+        assertEquals(1, service.roundTripSessions());
+        service.setRoundTripSessions(100_000);
+        assertEquals(OpenOrdersService.MAX_HORIZON_SESSIONS, service.roundTripSessions());
+    }
+
+    /** No store wired is "nothing set", never a failure — several callers construct it without one. */
+    @Test
+    void theRoundTripHorizonFallsBackToTheDefaultWithNoStore(@TempDir Path dir) {
+        OpenOrdersService service = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new IIOrdersParser()), FX, new ExcelReportWriter(), dir,
+                null, null, new YahooTickerMap(), null);
+
+        assertEquals(OpenOrdersService.DEFAULT_ROUND_TRIP_SESSIONS, service.roundTripSessions());
+        service.setRoundTripSessions(21);
+        assertEquals(OpenOrdersService.DEFAULT_ROUND_TRIP_SESSIONS, service.roundTripSessions());
+    }
 }

@@ -195,6 +195,25 @@ public class OpenOrdersService {
     /** KV key for the stored event-variance setting — same one-switch-for-everything contract. */
     static final String USE_EVENT_VAR_KEY = "orders_use_event_var";
 
+    /**
+     * KV key for the round-trip horizon the Ladders block prices over, and its shipped default.
+     *
+     * <p><b>Stored, not browser state</b>, on the same argument as the drift switch: the panel, the
+     * Excel export and anything else that re-derives this figure have to be asked the same question,
+     * and a horizon living in a {@code <select>} would let a downloaded sheet disagree with the
+     * screen it came from.
+     *
+     * <p>63 sessions — a quarter, on the same 252-session clock the drift and the vol scaling use.
+     * The rungs' own 10 and 30 are the wrong default here and the reason is the whole point of a
+     * separate horizon: those price <em>one</em> touch, and a round trip needs two of them in order,
+     * with the second getting only what the first leaves. Thirty sessions asked of a round trip is a
+     * far tighter constraint than thirty asked of a rung, which is exactly why the reader gets to
+     * move it rather than being handed a number that reads the same and means something else.
+     */
+    static final String ROUND_TRIP_SESSIONS_KEY = "ladders_round_trip_sessions";
+
+    static final int DEFAULT_ROUND_TRIP_SESSIONS = 63;
+
     /** Words taken from an instrument description when suggesting a match keyword. */
     private static final int KEYWORD_WORDS = 4;
 
@@ -475,6 +494,32 @@ public class OpenOrdersService {
     }
 
     /**
+     * The horizon the Ladders block's round trip is priced over, from the stored setting.
+     *
+     * <p>Clamped rather than validated at the door, so a stored value from an older build — or a
+     * hand-edited settings file — degrades to a horizon that can be priced instead of failing a
+     * read. Reads degrade; only writes throw.
+     */
+    public int roundTripSessions() {
+        if (kv == null) return DEFAULT_ROUND_TRIP_SESSIONS;
+        BigDecimal stored = kv.getBigDecimal(ROUND_TRIP_SESSIONS_KEY,
+                BigDecimal.valueOf(DEFAULT_ROUND_TRIP_SESSIONS));
+        return clampRoundTripSessions(stored == null ? DEFAULT_ROUND_TRIP_SESSIONS : stored.intValue());
+    }
+
+    /** Store the round-trip horizon. Takes effect on the next read of the panel or the export. */
+    public void setRoundTripSessions(int sessions) {
+        if (kv != null) {
+            kv.putBigDecimal(ROUND_TRIP_SESSIONS_KEY,
+                    BigDecimal.valueOf(clampRoundTripSessions(sessions)));
+        }
+    }
+
+    static int clampRoundTripSessions(int sessions) {
+        return Math.max(1, Math.min(sessions, MAX_HORIZON_SESSIONS));
+    }
+
+    /**
      * The forecast config actually in force, resolving <b>explicit request → stored setting →
      * shipped default</b>.
      *
@@ -608,10 +653,29 @@ public class OpenOrdersService {
         Map<String, String> orderNotes = orderHistory == null ? Map.of() : orderHistory.notes();
         List<String> accountLabels = parsers.stream().map(OrderParser::sourceName).toList();
         GroupRungs.TouchPricer touch = (order, sessions) -> touchAt(order, sessions, cfg);
+        // The same FX snapshot the rest of this load priced with, copied because `rates` is
+        // reassigned above and a lambda needs it effectively final. One snapshot per load is also
+        // the point: the GBP expected value must be on the rate the rest of the panel used.
+        Map<String, BigDecimal> snapshot = rates;
+        int tripSessions = roundTripSessions();
+        LadderService.RoundTripPricer trips = new LadderService.RoundTripPricer() {
+            @Override
+            public VolForecast.Sequence price(OpenOrder any, BigDecimal start,
+                                              List<BigDecimal> barriers, int sessions) {
+                return roundTripAt(any, start, barriers, sessions, cfg);
+            }
+
+            @Override
+            public BigDecimal toGbp(BigDecimal amount, String currency) {
+                return OpenOrdersService.toGbp(amount, currency, snapshot);
+            }
+        };
 
         LadderService.LadderReport ladderReport = ladders == null
-                ? new LadderService.LadderReport(List.of(), List.of(), List.of(), List.of())
-                : ladders.assemble(orders, intendedPriced, closed, orderNotes, accountLabels, touch);
+                ? new LadderService.LadderReport(List.of(), List.of(), List.of(), List.of(),
+                        tripSessions)
+                : ladders.assemble(orders, intendedPriced, closed, orderNotes, accountLabels,
+                        touch, trips, tripSessions);
 
         SwitchService.SwitchReport switchReport = switches == null
                 ? new SwitchService.SwitchReport(List.of(), List.of(), List.of(), List.of())
@@ -930,6 +994,33 @@ public class OpenOrdersService {
                 o.dailyVol30(), o.dailyVol250(), events.events());
         return VolForecast.touch(vols, o.currentPrice(), o.price(), sessions, cfg, assetClass,
                 yieldFor(o.symbol(), assetClass)).probability();
+    }
+
+    /**
+     * A ladder's round trip priced over the reader's horizon — two touches in order, inside one
+     * window.
+     *
+     * <p>Built exactly like {@link #touchAt}, and that is the point: same volatility windows off the
+     * same enriched order, same event-variance resolution, same asset class and per-name yield. A
+     * round trip is not a second model of the market, it is the same first passage asked a longer
+     * question, so anything that moves the rungs' columns moves this figure with them.
+     *
+     * <p>The events are re-resolved at <em>this</em> horizon rather than the rungs' — a print eight
+     * weeks out is inside a quarter-long round-trip window and outside a thirty-session one, and the
+     * calendar has to be read for the window actually being priced.
+     */
+    private VolForecast.Sequence roundTripAt(OpenOrder o, BigDecimal start,
+                                             List<BigDecimal> barriers, int sessions,
+                                             VolForecast.Config cfg) {
+        if (o == null || start == null || barriers == null) return null;
+        AssetClass assetClass = Instruments.assetClassOf(o.symbol());
+        OrderEventVariance.Events events = cfg.useEventVar() && eventVariance != null
+                ? eventVariance.eventsFor(o.symbol(), sessions)
+                : OrderEventVariance.Events.NONE;
+        VolForecast.Inputs vols = new VolForecast.Inputs(o.dailyVol10(), o.dailyVol20(),
+                o.dailyVol30(), o.dailyVol250(), events.events());
+        return VolForecast.sequence(vols, start, barriers, sessions, cfg, assetClass,
+                yieldFor(o.symbol(), assetClass));
     }
 
     /** The four realized-vol windows carried on an enriched row, as the forecast's input record. */

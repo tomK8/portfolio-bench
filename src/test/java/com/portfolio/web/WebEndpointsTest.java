@@ -1,5 +1,7 @@
 package com.portfolio.web;
 
+import com.portfolio.application.LadderService;
+import com.portfolio.application.OpenOrdersService;
 import com.portfolio.application.SwitchService;
 import com.portfolio.port.FxRateProvider;
 import org.junit.jupiter.api.Test;
@@ -36,6 +38,10 @@ class WebEndpointsTest {
     MockMvc mvc;
     @Autowired
     SwitchService switches;
+    @Autowired
+    LadderService ladders;
+    @Autowired
+    OpenOrdersService orders;
 
     @DynamicPropertySource
     static void temporaryDirs(DynamicPropertyRegistry registry) throws IOException {
@@ -102,6 +108,42 @@ class WebEndpointsTest {
                 .andExpect(content().string(containsString("no ladders yet")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         containsString("no input files found"))));
+    }
+
+    /**
+     * The round-trip horizon is a stored setting, so the control has to render from server state:
+     * a select showing a window the figures beside it were not priced over is the one thing this
+     * arrangement exists to prevent (the same convention the drift checkbox follows).
+     *
+     * <p>The ladder is made and removed inside the test. The block's controls only render once a
+     * ladder exists, and the class's other tests are about the state where none does.
+     */
+    @Test
+    void theRoundTripHorizonRendersFromServerStateAndThePostMovesIt() throws Exception {
+        long id = ladders.createLadder("Horizon test", "AAPL");
+        try {
+            mvc.perform(get("/ladders"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("Round trip over")))
+                    .andExpect(content().string(
+                            containsString("selected=\"selected\">63 sessions")));
+
+            mvc.perform(post("/ladders/horizon").param("sessions", "126"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(
+                            containsString("selected=\"selected\">126 sessions")))
+                    .andExpect(content().string(
+                            not(containsString("selected=\"selected\">63 sessions"))));
+
+            // Out of range is clamped, not refused: this is a view control with a fixed list of
+            // choices, so anything else is a stale tab, and the useful answer is the nearest
+            // horizon that can be priced rather than an error page over a panel that was working.
+            mvc.perform(post("/ladders/horizon").param("sessions", "0"))
+                    .andExpect(status().isOk());
+        } finally {
+            ladders.deleteLadder(id);
+            orders.setRoundTripSessions(63);   // back to the shipped default
+        }
     }
 
     @Test

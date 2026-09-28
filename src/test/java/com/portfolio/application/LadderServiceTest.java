@@ -1,5 +1,8 @@
 package com.portfolio.application;
 
+import com.portfolio.domain.AssetClass;
+import com.portfolio.domain.RoundTrips;
+import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.OpenOrder;
 import com.portfolio.domain.model.Rung;
 import com.portfolio.persistence.JdbcConnectionFactory;
@@ -37,6 +40,35 @@ class LadderServiceTest {
             (order, sessions) -> order == null || order.price() == null
                     ? null : new BigDecimal(sessions).movePointLeft(2);
 
+    /** The horizon these tests price a round trip over - a quarter, the shipped default. */
+    private static final int TRIP_SESSIONS = 63;
+
+    /**
+     * The real first-passage model on a fixed volatility, rather than a stand-in.
+     *
+     * <p>The touch pricer above can be a stub because what it is standing in for has its own tests;
+     * the round trip cannot, because the thing worth asserting here <em>is</em> that two legs come
+     * out below one and that a filled leg raises the figure. A fabricated number would make both
+     * assertions vacuous. 2%/session is an ordinary single-name equity.
+     *
+     * <p>The fixtures are priced in USD and the GBP conversion is left at 1: these tests are about
+     * which figure lands in which field, not about FX, which {@code OpenOrdersService} owns.
+     */
+    private static final LadderService.RoundTripPricer TRIPS = new LadderService.RoundTripPricer() {
+        @Override
+        public VolForecast.Sequence price(OpenOrder any, BigDecimal start,
+                                          List<BigDecimal> barriers, int sessions) {
+            BigDecimal vol = new BigDecimal("0.02");
+            return VolForecast.sequence(new VolForecast.Inputs(vol, vol, vol, vol), start, barriers,
+                    sessions, VolForecast.Config.DEFAULT, AssetClass.EQUITY, VolForecast.Yield.NONE);
+        }
+
+        @Override
+        public BigDecimal toGbp(BigDecimal amount, String currency) {
+            return amount;
+        }
+    };
+
     @TempDir
     Path dbDir;
 
@@ -71,7 +103,7 @@ class LadderServiceTest {
         OpenOrder buy = order("Roth IRA", "NVDA", "Buy", "20", "203.18", "REF2");
         s.addRungs(id, List.of(sell.identity(), buy.identity()));
 
-        var report = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH);
+        var report = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS);
 
         assertEquals(1, report.ladders().size());
         var ladder = report.ladders().get(0);
@@ -94,7 +126,7 @@ class LadderServiceTest {
         OpenOrder loose = order("Roth IRA", "NVDA", "Buy", "20", "193.73", "REF2");
         s.addRungs(id, List.of(assigned.identity()));
 
-        var report = s.assemble(List.of(assigned, loose), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH);
+        var report = s.assemble(List.of(assigned, loose), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS);
 
         assertEquals(1, report.ladders().get(0).rungs().size());
         assertEquals(List.of(loose.identity()),
@@ -109,7 +141,7 @@ class LadderServiceTest {
         OpenOrder nvda = order("Roth IRA", "NVDA", "Buy", "20", "193.73", "REF1");
         OpenOrder mrvl = order("Roth IRA", "MRVL", "Buy", "30", "195.10", "REF2");
 
-        var report = s.assemble(List.of(nvda, mrvl), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH);
+        var report = s.assemble(List.of(nvda, mrvl), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS);
 
         assertEquals(2, report.unassigned().size());
         assertEquals(List.of(nvda.identity()),
@@ -161,7 +193,7 @@ class LadderServiceTest {
         s.addIntent(id, "Roth IRA", "Buy", new BigDecimal("25"), new BigDecimal("175.00"), "why");
         List<OpenOrder> synthetic = s.intendedOrders(sym -> "USD");
 
-        var report = s.assemble(List.of(), synthetic, List.of(), Map.of(), ACCOUNTS, TOUCH);
+        var report = s.assemble(List.of(), synthetic, List.of(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS);
         Rung r = report.ladders().get(0).rungs().get(0);
 
         assertTrue(r.intended());
@@ -261,7 +293,7 @@ class LadderServiceTest {
         OpenOrder buy = order("Roth IRA", "NVDA", "Buy", "20", "203.18", "REF2");
         s.addRungs(id, List.of(sell.identity(), buy.identity()));
 
-        var ladder = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH)
+        var ladder = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS)
                 .ladders().get(0);
 
         for (Rung r : ladder.rungs()) {
@@ -280,7 +312,7 @@ class LadderServiceTest {
         s.addIntent(id, "Roth IRA", "Buy", new BigDecimal("25"), new BigDecimal("175.00"), null);
 
         Rung r = s.assemble(List.of(), s.intendedOrders(sym -> "USD"), List.of(), Map.of(),
-                ACCOUNTS, TOUCH).ladders().get(0).rungs().get(0);
+                ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS).ladders().get(0).rungs().get(0);
 
         assertEquals(0, new BigDecimal("0.10").compareTo(r.touchNear()));
         assertEquals(0, new BigDecimal("0.30").compareTo(r.touchFar()));
@@ -296,7 +328,7 @@ class LadderServiceTest {
         history.record("II SIPP", List.of(dealt(o)), Set.of(), DAY.plusDays(1));
         s.addRungs(id, List.of(o.identity()));
 
-        Rung r = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS, TOUCH)
+        Rung r = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS)
                 .ladders().get(0).rungs().get(0);
 
         assertTrue(r.filled());
@@ -321,7 +353,7 @@ class LadderServiceTest {
 
         var ladder = s.assemble(
                 List.of(soon.withHorizonTouch(null, 8), later.withHorizonTouch(null, 20), gtc),
-                List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH).ladders().get(0);
+                List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS).ladders().get(0);
         Rung eight = rungAt(ladder, "560");
         Rung twenty = rungAt(ladder, "570");
         Rung noExpiry = rungAt(ladder, "500");
@@ -366,7 +398,7 @@ class LadderServiceTest {
         OpenOrder twin = order("Roth IRA", "NVDA", "Buy", "25", "175.00", "REF-NEW");
 
         var report = s.assemble(List.of(twin), s.intendedOrders(sym -> "USD"), List.of(),
-                Map.of(), ACCOUNTS, TOUCH);
+                Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS);
 
         assertEquals(1, report.ladders().get(0).rungs().size(), "still just the intent");
         assertTrue(report.ladders().get(0).rungs().get(0).intended());
@@ -386,7 +418,7 @@ class LadderServiceTest {
         s.markPlaced(intentId, placed.identity());
 
         var report = s.assemble(List.of(placed), s.intendedOrders(sym -> "USD"), List.of(),
-                history.notes(), ACCOUNTS, TOUCH);
+                history.notes(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS);
         List<Rung> rungs = report.ladders().get(0).rungs();
         assertEquals(1, rungs.size());
         assertFalse(rungs.get(0).intended(), "it is the real order now");
@@ -435,7 +467,7 @@ class LadderServiceTest {
         history.record("Roth IRA", List.of(dealt(buy)), Set.of(), DAY.plusDays(2));
         s.addRungs(id, List.of(sell.identity(), buy.identity()));
 
-        var report = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS, TOUCH);
+        var report = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS);
         var ladder = report.ladders().get(0);
 
         assertEquals(2, ladder.rungs().size());
@@ -454,7 +486,7 @@ class LadderServiceTest {
         history.record("II SIPP", List.of(cancelled(o)), Set.of(), DAY.plusDays(1));
         s.addRungs(id, List.of(o.identity()));
 
-        var ladder = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS, TOUCH)
+        var ladder = s.assemble(List.of(), List.of(), history.closed(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS)
                 .ladders().get(0);
 
         assertEquals(Rung.State.CANCELLED, ladder.rungs().get(0).state());
@@ -469,7 +501,7 @@ class LadderServiceTest {
         long id = s.createLadder("NVDA round trip", "NVDA");
         s.addRungs(id, List.of("Roth IRA|VANISHED"));
 
-        var report = s.assemble(List.of(), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH);
+        var report = s.assemble(List.of(), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS);
 
         assertTrue(report.ladders().get(0).rungs().isEmpty());
         assertEquals(1, report.warnings().size());
@@ -493,5 +525,165 @@ class LadderServiceTest {
         return OpenOrder.parsed(o.broker(), o.symbol(), o.name(), o.side(), o.orderType(),
                 o.quantity(), o.price(), false, o.amount(), o.currency(), o.dateEntered(), null,
                 null, "CANCELLED", o.reference());
+    }
+
+    // ---- the round trip ----------------------------------------------------
+
+    /** An order the market has a live price for — what a round trip has to be measured from. */
+    private static OpenOrder priced(String broker, String side, String qty, String price,
+                                    String market, String ref) {
+        return order(broker, "NVDA", side, qty, price, ref)
+                .withCurrentPrice(new BigDecimal(market), null, null);
+    }
+
+    private static LadderService.RoundTripOutlook way(LadderService.Ladder l,
+                                                      RoundTrips.Direction d) {
+        return l.roundTrip().outlooks().stream()
+                .filter(o -> o.plan().direction() == d).findFirst().orElse(null);
+    }
+
+    /**
+     * The headline ask: a ladder with rungs on both sides supports two kinds of round trip, and the
+     * panel reports both with the likelier one first.
+     */
+    @Test
+    void aTwoSidedLadderReportsBothDirectionsMostLikelyFirst() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        // Market at 100, with the sell nearer than the buy — so opening on the sell is the likelier
+        // way round, and the ordering has to show it without the reader doing the comparison.
+        OpenOrder sell = priced("II SIPP", "Sell", "10", "104", "100", "REF1");
+        OpenOrder buy = priced("Roth IRA", "Buy", "10", "92", "100", "REF2");
+        s.addRungs(id, List.of(sell.identity(), buy.identity()));
+
+        var ladder = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS,
+                TOUCH, TRIPS, TRIP_SESSIONS).ladders().get(0);
+
+        assertEquals(2, ladder.roundTrip().outlooks().size());
+        assertEquals(RoundTrips.Direction.SELL_THEN_BUY,
+                ladder.roundTrip().leading().plan().direction());
+        var up = way(ladder, RoundTrips.Direction.SELL_THEN_BUY);
+        var down = way(ladder, RoundTrips.Direction.BUY_THEN_SELL);
+        assertTrue(up.sequence().probability().compareTo(down.sequence().probability()) > 0);
+        assertEquals(TRIP_SESSIONS, ladder.roundTrip().sessions());
+    }
+
+    /**
+     * Two rungs at 60% and 80% are not a 70% round trip. The round trip has to price below either
+     * leg on its own, because the second leg gets only what the first leaves of the window — which
+     * is the whole reason the figure is computed rather than eyeballed off the two columns.
+     */
+    @Test
+    void aRoundTripPricesBelowTheRungsItIsMadeOf() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        OpenOrder sell = priced("II SIPP", "Sell", "10", "104", "100", "REF1");
+        OpenOrder buy = priced("Roth IRA", "Buy", "10", "96", "100", "REF2");
+        s.addRungs(id, List.of(sell.identity(), buy.identity()));
+
+        var ladder = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS,
+                TOUCH, TRIPS, TRIP_SESSIONS).ladders().get(0);
+        BigDecimal trip = way(ladder, RoundTrips.Direction.SELL_THEN_BUY).sequence().probability();
+        BigDecimal oneLeg = TRIPS.price(sell, new BigDecimal("100"),
+                List.of(new BigDecimal("104")), TRIP_SESSIONS).probability();
+
+        assertTrue(trip.compareTo(oneLeg) < 0,
+                "a round trip must price below its own first leg: " + trip + " vs " + oneLeg);
+    }
+
+    /**
+     * When a leg fills the ladder needs one event rather than two, so the probability rises — and it
+     * is conditioned on where the market is now, not on the price the ladder was created at.
+     */
+    @Test
+    void aFilledLegRaisesTheOddsBecauseOneEventIsLeftRatherThanTwo() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        OpenOrder sell = priced("II SIPP", "Sell", "10", "104", "100", "REF1");
+        OpenOrder buy = priced("Roth IRA", "Buy", "10", "96", "100", "REF2");
+        s.addRungs(id, List.of(sell.identity(), buy.identity()));
+
+        var both = s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS,
+                TOUCH, TRIPS, TRIP_SESSIONS).ladders().get(0);
+
+        // Now the sell fills: it leaves the live feed and turns up in the history as Dealt.
+        history.record("II SIPP", List.of(sell), Set.of(sell.identity()), DAY);
+        history.record("II SIPP", List.of(dealt(sell)), Set.of(), DAY.plusDays(1));
+        var afterFill = s.assemble(List.of(buy), List.of(), history.closed(), Map.of(), ACCOUNTS,
+                TOUCH, TRIPS, TRIP_SESSIONS).ladders().get(0);
+
+        var before = way(both, RoundTrips.Direction.SELL_THEN_BUY);
+        var after = afterFill.roundTrip().leading();
+        assertEquals(2, before.plan().legs());
+        assertEquals(1, after.plan().legs());
+        assertTrue(after.plan().underway());
+        assertTrue(after.sequence().probability().compareTo(before.sequence().probability()) > 0,
+                "one leg left must price above two: " + after.sequence().probability()
+                        + " vs " + before.sequence().probability());
+        // What remains, priced from today's market — not the figure the ladder was born with.
+        assertEquals(0, new BigDecimal("100").compareTo(after.plan().start()));
+        assertEquals(List.of(new BigDecimal("96")), after.plan().barriers());
+    }
+
+    /** Probability × spread × size, in the ladder's own money and in GBP beside it. */
+    @Test
+    void expectedValueIsTheProbabilityTimesTheSpreadTimesTheSize() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        OpenOrder sell = priced("II SIPP", "Sell", "10", "104", "100", "REF1");
+        OpenOrder buy = priced("Roth IRA", "Buy", "10", "96", "100", "REF2");
+        s.addRungs(id, List.of(sell.identity(), buy.identity()));
+
+        var o = way(s.assemble(List.of(sell, buy), List.of(), List.of(), Map.of(), ACCOUNTS,
+                TOUCH, TRIPS, TRIP_SESSIONS).ladders().get(0), RoundTrips.Direction.SELL_THEN_BUY);
+
+        assertEquals(0, new BigDecimal("8").compareTo(o.plan().spread()));
+        assertEquals(0, new BigDecimal("10").compareTo(o.plan().quantity()));
+        assertEquals(0, o.sequence().probability().multiply(new BigDecimal("80"))
+                .compareTo(o.expectedValue()));
+        assertEquals(o.expectedValue(), o.expectedValueGbp(), "the fixture's rate is 1");
+    }
+
+    /**
+     * A ladder that cannot make a round trip says why rather than showing an empty block, and the
+     * horizon control still renders — the reader is entitled to know what window was asked about.
+     */
+    @Test
+    void aOneSidedLadderSaysWhyThereIsNoRoundTrip() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA accumulation", "NVDA");
+        OpenOrder buy = priced("Roth IRA", "Buy", "10", "96", "100", "REF1");
+        s.addRungs(id, List.of(buy.identity()));
+
+        var report = s.assemble(List.of(buy), List.of(), List.of(), Map.of(), ACCOUNTS,
+                TOUCH, TRIPS, TRIP_SESSIONS);
+        var rt = report.ladders().get(0).roundTrip();
+
+        assertFalse(rt.any());
+        assertNull(rt.leading());
+        assertNotNull(rt.unavailable());
+        assertEquals(TRIP_SESSIONS, rt.sessions());
+        assertEquals(TRIP_SESSIONS, report.roundTripSessions());
+    }
+
+    /** An intended rung is on the path like any other: this panel is where it exists at all. */
+    @Test
+    void anIntendedRungCompletesARoundTripLikeARealOne() {
+        LadderService s = service();
+        long id = s.createLadder("NVDA round trip", "NVDA");
+        OpenOrder sell = priced("II SIPP", "Sell", "10", "104", "100", "REF1");
+        s.addRungs(id, List.of(sell.identity()));
+        s.addIntent(id, "Roth IRA", "Buy", new BigDecimal("10"), new BigDecimal("96"), "no cash yet");
+
+        List<OpenOrder> intents = s.intendedOrders(sym -> "USD").stream()
+                .map(o -> o.withCurrentPrice(new BigDecimal("100"), null, null)).toList();
+        var ladder = s.assemble(List.of(sell), intents, List.of(), Map.of(), ACCOUNTS,
+                TOUCH, TRIPS, TRIP_SESSIONS).ladders().get(0);
+
+        var o = way(ladder, RoundTrips.Direction.SELL_THEN_BUY);
+        assertNotNull(o);
+        assertEquals(2, o.plan().barriers().size());
+        assertEquals(0, new BigDecimal("104").compareTo(o.plan().barriers().get(0)));
+        assertEquals(0, new BigDecimal("96").compareTo(o.plan().barriers().get(1)));
     }
 }

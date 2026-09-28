@@ -265,11 +265,11 @@ class SwitchServiceTest {
         ladders.createLadder("NVDA round trip", "NVDA");
 
         assertEquals(1, assemble(s, List.of()).switches().size());
-        assertEquals(1, ladders.assemble(List.of(), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH)
+        assertEquals(1, ladders.assemble(List.of(), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH, null, 63)
                 .ladders().size());
         assertEquals("EQQQ", assemble(s, List.of()).switches().get(0).from());
         assertEquals("NVDA",
-                ladders.assemble(List.of(), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH)
+                ladders.assemble(List.of(), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH, null, 63)
                         .ladders().get(0).group().symbol());
     }
 
@@ -286,7 +286,7 @@ class SwitchServiceTest {
         s.addLegs(switchId, List.of(sell.identity()));
 
         assertEquals(1, assemble(s, List.of(sell)).switches().get(0).sellLegs().size());
-        assertTrue(ladders.assemble(List.of(sell), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH)
+        assertTrue(ladders.assemble(List.of(sell), List.of(), List.of(), Map.of(), ACCOUNTS, TOUCH, null, 63)
                 .ladders().get(0).rungs().isEmpty(), "assigning it elsewhere moved it");
     }
 

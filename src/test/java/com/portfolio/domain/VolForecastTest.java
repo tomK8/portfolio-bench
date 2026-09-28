@@ -595,4 +595,105 @@ class VolForecastTest {
         assertTrue(t.probabilityLow().compareTo(gross.probabilityLow()) > 0);
         assertTrue(t.probabilityHigh().compareTo(gross.probabilityHigh()) > 0);
     }
+
+    // ---- the round trip: a sequence of barriers over one horizon ------------
+
+    @Test
+    void aSequenceOfOneBarrierIsTheSingleTouch() {
+        // The part-executed ladder. One leg left has to be priced by the model the rung above it is
+        // priced by, down to the last digit — not by a second implementation that agrees today.
+        Inputs in = inputs("0.02", "0.02", "0.02", "0.02");
+        VolForecast.Sequence seq = VolForecast.sequence(in, FROM, java.util.List.of(BUY_LIMIT), 63,
+                CFG, AssetClass.EQUITY, VolForecast.Yield.NONE);
+        Touch touch = VolForecast.touch(in, FROM, BUY_LIMIT, 63, CFG, AssetClass.EQUITY,
+                VolForecast.Yield.NONE);
+
+        assertEquals(touch.probability(), seq.probability());
+        assertEquals(touch.sigmaEff(), seq.sigmaEff());
+        assertEquals(touch.source(), seq.source());
+        assertEquals(1, seq.legs());
+    }
+
+    @Test
+    void aRoundTripPricesBelowEitherLegOnItsOwn() {
+        // The reason the figure exists. Two rungs that each look likely do not make a likely round
+        // trip: the second leg gets only what the first leaves of the window.
+        Inputs in = inputs("0.02", "0.02", "0.02", "0.02");
+        java.util.List<BigDecimal> path = java.util.List.of(dec("106"), dec("96"));
+        VolForecast.Sequence trip = VolForecast.sequence(in, FROM, path, 63, CFG,
+                AssetClass.EQUITY, VolForecast.Yield.NONE);
+        Touch sell = VolForecast.touch(in, FROM, dec("106"), 63, CFG, AssetClass.EQUITY,
+                VolForecast.Yield.NONE);
+        Touch buy = VolForecast.touch(in, dec("106"), dec("96"), 63, CFG, AssetClass.EQUITY,
+                VolForecast.Yield.NONE);
+
+        assertTrue(trip.probability().compareTo(sell.probability()) < 0);
+        assertTrue(trip.probability().compareTo(buy.probability()) < 0);
+        assertEquals(2, trip.legs());
+    }
+
+    @Test
+    void aSequenceUsesOneSigmaEffForTheWholeHorizonAndNotOnePerLeg() {
+        // σ is forecast for the window the reader chose, and how that window splits between the two
+        // legs is a random variable — there is no per-leg horizon to forecast for. So the blend is
+        // resolved once, at the horizon, and it is the same σ the single-barrier form would use
+        // there.
+        Inputs in = inputs("0.03", "0.03", "0.03", "0.01");
+        VolForecast.Sequence seq = VolForecast.sequence(in, FROM,
+                java.util.List.of(dec("106"), dec("96")), 126, CFG, AssetClass.EQUITY,
+                VolForecast.Yield.NONE);
+
+        assertEquals(VolForecast.resolve(in, 126, CFG).sigmaEff(), seq.sigmaEff());
+        assertEquals(Source.BLEND, seq.source());
+    }
+
+    @Test
+    void aSequenceCarriesTheRvBracketTheTouchColumnsDo() {
+        // The honest width around the point estimate, on the same argument: if the low end already
+        // clears the bar being decided against, the call is robust to the volatility input.
+        Inputs in = inputs("0.01", "0.02", "0.04", "0.02");
+        VolForecast.Sequence seq = VolForecast.sequence(in, FROM,
+                java.util.List.of(dec("106"), dec("96")), 63, CFG, AssetClass.EQUITY,
+                VolForecast.Yield.NONE);
+
+        assertTrue(seq.hasRange());
+        assertTrue(seq.probabilityLow().compareTo(seq.probability()) <= 0);
+        assertTrue(seq.probabilityHigh().compareTo(seq.probability()) >= 0);
+    }
+
+    @Test
+    void aSequenceWithNoVolatilityResolvesToNothingRatherThanZero() {
+        VolForecast.Sequence seq = VolForecast.sequence(Inputs.NONE, FROM,
+                java.util.List.of(dec("106"), dec("96")), 63, CFG, AssetClass.EQUITY,
+                VolForecast.Yield.NONE);
+
+        assertNull(seq.probability());
+        assertEquals(Source.NONE, seq.source());
+        assertEquals(2, seq.legs(), "it still says what it was asked, so the panel can say so too");
+    }
+
+    @Test
+    void driftReachesTheSequenceThroughTheSameNetting() {
+        // Whatever moves the rungs' columns has to move this figure with them: the drift switch, the
+        // class figure and the per-name yield netted off it are resolved here exactly once, by the
+        // same code the single-barrier form uses.
+        Inputs in = inputs("0.02", "0.02", "0.02", "0.02");
+        java.util.List<BigDecimal> path = java.util.List.of(dec("106"), dec("96"));
+        Config drifted = Config.of(null, null, true);
+
+        VolForecast.Sequence off = VolForecast.sequence(in, FROM, path, 63, CFG,
+                AssetClass.EQUITY, VolForecast.Yield.NONE);
+        VolForecast.Sequence on = VolForecast.sequence(in, FROM, path, 63, drifted,
+                AssetClass.EQUITY, VolForecast.Yield.NONE);
+        VolForecast.Sequence netted = VolForecast.sequence(in, FROM, path, 63, drifted,
+                AssetClass.EQUITY, divYield("0.08"));
+
+        assertFalse(off.drifted());
+        assertTrue(on.drifted());
+        assertEquals(0, on.drift().compareTo(AssetClass.EQUITY.dailyTotalReturn()));
+        // An 8% yield against an 8% class total return leaves no price drift at all, which drops the
+        // whole thing back onto the driftless branch — the same reduction the touch form has.
+        assertEquals(0, netted.drift().signum());
+        assertEquals(off.probability(), netted.probability());
+    }
 }

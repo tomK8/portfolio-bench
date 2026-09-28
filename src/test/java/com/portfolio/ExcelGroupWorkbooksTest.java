@@ -3,7 +3,9 @@ package com.portfolio;
 import com.portfolio.application.LadderService;
 import com.portfolio.application.SwitchService;
 import com.portfolio.domain.Ladders;
+import com.portfolio.domain.RoundTrips;
 import com.portfolio.domain.Switches;
+import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.GroupType;
 import com.portfolio.domain.model.OrderGroup;
 import com.portfolio.domain.model.Rung;
@@ -50,12 +52,38 @@ class ExcelGroupWorkbooksTest {
 
     private static LadderService.Ladder ladder(String name, String symbol, String market,
                                                List<Rung> rungs) {
+        return ladder(name, symbol, market, rungs,
+                new LadderService.RoundTripView(63, List.of(), List.of(),
+                        "Every rung left is a buy, so there is nothing on the other side to "
+                        + "complete a round trip with."));
+    }
+
+    private static LadderService.Ladder ladder(String name, String symbol, String market,
+                                               List<Rung> rungs, LadderService.RoundTripView trip) {
         List<Rung> ordered = Ladders.byPrice(rungs);
         BigDecimal current = market == null ? null : new BigDecimal(market);
         return new LadderService.Ladder(
                 new OrderGroup(1L, GroupType.LADDER, name, symbol, null, null, LocalDate.now()),
                 ordered, Ladders.markerIndex(ordered, current), current, "USD",
-                Ladders.totals(ordered));
+                Ladders.totals(ordered), trip);
+    }
+
+    /**
+     * One priced round trip, built by hand. The sheet's job is to land each figure in the right
+     * column, so the inputs are stated rather than forecast - what the model would say about them
+     * is {@code VolForecastTest}'s business and not this file's.
+     */
+    private static LadderService.RoundTripOutlook outlook(RoundTrips.Direction direction,
+                                                          boolean underway, String probability,
+                                                          String ev) {
+        RoundTrips.Plan plan = new RoundTrips.Plan(direction, underway, new BigDecimal("220"),
+                List.of(new BigDecimal("246.97"), new BigDecimal("203.18")), new BigDecimal("20"),
+                new BigDecimal("246.97"), new BigDecimal("203.18"), new BigDecimal("43.79"), "USD");
+        VolForecast.Sequence seq = new VolForecast.Sequence(63, 2, new BigDecimal("0.02"),
+                BigDecimal.ONE, VolForecast.Source.BLEND, new BigDecimal(probability),
+                new BigDecimal("0.10"), new BigDecimal("0.30"), BigDecimal.ZERO, BigDecimal.ZERO);
+        return new LadderService.RoundTripOutlook(plan, seq, new BigDecimal(ev),
+                new BigDecimal(ev).divide(new BigDecimal("1.345"), 2, java.math.RoundingMode.HALF_UP));
     }
 
     private static List<String> sheetNames(Workbook wb) {
@@ -88,11 +116,62 @@ class ExcelGroupWorkbooksTest {
                         rung("Roth IRA", "Buy", "20", "193.73", "USD", Rung.State.INTENDED)))));
 
         try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
-            assertEquals(List.of("Rungs", "Ladders", "Cash"), sheetNames(wb));
+            assertEquals(List.of("Rungs", "Ladders", "Round trips", "Cash"), sheetNames(wb));
             assertEquals("Ladder", headers(wb.getSheet("Rungs")).get(0),
                     "every sheet leads with the group name — that is the join back to the card");
             assertEquals("Ladder", headers(wb.getSheet("Ladders")).get(0));
             assertEquals("Ladder", headers(wb.getSheet("Cash")).get(0));
+        }
+    }
+
+    /**
+     * The round-trip sheet's grain is the <b>direction</b>, not the ladder. Sell-then-buy and
+     * buy-then-sell are two paths with two answers, and folding them onto one row would need a
+     * column pair per direction and still lose which one the ladder is actually in.
+     */
+    @Test
+    void theRoundTripSheetHasARowPerDirection() throws Exception {
+        LadderService.RoundTripView trip = new LadderService.RoundTripView(63,
+                List.of(outlook(RoundTrips.Direction.SELL_THEN_BUY, true, "0.42", "367.84"),
+                        outlook(RoundTrips.Direction.BUY_THEN_SELL, false, "0.11", "96.34")),
+                List.of(), null);
+        byte[] bytes = new ExcelReportWriter().laddersWorkbook(List.of(ladder("NVDA round trip",
+                "NVDA", "220",
+                List.of(rung("II SIPP", "Sell", "20", "246.97", "USD", Rung.State.WORKING),
+                        rung("Roth IRA", "Buy", "20", "203.18", "USD", Rung.State.WORKING)),
+                trip)));
+
+        try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
+            Sheet sheet = wb.getSheet("Round trips");
+            assertEquals("Ladder", headers(sheet).get(0));
+            assertEquals("Sell \u2192 buy", str(sheet, 1, 2));
+            assertEquals("Buy \u2192 sell", str(sheet, 2, 2));
+            // The horizon rides on every row: a probability that does not say what window it is
+            // over cannot be compared with the file downloaded last month.
+            assertEquals(63.0, sheet.getRow(1).getCell(5).getNumericCellValue(), 1e-9);
+            assertEquals(0.42, sheet.getRow(1).getCell(6).getNumericCellValue(), 1e-9);
+            assertEquals("yes", str(sheet, 1, 3), "and which one the ladder is already in");
+            assertEquals("", str(sheet, 2, 3));
+            assertEquals(367.84, sheet.getRow(1).getCell(13).getNumericCellValue(), 1e-9);
+        }
+    }
+
+    /**
+     * A ladder with no round trip to price still gets a row, carrying why. Dropping it would leave
+     * the sheet's silence ambiguous between "no round trip is possible here" and "this ladder was
+     * not in the file" — opposite facts about the same name.
+     */
+    @Test
+    void aLadderWithNoRoundTripStillAppearsAndSaysWhy() throws Exception {
+        byte[] bytes = new ExcelReportWriter().laddersWorkbook(List.of(ladder("NVDA accumulation",
+                "NVDA", "220",
+                List.of(rung("Roth IRA", "Buy", "20", "203.18", "USD", Rung.State.WORKING)))));
+
+        try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
+            Sheet sheet = wb.getSheet("Round trips");
+            assertEquals("NVDA accumulation", str(sheet, 1, 0));
+            assertEquals("", str(sheet, 1, 2), "no direction, because there is no trip");
+            assertTrue(str(sheet, 1, 16).contains("nothing on the other side"), str(sheet, 1, 16));
         }
     }
 

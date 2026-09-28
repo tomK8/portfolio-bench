@@ -9,7 +9,9 @@ import com.portfolio.domain.Ladders;
 import com.portfolio.domain.PortfolioAggregator;
 import com.portfolio.domain.PortfolioMetrics;
 import com.portfolio.domain.PositionIrr;
+import com.portfolio.domain.RoundTrips;
 import com.portfolio.domain.Switches;
+import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.Holding;
 import com.portfolio.domain.model.OpenOrder;
@@ -1201,7 +1203,8 @@ public class ExcelReportWriter {
     // exactly the netting across accounts both panels exist to prevent.
 
     /**
-     * Workbook of the Ladders block: {@code Rungs}, {@code Ladders}, {@code Cash}.
+     * Workbook of the Ladders block: {@code Rungs}, {@code Ladders}, {@code Round trips},
+     * {@code Cash}.
      *
      * <p>The {@code Rungs} sheet is the price axis flattened. The axis itself is an ordering, which
      * a spreadsheet will not preserve the moment anyone sorts it, so the fact the ordering encodes
@@ -1214,6 +1217,7 @@ public class ExcelReportWriter {
              ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
             writeRungsSheet(wb.createSheet("Rungs"), ladders, wb);
             writeLadderSummarySheet(wb.createSheet("Ladders"), ladders, wb);
+            writeRoundTripSheet(wb.createSheet("Round trips"), ladders, wb);
             writeGroupCashSheet(wb.createSheet("Cash"), ladderCashLines(ladders), "Ladder", wb);
             wb.write(bos);
             return bos.toByteArray();
@@ -1323,6 +1327,82 @@ public class ExcelReportWriter {
             // Anything that could not be computed is named rather than absorbed — the app-wide
             // rule, and the panel prints the same list under the totals it was left out of.
             styledCell(row, 13, String.join("; ", t.excluded()), text);
+        }
+        finishSheet(sheet, headers.length, rowNum);
+    }
+
+    /**
+     * The round-trip forecast: <b>one row per ladder and direction</b>, not one per ladder.
+     *
+     * <p>A ladder with rungs on both sides supports two trips — sell-then-buy on shares held, and
+     * buy-then-sell on shares not yet owned — and they are different paths with different answers.
+     * Folding them into one row would need a column pair per direction and would still lose which
+     * one the ladder is actually in, so the grain of the sheet is the direction and the ladder's
+     * name is the join, like every other sheet in this workbook.
+     *
+     * <p>The horizon is a column rather than a title, because it is a stored setting that can move
+     * between downloads: a file whose probabilities do not say what window they are over cannot be
+     * compared with the one taken last month. {@code Legs} carries the same thing the panel's badge
+     * does — one leg left is a different question from two, and a reader sorting by probability has
+     * to be able to see that the rows were not all asked the same one.
+     */
+    private static void writeRoundTripSheet(Sheet sheet, List<LadderService.Ladder> ladders,
+                                            Workbook wb) {
+        CellStyle boldText = boldTextStyle(wb);
+        CellStyle text = wb.createCellStyle();
+        CellStyle qtyNum = numericStyle(wb, false);
+        CellStyle count = countStyle(wb);
+        CellStyle touchPct = touchPctStyle(wb);
+        Map<String, CellStyle> money = new HashMap<>();
+
+        String[] headers = {"Ladder", "Security", "Direction", "Underway", "Legs left",
+                "Horizon (sessions)", "P(round trip)", "P(low)", "P(high)", "Matched quantity",
+                "Sell price", "Buy price", "Spread", "Expected value", "Expected value GBP",
+                "Currency", "Left out"};
+        header(sheet, headers, boldText);
+
+        int rowNum = 1;
+        for (LadderService.Ladder l : ladders) {
+            LadderService.RoundTripView rt = l.roundTrip();
+            for (LadderService.RoundTripOutlook o : rt.outlooks()) {
+                RoundTrips.Plan plan = o.plan();
+                Row row = sheet.createRow(rowNum++);
+                styledCell(row, 0, l.group().name(), text);
+                styledCell(row, 1, dashIfNull(l.group().symbol()), text);
+                styledCell(row, 2, plan.direction().label(), text);
+                styledCell(row, 3, plan.underway() ? "yes" : "", text);
+                setNumeric(row, 4, BigDecimal.valueOf(plan.legs()), count);
+                setNumeric(row, 5, BigDecimal.valueOf(rt.sessions()), count);
+                VolForecast.Sequence seq = o.sequence();
+                if (seq != null) {
+                    if (seq.probability() != null) setStyled(row, 6, seq.probability(), touchPct);
+                    if (seq.probabilityLow() != null) setStyled(row, 7, seq.probabilityLow(), touchPct);
+                    if (seq.probabilityHigh() != null) setStyled(row, 8, seq.probabilityHigh(), touchPct);
+                }
+                setNumeric(row, 9, plan.quantity(), qtyNum);
+                setMoney(row, 10, plan.sellPrice(), plan.currency(), false, wb, money);
+                setMoney(row, 11, plan.buyPrice(), plan.currency(), false, wb, money);
+                setMoney(row, 12, plan.spread(), plan.currency(), false, wb, money);
+                if (o.expectedValue() != null) {
+                    setMoney(row, 13, o.expectedValue(), plan.currency(), false, wb, money);
+                }
+                if (o.expectedValueGbp() != null) {
+                    setMoney(row, 14, o.expectedValueGbp(), "GBP", false, wb, money);
+                }
+                styledCell(row, 15, dashIfNull(plan.currency()), text);
+                styledCell(row, 16, String.join("; ", rt.excluded()), text);
+            }
+            // A ladder with no trip to price still gets a row, carrying why. Dropping it would make
+            // the sheet's silence ambiguous between "no round trip is possible here" and "this
+            // ladder was not in the file", which are opposite facts about the same name.
+            if (!rt.any()) {
+                Row row = sheet.createRow(rowNum++);
+                styledCell(row, 0, l.group().name(), text);
+                styledCell(row, 1, dashIfNull(l.group().symbol()), text);
+                setNumeric(row, 5, BigDecimal.valueOf(rt.sessions()), count);
+                styledCell(row, 16, rt.unavailable() == null ? String.join("; ", rt.excluded())
+                        : rt.unavailable(), text);
+            }
         }
         finishSheet(sheet, headers.length, rowNum);
     }

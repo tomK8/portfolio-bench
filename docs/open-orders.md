@@ -518,6 +518,137 @@ rung and a resting one are the same input to every figure. What state a rung is 
 - **Anything that cannot be computed is dropped from the figure it would have corrupted and named**
   in `Totals.excluded`, which the panel prints underneath — the app-wide rule.
 
+## The round trip: will this ladder come back round, and is it worth it
+
+`domain/RoundTrips` (the path) + `VolForecast.sequence` / `PriceStats.sequentialTouchProbability`
+(the odds) + `LadderService.RoundTripView` (the two joined, with the money on them). One block in
+each ladder's summary, and one stored horizon control in the panel's head.
+
+**The question the rung columns cannot answer.** `P(10)` and `P(30)` say how likely each rung is to
+fill. They do not say whether the *ladder* is likely to come back round — a sell followed by a buy
+back, or a buy followed by a sell out — which is the thing being decided when an order is left
+resting. **Two rungs at 60% and 80% are not a 70% round trip, and not a 48% one either.** The naive
+product assumes each leg gets the whole window; in a round trip the second leg gets only what the
+first leaves of it, and starts from the first barrier rather than from today's price. Both
+corrections run the same way, against the reader's optimism, which is exactly why the figure is
+computed rather than eyeballed off two columns that are each individually correct.
+
+**The next round trip, not every rung.** Three rungs a side is a sequence nobody waits out — the
+ladder is repriced long before it plays through — so a probability covering all of them answers a
+question that cannot come true.
+
+**Matched by quantity, never by pairs.** A round trip is a quantity sold and the same quantity
+bought back, or the reverse. Which rung closes which is not a question this can answer or needs to:
+rungs fill out of order, and selling at one level and buying back at another is a completed trip
+whatever the two were recorded as. So the opening leg is the **nearest** remaining rung on its side
+(the first one the market reaches — not the one the reader would have picked), and the closing leg
+is however many rungs on the other side it takes to match that quantity, priced at their
+quantity-weighted average with the last taken part-way if that is all the match needs. The excess on
+the longer side is a position change and is deliberately not priced as part of a trip.
+
+**One barrier stands for a set of closing rungs, and it is the furthest of them.** Price is
+continuous: reaching the last rung the match needs means the nearer ones were passed on the way. So
+three buys at 98/96/94 closing a sell of 30 collapse to the single level 94, bought back at the
+average 96.
+
+**Direction is reported, both ways when both apply.** `SELL_THEN_BUY` is shares already held sold
+high and bought back lower; `BUY_THEN_SELL` is shares not yet owned bought low and sold out higher.
+They are different paths over the same two rungs and have different probabilities, so both are shown
+and the likelier is listed first — the reader should be able to see which way round the ladder is
+more likely to complete without doing the comparison. **A filled leg settles the direction by
+arithmetic rather than by a rule:** matching is by quantity, so the two filled sides cancel and only
+the excess is open, which means there can never be an open leg on both sides at once.
+
+**A part-executed ladder shows the odds of what remains.** When a leg fills the ladder needs *one*
+event rather than two, so the probability rises — and it is conditioned on the **current price**,
+never the price the ladder was created at. `Rung.filled()` is the whole input; nothing is
+remembered. The panel marks that row `underway`, because one leg left and two legs left are
+different questions and a reader comparing two figures has to be able to see that they were not
+asked the same one.
+
+**A rung already through the market is not something to wait for.** A sell below the bid is
+marketable: it fills, it is not a barrier. It therefore contributes no leg, and the next leg starts
+from the **market price** rather than from that rung's limit — the market is where the market is.
+This is the same fact the price axis keeps visible by ordering strictly by price, read as a path.
+
+### The maths
+
+Exact under the same geometric Brownian motion the single-barrier columns assume, not an
+approximation of it. By the strong Markov property the process restarts at the first barrier the
+moment it is touched, so the second passage is independent of the first and distributed as a fresh
+first passage from that level:
+
+```
+P(T₁ + T₂ ≤ N) = ∫₀^N f(t; b₁) · F(N − t; b₂) dt
+```
+
+with `b₁ = ln(barrier₁/start)`, `b₂ = ln(barrier₂/barrier₁)`, `f` the inverse-Gaussian first-passage
+density and `F` the first-passage CDF that `touchProbabilityDrifted` already is. One leg is that CDF
+itself — literally the same call, so a part-executed ladder is priced by the model the rung above it
+is priced by rather than by a second implementation that agrees today. Zero legs is 1.
+
+**The quadrature's grid is in `t = N·u⁴`, and that substitution is load-bearing.** For a barrier
+close in volatility units the density puts nearly all its mass in the first fraction of a session,
+peaking near `b²/3σ²`. An evenly spaced Simpson grid over a quarter steps straight over that spike —
+on the worst case tested it lost most of the probability outright, silently, in the direction of
+"this ladder will never complete". Clustering the abscissae toward zero costs nothing and holds the
+error below 2e-4 across every barrier, volatility and horizon the panel can produce, which is inside
+the 4 dp the figure is rounded to. `sequentialTouch_reproducesTheClosedFormWhenTheSecondBarrierIsWhereTheFirstIs`
+pins it: put the second barrier on the first and `F ≡ 1`, so the convolution must reproduce the
+closed-form single-barrier probability.
+
+**Three or more legs returns null, not a number.** Each further leg is another nested convolution,
+`O(Mᵏ)` and less accurate with it; nothing here asks for one, and a wrong number would be
+indistinguishable from a right one.
+
+**One σ_eff for the whole horizon**, resolved by the same `VolForecast.resolve` the rungs use, with
+the same drift netting and the same RV10/RV30 bracket. How the window splits between the two legs is
+a random variable — there is no per-leg horizon to forecast for, and blending a second σ for "the
+rest of the window" would be forecasting off a quantity the model has not drawn yet. Drift, when it
+is on, cannot help both legs: it makes the sell leg likelier and the buy-back leg less so, and the
+round trip lands on the balance.
+
+### The horizon is its own, and selectable
+
+**`POST /ladders/horizon?sessions=` → `ladders_round_trip_sessions` in the `KeyValueStore`**, default
+**63** (a quarter, on the same 252-session clock the drift and the vol scaling use). Choices are
+10 / 21 / 42 / 63 / 126 / 252, named in the calendar terms the decision is made in.
+
+The rungs' fixed 10 and 30 are the wrong window here and that is the whole reason this one is
+separate: **thirty sessions asked of two legs is a far tighter constraint than thirty asked of one
+rung**, so the same number would read the same and mean something else. Stored app-wide rather than
+left in the `<select>`, on the same argument as the drift switch: the panel and the Excel download
+have to be asked the same question, and a downloaded sheet must never be priced over a window the
+screen it came from never showed. Every ladder's line names its horizon beside the figure for the
+same reason. Out of range is clamped rather than refused — this is a view control with a fixed list,
+so anything else is a stale tab, and the useful answer is the nearest priceable horizon rather than
+an error page over a panel that was working.
+
+### Expected value
+
+**Probability × spread × matched quantity**, in the ladder's own currency, with the GBP figure beside
+it. A wide spread that never completes and a narrow one that always does come to the same number,
+which is the point of multiplying them; the GBP conversion is what makes two ladders on different
+listings comparable when the decision is where to leave resting orders across several symbols.
+
+**Never clamped.** A ladder whose buy-back sits above its sell really does lose on completion, and a
+floor at zero would hide the one arrangement most worth seeing. **Null, never zero**, when the
+probability did not resolve: an unpriceable ladder and a worthless one are different answers.
+
+Anything dropped from the matching — a rung with no price, no quantity or no side — is named in
+`Next.excluded` and printed under the block, and a ladder with no round trip available says **why**
+in the reader's terms rather than showing an empty line.
+
+### In the workbook
+
+A fourth sheet, `Round trips`, **one row per ladder and direction** — the grain is the direction,
+because two directions folded onto one row would need a column pair each and would still lose which
+one the ladder is in. The horizon is a column rather than a title (it is a stored setting that can
+move between downloads, and a probability that does not say what window it is over cannot be
+compared with last month's file), and `Legs left` carries what the panel's `underway` badge does. A
+ladder with no trip to price still gets a row carrying why: dropping it would leave the sheet's
+silence ambiguous between "no round trip is possible here" and "this ladder was not in the file".
+
 ## Editable intended rungs: the price and quantity cells
 
 An intended rung's price and quantity are inputs, and committing one — leave the box, or press Enter
@@ -622,8 +753,9 @@ else and so carries its own side, quantity and price.
 - **A rung row opens the shared price popup**, on the same terms the table's rows do — only when the
   ladder's security resolved to a ticker. An `<input>` is excluded from that row click, so typing in
   a price cell cannot open a chart — the same exclusion the table's Note and P(N) cells rely on.
-- **`Download Excel` writes every ladder** to `Ladders-{date}.xlsx` (`POST /ladders/export`) — three
-  sheets: the rungs, the per-ladder totals, and cash by account. It re-loads on the press like the
+- **`Download Excel` writes every ladder** to `Ladders-{date}.xlsx` (`POST /ladders/export`) — four
+  sheets: the rungs, the per-ladder totals, the round-trip forecast (one row per ladder *and
+  direction*) and cash by account. It re-loads on the press like the
   orders export, which matters more here because `P(10)`/`P(30)` are priced on the stored forecast
   settings. The button appears only once a ladder exists, and the export sits outside the order-files
   guard for the same reason the block does. Sheet design and the columns that exist only because a

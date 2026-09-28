@@ -1,6 +1,8 @@
 package com.portfolio.application;
 
 import com.portfolio.domain.Ladders;
+import com.portfolio.domain.RoundTrips;
+import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.GroupType;
 import com.portfolio.domain.model.IntendedRung;
 import com.portfolio.domain.model.OpenOrder;
@@ -13,6 +15,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -54,6 +57,99 @@ public class LadderService {
      */
     public static final int NEAR_HORIZON_SESSIONS = GroupRungs.NEAR_HORIZON_SESSIONS;
     public static final int FAR_HORIZON_SESSIONS = GroupRungs.FAR_HORIZON_SESSIONS;
+
+    /**
+     * The horizons the round trip may be priced over, as the panel offers them.
+     *
+     * <p>A short list rather than a free-text box. Every one of these is a window a resting ladder is
+     * actually left in the market for, they are named in the calendar terms the decision is made in,
+     * and a fixed set is what keeps two ladders read side by side comparable. The number of sessions
+     * is what is stored and priced; the words beside it are only how a quarter reads.
+     */
+    public static final List<Horizon> ROUND_TRIP_HORIZONS = List.of(
+            new Horizon(10, "a fortnight"),
+            new Horizon(21, "a month"),
+            new Horizon(42, "two months"),
+            new Horizon(63, "a quarter"),
+            new Horizon(126, "half a year"),
+            new Horizon(252, "a year"));
+
+    /** One offered horizon: trading sessions, and what that is in the calendar. */
+    public record Horizon(int sessions, String label) {
+    }
+
+    /**
+     * Prices a ladder's round trip: the chance the market walks the whole path in order, inside the
+     * horizon.
+     *
+     * <p>Injected for the reason {@link GroupRungs.TouchPricer} is — the first-passage model lives in
+     * one place, and a panel computing its own would be a second implementation that eventually
+     * disagrees with the rungs above it. Both methods are the caller's because both need what this
+     * service has no access to: the instrument's volatility windows, its scheduled events, its asset
+     * class and yield, and the FX snapshot.
+     */
+    public interface RoundTripPricer {
+
+        /**
+         * @param any      any enriched order on the ladder, for the volatility windows and the symbol.
+         *                 Every rung on a ladder is the same security, so which one is immaterial —
+         *                 the same assumption {@code currentPrice} already makes.
+         * @param start    where the path begins: the live market price.
+         * @param barriers the levels to be reached, in order.
+         */
+        VolForecast.Sequence price(OpenOrder any, BigDecimal start, List<BigDecimal> barriers,
+                                   int sessions);
+
+        /**
+         * The ladder's own money in GBP. Expected value exists to make ladders comparable with each
+         * other, and a dollar figure beside a pence one compares nothing — so the native number is
+         * the one to read and the GBP one is the one to rank by. Null when no rate is to hand, which
+         * leaves the column blank rather than wrong.
+         */
+        BigDecimal toGbp(BigDecimal amount, String currency);
+    }
+
+    /**
+     * One direction's round trip, priced.
+     *
+     * @param expectedValue    probability × spread × matched quantity, in the ladder's own currency.
+     *                         The number that says whether this ladder is worth leaving in the
+     *                         market: a wide spread that never completes and a narrow one that
+     *                         always does are the same figure, which is the point of multiplying
+     *                         them.
+     * @param expectedValueGbp the same in GBP, for ranking ladders on different listings against
+     *                         each other. Null when no FX rate resolved.
+     */
+    public record RoundTripOutlook(RoundTrips.Plan plan, VolForecast.Sequence sequence,
+                                   BigDecimal expectedValue, BigDecimal expectedValueGbp) {
+
+        /**
+         * Built here rather than by the pricer so the arithmetic that turns a probability into money
+         * is in one place and not in a lambda. Expected value is null, never zero, when the
+         * probability did not resolve: an unpriceable ladder and a worthless one are different
+         * answers.
+         */
+        static RoundTripOutlook of(RoundTrips.Plan plan, VolForecast.Sequence seq,
+                                   RoundTripPricer pricer) {
+            BigDecimal p = seq == null ? null : seq.probability();
+            BigDecimal ev = p == null ? null : plan.gross().multiply(p);
+            BigDecimal gbp = ev == null ? null : pricer.toGbp(ev, plan.currency());
+            return new RoundTripOutlook(plan, seq, ev, gbp);
+        }
+
+        public boolean priced() {
+            return sequence != null && sequence.probability() != null;
+        }
+
+        /** What the panel prints on the row: how many events are left, in words. */
+        public String legsLabel() {
+            return switch (plan.legs()) {
+                case 0 -> "both legs are through the market";
+                case 1 -> plan.underway() ? "one leg left" : "one leg left — the other fills on the spot";
+                default -> "two legs";
+            };
+        }
+    }
 
     /** The broker a synthetic intent order is stamped with is the account the user chose. */
     private final OrderGroupRepository groups;
@@ -114,18 +210,26 @@ public class LadderService {
      *                 first-passage model lives in one place, and a ladder column computing its own
      *                 would be a second implementation that eventually disagrees with the table.
      *                 See {@link GroupRungs.TouchPricer}.
+     * @param trips    prices a whole round trip - two touches in order, inside one window. Separate
+     *                 from {@code touch} because it is a different question and not a product of
+     *                 that one: see {@link RoundTripPricer}.
+     * @param tripSessions the horizon the round trip is priced over, which the reader chooses. Its
+     *                 own, and deliberately not the rungs' fixed 10 and 30: thirty sessions for two
+     *                 legs is a far tighter constraint than thirty for one, so the same number would
+     *                 not mean the same thing in the two places.
      */
     public LadderReport assemble(List<OpenOrder> live, List<OpenOrder> intents,
                                  List<OrderHistoryRepository.HistoricalOrder> history,
                                  Map<String, String> notes, List<String> accounts,
-                                 GroupRungs.TouchPricer touch) {
+                                 GroupRungs.TouchPricer touch, RoundTripPricer trips,
+                                 int tripSessions) {
         List<String> warnings = new ArrayList<>();
         // Ladders only. A group of another type has its own assembler with its own shape, and
         // reading one here would lay two listings of a fund on a single price axis that means
         // nothing for them - the exact mistake GroupType exists to prevent.
         List<OrderGroup> all = groups.groups().stream().filter(OrderGroup::isLadder).toList();
         if (all.isEmpty()) {
-            return new LadderReport(List.of(), List.of(), accounts, warnings);
+            return new LadderReport(List.of(), List.of(), accounts, warnings, tripSessions);
         }
 
         Map<String, OpenOrder> liveByKey = GroupRungs.byKey(live);
@@ -156,10 +260,50 @@ public class LadderService {
             List<Rung> ordered = Ladders.byPrice(rungs);
             BigDecimal current = currentPrice(ordered);
             ladders.add(new Ladder(g, ordered, Ladders.markerIndex(ordered, current), current,
-                    currencyOf(ordered), Ladders.totals(rungs)));
+                    currencyOf(ordered), Ladders.totals(rungs),
+                    roundTrip(ordered, current, trips, tripSessions)));
         }
 
-        return new LadderReport(ladders, unassigned(live, history), accounts, warnings);
+        return new LadderReport(ladders, unassigned(live, history), accounts, warnings,
+                tripSessions);
+    }
+
+    /**
+     * What the ladder's next round trip would be, priced.
+     *
+     * <p>{@link RoundTrips} works out the paths and this puts odds and money on them. Ordered most
+     * likely first, which is the comparison the reader is making when both directions apply - and a
+     * trip already underway comes out on top by arithmetic rather than by a rule, since one leg left
+     * is strictly likelier than two over the same window.
+     */
+    private static RoundTripView roundTrip(List<Rung> rungs, BigDecimal current,
+                                           RoundTripPricer trips, int sessions) {
+        RoundTrips.Next next = RoundTrips.next(rungs, current);
+        if (trips == null || !next.any()) {
+            return new RoundTripView(sessions, List.of(), next.excluded(), next.unavailable());
+        }
+        OpenOrder any = anyOrder(rungs);
+        List<RoundTripOutlook> out = new ArrayList<>();
+        for (RoundTrips.Plan plan : next.plans()) {
+            out.add(RoundTripOutlook.of(plan,
+                    trips.price(any, plan.start(), plan.barriers(), sessions), trips));
+        }
+        out.sort(Comparator.comparing(
+                (RoundTripOutlook o) -> o.sequence() == null ? null : o.sequence().probability(),
+                Comparator.nullsLast(Comparator.reverseOrder())));
+        return new RoundTripView(sessions, List.copyOf(out), next.excluded(), next.unavailable());
+    }
+
+    /**
+     * Any enriched order on the ladder - the volatility windows the round trip is priced off. Every
+     * rung is the same security, so they agree by construction; a closed or unpriced rung carries
+     * none, which is why this is a search and not just the first element.
+     */
+    private static OpenOrder anyOrder(List<Rung> rungs) {
+        for (Rung r : rungs) {
+            if (r.order() != null) return r.order();
+        }
+        return null;
     }
 
     /**
@@ -282,7 +426,8 @@ public class LadderService {
 
     /** One ladder, laid out. */
     public record Ladder(OrderGroup group, List<Rung> rungs, int markerIndex,
-                         BigDecimal currentPrice, String currency, Ladders.Totals totals) {
+                         BigDecimal currentPrice, String currency, Ladders.Totals totals,
+                         RoundTripView roundTrip) {
 
         /** Rungs above the market, in the price order the panel draws. */
         public List<Rung> above() {
@@ -305,6 +450,29 @@ public class LadderService {
     }
 
     /**
+     * The round-trip block of one ladder's summary: what it could next complete, over the horizon the
+     * reader chose.
+     *
+     * <p>The horizon is on the record as well as on each sequence because the control that sets it
+     * has to render even when nothing could be priced - a one-sided ladder still gets to say what
+     * window it is being asked about.
+     *
+     * @param unavailable why there is no trip to price, in the reader's terms. Null when there is one.
+     */
+    public record RoundTripView(int sessions, List<RoundTripOutlook> outlooks,
+                                List<String> excluded, String unavailable) {
+
+        public boolean any() {
+            return !outlooks.isEmpty();
+        }
+
+        /** The likeliest direction - the one the reader is being pointed at. */
+        public RoundTripOutlook leading() {
+            return outlooks.isEmpty() ? null : outlooks.get(0);
+        }
+    }
+
+    /**
      * What the Ladders panel renders.
      *
      * <p>{@link #assignableFor} is the single place the "one group, one security" rule is applied.
@@ -312,7 +480,8 @@ public class LadderService {
      * securities changes this method and nothing under it.
      */
     public record LadderReport(List<Ladder> ladders, List<GroupRungs.Candidate> unassigned,
-                               List<String> accounts, List<String> warnings) {
+                               List<String> accounts, List<String> warnings,
+                               int roundTripSessions) {
 
         public boolean isEmpty() {
             return ladders.isEmpty();

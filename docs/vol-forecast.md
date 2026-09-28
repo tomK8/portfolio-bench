@@ -51,6 +51,19 @@ Consumed by the Open orders panel — see [open-orders.md](open-orders.md).
   `halfLifeDays`, `gtcHorizonSessions`, `useDrift` and `useEventVar` are parameters, not constants,
   and are query params on `GET /orders?halfLife=&gtcSessions=&useDrift=&useEventVar=` (and on
   `/orders/touch`), the same "every knob is a query param" convention the strategy tabs use.
+- **`VolForecast.sequence` — the same forecast asked about a *sequence* of barriers.** The Ladders
+  block's round trip needs two touches in order and inside one window, and it is not a product of
+  two `touch` calls: the second leg gets only what the first leaves of the horizon and starts from
+  the first barrier rather than from today's price. Everything around the first passage is the
+  single-barrier path unchanged and deliberately so — one `resolve` (blended for *this* horizon, not
+  for a leg of it), one drift netting, one RV10/RV30 bracket. **One σ_eff across both legs**, because
+  how the window splits between them is a random variable: there is no per-leg window to forecast
+  for, and blending a second σ for "the rest of the horizon" would be forecasting off a quantity the
+  model has not drawn yet. One barrier reduces to `touch` exactly, by calling it. The first passage
+  itself is `PriceStats.sequentialTouchProbability` — see [open-orders.md](open-orders.md) for the
+  convolution and why its quadrature grid is clustered toward zero. **No calibration line is
+  written**, on the probe's argument: the log's grain is one order and one fill, and a round trip is
+  neither.
 - **The drift switch is one stored, app-wide setting**, not a per-row option and not browser state.
   A checkbox on the panel posts `POST /orders/drift?enabled=` → `orders_use_drift` in the
   `KeyValueStore`, and **everything resolves through `OpenOrdersService.effectiveConfig`**:

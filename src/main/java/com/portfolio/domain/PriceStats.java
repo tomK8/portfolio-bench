@@ -298,6 +298,145 @@ public final class PriceStats {
         return normalCdf(z1) + Math.exp(2.0 * nu * b / (sigma * sigma) + Math.log(normalCdf(z2)));
     }
 
+    /**
+     * Probability that the price completes an <b>ordered sequence</b> of barrier touches within
+     * {@code sessions} — what a ladder's round trip is: sell at one level and buy back at
+     * another, or buy and sell out, in that order and inside one window.
+     *
+     * <p><b>Two touch probabilities do not multiply, and they do not average.</b> A 60% rung and an
+     * 80% rung are not a 70% round trip and not a 48% one either: the second leg does not have the
+     * whole window, it has whatever is left of it when the first fills, and it starts from the first
+     * barrier rather than from today's price. Both corrections run the same way — against the
+     * reader's optimism — which is exactly why the figure is worth computing rather than eyeballing.
+     *
+     * <p>The result is exact under the same geometric Brownian motion the single-barrier columns
+     * assume, not an approximation of it. By the strong Markov property the process restarts at the
+     * first barrier the moment it is touched, so the second passage is independent of the first and
+     * distributed as a fresh first passage from that level:
+     * <pre>
+     *   P(T₁ + T₂ ≤ N) = ∫₀^N f(t; b₁) · F(N − t; b₂) dt
+     * </pre>
+     * with {@code b₁ = ln(barrier₁/start)}, {@code b₂ = ln(barrier₂/barrier₁)}, {@code f} the
+     * first-passage density and {@code F} the first-passage CDF that {@link #touchProbabilityDrifted}
+     * already is. The convolution has no elementary closed form and is integrated numerically
+     * (Simpson, {@link #CONVOLUTION_PANELS} panels); the quadrature is pinned against the closed
+     * form by setting {@code b₂ = 0}, where {@code F ≡ 1} and the integral must reproduce the
+     * single-barrier probability exactly.
+     *
+     * <p>The list is the legs still to happen, in the order they must happen, and the caller has
+     * already decided what those are — which side of the market each sits on, and whether one has
+     * filled already. <b>Empty means nothing is left to wait for</b> and the answer is 1: that is a
+     * ladder whose remaining legs are both through the market, not a ladder with no legs, and the
+     * caller distinguishes those. One barrier is the ordinary single passage, and the two agree by
+     * construction because the one-leg branch <em>is</em> {@link #touchProbabilityDrifted}.
+     *
+     * <p>Three or more legs returns null rather than a number. Each further leg is another nested
+     * convolution, so the cost is {@code O(Mᵏ)} and the accuracy falls with it; nothing in this app
+     * asks for one, and a wrong number would be indistinguishable from a right one.
+     *
+     * @param logDriftPerSession ν per trading session, the same log drift the single-barrier form
+     *                           takes — null or zero gives the driftless result. One ν for the whole
+     *                           sequence: it is a property of the instrument over the horizon, not
+     *                           of which leg is being waited on.
+     */
+    public static BigDecimal sequentialTouchProbability(BigDecimal start, List<BigDecimal> barriers,
+                                                        BigDecimal sigmaPerSession, int sessions,
+                                                        BigDecimal logDriftPerSession) {
+        if (start == null || barriers == null || sigmaPerSession == null || sessions < 1) return null;
+        if (barriers.isEmpty()) return BigDecimal.ONE;
+        if (barriers.size() == 1) {
+            return touchProbabilityDrifted(start, barriers.get(0), sigmaPerSession, sessions,
+                    logDriftPerSession);
+        }
+        if (barriers.size() > 2) return null;
+
+        BigDecimal first = barriers.get(0), second = barriers.get(1);
+        if (first == null || second == null) return null;
+        double s = start.doubleValue(), b1 = first.doubleValue(), b2 = second.doubleValue();
+        double sigma = sigmaPerSession.doubleValue();
+        if (s <= 0 || b1 <= 0 || b2 <= 0 || sigma <= 0) return null;
+        double nu = logDriftPerSession == null ? 0.0 : logDriftPerSession.doubleValue();
+
+        double p = sequentialTouchRaw(s, b1, b2, sigma, sessions, nu);
+        if (!Double.isFinite(p)) return null;
+        return BigDecimal.valueOf(Math.max(0.0, Math.min(1.0, p))).setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Panels in the Simpson rule. Even, as Simpson requires, and generous rather than tuned: each
+     * panel is a couple of {@code exp} calls, so every ladder on the panel together costs less than
+     * one price lookup and the accuracy is not something anyone has to think about when the horizon
+     * is moved.
+     */
+    private static final int CONVOLUTION_PANELS = 2000;
+
+    /**
+     * The two-leg first passage as a raw double — unrounded and unclamped, so a test can assert the
+     * quadrature against the closed form to far better than the 4 dp the public form rounds to.
+     *
+     * <p><b>The grid is in {@code t = N·u⁴}, not in {@code t}</b>, and that substitution is
+     * load-bearing rather than a refinement. The first-passage density is an inverse Gaussian: for a
+     * barrier close in volatility units it puts almost all of its mass in the first fraction of a
+     * session, peaking around {@code b²/3σ²}. An evenly spaced grid over a quarter steps straight
+     * over that spike — on the worst of the cases tested it lost most of the probability outright,
+     * silently, in the direction of "this ladder will never complete". Clustering the abscissae
+     * toward zero costs nothing and holds the error below {@code 2e-4} across every barrier,
+     * volatility and horizon the panel can produce, which is inside the 4 dp the figure is rounded
+     * to before anyone sees it.
+     */
+    static double sequentialTouchRaw(double start, double first, double second, double sigma,
+                                     double sessions, double nu) {
+        double b1 = Math.log(first / start);
+        double b2 = Math.log(second / first);
+        double h = 1.0 / CONVOLUTION_PANELS;
+        double sum = 0.0;                        // u = 0 and u = 1 both contribute nothing:
+        for (int i = 1; i < CONVOLUTION_PANELS; i++) {    // f(0) = 0 and F(0) = 0.
+            double u = i * h;
+            double t = sessions * u * u * u * u;
+            double dtdu = 4.0 * sessions * u * u * u;
+            double w = (i % 2 == 0) ? 2.0 : 4.0;
+            sum += w * firstPassageDensity(b1, sigma, t, nu)
+                    * firstPassageCdf(b2, sigma, sessions - t, nu) * dtdu;
+        }
+        return sum * h / 3.0;
+    }
+
+    /**
+     * The inverse-Gaussian first-passage density of {@code νt + σWₜ} to level {@code b}, computed in
+     * logs so the {@code t^{-3/2}} factor and the vanishing exponential cannot meet as
+     * {@code ∞ × 0}. Zero at {@code t ≤ 0}, which is what makes {@code t = 0} a safe endpoint of the
+     * quadrature rather than a NaN in it.
+     */
+    static double firstPassageDensity(double b, double sigma, double t, double nu) {
+        if (t <= 0 || sigma <= 0) return 0.0;
+        if (b == 0) return 0.0;                 // already there; the caller handles it as no leg
+        double drift = b - nu * t;
+        double logF = Math.log(Math.abs(b)) - Math.log(sigma) - 1.5 * Math.log(t)
+                - 0.5 * Math.log(2.0 * Math.PI) - drift * drift / (2.0 * sigma * sigma * t);
+        double f = Math.exp(logF);
+        return Double.isFinite(f) ? f : 0.0;
+    }
+
+    /**
+     * {@code P(T ≤ t)} for the same passage — {@link #driftedTouchRaw} in log-barrier form and over a
+     * continuous {@code t}, with the driftless closed form taken at {@code ν = 0} for the reason
+     * {@code VolForecast} short-circuits there: {@code exp(2νb/σ²)} is {@code 0/0} at a degenerate σ
+     * and the driftless branch never evaluates it. A zero barrier is already touched, so
+     * {@code F ≡ 1}; a non-positive {@code t} is no time at all, so {@code F ≡ 0}.
+     */
+    static double firstPassageCdf(double b, double sigma, double t, double nu) {
+        if (b == 0) return 1.0;
+        if (t <= 0 || sigma <= 0) return 0.0;
+        double absB = Math.abs(b);
+        double sigmaH = sigma * Math.sqrt(t);
+        if (nu == 0.0) return 2.0 * normalCdf(-absB / sigmaH);
+        double sign = b >= 0 ? 1.0 : -1.0;
+        double z1 = (-absB + sign * nu * t) / sigmaH;
+        double z2 = (-absB - sign * nu * t) / sigmaH;
+        double p = normalCdf(z1) + Math.exp(2.0 * nu * b / (sigma * sigma) + Math.log(normalCdf(z2)));
+        return Double.isFinite(p) ? Math.max(0.0, Math.min(1.0, p)) : 2.0 * normalCdf(-absB / sigmaH);
+    }
+
     /** {@code 2·Φ(−|b|/(σ√N))} as a raw double — the ν = 0 case, for the same exact comparison. */
     static double driftlessTouchRaw(double current, double limit, double sigma, int sessions) {
         double d = Math.log(limit / current) / (sigma * Math.sqrt(sessions));

@@ -293,6 +293,41 @@ public final class VolForecast {
         }
     }
 
+    /**
+     * A priced <b>sequence</b> of barriers — the ladder's round trip, where the single-barrier
+     * {@link Touch} is one rung's fill.
+     *
+     * <p>Same forecast, same drift, same RV10/RV30 bracket as {@link Touch}; what differs is the
+     * question. A round trip needs two things to happen in order and inside one window, so the
+     * second leg gets only what the first leaves of the horizon and starts from the first barrier
+     * rather than from today's price — see {@link PriceStats#sequentialTouchProbability}.
+     *
+     * @param legs how many passages are still to come: 2 for a round trip not yet started, 1 once a
+     *             leg has filled and only the close is left, 0 when both remaining legs are already
+     *             through the market. The number is on the record because it is the whole reason a
+     *             part-executed ladder reads higher than it did when it was created, and a reader
+     *             comparing two ladders has to be able to see that they were not asked the same
+     *             question.
+     */
+    public record Sequence(int sessions, int legs, BigDecimal sigmaEff, BigDecimal decay,
+                           Source source, BigDecimal probability, BigDecimal probabilityLow,
+                           BigDecimal probabilityHigh, BigDecimal drift, BigDecimal logDrift) {
+
+        public static Sequence none(int sessions, int legs) {
+            return new Sequence(sessions, legs, null, null, Source.NONE, null, null, null,
+                    BigDecimal.ZERO, BigDecimal.ZERO);
+        }
+
+        /** True when the RV10/RV30 bracket exists — the honest width around the point estimate. */
+        public boolean hasRange() {
+            return probabilityLow != null && probabilityHigh != null;
+        }
+
+        public boolean drifted() {
+            return drift != null && drift.signum() != 0;
+        }
+    }
+
     private static final int SCALE = 8;
 
     private VolForecast() {
@@ -479,6 +514,46 @@ public final class VolForecast {
                 min(a, b), max(a, b), mu, logDrift(mu, f.sigmaEff()),
                 muTotal, nets ? y.annual() : BigDecimal.ZERO, nets && y.fallback(),
                 f.sigmaEffDiffusive(), f.eventCount(), f.eventVariance());
+    }
+
+
+    /**
+     * Price an ordered sequence of barriers over one horizon — {@link #touch} for a round trip.
+     *
+     * <p>Everything but the first passage itself is the single-barrier path unchanged, and
+     * deliberately so: one σ_eff resolution (blended for <em>this</em> horizon, not for a leg of
+     * it), one drift netting, one RV10/RV30 bracket. A round trip priced off a second vol model
+     * would be a different question wearing the same units as the rungs above it.
+     *
+     * <p><b>One σ_eff across both legs.</b> σ is forecast for the horizon the reader chose, and the
+     * split of that horizon between the two legs is a random variable — there is no per-leg window
+     * to forecast for. Blending a second σ for "the rest of the horizon" would be forecasting off a
+     * quantity the model itself has not yet drawn.
+     */
+    public static Sequence sequence(Inputs in, BigDecimal start, List<BigDecimal> barriers,
+                                    int sessions, Config cfg, AssetClass assetClass, Yield yield) {
+        Config c = cfg == null ? Config.DEFAULT : cfg;
+        int n = Math.max(1, sessions);
+        int legs = barriers == null ? 0 : barriers.size();
+        Forecast f = resolve(in, n, c);
+        if (f.sigmaEff() == null) return Sequence.none(n, legs);
+
+        AssetClass ac = assetClass == null ? AssetClass.UNKNOWN : assetClass;
+        Yield y = yield == null ? Yield.NONE : yield;
+        BigDecimal muTotal = c.useDrift() ? ac.dailyTotalReturn() : BigDecimal.ZERO;
+        boolean nets = c.useDrift() && ac.appliesYield();
+        BigDecimal mu = nets ? muTotal.subtract(perSessionYield(y.annual())) : muTotal;
+
+        BigDecimal p = PriceStats.sequentialTouchProbability(start, barriers, f.sigmaEff(), n,
+                logDrift(mu, f.sigmaEff()));
+        BigDecimal lowSigma = positiveOrNull(in == null ? null : in.rv10());
+        BigDecimal highSigma = positiveOrNull(in == null ? null : in.rv30());
+        BigDecimal a = lowSigma == null ? null : PriceStats.sequentialTouchProbability(
+                start, barriers, lowSigma, n, logDrift(mu, lowSigma));
+        BigDecimal b = highSigma == null ? null : PriceStats.sequentialTouchProbability(
+                start, barriers, highSigma, n, logDrift(mu, highSigma));
+        return new Sequence(n, legs, f.sigmaEff(), f.decay(), f.source(), p, min(a, b), max(a, b),
+                mu, logDrift(mu, f.sigmaEff()));
     }
 
     /**

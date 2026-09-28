@@ -46,6 +46,26 @@
             </details>
 
             <!--
+              One control for the whole block, because it is one stored setting. A round trip's
+              horizon is its own — thirty sessions asked of two legs is a far tighter constraint
+              than thirty asked of one rung, so the rungs' fixed P(10)/P(30) are the wrong window
+              here and the same number would not mean the same thing. Stored rather than left in the
+              select so the Excel download can never be priced over a window the screen never
+              showed; every ladder's figure names the horizon beside it for the same reason.
+            -->
+            <label class="rt-horizon" th:unless="${orders.ladders.isEmpty()}"
+                   title="The window the round-trip probability below is priced over. Its own, and deliberately not the rungs' 10 and 30: those price one touch, while a round trip needs two in order and the second gets only what the first leaves of the window. Stored app-wide — it applies to the panel and the Excel download, and survives a restart.">
+                Round trip over
+                <select name="sessions" hx-post="/ladders/horizon" hx-trigger="change"
+                        hx-target="#ladders-result" hx-swap="innerHTML">
+                    <option th:each="h : ${T(com.portfolio.application.LadderService).ROUND_TRIP_HORIZONS}"
+                            th:value="${h.sessions}"
+                            th:selected="${h.sessions == orders.ladders.roundTripSessions}"
+                            th:text="${h.sessions} + ' sessions — ' + ${h.label}">63 sessions</option>
+                </select>
+            </label>
+
+            <!--
               Rendered only when there is a ladder to write. A Download button that can only report
               "nothing to export" is worse than no button — and the export re-derives on the press,
               so what lands in ~/Documents is the ladders as they are now, not this render.
@@ -190,6 +210,69 @@
                     <span class="muted ladder-caveat"
                           title="No broker export here carries an execution price, so these are the last prices the exports showed for those orders. For a limit order that is the limit it filled at or better.">
                         on export prices</span>
+                </div>
+
+                <!--
+                  The next round trip, and the odds on it. Not a product of the rungs' own
+                  probabilities: two legs at 60% and 80% are not a 70% round trip and not a 48% one
+                  either, because the second leg gets only what the first leaves of the window and
+                  starts from the first barrier rather than from today's price. Both corrections run
+                  against the reader's optimism, which is why the figure is computed rather than
+                  eyeballed.
+
+                  The *next* one, deliberately — not "every rung fills". Three rungs a side is a
+                  sequence nobody waits out, and a probability covering all of them would answer a
+                  question that cannot come true.
+                -->
+                <div class="ladder-rt" th:with="rt=${l.roundTrip}">
+                    <span class="lbl"
+                          th:text="'Next round trip, ' + ${rt.sessions} + ' sessions'"
+                          title="The chance this ladder completes one matched round trip — a sell and a buy back, or a buy and a sell out — inside the horizon, from today's price. Matched by quantity and not by pairs: rungs fill out of order, and selling at one level and buying back at another is a completed trip whatever the two rungs were recorded as.">Next round trip</span>
+
+                    <div class="rt-line" th:each="o : ${rt.outlooks}"
+                         th:classappend="${o.plan.underway()} ? 'rt-underway' : ''">
+                        <span class="rt-dir" th:text="${o.plan.direction.label()}"
+                              th:title="${o.plan.direction.gloss()} + ' — ' + ${o.legsLabel()}">Sell → buy</span>
+                        <span class="rt-badge" th:if="${o.plan.underway()}"
+                              title="A leg has already filled, so this trip needs one event rather than two — and it is priced from where the market is now, not from where the ladder was created.">underway</span>
+
+                        <span class="val" th:if="${o.priced()}"
+                              th:text="${#numbers.formatDecimal(o.sequence.probability.multiply(100), 1, 'COMMA', 1, 'POINT')} + '%'">0.0%</span>
+                        <span class="val na" th:unless="${o.priced()}"
+                              title="No volatility forecast resolved for this security, so there is nothing to put odds on. A probability of zero would be a claim; this is the absence of one.">—</span>
+                        <!-- The same probability off RV10 and RV30. If the low end already clears
+                             the bar you are deciding against, the call is robust to the vol input;
+                             if only the high end does, the number is doing more work than it can
+                             bear. -->
+                        <span class="muted rt-range" th:if="${o.priced() and o.sequence.hasRange()}"
+                              th:text="'(' + ${#numbers.formatDecimal(o.sequence.probabilityLow.multiply(100), 1, 'COMMA', 1, 'POINT')}
+                                       + '–' + ${#numbers.formatDecimal(o.sequence.probabilityHigh.multiply(100), 1, 'COMMA', 1, 'POINT')} + '%)'"
+                              title="The same round trip priced off RV10 and RV30 instead of the blended forecast — how much of this figure is the volatility estimate.">(0–0%)</span>
+
+                        <span class="rt-ev" th:if="${o.expectedValue != null}"
+                              th:classappend="${o.expectedValue.signum() > 0 ? 'val-pos'
+                                              : (o.expectedValue.signum() < 0 ? 'val-neg' : '')}"
+                              th:text="'EV ' + ${(o.expectedValue.signum() > 0 ? '+' : '')} + ${l.currencySymbol()}
+                                       + ${#numbers.formatDecimal(o.expectedValue, 1, 'COMMA', 2, 'POINT')}"
+                              title="Probability × spread × matched quantity. A wide spread that never completes and a narrow one that always does come to the same number, which is the point of multiplying them.">EV</span>
+                        <span class="muted rt-gbp" th:if="${o.expectedValueGbp != null and o.plan.currency != 'GBP'}"
+                              th:text="'(£' + ${#numbers.formatDecimal(o.expectedValueGbp, 1, 'COMMA', 2, 'POINT')} + ')'"
+                              title="The same expected value in GBP — what makes two ladders on different listings comparable when you are deciding where to leave resting orders.">(£0.00)</span>
+
+                        <span class="muted rt-detail"
+                              th:text="${#numbers.formatDecimal(o.plan.quantity, 1, 'COMMA', 2, 'POINT')}
+                                       + ' at sell ' + ${l.currencySymbol()} + ${#numbers.formatDecimal(o.plan.sellPrice(), 1, 'COMMA', 2, 'POINT')}
+                                       + ' / buy ' + ${l.currencySymbol()} + ${#numbers.formatDecimal(o.plan.buyPrice(), 1, 'COMMA', 2, 'POINT')}
+                                       + ' · spread ' + ${l.currencySymbol()} + ${#numbers.formatDecimal(o.plan.spread, 1, 'COMMA', 2, 'POINT')}
+                                       + ' · ' + ${o.legsLabel()}">detail</span>
+                    </div>
+
+                    <span class="muted rt-none" th:if="${rt.unavailable != null}"
+                          th:text="${rt.unavailable}">why not</span>
+
+                    <ul class="ladder-excluded" th:if="${!#lists.isEmpty(rt.excluded)}">
+                        <li th:each="x : ${rt.excluded}" th:text="${x}">excluded</li>
+                    </ul>
                 </div>
 
                 <ul class="ladder-excluded" th:if="${!#lists.isEmpty(l.totals.excluded)}">

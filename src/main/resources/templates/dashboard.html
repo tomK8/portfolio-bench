@@ -185,6 +185,35 @@
         .order-note-failed { border-color: #c0392b !important; }
         .order-note-cell { min-width: 10rem; }
 
+        /* The settleable status cell. A select that reads as text until it is hovered, for the
+           same reason the note input does: a column of mostly-unanswered rows should read as a
+           column of states, not a column of controls. */
+        .order-state {
+            border: 1px solid transparent;
+            background: transparent;
+            font: inherit;
+            font-size: 0.85rem;
+            padding: 0.1rem 0.15rem;
+            border-radius: 3px;
+            color: inherit;
+        }
+        .order-state:hover { border-color: #d5d8dd; }
+        .order-state:focus { border-color: #4a7ebb; background: #fff; outline: none; }
+        .order-state-set { color: #2ca02c; }
+        .order-state-saved { background: rgba(44, 160, 44, 0.18) !important; }
+        .order-state-failed { border-color: #c0392b !important; }
+        .order-state-cell { min-width: 9.5rem; white-space: nowrap; }
+        .state-src {
+            font-size: 0.68rem;
+            color: #8a9099;
+            cursor: help;
+            padding: 0 0.1rem;
+        }
+        html[data-theme="dark"] .order-state:hover { border-color: #3a3f47; }
+        html[data-theme="dark"] .order-state:focus { border-color: #7aa7dd; background: #1a1c20; }
+        html[data-theme="dark"] .order-state-set { color: #4ade80; }
+        html[data-theme="dark"] .state-src { color: #70767e; }
+
         .order-history { margin-top: 1.25rem; }
         .order-history > summary {
             cursor: pointer;

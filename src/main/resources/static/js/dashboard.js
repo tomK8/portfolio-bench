@@ -253,6 +253,77 @@
             e.target.blur();
         });
 
+        // ── Closed orders: saying what became of one the broker never accounted for ─────
+        // Delegated from body for the same reason the note above is: the fragment is swapped
+        // whole on every tab click.
+        //
+        // Not an htmx post, deliberately. Re-rendering the panel would re-parse three broker
+        // exports and re-read the price feed to change one cell, and it would collapse the
+        // <details> this row is inside — the user would lose their place in the very list they
+        // are working down. So the verdict goes over fetch and only the two things that actually
+        // depend on it are refreshed: this cell, and the group blocks, where a rung that just
+        // became Filled is the whole reason for setting it.
+        document.body.addEventListener('change', function (e) {
+            var sel = e.target;
+            if (!sel.classList || !sel.classList.contains('order-state')) return;
+            var key = sel.dataset.orderKey;
+            if (!key) return;
+            var value = sel.value;
+            sel.classList.remove('order-state-saved', 'order-state-failed');
+            mpPost('/orders/status', {orderKey: key, status: value})
+                .then(function (res) {
+                    if (!res.ok) {
+                        sel.classList.add('order-state-failed');
+                        sel.title = res.message || 'Not saved';
+                        return;
+                    }
+                    var label = sel.options[sel.selectedIndex].text;
+                    // The column sorts on the cell's data-sort-value, since a <select> holds no
+                    // text parseVal can see; a verdict just set has to update it or a later sort
+                    // would order the table by what was on screen when it rendered.
+                    var cell = sel.closest('td');
+                    if (cell) {
+                        cell.dataset.sortValue = label;
+                        var src = cell.querySelector('.state-src');
+                        if (value && !src) {
+                            src = document.createElement('span');
+                            src.className = 'state-src';
+                            cell.appendChild(src);
+                        }
+                        if (src) {
+                            // Always "yours" here: this path is the user saying so. A ledger match
+                            // is written by the server and only ever arrives with a re-render.
+                            if (value) { src.textContent = 'yours'; } else { src.remove(); }
+                        }
+                    }
+                    sel.classList.toggle('order-state-set', !!value);
+                    sel.classList.toggle('muted', !value);
+                    sel.classList.add('order-state-saved');
+                    setTimeout(function () { sel.classList.remove('order-state-saved'); }, 1200);
+                    refreshGroupBlocks();
+                })
+                .catch(function (err) {
+                    sel.classList.add('order-state-failed');
+                    sel.title = String(err.message || err);
+                });
+        });
+
+        // Redraw the Ladders and Share-class switches blocks in place. A rung's state is read from
+        // the order history, so a verdict just recorded changes what those blocks say — a sell that
+        // now reads Filled is half a round trip that was invisible a second ago. Failure is
+        // swallowed on purpose: the verdict is saved either way, and the next tab click redraws
+        // them regardless.
+        function refreshGroupBlocks() {
+            ['#ladders-result', '#switches-result'].forEach(function (target) {
+                if (!document.querySelector(target)) return;
+                var url = target === '#ladders-result' ? '/ladders' : '/switches';
+                try {
+                    var req = htmx.ajax('GET', url, {target: target, swap: 'innerHTML'});
+                    if (req && req.catch) { req.catch(function () { }); }
+                } catch (err) { /* the blocks are redrawn on the next tab click anyway */ }
+            });
+        }
+
         // ── Intended rungs: editable price and quantity ─────────────────────────
         // Only the rungs the user recorded here are editable — a rung that came from a broker's CSV
         // prints as text and carries no input at all, so nothing below can reach one.

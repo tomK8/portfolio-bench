@@ -1,6 +1,7 @@
 package com.portfolio.persistence;
 
 import com.portfolio.domain.model.OpenOrder;
+import com.portfolio.domain.model.OrderStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -13,6 +14,7 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OrderHistoryRepositoryTest {
@@ -249,8 +251,8 @@ class OrderHistoryRepositoryTest {
 
     /**
      * A closed order that is a rung of a ladder survives retention however old it is. The second
-     * leg of a round trip can fill months after the first, and a month's window would delete the
-     * half that was waiting to be completed — exactly the thing the ladder was kept for.
+     * leg of a round trip can fill months after the first, and any finite window would eventually
+     * delete the half that was waiting to be completed — exactly the thing the ladder was kept for.
      */
     @Test
     void aClosedOrderThatIsALadderRungIsNeverPruned() {
@@ -260,7 +262,8 @@ class OrderHistoryRepositoryTest {
         r.record(AJ, List.of(rung, loose), openKeys(rung, loose), DAY1);
         r.record(AJ, List.of(), Set.of(), DAY1);
 
-        int removed = r.prune(DAY1.plusYears(1), Set.of(rung.identity()));
+        int removed = r.prune(DAY1.plusDays(OrderHistoryRepository.RETENTION_DAYS + 1),
+                Set.of(rung.identity()));
 
         assertEquals(1, removed, "only the order nothing points at");
         assertEquals(List.of(rung.identity()),
@@ -275,7 +278,7 @@ class OrderHistoryRepositoryTest {
         r.record(AJ, List.of(o), openKeys(o), DAY1);
         r.saveNote(o.identity(), "GTC, watching");
 
-        assertEquals(0, r.prune(DAY1.plusYears(1)));
+        assertEquals(0, r.prune(DAY1.plusDays(OrderHistoryRepository.RETENTION_DAYS + 1)));
         assertEquals("GTC, watching", r.notes().get(o.identity()));
     }
 
@@ -309,6 +312,134 @@ class OrderHistoryRepositoryTest {
 
         assertEquals(a.identity(), same.identity(), "trailing zeros are not a different order");
         assertFalse(a.identity().equals(repriced.identity()), "a repriced order is a new order");
+    }
+
+    // ---- saying what became of an order the broker never accounted for -----
+
+    /** The point of a separate column: tomorrow's download of the order export must not undo it. */
+    @Test
+    void aVerdictSurvivesTheNextReParseOfTheExport() {
+        var r = repo();
+        OpenOrder o = order("REF1", "LSEG", "80.00", "In progress");
+        r.record(AJ, List.of(o), openKeys(o), DAY1);
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(1));   // vanished from the export
+
+        assertEquals(OrderHistoryRepository.HistoricalOrder.NO_LONGER_LISTED,
+                onlyClosed(r).state());
+        assertTrue(r.saveResolution(o.identity(), OrderStatus.FILLED,
+                OrderHistoryRepository.SOURCE_MANUAL, null, DAY1.plusDays(1)));
+
+        // The broker keeps listing nothing, several imports running.
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(2));
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(3));
+
+        var h = onlyClosed(r);
+        assertEquals("Filled", h.state());
+        assertTrue(h.stateResolved());
+        assertTrue(h.resolvedByUser());
+        assertFalse(h.stateInferred(), "somebody has said what happened, so nothing is inferred");
+    }
+
+    /** Even an order the broker <em>re-lists</em> and then drops again keeps the verdict's column. */
+    @Test
+    void theBrokersOwnWordOutranksAVerdict() {
+        var r = repo();
+        OpenOrder o = order("REF1", "LSEG", "80.00", "In progress");
+        r.record(AJ, List.of(o), openKeys(o), DAY1);
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(1));
+        r.saveResolution(o.identity(), OrderStatus.FILLED,
+                OrderHistoryRepository.SOURCE_MANUAL, null, DAY1.plusDays(1));
+
+        // The export comes back, this time restating the order as cancelled.
+        OpenOrder restated = order("REF1", "LSEG", "80.00", "Cancelled");
+        r.record(AJ, List.of(restated), Set.of(), DAY1.plusDays(2));
+
+        var h = onlyClosed(r);
+        assertEquals("Cancelled", h.state(), "the broker's word is the evidence");
+        assertFalse(h.stateResolved());
+        assertFalse(h.answerable(), "and there is nothing left to answer");
+    }
+
+    /** A verdict only ever answers a silence — it may not argue with a statement. */
+    @Test
+    void anOrderTheBrokerAccountedForCannotBeOverruled() {
+        var r = repo();
+        OpenOrder o = order("REF1", "LSEG", "80.00", "Dealt");
+        r.record(AJ, List.of(o), Set.of(), DAY1);
+
+        var e = assertThrows(IllegalStateException.class, () -> r.saveResolution(o.identity(),
+                OrderStatus.CANCELLED, OrderHistoryRepository.SOURCE_MANUAL, null, DAY1));
+        assertTrue(e.getMessage().contains("already said"));
+    }
+
+    /** There is nothing to explain about an order still resting at the broker. */
+    @Test
+    void aRestingOrderCannotBeGivenAVerdict() {
+        var r = repo();
+        OpenOrder o = order("REF1", "LSEG", "80.00", "In progress");
+        r.record(AJ, List.of(o), openKeys(o), DAY1);
+
+        assertThrows(IllegalStateException.class, () -> r.saveResolution(o.identity(),
+                OrderStatus.FILLED, OrderHistoryRepository.SOURCE_MANUAL, null, DAY1));
+    }
+
+    /** A verdict has to say the order ended; "still working" is not an answer. */
+    @Test
+    void aVerdictMustBeATerminalState() {
+        var r = repo();
+        OpenOrder o = order("REF1", "LSEG", "80.00", "In progress");
+        r.record(AJ, List.of(o), openKeys(o), DAY1);
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(1));
+
+        assertThrows(IllegalStateException.class, () -> r.saveResolution(o.identity(),
+                OrderStatus.WORKING, OrderHistoryRepository.SOURCE_MANUAL, null, DAY1));
+    }
+
+    /** Clearing hands the row back: it reads as unexplained again. */
+    @Test
+    void aVerdictCanBeWithdrawn() {
+        var r = repo();
+        OpenOrder o = order("REF1", "LSEG", "80.00", "In progress");
+        r.record(AJ, List.of(o), openKeys(o), DAY1);
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(1));
+        r.saveResolution(o.identity(), OrderStatus.FILLED,
+                OrderHistoryRepository.SOURCE_MANUAL, null, DAY1.plusDays(1));
+
+        r.saveResolution(o.identity(), null, null, null, DAY1.plusDays(2));
+
+        var h = onlyClosed(r);
+        assertEquals(OrderHistoryRepository.HistoricalOrder.NO_LONGER_LISTED, h.state());
+        assertTrue(h.stateInferred());
+        assertNull(h.resolvedStatus());
+    }
+
+    /** A matched verdict owns its ledger row, so a later run cannot hand the trade to another order. */
+    @Test
+    void aMatchedVerdictRecordsTheTradeItClaims() {
+        var r = repo();
+        OpenOrder o = order("REF1", "LSEG", "80.00", "In progress");
+        r.record(AJ, List.of(o), openKeys(o), DAY1);
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(1));
+        r.saveResolution(o.identity(), OrderStatus.FILLED,
+                OrderHistoryRepository.SOURCE_MATCHED, 42L, DAY1.plusDays(1));
+
+        var c = r.fillCandidates().stream()
+                .filter(x -> x.orderKey().equals(o.identity())).findFirst().orElseThrow();
+        assertEquals(42L, c.resolvedTrade());
+        assertFalse(onlyClosed(r).resolvedByUser(), "this one came from the ledger, not the user");
+    }
+
+    /** How far the ledger was read is remembered, so an unanswerable row is not re-asked daily. */
+    @Test
+    void howFarTheLedgerWasReadIsRemembered() {
+        var r = repo();
+        OpenOrder o = order("REF1", "LSEG", "80.00", "In progress");
+        r.record(AJ, List.of(o), openKeys(o), DAY1);
+        r.record(AJ, List.of(), Set.of(), DAY1.plusDays(1));
+
+        r.markChecked(java.util.Map.of(o.identity(), "2026-09-30"));
+
+        assertEquals("2026-09-30", r.fillCandidates().get(0).matchedThrough());
     }
 
     @Test

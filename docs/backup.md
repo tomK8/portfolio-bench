@@ -24,7 +24,7 @@ What cannot be re-fetched is the eleven tables in `BackupService.TABLES`:
 |---|---|
 | `cash_transactions` | The ledger, back to 2016-01-05. Brokers cap export windows, and it carries corrections — Mappings re-keying, recorded transfers, manual positions — that no re-download reproduces |
 | `trade_notes` | Hand-written, keyed to ledger rowids |
-| `order_history` | Includes closed orders the broker no longer lists — the filled legs of a completed ladder round trip live only here |
+| `order_history` | Includes closed orders the broker no longer lists — the filled legs of a completed ladder round trip live only here, along with each order's note and any verdict recorded about one the broker never accounted for. A hand-typed verdict is unrecoverable: the export it contradicts says nothing |
 | `order_group{,_member,_intent}` | Ladders and switches encode an *intention*. Nothing observable implies them |
 | `instrument_aliases`, `ticker_mappings` | Hand-curated. A rename re-keys ledger rows and is not undoable — see [instrument-mappings.md](instrument-mappings.md) |
 | `watchlist` | Symbols and their thresholds |

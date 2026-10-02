@@ -161,20 +161,102 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
       two it was is exactly what the export declined to say. `HistoricalOrder.stateInferred()`
       is what separates our inference from the broker's statement, and drives the muting.
 
+### Settling a "No longer listed" order
+
+An order export is a snapshot of what is **resting**, so a fill appears in it only on the day it
+happens. Download it a week later and the order has simply vanished — which looks exactly like a
+cancellation, and leaves a ladder unable to see the filled half of its round trip (an MRVL sell at
+$269.10 filled while the market ran to $271.84; the panel showed a buy with "no sell rung left to
+close it"). Two things answer that silence, and both are **stored** rather than re-derived.
+
+- **The verdict lives in its own columns**, never in `status`. `status` is the broker's word,
+  rewritten by every re-parse; `resolved_status` / `resolved_source` / `resolved_at` /
+  `resolved_trade` are ours and the `ON CONFLICT` update does not list them — the same bargain
+  `note` has, and the only reason a verdict survives tomorrow's download.
+- **The broker's own word always wins.** `HistoricalOrder.state()` ranks three sources: a terminal
+  broker status, then a verdict, then absence. `saveResolution` refuses a row whose stored status
+  `OrderStatus.of` reads as terminal — that is the account statement, and this is not the place to
+  disagree with it. The guard is read in Java rather than expressed in the `WHERE` clause because
+  what counts as terminal is `OrderStatus`'s judgement and nowhere else's (it reads `Part-Executed`
+  and `PART EXECUTED` as one word; no SQL comparison on the stored text would).
+- **A verdict reaches the ladder, not just the table.** `GroupRungs.stateOf` reads `state()`, so a
+  settled sell becomes a `FILLED` rung and the round trip it completes becomes visible. That is the
+  whole reason for recording one.
+
+#### Matched from the cash ledger — `OrderFills` + `OrderFillReconciler`
+
+A fill moves money and the money is in the statement, which is downloaded on its own schedule. So an
+unexplained order is matched against the ledger's `TRANSACTION` rows. **Only `FILLED` is ever
+written**: a match is evidence of a fill, but the absence of one is not evidence of a cancellation —
+only of a ledger that may not have been downloaded yet.
+
+The rule, every clause of which earns its place against the live data:
+
+| Clause | Why |
+|---|---|
+| same account, same instrument (both sides through `Instruments.matchKey`) | the two exports punctuate a name differently |
+| **side from the sign of the cash**, never the quantity | AJ Bell writes "Sale 7,605" and II "100 INTEL" — both positive. Quantity's sign is a Roth convention, not a ledger one |
+| quantity equal, exactly | a partial fill is not this order, and claiming it would put a full rung's size on a ladder |
+| trade on or after `date_entered`, on or before `closed_at` | the upper bound is what stops a *modified* order claiming the fill of the order that replaced it — the replacement's trade lands after the original disappeared (NVDA: three limits gone 09-11, the replacement filled 09-14) |
+| fill no more than **2%** through the limit (`OrderFills.LIMIT_TOLERANCE`), unfavourable side only | a guard, not a reconciliation. Fees are *inside* the ledger amount: 50 LSEG at an £85.05 limit booked £4,276.26, an implied £85.53, because 0.5% stamp duty and a flat commission are in it. A test that cannot be run — no limit, no currency, two different currencies — is **not** evidence against the match |
+| the trade is not already claimed | see below |
+
+- **One trade, one order.** Citi exports no reference, so a Roth order's identity is a composite
+  *including its price* — and Citi restates that price to the fill price when the order trades. The
+  same order therefore arrives as **two** rows: a ghost at the old limit, indistinguishable from an
+  order that vanished, and the real row carrying "Executed" (AMD 534.87 → 534.93; TSM 439.59 →
+  442.20). There is one trade and two candidates for it. So trades are claimed in two passes: orders
+  the broker *did* account for go first, and only then do the unexplained ones look at what is left.
+  Without that pass the ghost and its twin both read as fills and a ladder shows two sells where one
+  was placed. Claims already written (`resolved_trade`) are honoured the same way across runs.
+- **Correction pairs are removed first**, through `PositionDetailService.pruneCorrections` rather
+  than a second rule here. A reversal books as cash *in* on a purchase, so left in it reads as a sale
+  of exactly the size that was bought — the shape most likely to be mistaken for a resting sell
+  order's fill.
+- **It is asked once per ledger, not once per page load.** Both callers run it — `OpenOrdersService`
+  (where an order is first filed as gone) and `ImportCashService` (where the trade that explains one
+  arrives) — because either half of the evidence can come first. Each attempt stamps the account's
+  latest ledger date on the row (`matched_through`), and the next call skips every row whose account
+  has not been imported past it. An order the ledger could not explain has had its question asked of
+  the data that exists; the answer cannot change until the data does. In the steady state the pass
+  reads one small table, finds nothing due, and never touches the ledger at all.
+
+#### Said by hand — `POST /orders/status`
+
+The Status cell of a "No longer listed" row is a dropdown (Filled / Cancelled / Expired, or back to
+unanswered); a row the broker accounted for is plain text and carries no control at all. This is the
+hand for what the ledger cannot do: a **cancellation leaves no trade**, and a fill whose statement
+has not been imported leaves none yet either. Stored exactly like a matched verdict and equally
+durable, and marked as the user's word (`yours` vs `ledger` beside the cell) so the column never
+reads as though the export had said it. Withdrawing a verdict also clears `matched_through`, so the
+row is asked about again rather than waiting on a date it was checked against under a verdict that
+no longer stands.
+
+Not an htmx post: re-rendering the panel would re-parse three broker exports and re-read the price
+feed to change one cell, and it would collapse the `<details>` the row is inside — losing the user's
+place in the very list they are working down. The verdict goes over `fetch`, and only the two things
+that depend on it are redrawn: the cell, and the group blocks.
+
   - **A re-parse never touches the note.** The `ON CONFLICT` update lists status, price, quantity,
     amount and `last_seen` and deliberately omits `note` and `first_seen`: the text belongs to the
     user, not the export. `saveNote` likewise only ever UPDATEs — an annotation is *about* an order
     the tool has seen, so a key it does not know is rejected rather than inserted as a bare row
     with no broker and no price (the realistic cause is a stale tab whose order has been pruned).
-  - **Retention is 31 days from `closed_at`, and applies to closed rows only.** An order resting
+  - **Retention is 365 days from `closed_at`, and applies to closed rows only.** An order resting
     for months is not history and is never pruned — pruning it would delete a live annotation.
     Later imports do not refresh an already-closed row's date, so the clock runs from when the
     order actually went rather than from the last time anything was read. `prune` runs inside
     `load()` because this panel is the only writer and so the only thing that can leave the table
     growing. On the **first** run every terminal row in the exports is filed as closed *today* —
-    there is no record of when they really went, so that cohort's month starts from the first load.
+    there is no record of when they really went, so that cohort's year starts from the first load.
+    - **Why a year and not the month it started as.** The month served the original purpose —
+      reading an annotation against the order that replaced it — but two things arrived after it.
+      A ladder's round trip is a sell and the buy that closes it, which can be a season apart; and
+      the order picker can only offer what is still stored, so retention is also the window in
+      which a user may decide an old fill belongs on a ladder. An order already in a group is
+      exempt from pruning entirely, so this governs only the loose ones — a few hundred rows a year.
   - The history rides on the **same payload** as the table (`OrdersReport.history`) rather than a
-    second endpoint: capped at a month it is small, and the panel renders it collapsed with no
+    second endpoint: a year of it is still small, and the panel renders it collapsed with no
     extra round trip. Notes ride alongside as `OrdersReport.notes` keyed by identity, deliberately
     **off `OpenOrder`** — that record already carries thirty-odd broker and model fields, and this
     keeps the parsers and every `with*` enrichment untouched by a feature none of them are part of.
@@ -720,9 +802,10 @@ else and so carries its own side, quantity and price.
   order elsewhere moves it. A rung counted in two ladders would be counted twice in the cash each
   needs.
 - **A rung is never pruned.** `OrderHistoryRepository.prune` takes a `keep` set and
-  `OpenOrdersService` passes `ladders.rungOrderKeys()`. The second leg of a round trip can fill months
-  after the first — a sell in August and the buy that closes it in October are one trip, and a
-  month's retention would have deleted half of it before the half that completes it arrived. The set
+  `OpenOrdersService` passes `ladders.rungOrderKeys()` — every order in *any* group, since the member
+  table is shared across group types. The second leg of a round trip can fill months
+  after the first — a sell in August and the buy that closes it in October are one trip, and any
+  finite retention would eventually delete half of it before the half that completes it arrived. The set
   is passed in rather than read from the group table inside the query, so the history repository goes
   on knowing nothing about ladders and the rule is visible where its reason is.
 - **`GroupType` now has two constants, and the seam held.** The share-class switch that this column
@@ -749,7 +832,9 @@ else and so carries its own side, quantity and price.
   the order, and that note is a cell of the table below.
 - **The picker offers closed orders as well as resting ones.** The first ladder anyone builds is
   usually a sell that has already filled paired with a buy still resting; a picker of live orders only
-  could never assemble the completed round trip the panel exists to show.
+  could never assemble the completed round trip the panel exists to show. What it can offer is bounded
+  by retention — a rung already assigned is kept forever, but an order *not yet* on a ladder is only
+  assignable while it is still stored, which is the second reason that window is a year.
 - **A rung row opens the shared price popup**, on the same terms the table's rows do — only when the
   ladder's security resolved to a ticker. An `<input>` is excluded from that row click, so typing in
   a price cell cannot open a chart — the same exclusion the table's Note and P(N) cells rely on.

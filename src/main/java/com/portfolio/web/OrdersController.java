@@ -64,6 +64,38 @@ public class OrdersController {
     }
 
     /**
+     * Records what became of an order the broker stopped listing without ever saying — or clears
+     * that record.
+     *
+     * <p>Needed because a broker's order export is a snapshot of what is <em>resting</em>, so a
+     * fill is only ever visible in it on the day it happens. Download it a week later and the order
+     * is simply gone, which is indistinguishable from a cancellation, and a ladder cannot show a
+     * round trip whose filled leg it is unable to see. The cash ledger answers this on its own
+     * wherever the statement has been imported; this is the hand for the cases it cannot — a
+     * cancellation, which leaves no trade at all, and a fill whose statement has not been
+     * downloaded yet.
+     *
+     * <p>Refuses a verdict on an order the broker <em>did</em> account for: that is evidence, and
+     * disagreeing with it here would be disagreeing with the account statement. The refusal comes
+     * back as {@code ok:false} carrying its reason rather than as an error page — like the note
+     * above, the realistic cause is a stale tab, which is not a fault.
+     *
+     * @param status an {@link com.portfolio.domain.model.OrderStatus} name, or blank to clear
+     */
+    @PostMapping("/orders/status")
+    @ResponseBody
+    public Map<String, Object> saveStatus(@RequestParam String orderKey,
+                                          @RequestParam(required = false) String status) {
+        try {
+            boolean saved = openOrdersService.saveStatus(orderKey, status);
+            return Map.of("ok", saved, "message",
+                    saved ? "Saved" : "That order is no longer on file — nothing was saved.");
+        } catch (IllegalStateException e) {
+            return Map.of("ok", false, "message", e.getMessage());
+        }
+    }
+
+    /**
      * Re-prices the {@code P(N)} column's touch probability over a caller-supplied horizon, for
      * the editable sessions box on each row.
      *

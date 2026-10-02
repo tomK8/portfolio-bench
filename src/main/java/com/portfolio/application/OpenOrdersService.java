@@ -225,6 +225,7 @@ public class OpenOrdersService {
     private final IntradayPriceRepository intraday;
     private final PriceHistoryRepository history;
     private final OrderHistoryRepository orderHistory;
+    private final OrderFillReconciler fillReconciler;
     private final LadderService ladders;
     private final SwitchService switches;
     private final YahooTickerMap tickerMap;
@@ -389,6 +390,32 @@ public class OpenOrdersService {
                              DividendYieldService dividendYields,
                              OrderHistoryRepository orderHistory,
                              LadderService ladders, SwitchService switches) {
+        this(fileLocator, parsers, fxRateProvider, excelReportWriter, outputDir, intraday, history,
+                tickerMap, kv, quoteWarmer, historyWarmer, eventVariance, fundamentals,
+                dividendYields, orderHistory, ladders, switches, null);
+    }
+
+    /**
+     * @param fillReconciler settles orders a broker stopped listing without saying what became of
+     *                       them, against the trade they produced in the cash ledger. Called here
+     *                       because this is where an order is first filed as gone, and the ledger
+     *                       may already hold the answer; the cash import calls it too, for the case
+     *                       where the order went first and the statement arrived after. Null
+     *                       degrades to orders that stay "No longer listed" until the user says
+     *                       otherwise — the same bargain every other optional collaborator takes.
+     */
+    public OpenOrdersService(HoldingFileLocator fileLocator, List<OrderParser> parsers,
+                             FxRateProvider fxRateProvider, ExcelReportWriter excelReportWriter,
+                             Path outputDir, IntradayPriceRepository intraday,
+                             PriceHistoryRepository history, YahooTickerMap tickerMap,
+                             KeyValueStore kv, Consumer<Collection<String>> quoteWarmer,
+                             Consumer<String> historyWarmer, OrderEventVariance eventVariance,
+                             FundamentalsRepository fundamentals,
+                             DividendYieldService dividendYields,
+                             OrderHistoryRepository orderHistory,
+                             LadderService ladders, SwitchService switches,
+                             OrderFillReconciler fillReconciler) {
+        this.fillReconciler = fillReconciler;
         this.ladders = ladders;
         this.switches = switches;
         this.orderHistory = orderHistory;
@@ -553,6 +580,39 @@ public class OpenOrdersService {
         return orderHistory != null && orderHistory.saveNote(orderKey, note);
     }
 
+    /**
+     * Records what became of an order the broker stopped listing without ever saying — or clears
+     * that record, handing the row back to the matcher.
+     *
+     * <p>The user is the other source of a verdict, beside the cash ledger, and is needed for the
+     * cases the ledger cannot answer: a cancellation leaves no trade at all, and a fill the
+     * statement has not been downloaded for leaves none yet either. A hand-written verdict is
+     * stored exactly like a matched one and is equally durable — it is in its own column, so the
+     * next download of the order export cannot undo it — and it is marked as the user's word so
+     * the panel never shows it as something a broker said.
+     *
+     * <p>Clearing one also clears {@code matched_through}, so an order handed back is asked about
+     * again on the next load rather than waiting for the ledger to grow past a date it was checked
+     * against under a verdict that no longer stands.
+     *
+     * @param status an {@link OrderStatus} name, or blank to clear
+     * @throws IllegalStateException when the status is not one an order can end in, or when the
+     *                               broker already said what happened — its word is the evidence
+     *                               and nothing here outranks it
+     */
+    public boolean saveStatus(String orderKey, String status) {
+        if (orderHistory == null) return false;
+        String raw = status == null ? "" : status.trim();
+        OrderStatus verdict = raw.isEmpty() ? null : OrderStatus.named(raw);
+        if (!raw.isEmpty() && verdict == null) {
+            throw new IllegalStateException("Not a state an order can end in: " + raw);
+        }
+        boolean saved = orderHistory.saveResolution(orderKey, verdict,
+                OrderHistoryRepository.SOURCE_MANUAL, null, LocalDate.now());
+        if (saved && verdict == null) orderHistory.markChecked(java.util.Collections.singletonMap(orderKey, null));
+        return saved;
+    }
+
     public OrdersReport load() {
         return load(effectiveConfig(null, null, null));
     }
@@ -647,6 +707,12 @@ public class OpenOrdersService {
             }
             warmLaggingQuotes(intentQuotes.warm());
         }
+
+        // After every broker's export has been recorded and before the history is read back: an
+        // order filed as gone a moment ago may have a trade sitting in the ledger already, and this
+        // is the first chance to say so. Does nothing unless a ledger has been imported past the
+        // last time the same question was asked, so the steady-state cost is one small query.
+        if (fillReconciler != null) fillReconciler.reconcile(today);
 
         List<OrderHistoryRepository.HistoricalOrder> closed =
                 orderHistory == null ? List.of() : orderHistory.closed();

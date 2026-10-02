@@ -146,14 +146,22 @@ public final class GroupRungs {
      * treats it as terminal: it is no longer working. None of the three brokers has yet written that
      * status, and if one does the matched quantity will be its full size rather than the part that
      * traded — the export carries no other number.
+     *
+     * <p>It reads {@code HistoricalOrder.state()} rather than the raw status, so a verdict recorded
+     * about an order the broker never accounted for — matched to its cash-ledger trade, or typed in
+     * — reaches the ladder as well as the table. That is the whole point of recording one: a sell
+     * that filled while nobody was downloading order statuses is still half of a round trip, and a
+     * ladder that cannot see it reports an open position that was closed weeks ago.
      */
     static Rung.State stateOf(OrderHistoryRepository.HistoricalOrder h) {
-        return switch (OrderStatus.of(h.status())) {
+        OrderStatus settled = h.resolved();
+        OrderStatus state = settled != null ? settled : OrderStatus.of(h.status());
+        return switch (state) {
             case FILLED, PART_FILLED -> Rung.State.FILLED;
             case CANCELLED, EXPIRED, REJECTED -> Rung.State.CANCELLED;
-            // WORKING or UNKNOWN on a closed row means the broker stopped listing it without ever
-            // saying what became of it. Not counted as a fill: which it was is what the export
-            // declined to say.
+            // WORKING or UNKNOWN on a closed row means nobody has said what became of it. Not
+            // counted as a fill: which it was is what the export declined to say, and no match in
+            // the ledger explained it either.
             case WORKING, UNKNOWN -> Rung.State.UNLISTED;
         };
     }

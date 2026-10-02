@@ -450,6 +450,19 @@
             <i>No longer listed</i> is the third state and the only inferred one — the broker
             stopped listing the order without ever saying what became of it, which is what a
             modified order looks like from outside.
+            <br/>
+            <b>That third state is yours to settle.</b> An order export is a snapshot of what is
+            <i>resting</i>, so a fill shows up in it only on the day it happens — download it a week
+            later and the order has simply vanished, which looks exactly like a cancellation and
+            leaves a ladder unable to see the filled half of its round trip. Two things fix it, and
+            both are stored rather than re-derived, so the next download cannot undo them:
+            <span class="state-src">ledger</span> marks a row matched to the trade it produced in
+            the cash ledger — same account, instrument, side and quantity, inside the order's own
+            life, on the right side of its limit, and claimed by nothing else;
+            <span class="state-src">yours</span> marks one you set from the dropdown, which is what
+            the ledger cannot do for a cancellation (no trade exists) or for a fill whose statement
+            hasn't been imported yet. A row the broker <i>did</i> account for is plain text — its
+            word is the evidence and nothing here overrules it.
         </p>
         <!--
           Sortable on every column, like the open table above it. No JS of its own: the
@@ -486,15 +499,36 @@
                 <td class="txt" th:text="${h.dateEntered != null ? h.dateEntered : '—'}">—</td>
                 <!--
                   One vocabulary, with the broker's own word kept on hover — it is the evidence,
-                  and a broker may write something this app has never seen. "No longer listed" is
-                  the inferred state and is muted to say so.
+                  and a broker may write something this app has never seen.
+
+                  Two renderings, because there are two kinds of row. Where the broker said what
+                  happened the cell is text: that is evidence and there is nothing to decide. Where
+                  it stayed silent the cell is a dropdown, because the silence is a question and
+                  this is where it gets answered — by the cash-ledger match, or by the user. The
+                  sort reads data-sort-value, since a <select> holds no text the sorter can see.
                 -->
-                <td class="txt" th:classappend="${h.stateInferred()} ? 'muted' : ''"
-                    th:title="${h.stateInferred()
-                        ? 'The broker stopped listing this order without restating it — last seen as: '
-                          + (h.status != null and !h.status.isBlank() ? h.status : 'no status')
-                        : 'Broker reported: ' + h.status}"
-                    th:text="${h.state()}">—</td>
+                <td class="txt order-state-cell" th:attr="data-sort-value=${h.state()}">
+                    <span th:unless="${h.answerable()}"
+                          th:title="'Broker reported: ' + ${h.status}"
+                          th:text="${h.state()}">—</span>
+                    <select th:if="${h.answerable()}" class="order-state"
+                            th:classappend="${h.stateResolved()} ? 'order-state-set' : 'muted'"
+                            th:attr="data-order-key=${h.orderKey}"
+                            th:title="${h.stateResolved() ? h.resolutionNote()
+                                : 'The broker stopped listing this order without restating it — last seen as: '
+                                  + (h.status != null and !h.status.isBlank() ? h.status : 'no status')
+                                  + '. Say what became of it, or leave it unanswered.'}">
+                        <option value="" th:selected="${!h.stateResolved()}">No longer listed</option>
+                        <option value="FILLED" th:selected="${h.resolvedName() == 'FILLED'}">Filled</option>
+                        <option value="CANCELLED" th:selected="${h.resolvedName() == 'CANCELLED'}">Cancelled</option>
+                        <option value="EXPIRED" th:selected="${h.resolvedName() == 'EXPIRED'}">Expired</option>
+                    </select>
+                    <!-- Where the answer came from. A verdict is ours, never the broker's, and a
+                         column that did not say so would read as though the export had. -->
+                    <span class="state-src" th:if="${h.stateResolved()}"
+                          th:title="${h.resolutionNote()}"
+                          th:text="${h.resolvedByUser()} ? 'yours' : 'ledger'">ledger</span>
+                </td>
                 <!-- The note lives in an <input>, so the cell holds no text to sort on. -->
                 <td class="txt order-note-cell" th:attr="data-sort-value=${h.note}">
                     <input class="order-note" type="text" placeholder="add a note…"

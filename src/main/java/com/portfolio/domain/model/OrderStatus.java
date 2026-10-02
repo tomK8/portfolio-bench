@@ -81,4 +81,28 @@ public enum OrderStatus {
     public boolean open() {
         return this == WORKING || this == UNKNOWN;
     }
+
+    /** True when this state says the order is over, whatever the outcome was. */
+    public boolean terminal() {
+        return !open();
+    }
+
+    /**
+     * The constant one of our own stored names refers to, or null when this build has never heard
+     * of it.
+     *
+     * <p>Deliberately not {@link #of}: that reads a <em>broker's</em> word, where an unrecognised
+     * one is {@link #UNKNOWN} and therefore still open, because a broker may invent a spelling
+     * tomorrow and dropping the order would be worse than showing it. This reads a name this
+     * application wrote itself, where the only way to meet an unknown one is a column written by a
+     * build that knew a constant this one does not — and there the honest answer is "no verdict",
+     * not "unknown, so still open". Returning null keeps the two cases from sharing an answer.
+     */
+    public static OrderStatus named(String name) {
+        if (name == null || name.isBlank()) return null;
+        for (OrderStatus s : values()) {
+            if (s.name().equalsIgnoreCase(name.trim())) return s;
+        }
+        return null;
+    }
 }

@@ -214,6 +214,7 @@ public class BeanConfiguration {
                                                OrderHistoryRepository orderHistoryRepository,
                                                LadderService ladderService,
                                                SwitchService switchService,
+                                               OrderFillReconciler orderFillReconciler,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
@@ -258,7 +259,25 @@ public class BeanConfiguration {
                 // The Share-class switches block, on exactly the same terms and for the same
                 // reason: its buy leg is normally an intended one, and an intended leg is only as
                 // good as the enrichment it comes back with.
-                switchService);
+                switchService,
+                // Settles orders a broker stopped listing without saying what became of them,
+                // against the trade they produced in the cash ledger. Here because this panel is
+                // where an order is first filed as gone; the cash import calls the same service for
+                // the opposite order of arrival.
+                orderFillReconciler);
+    }
+
+    /**
+     * Reads what became of an order the broker never accounted for, out of the cash ledger.
+     *
+     * <p>Its own bean rather than something either caller owns, because both of them call it and
+     * for symmetric reasons — the Open-orders panel when an order goes, the cash import when the
+     * statement that explains it arrives — and a second copy of the rule would be a second answer.
+     */
+    @Bean
+    public OrderFillReconciler orderFillReconciler(OrderHistoryRepository orderHistoryRepository,
+                                                   CashTransactionRepository cashTransactionRepository) {
+        return new OrderFillReconciler(orderHistoryRepository, cashTransactionRepository);
     }
 
     /**
@@ -685,8 +704,9 @@ public class BeanConfiguration {
 
     @Bean
     public ImportCashService importCashService(@Value("${portfolio.input-dir:}") String inputDir,
-                                               java.util.List<CashImporter> cashImporters) {
-        return new ImportCashService(inputDir(inputDir), cashImporters);
+                                               java.util.List<CashImporter> cashImporters,
+                                               OrderFillReconciler orderFillReconciler) {
+        return new ImportCashService(inputDir(inputDir), cashImporters, orderFillReconciler);
     }
 
     @Bean

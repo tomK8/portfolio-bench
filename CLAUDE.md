@@ -70,6 +70,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   reconstruction), `Irr` (the app's only XIRR solver) + `PositionIrr`, `Instruments`
   (`isBond`, `giltId`, `couponOf`, `assetClassOf` — single home of all four), `DividendYield`,
   `Reminders` (when a reminder is due, and the once-a-day key),
+  `OrderFills` (the rule that reads a vanished order's fill out of the cash ledger),
   `VolForecast` + `AssetClass` (the open-orders touch model), `Ladders` (rung layout + per-account
   cash), `RoundTrips` (the path a ladder's next round trip has to walk), `Switches` (share-class switch: one yardstick, the index/FX split, progress in units),
   `ShareClasses` (the declared one-holding pairs), `PriceStats`, `StyleClassifier`,
@@ -90,6 +91,8 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 - `application` — use-case orchestration; ~40 services. `PortfolioGatherer`,
   `SyncPortfolioService`, `SyncFromCashService`, `ManualPositionService`, `AssetTransferService`,
   `ExportExcelService`, `DividendService`, `AllocationService`, `PortfolioValueService`,
+  `OrderFillReconciler` (settles a vanished order against its cash-ledger trade; run by both the
+  orders panel and the cash import, and idle unless the ledger has moved),
   `PortfolioReturnService`, `AttributionService`, `OpenOrdersService`, `LadderService`,
   `SwitchService` + `GroupRungs` (what both group types share) + `ShareClassRegistry`
   + `IntentEdits` (the editable price/qty cells — intended rungs only),
@@ -217,7 +220,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [sync-views.md](docs/sync-views.md) | change either sync tab or the Portfolio % column | Ledger view drops unpriced equities but not bonds; II SIPP cash comes from the form, blank ≠ zero; a row opens the shared price popup and a `CASH` row carries no `data-symbol` |
 | [cash-ledger-irr.md](docs/cash-ledger-irr.md) | touch the Annualised return column or `Irr` | IRR not CAGR; current episode only; unsolvable writes **no** cell, never a zero; two day-count bases are deliberate |
 | [table-grouping.md](docs/table-grouping.md) | add a grouping key to either table | Exactly one group per holding; Gain % is `Σgain ÷ Σcost`, never the mean of members; a new key is a resolver class and nothing else |
-| [open-orders.md](docs/open-orders.md) | change the orders panel, a parser or the probe | Parsers build via `OpenOrder.parsed(...)`; open/closed filter is a denylist and `OrderStatus` is its only vocabulary; quote age is judged against same-market peers, not the clock; **ladder membership is never inferred and an intended rung is never auto-promoted**; a rung is never pruned; **only an intended rung's price and quantity are editable** — an order from a broker export is never restated here — and blank is never zero; a ladder's round trip is the **next** one, matched by quantity and never by rung pairs, and it is a sequential first passage — never a product of the two rungs' own probabilities — priced from **today's** price over its own selectable horizon |
+| [open-orders.md](docs/open-orders.md) | change the orders panel, a parser or the probe | Parsers build via `OpenOrder.parsed(...)`; open/closed filter is a denylist and `OrderStatus` is its only vocabulary; quote age is judged against same-market peers, not the clock; **a verdict on a vanished order lives in its own columns and the broker's own word always outranks it** — the cash-ledger match writes only `FILLED` (no trade is not evidence of a cancellation), reads the side off the sign of the *cash*, and each trade is claimed once so a modified Roth order's ghost cannot claim its twin's fill; **ladder membership is never inferred and an intended rung is never auto-promoted**; a rung is never pruned; **only an intended rung's price and quantity are editable** — an order from a broker export is never restated here — and blank is never zero; a ladder's round trip is the **next** one, matched by quantity and never by rung pairs, and it is a sequential first passage — never a product of the two rungs' own probabilities — priced from **today's** price over its own selectable horizon |
 | [share-class-switches.md](docs/share-class-switches.md) | change the switches block, or any exposure view | A switch is **declared, never detected**, and declaring it is also what folds the two listings into one holding in Allocation/Concentration/Currency; the legs are **one table in two sections** so the two sides share one column geometry, and the sections are the two **directions**, not the two lines — a side is chosen by side and *either* side may sit on *either* listing, which is what the listing column and the GBP sort are for; both legs go on one GBP yardstick before anything is compared and a side spanning both lines has **no** native average; the index/FX split is an exact identity over each side's own blended market, and the basis *block* stays the two lines, unmoved by an edited limit — evidence you can edit is not evidence; "complete" means the units arrived, not that nothing is resting |
 | [vol-forecast.md](docs/vol-forecast.md) | change P(N), σ_eff, drift or the calibration log | σ is *forecast* for the horizon, never a trailing window of that length; drift is a **price** drift (class total return − that name's yield); the probe writes no calibration line; one σ_eff serves a whole barrier sequence, because how the window splits between its legs is not a window to forecast for |
 | [live-tab.md](docs/live-tab.md) | change the Live tab or intraday session handling | Day Δ is anchored on the quote's **trading day**, not the calendar day; `loadLatestIntradayPrices` is regular-session only |
@@ -295,6 +298,7 @@ beyond the code, so treat the source as the specification.
 | `POST /switches/export` | Switches | `OpenOrdersService.exportSwitches` — `Share-Class Switches-{date}.xlsx`, 5 sheets |
 | `POST /orders/drift`, `POST /orders/event-var` | Orders | stored app-wide model switches |
 | `POST /orders/note` | Orders | `OrderHistoryRepository.saveNote` |
+| `POST /orders/status` | Orders | what became of an order the broker stopped listing without saying — **only where it was silent**, stored in its own column so a re-parse cannot undo it; blank clears and hands the row back to the cash-ledger matcher |
 | `POST /orders/export` | Orders | `OpenOrdersService.export` |
 | `GET /allocation`, `/allocation/sectors`, `/allocation/styles` | Charts | `AllocationService`, `SectorBreakdownService`, `StyleBreakdownService` |
 | `GET`/`POST /allocation/targets` | Charts | target-allocation drift |

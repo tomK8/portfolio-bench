@@ -55,7 +55,8 @@ for ledger-only symbols too and reports them against zero.
 **A standing gotcha this turned up, now fixed.** `POST /sync` and `POST /export` used to persist
 the II SIPP cash inputs with `defaultValue = "0"`, and `WebSupport.parseCash` mapped blank and
 unreadable input to `BigDecimal.ZERO` — so **any request that omitted those params silently
-overwrote the stored balances with zero**. They live in `ii_sipp_cash_last{,_usd}.txt` and are the
+overwrote the stored balances with zero**. They live in one `ii_sipp_cash_last*.txt` per currency
+(`{,_usd,_eur}`, declared in `IiCashField`) and are the
 holdings view's *only* source of II cash (II's holdings export omits the balance), so a stray
 parameterless POST — a form that forgets a field, a hand-run `curl`, a script hitting `/export` —
 cost a real figure with nothing on screen to say so; the only symptom was a total quietly short by

@@ -68,11 +68,24 @@ for bonds).
 `PortfolioAggregator.realtime` divides by 100 before producing the RT market value.
 
 **II SIPP cash field (holdings view + Excel export only):** II's holdings CSV export omits the
-cash balance, so the dashboard form supplies it as **two separate inputs** — `iiSippCash`
-(GBP) and `iiSippCashUsd` (USD). `SyncPortfolioService.combineIiCashAsGbp` converts the USD
-portion at the live FX rate it already fetched and sums into the single GBP figure that
-flows into `PortfolioMetrics` and the Excel sheet. Both inputs persist in `KeyValueStore`
-(`ii_sipp_cash_last`, `ii_sipp_cash_last_usd`). The cash-ledger view, contributions chart,
-and value-over-time chart don't use these inputs — they derive II cash from the latest
-stored `cash_balance_gbp` per `(account='II', currency)` directly.
+cash balance, so the dashboard form supplies it as **one input per currency the account holds** —
+`iiSippCash` (GBP), `iiSippCashUsd` (USD), `iiSippCashEur` (EUR). `IiCash.totalGbp` converts each
+non-sterling box at the live FX rate the run already fetched and sums into the single GBP figure
+that flows into `PortfolioMetrics` and the Excel sheet; `IiCash.gbp` does one currency at a time
+for the reconciliation panel, so an II euro balance is compared against the ledger's **euro**
+balance instead of disappearing into the sterling row. Each input persists in `KeyValueStore`
+under its own key (`ii_sipp_cash_last`, `ii_sipp_cash_last_usd`, `ii_sipp_cash_last_eur`).
+
+**The set of boxes is declared once, in `IiCashField`** (param name + KV key, in form order).
+Adding a currency is that constant plus a label in `dashboard.html` — nothing between the
+controller and the Excel writer names a currency, because the figures travel together as one
+`IiCash` rather than as a parameter per currency. They used to be two `BigDecimal` parameters
+threaded through `POST /sync`, `POST /export`, the sync and the reconciliation, which is four
+signatures per new currency. `WebEndpointsTest.theFormCarriesEveryIiCashBox` asserts the form
+really carries a box for every constant: a box the template misspells posts nothing, and nothing
+means *keep the stored balance*, so the figure typed into it would never arrive and never complain.
+
+The cash-ledger view, contributions chart, and value-over-time chart don't use these inputs —
+they derive II cash from the latest stored `cash_balance_gbp` per `(account='II', currency)`
+directly.
 

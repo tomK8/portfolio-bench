@@ -69,14 +69,16 @@ public class SyncPortfolioService {
         this.kv = kv;
     }
 
-    public SyncResult sync(BigDecimal iiSippCashGbp, BigDecimal iiSippCashUsd) {
+    public SyncResult sync(IiCash iiCash) {
         GatheredPortfolio gathered = gatherer.gather();
 
         if (gathered.holdings().isEmpty()) {
             return SyncResult.empty(gathered.rates());
         }
 
-        BigDecimal iiSippCash = combineIiCashAsGbp(iiSippCashGbp, iiSippCashUsd, gathered.rates());
+        // II's holdings export omits cash, so the form's figures are the only source of it here.
+        // They arrive per currency and are converted at the rates this run already fetched.
+        BigDecimal iiSippCash = iiCash.totalGbp(gathered.rates());
 
         Map<String, String> tickerBySymbol = tickerBySymbol(gathered.holdings());
         Map<String, IntradayPrice> latestBySymbol = latestPricesBySymbol(tickerBySymbol);
@@ -99,8 +101,7 @@ public class SyncPortfolioService {
         kv.putStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY, heldSymbols);
 
         List<String> sources = new ArrayList<>(gathered.sources().keySet());
-        List<SyncResult.CashRecon> recon = reconcileCash(
-                aggregated, iiSippCashGbp, iiSippCashUsd, gathered.rates());
+        List<SyncResult.CashRecon> recon = reconcileCash(aggregated, iiCash, gathered.rates());
         List<String> missingIntraday = missingIntradayPrices(aggregated);
         for (String sym : missingIntraday) log.warn("No intraday price for held symbol {}", sym);
         List<SyncResult.UnpricedSymbol> unpriced = unpricedSymbols(missingIntraday, tickerBySymbol, priceHistory);
@@ -262,7 +263,7 @@ public class SyncPortfolioService {
      * one side or the other, and that's worth eyeballing.
      */
     private List<SyncResult.CashRecon> reconcileCash(List<AggHolding> aggregated,
-                                                     BigDecimal iiCashGbp, BigDecimal iiCashUsd,
+                                                     IiCash iiCash,
                                                      Map<String, BigDecimal> rates) {
         Map<String, BigDecimal> holdingsByKey = new LinkedHashMap<>();
         for (AggHolding h : aggregated) {
@@ -271,15 +272,12 @@ public class SyncPortfolioService {
             String account = ACCOUNT_KEY_BY_SOURCE.getOrDefault(source, source);
             holdingsByKey.merge(account + "|" + h.currencyCode(), h.marketValueGbp(), BigDecimal::add);
         }
-        if (iiCashGbp != null && iiCashGbp.signum() != 0) {
-            holdingsByKey.merge("II|GBP", iiCashGbp, BigDecimal::add);
-        }
-        if (iiCashUsd != null && iiCashUsd.signum() != 0) {
-            BigDecimal usdRate = rates.get("USD");
-            if (usdRate != null && usdRate.signum() != 0) {
-                holdingsByKey.merge("II|USD",
-                        iiCashUsd.divide(usdRate, 10, RoundingMode.HALF_UP), BigDecimal::add);
-            }
+        // One row per currency the form offers, so an II euro balance is compared against the
+        // ledger's euro balance rather than disappearing into the sterling row.
+        for (Map.Entry<String, BigDecimal> e : iiCash.nativeByCurrency().entrySet()) {
+            if (e.getValue() == null || e.getValue().signum() == 0) continue;
+            BigDecimal gbp = iiCash.gbp(e.getKey(), rates);
+            if (gbp != null) holdingsByKey.merge("II|" + e.getKey(), gbp, BigDecimal::add);
         }
 
         // Re-convert the ledger's native balance via the live FX so it lines up with the
@@ -333,19 +331,6 @@ public class SyncPortfolioService {
             // would resolve it anyway. Stated explicitly because relying on that coincidence is
             // how a silent phantom-drift row would appear if either name ever changed.
             "Equate", "Equate");
-
-    /**
-     * II SIPP cash entered on the dashboard as two amounts (GBP + USD). Convert the USD
-     * portion at the live rate we already fetched, sum, and feed that single GBP figure
-     * into the metrics layer — saves the user the manual conversion each time the FX moves.
-     */
-    static BigDecimal combineIiCashAsGbp(BigDecimal gbp, BigDecimal usd,
-                                         Map<String, BigDecimal> rates) {
-        if (usd == null || usd.signum() == 0) return gbp;
-        BigDecimal usdRate = rates.get("USD");
-        if (usdRate == null || usdRate.signum() == 0) return gbp;
-        return gbp.add(usd.divide(usdRate, 10, RoundingMode.HALF_UP));
-    }
 
     /**
      * Bulk-load the latest cached intraday price per holding, re-keyed by <b>internal symbol</b>

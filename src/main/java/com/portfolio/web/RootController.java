@@ -10,7 +10,6 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 
-import java.math.BigDecimal;
 
 /**
  * Landing-page controller. Renders the Thymeleaf {@code dashboard} template populated with
@@ -60,10 +59,9 @@ public class RootController {
         model.addAttribute("demo", demo);
         model.addAttribute("inputDir", inputDir);
         model.addAttribute("backupDir", backupDir);
-        model.addAttribute("iiSippCash",
-                settings.getBigDecimal(WebSupport.II_SIPP_CASH_KEY, BigDecimal.ZERO).toPlainString());
-        model.addAttribute("iiSippCashUsd",
-                settings.getBigDecimal(WebSupport.II_SIPP_CASH_USD_KEY, BigDecimal.ZERO).toPlainString());
+        // One attribute per II SIPP cash box, named after the parameter the box posts under, so
+        // the set of boxes is declared once (IiCashField) rather than here and in the template.
+        WebSupport.storedIiCash(settings).forEach(model::addAttribute);
         // The Cash-ledger grouping dropdown is generated from the enum rather than hand-written
         // in the template, so a new key type is a constant plus a resolver and nothing else.
         model.addAttribute("groupOptions", groupingService.options());

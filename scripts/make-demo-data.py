@@ -309,10 +309,15 @@ KV_VERBATIM = [
     "momentum_universe_history", "swing_symbols", "swing_cluster",
     "trend_symbols", "range_symbols", "orders_use_drift", "orders_use_event_var",
 ]
-KV_SYNTH = ["roth_balance_brought_forward", "ii_sipp_cash_last", "ii_sipp_cash_last_usd"]
-# Derived from the ledger on import/sync - copying them would leak a real balance.
+# One per II SIPP cash box on the Holdings form (IiCashField) - a missing one would show the
+# demo an empty box, which reads as "keep the stored balance", not as zero.
+KV_SYNTH = ["roth_balance_brought_forward", "ii_sipp_cash_last", "ii_sipp_cash_last_usd",
+            "ii_sipp_cash_last_eur"]
+# Derived from the ledger on import/sync - copying them would leak a real balance. The copy above
+# is an allowlist, so this list documents what is left behind rather than enforcing it.
 KV_NEVER = ["cash_balance_II_GBP_gbp", "cash_balance_II_GBP_native",
             "cash_balance_II_USD_gbp", "cash_balance_II_USD_native",
+            "cash_balance_II_EUR_gbp", "cash_balance_II_EUR_native",
             "held_symbols", "order_symbols", "watchlist_alerts_fired",
             "allocation_targets"]
 

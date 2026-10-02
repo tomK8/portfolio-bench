@@ -42,8 +42,11 @@
   the dashboard's writes throw. See [instrument-mappings.md](instrument-mappings.md).
 - `KeyValueStore` — file-backed scalar settings, one `<key>.txt` per key under `<db-dir>`:
   - `ii_sipp_cash_last` — last II SIPP **GBP** cash balance entered on the dashboard.
-  - `ii_sipp_cash_last_usd` — last II SIPP **USD** cash balance entered on the dashboard.
-    Service converts via current FX before summing into the holdings view's totals.
+  - `ii_sipp_cash_last_usd` / `ii_sipp_cash_last_eur` — the same for **USD** and **EUR**; one key
+    per box on the form, declared in `IiCashField`. Each is converted via current FX before
+    summing into the holdings view's totals. The sterling key carries no currency in its name
+    because sterling was the only box when it was chosen — renaming it now would strand a
+    balance II's export cannot supply again.
   - `roth_balance_brought_forward` — RothIRA opening balance in **USD**, used to seed the
     running balance on first import. Charts must convert to GBP via historical FX
     (see `ContributionService.rothSeedAsGbp`, `PortfolioValueService.timeline`) — treating

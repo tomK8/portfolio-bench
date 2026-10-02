@@ -23,6 +23,7 @@ import java.util.Map;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -69,6 +70,35 @@ class WebEndpointsTest {
                 .andExpect(content().string(containsString("Dividends (£)")))
                 .andExpect(content().string(containsString("Total Gain (£)")))
                 .andExpect(content().string(containsString("Total Gain %")));
+    }
+
+    /**
+     * Every II SIPP cash box the enum declares has to exist in the form, under exactly the name
+     * it posts under. A box the template spells differently posts nothing, and "nothing" means
+     * "keep the stored balance" — so the figure typed into it would silently never arrive.
+     */
+    @Test
+    void theFormCarriesEveryIiCashBox() throws Exception {
+        String page = mvc.perform(get("/")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        for (IiCashField f : IiCashField.values()) {
+            assertTrue(page.contains("name=\"" + f.param() + "\""),
+                    "the Holdings form has no box posting as " + f.param());
+        }
+    }
+
+    /** The euro box reaches the stored balances and the totals, exactly as the dollar one does. */
+    @Test
+    void syncStoresEveryCurrencyBox() throws Exception {
+        mvc.perform(post("/sync")
+                        .param("iiSippCash", "500")
+                        .param("iiSippCashUsd", "250")
+                        .param("iiSippCashEur", "1200"))
+                .andExpect(status().isOk());
+
+        String page = mvc.perform(get("/")).andReturn().getResponse().getContentAsString();
+        assertTrue(page.contains("value=\"1200\""), "the euro balance must come back in its box");
     }
 
     @Test

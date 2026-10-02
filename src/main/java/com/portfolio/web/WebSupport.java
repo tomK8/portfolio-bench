@@ -1,5 +1,6 @@
 package com.portfolio.web;
 
+import com.portfolio.application.IiCash;
 import com.portfolio.persistence.KeyValueStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -7,6 +8,8 @@ import org.slf4j.LoggerFactory;
 import java.math.BigDecimal;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Small set of helpers shared across the web controllers: the timestamp string the result
@@ -16,12 +19,6 @@ import java.time.format.DateTimeFormatter;
 final class WebSupport {
 
     private static final Logger log = LoggerFactory.getLogger(WebSupport.class);
-
-    /** KV key for the last II SIPP GBP cash balance entered on the dashboard. */
-    static final String II_SIPP_CASH_KEY = "ii_sipp_cash_last";
-
-    /** KV key for the last II SIPP USD cash balance entered on the dashboard. */
-    static final String II_SIPP_CASH_USD_KEY = "ii_sipp_cash_last_usd";
 
     private static final DateTimeFormatter HMS = DateTimeFormatter.ofPattern("HH:mm:ss");
 
@@ -76,11 +73,32 @@ final class WebSupport {
         return cash;
     }
 
-    static BigDecimal persistIiSippCash(KeyValueStore settings, String raw) {
-        return persistCash(settings, II_SIPP_CASH_KEY, raw);
+    /**
+     * Stores every II SIPP cash box this form posted and returns the whole set — one currency per
+     * {@link IiCashField}, each handled by {@link #persistCash} independently, so a request that
+     * states one currency leaves the others at their stored balances rather than zeroing them.
+     *
+     * <p>Takes the raw parameter map rather than a parameter per box: that is what keeps a new
+     * currency to one enum constant instead of a new argument on four signatures.
+     */
+    static IiCash persistIiCash(KeyValueStore settings, Map<String, String> form) {
+        Map<String, BigDecimal> byCurrency = new LinkedHashMap<>();
+        for (IiCashField f : IiCashField.values()) {
+            byCurrency.put(f.currency(), persistCash(settings, f.key(), form.get(f.param())));
+        }
+        return new IiCash(byCurrency);
     }
 
-    static BigDecimal persistIiSippCashUsd(KeyValueStore settings, String raw) {
-        return persistCash(settings, II_SIPP_CASH_USD_KEY, raw);
+    /**
+     * The stored balances as the form's own parameter names → the value to pre-fill each box
+     * with. Added to the model one attribute per box, so the template reads {@code ${iiSippCash}}
+     * and friends by the same name it posts them under.
+     */
+    static Map<String, String> storedIiCash(KeyValueStore settings) {
+        Map<String, String> byParam = new LinkedHashMap<>();
+        for (IiCashField f : IiCashField.values()) {
+            byParam.put(f.param(), settings.getBigDecimal(f.key(), BigDecimal.ZERO).toPlainString());
+        }
+        return byParam;
     }
 }

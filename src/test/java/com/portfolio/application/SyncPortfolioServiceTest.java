@@ -29,8 +29,8 @@ class SyncPortfolioServiceTest {
     /**
      * Fake FX provider — the reason FxRateProvider is a port: no network in tests.
      */
-    private static final FxRateProvider FX =
-            () -> Map.of("GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"));
+    private static final FxRateProvider FX = () -> Map.of(
+            "GBP", BigDecimal.ONE, "USD", new BigDecimal("1.25"), "EUR", new BigDecimal("1.20"));
 
     @TempDir
     Path inputDir;
@@ -74,7 +74,7 @@ class SyncPortfolioServiceTest {
     @Test
     void aHandEnteredPositionReachesTheHoldingsPipeline() {
         seedManualBarc();
-        SyncResult result = service(true).sync(BigDecimal.ZERO, BigDecimal.ZERO);
+        SyncResult result = service(true).sync(IiCash.ofGbp(BigDecimal.ZERO));
 
         assertTrue(result.holdings().stream().anyMatch(h -> "BARC".equals(h.securityId())),
                 "an account with no export still has to appear on the Files tab");
@@ -83,7 +83,7 @@ class SyncPortfolioServiceTest {
     @Test
     void aHandEnteredPositionIsPublishedToHeldSymbols() {
         seedManualBarc();
-        service(true).sync(BigDecimal.ZERO, BigDecimal.ZERO);
+        service(true).sync(IiCash.ofGbp(BigDecimal.ZERO));
 
         // held_symbols is what feeds the fundamentals, earnings and price-fetch universes.
         assertTrue(new KeyValueStore(dbDir).getStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY)
@@ -93,7 +93,7 @@ class SyncPortfolioServiceTest {
     @Test
     void aHandEnteredPositionDoesNotShowAsReconciliationDrift() {
         seedManualBarc();
-        SyncResult result = service(true).sync(BigDecimal.ZERO, BigDecimal.ZERO);
+        SyncResult result = service(true).sync(IiCash.ofGbp(BigDecimal.ZERO));
 
         // Both sides derive from the same ledger rows and the same quote, so a drift row here
         // would be the panel disagreeing with itself.
@@ -103,7 +103,7 @@ class SyncPortfolioServiceTest {
 
     @Test
     void returnsEmptyWhenNoInputFiles() {
-        SyncResult result = service().sync(new BigDecimal("1000"), BigDecimal.ZERO);
+        SyncResult result = service().sync(IiCash.ofGbp(new BigDecimal("1000")));
 
         assertTrue(result.empty());
         assertTrue(result.holdings().isEmpty());
@@ -128,7 +128,7 @@ class SyncPortfolioServiceTest {
         Files.writeString(inputDir.resolve("11111111-1111-1111-1111-111111111111.csv"),
                 "Symbol,Qty,Market Value,Book Cost\nAAPL,1,$100.00,$100.00\n");
 
-        SyncResult result = service().sync(BigDecimal.ZERO, BigDecimal.ZERO);
+        SyncResult result = service().sync(IiCash.ofGbp(BigDecimal.ZERO));
 
         SyncResult.CashRecon row = result.cashRecon().stream()
                 .filter(r -> "RothIRA".equals(r.account()) && "USD".equals(r.currency()))
@@ -143,7 +143,7 @@ class SyncPortfolioServiceTest {
         Files.writeString(inputDir.resolve("11111111-1111-1111-1111-111111111111.csv"),
                 "Symbol,Qty,Market Value,Book Cost\nAAPL,10,$1500.00,$1000.00\n");
 
-        SyncResult result = service().sync(new BigDecimal("500"), BigDecimal.ZERO);
+        SyncResult result = service().sync(IiCash.ofGbp(new BigDecimal("500")));
 
         assertFalse(result.empty());
         assertEquals(1, result.holdings().size());
@@ -152,5 +152,32 @@ class SyncPortfolioServiceTest {
         assertEquals(0, new BigDecimal("1700").compareTo(result.totals().totalGbp()));
         // cost 1000 USD / 1.25 = 800 GBP; gain = 1200 - 800 = 400.
         assertEquals(0, new BigDecimal("400").compareTo(result.totals().totalGainGbp()));
+    }
+
+    /**
+     * II holds euro alongside sterling and dollars, and this form is the holdings view's only
+     * source of any of them. Each box has to reach the total at its own live rate, and be
+     * compared against the ledger's balance in <em>that</em> currency rather than folded into the
+     * sterling row — a euro balance buried in the GBP row is a reconciliation that cannot fail.
+     */
+    @Test
+    void everyCurrencyBoxReachesTheTotalAndItsOwnReconciliationRow() throws IOException {
+        Files.writeString(inputDir.resolve("11111111-1111-1111-1111-111111111111.csv"),
+                "Symbol,Qty,Market Value,Book Cost\nAAPL,10,$1500.00,$1000.00\n");
+
+        SyncResult result = service().sync(new IiCash(Map.of(
+                "GBP", new BigDecimal("500"),
+                "USD", new BigDecimal("250"),
+                "EUR", new BigDecimal("1200"))));
+
+        // equity 1500 USD / 1.25 = 1200; cash 500 + 250/1.25 + 1200/1.20 = 500 + 200 + 1000.
+        assertEquals(0, new BigDecimal("1700").compareTo(result.totals().totalCashGbp()));
+        assertEquals(0, new BigDecimal("2900").compareTo(result.totals().totalGbp()));
+
+        SyncResult.CashRecon eur = result.cashRecon().stream()
+                .filter(r -> "II".equals(r.account()) && "EUR".equals(r.currency()))
+                .findFirst().orElseThrow(() -> new AssertionError("no II/EUR reconciliation row"));
+        assertEquals(0, new BigDecimal("1000.00").compareTo(eur.holdingsGbp()),
+                "the euro box belongs in the II/EUR row at the live rate");
     }
 }

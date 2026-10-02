@@ -2,8 +2,9 @@
 
 - **From holdings files** — `POST /sync` → `fragments/portfolio`. Includes a cash
   reconciliation panel comparing the holdings-side cash (parsed CASH rows + form-supplied
-  II SIPP £/$) against the ledger-side latest stored cash balance, with red rows for
-  |diff| > £50 (threshold in `SyncPortfolioService.CASH_DRIFT_WARN_GBP`).
+  II SIPP £/$/€, each on its own row in its own currency) against the ledger-side latest stored
+  cash balance, with red rows for |diff| > £50 (threshold in
+  `SyncPortfolioService.CASH_DRIFT_WARN_GBP`).
 - **From cash ledger** — `POST /sync-from-cash` → `fragments/portfolio-ledger`. Slimmer
   table (no separate "Market Value £" / "RT Market Value £" columns — single combined
   value column). Drops positions without an intraday price — except bonds, which fall back to

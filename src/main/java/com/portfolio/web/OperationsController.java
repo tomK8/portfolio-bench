@@ -67,13 +67,14 @@ public class OperationsController {
         this.groupingService = groupingService;
     }
 
+    /**
+     * The whole form arrives as a map so the II SIPP cash boxes stay one per currency without a
+     * parameter here per currency — {@link WebSupport#persistIiCash} reads the ones it knows and
+     * ignores the rest. An absent box still means "leave the stored balance alone", never zero.
+     */
     @PostMapping("/sync")
-    public String sync(@RequestParam(name = "iiSippCash", required = false) String iiSippCash,
-                       @RequestParam(name = "iiSippCashUsd", required = false) String iiSippCashUsd,
-                       Model model) {
-        model.addAttribute("result", syncService.sync(
-                WebSupport.persistIiSippCash(settings, iiSippCash),
-                WebSupport.persistIiSippCashUsd(settings, iiSippCashUsd)));
+    public String sync(@RequestParam Map<String, String> form, Model model) {
+        model.addAttribute("result", syncService.sync(WebSupport.persistIiCash(settings, form)));
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/portfolio :: result";
     }
@@ -114,12 +115,8 @@ public class OperationsController {
     }
 
     @PostMapping("/export")
-    public String export(@RequestParam(name = "iiSippCash", required = false) String iiSippCash,
-                         @RequestParam(name = "iiSippCashUsd", required = false) String iiSippCashUsd,
-                         Model model) {
-        model.addAttribute("export", exportService.export(
-                WebSupport.persistIiSippCash(settings, iiSippCash),
-                WebSupport.persistIiSippCashUsd(settings, iiSippCashUsd)));
+    public String export(@RequestParam Map<String, String> form, Model model) {
+        model.addAttribute("export", exportService.export(WebSupport.persistIiCash(settings, form)));
         model.addAttribute("completedAt", WebSupport.now());
         return "fragments/export :: result";
     }

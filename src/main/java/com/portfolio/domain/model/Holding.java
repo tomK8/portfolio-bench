@@ -62,6 +62,20 @@ public class Holding {
         return source;
     }
 
+    /**
+     * A copy carrying {@code cost} as its GBP cost basis. For a source that reports no basis at
+     * all — AJ Bell states none for shares transferred in in specie, because it never saw the
+     * purchase — where the ledger does have one.
+     */
+    public Holding withCostBasisGbp(BigDecimal cost) {
+        return builder(securityId, quantity, currency, source)
+                .avgPricePaid(avgPricePaid)
+                .currentMarketValue(currentMarketValue)
+                .currentMarketValueGbp(currentMarketValueGbp)
+                .costBasisGbp(cost)
+                .build();
+    }
+
     @Override
     public String toString() {
         return String.format("Holding{id='%s', qty=%s, avgPrice=%s, mktVal=%s, ccy=%s, source='%s'}",

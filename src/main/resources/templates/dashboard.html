@@ -2119,7 +2119,7 @@
 
 <form class="actions" hx-indicator="#spinner">
     <button hx-post="/import-cash" hx-target="#import-result" type="submit">Import cash statement</button>
-    <span class="muted">reads <code th:text="${inputDir} + '/cashstatements*.csv'">~/Downloads/cashstatements*.csv</code> (AJBell), <code th:text="${inputDir} + '/History*.xlsx'">~/Downloads/History*.xlsx</code> (RothIRA) and UUID-named <code th:text="${inputDir} + '/*.csv'">~/Downloads/*.csv</code> (II SIPP)</span>
+    <span class="muted">reads <code th:text="${inputDir} + '/cashstatements*.csv'">~/Downloads/cashstatements*.csv</code> (AJ Bell — both accounts; which is which is read from the instruments each statement names, so download both <code>portfolio*.csv</code> holdings exports too), <code th:text="${inputDir} + '/History*.xlsx'">~/Downloads/History*.xlsx</code> (RothIRA) and UUID-named <code th:text="${inputDir} + '/*.csv'">~/Downloads/*.csv</code> (II SIPP)</span>
     <span class="htmx-indicator" id="spinner">Working…</span>
 </form>
 
@@ -2265,7 +2265,7 @@
 <section class="tab-panel" id="panel-orders">
     <p class="muted" style="margin-top: 0">
         Resting (open) orders across brokers, parsed from the latest order-status exports in
-        <code th:text="${inputDir}">~/Downloads</code> — AJ Bell <code>activeorders*.csv</code>, II order history
+        <code th:text="${inputDir}">~/Downloads</code> — AJ Bell <code>activeorders*.csv</code> (one per account, matched to the SIPP or the Dealing account by the instruments it names), II order history
         (UUID <code>.csv</code>), Citi Roth <code>Order+Status*.xlsx</code>. Read-only; filled,
         cancelled and expired orders are excluded.
     </p>

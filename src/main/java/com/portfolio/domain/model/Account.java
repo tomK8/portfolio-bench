@@ -15,6 +15,13 @@ import java.util.List;
  */
 public enum Account {
     AJBELL("AJBell", false),
+    /**
+     * AJ Bell Dealing account — a second AJ Bell portfolio behind the same login. Its exports are
+     * byte-identical in shape to the SIPP's and carry no account marker, so which account a
+     * {@code cashstatements*.csv} or {@code activeorders*.csv} belongs to is decided by
+     * {@link com.portfolio.domain.AjBellPortfolios} rather than read off the file.
+     */
+    AJBELL_DEALING("AJBellDealing", false),
     ROTH_IRA("RothIRA", false),
     II("II", false),
     /** Employee share plan (Equate Plus). No export exists — positions are entered by hand. */
@@ -37,17 +44,29 @@ public enum Account {
      * parsers report as their {@code sourceName()} — so a broker name coming off an order and an
      * account name coming off the ledger are the same word and can be matched.
      *
-     * <p>This is the single home for that mapping. Several services still carry a private copy of
-     * it from before this method existed; they should move here as they are next touched, not all
-     * at once in an unrelated change.
+     * <p>This is the single home for that mapping. The private copies several services carried
+     * from before this method existed have all moved here — a second AJ Bell account was invisible
+     * in every one of them, which is what finally forced it.
      */
     public String displayName() {
         return switch (this) {
             case AJBELL -> "AJ Bell SIPP";
+            case AJBELL_DEALING -> "AJ Bell Dealing";
             case ROTH_IRA -> "Roth IRA";
             case II -> "II SIPP";
             case EQUATE -> "Equate";
         };
+    }
+
+    /**
+     * The label for a stored {@code account} value, or the value itself when it names no account —
+     * so a row written by a future constant still prints something rather than vanishing.
+     */
+    public static String displayNameOf(String dbValue) {
+        for (Account a : values()) {
+            if (a.dbValue.equals(dbValue)) return a.displayName();
+        }
+        return dbValue;
     }
 
     /** The account a display label names, or null when it names none. */

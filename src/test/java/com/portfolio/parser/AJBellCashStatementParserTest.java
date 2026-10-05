@@ -41,11 +41,23 @@ class AJBellCashStatementParserTest {
         assertTrue(parser.supports(FIXTURE));   // the fixture keeps the exact filename
     }
 
+    /**
+     * The browser suffixes a second download, which is exactly how two AJ Bell accounts' statements
+     * come to sit in the input directory at once — so a suffixed name is a statement like any
+     * other. {@code supports} and the importer's glob agree on that; which <em>account</em> a
+     * statement belongs to is decided separately, by AjBellFileRouter, on its contents.
+     */
+    @Test
+    void supports_acceptsSuffixedDownloadsOfTheSameExport() {
+        assertTrue(parser.supports(Paths.get("cashstatements (1).csv")));
+        assertTrue(parser.supports(Paths.get("cashstatements_2026-09-23.csv")));
+    }
+
     @Test
     void supports_rejectsOtherFilenames() {
-        assertFalse(parser.supports(Paths.get("cashstatements (1).csv")));
-        assertFalse(parser.supports(Paths.get("cashstatements_combined.csv")));
         assertFalse(parser.supports(Paths.get("portfolio.csv")));
+        assertFalse(parser.supports(Paths.get("statements.csv")));
+        assertFalse(parser.supports(Paths.get("cashstatements.xlsx")));
     }
 
     // --- parse() against the committed synthetic fixture ---

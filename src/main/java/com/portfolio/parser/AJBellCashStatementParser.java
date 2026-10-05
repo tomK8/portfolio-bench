@@ -20,17 +20,25 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Parses the fixed-path ~/Downloads/cashstatements.csv cash statement export from AJ Bell.
+ * Parses the ~/Downloads/cashstatements*.csv cash statement export from AJ Bell. One instance per
+ * AJ Bell account.
  * <p>
  * The file is newest-first; rows are reversed internally for chronological balance verification.
  * All amounts are already in GBP, so fx_to_gbp = 1.0 throughout.
  * BALANCE B/F rows (opening balance markers) anchor the verification chain but are not persisted.
+ *
+ * <p><b>The statement does not say which AJ Bell account it is.</b> Two accounts behind one login
+ * export the same filename with the same header and no account number in it, so which ledger a
+ * statement belongs to is decided outside this class, by {@code AjBellFileRouter}, from the
+ * instruments the statement names ({@link #symbolsIn}). The account is then handed in at
+ * construction. Misfiling one would corrupt two ledgers at once and the dedup key is scoped per
+ * account, so the next import would not repair it — which is why an unroutable statement is
+ * refused rather than defaulted.
  */
 public class AJBellCashStatementParser implements CashTransactionParser {
 
     private static final Logger log = LoggerFactory.getLogger(AJBellCashStatementParser.class);
 
-    private static final Account ACCOUNT = Account.AJBELL;
     private static final String CURRENCY = "GBP";
     private static final double FX_TO_GBP = 1.0;
 
@@ -70,13 +78,26 @@ public class AJBellCashStatementParser implements CashTransactionParser {
      */
     private final Supplier<Map<String, String>> aliasSource;
 
+    /** The ledger these rows are filed against. */
+    private final Account account;
+
     /** Committed rules only — the default for tests and any alias-store-less context. */
     public AJBellCashStatementParser() {
         this(Map::of);
     }
 
     public AJBellCashStatementParser(Supplier<Map<String, String>> aliasSource) {
+        this(Account.AJBELL, aliasSource);
+    }
+
+    public AJBellCashStatementParser(Account account, Supplier<Map<String, String>> aliasSource) {
+        this.account = account;
         this.aliasSource = aliasSource == null ? Map::of : aliasSource;
+    }
+
+    /** The same parser reading for another AJ Bell account, once the statement has been routed. */
+    public AJBellCashStatementParser forAccount(Account other) {
+        return other == account ? this : new AJBellCashStatementParser(other, aliasSource);
     }
 
     private static final List<SymbolRule> SYMBOL_RULES = List.of(
@@ -114,7 +135,12 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             new SymbolRule(Pattern.compile("\\bBP\\b|\\bB\\s+P\\b"), "BP.")
     );
 
-    private String resolveSymbol(String name) {
+    /**
+     * The symbol a description resolves to, or null when no rule matches — the quiet form. Used by
+     * {@link #symbolsIn} so that merely sniffing a file to find out whose account it is does not
+     * emit the "add a mapping" warning for every row of every candidate file in the directory.
+     */
+    private String resolveSymbolOrNull(String name) {
         String bondId = tryExtractGiltId(name);
         if (bondId != null) return bondId;
 
@@ -135,19 +161,34 @@ public class AJBellCashStatementParser implements CashTransactionParser {
         for (SymbolRule rule : SYMBOL_RULES) {
             if (rule.pattern().matcher(upper).find()) return rule.ticker();
         }
+        return null;
+    }
 
-        // No rule matched: the ledger keeps the cleaned-up investment name as its symbol, which is
-        // visible but wrong for every symbol-keyed join downstream — the holdings file calls the
-        // same position PHP while the ledger calls it PRIMARY HEALTH PROPERTIES PLC, so the two
-        // views stop agreeing (the reconciliation panel showed the whole position as a diff) and
-        // no price feed will ever resolve the long name. Warn with the fix at parse time rather
-        // than leaving it to be noticed downstream.
-        String cleaned = cleanName(name);
-        log.warn("[AJBell cash] No symbol rule for \"{}\" — storing it as \"{}\". Map it from the "
-                + "Open orders tab (saving a name mapping there also rewrites ledger rows already "
-                + "stored under the long name), or this position will not price or reconcile.",
-                name, cleaned);
-        return cleaned;
+    /**
+     * Every instrument the statement names, as internal symbols — the evidence this file's account
+     * is routed on. A row naming no instrument (a charge, interest, a contribution) and a name no
+     * rule matches both contribute nothing, so a statement of nothing but fees is honestly
+     * unroutable rather than filed against whichever account happened to ask first.
+     */
+    public Set<String> symbolsIn(Path file) {
+        Set<String> out = new LinkedHashSet<>();
+        try {
+            String content = Files.readString(file, StandardCharsets.UTF_8);
+            while (!content.isEmpty() && content.charAt(0) == '\uFEFF') content = content.substring(1);
+            CSVFormat format = CSVFormat.DEFAULT.builder()
+                    .setHeader().setSkipHeaderRecord(true).build();
+            try (CSVParser csv = CSVParser.parse(content, format)) {
+                for (CSVRecord r : csv) {
+                    String desc = r.get(COL_DESCRIPTION).trim();
+                    if (desc.toUpperCase().contains("BALANCE B/F")) continue;
+                    ClassifiedRow cr = classify(desc, true);
+                    if (cr.mapped()) out.add(cr.symbol().toUpperCase());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not read instruments from {} — it cannot be routed to an account", file, e);
+        }
+        return out;
     }
 
     // ---- CashTransactionParser ----
@@ -217,12 +258,22 @@ public class AJBellCashStatementParser implements CashTransactionParser {
 
     @Override
     public Account account() {
-        return ACCOUNT;
+        return account;
     }
 
     @Override
     public boolean supports(Path file) {
-        return "cashstatements.csv".equals(file.getFileName().toString());
+        return isAjBellCashFile(file);
+    }
+
+    /**
+     * True for any AJ Bell cash statement, whichever account it turns out to be for. The browser
+     * suffixes a second download ({@code cashstatements (1).csv}), which is exactly how both
+     * accounts' statements come to sit in the directory at once.
+     */
+    public static boolean isAjBellCashFile(Path file) {
+        String name = file.getFileName().toString();
+        return name.startsWith("cashstatements") && name.endsWith(".csv");
     }
 
     // ---- Helpers ----
@@ -270,7 +321,7 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             // so the balance change is receipt + payment in both directions.
             double expected = running + row.receipt() + row.payment();
             if (Math.abs(expected - row.balance()) > 0.02) {
-                log.warn("[AJBell cash] Balance mismatch at {} '{}': expected {}, got {}",
+                log.warn("[" + account.dbValue() + " cash] Balance mismatch at {} '{}': expected {}, got {}",
                         row.date(), row.description(), String.format("%.2f", expected),
                         String.format("%.2f", row.balance()));
             }
@@ -280,7 +331,7 @@ public class AJBellCashStatementParser implements CashTransactionParser {
             ClassifiedRow cr = classify(row.description());
             result.add(new CashTransaction(
                     convertDate(row.date()),
-                    ACCOUNT,
+                    account,
                     cr.type(),
                     cr.symbol(),
                     cr.quantity(),
@@ -326,29 +377,63 @@ public class AJBellCashStatementParser implements CashTransactionParser {
     }
 
     private ClassifiedRow classify(String description) {
+        return classify(description, false);
+    }
+
+    /** @param quiet suppress the unmapped-name and unclassified-row warnings (routing sniff only) */
+    private ClassifiedRow classify(String description, boolean quiet) {
         Matcher m = PAT_DIVIDEND.matcher(description);
         if (m.matches()) {
-            return new ClassifiedRow(TransactionType.DIVIDEND, resolveSymbol(m.group(2).trim()), parseQty(m.group(1)));
+            return instrument(TransactionType.DIVIDEND, m.group(2).trim(), parseQty(m.group(1)), quiet);
         }
 
         m = PAT_TRANSACTION.matcher(description);
         if (m.matches()) {
-            return new ClassifiedRow(TransactionType.TRANSACTION, resolveSymbol(m.group(3).trim()), parseQty(m.group(2)));
+            return instrument(TransactionType.TRANSACTION, m.group(3).trim(), parseQty(m.group(2)), quiet);
         }
 
         String upper = description.trim().toUpperCase();
-        if (upper.contains("CHARGE")) return new ClassifiedRow(TransactionType.CHARGE, "GBP", 0.0);
-        if (upper.startsWith("GROSS INTEREST")) return new ClassifiedRow(TransactionType.INTEREST, "GBP", 0.0);
+        if (upper.contains("CHARGE")) return cash(TransactionType.CHARGE);
+        if (upper.startsWith("GROSS INTEREST")) return cash(TransactionType.INTEREST);
         if (upper.startsWith("PENSION")
-                || upper.startsWith("TRANSFER")) return new ClassifiedRow(TransactionType.CONTRIBUTION, "GBP", 0.0);
+                || upper.startsWith("TRANSFER")) return cash(TransactionType.CONTRIBUTION);
 
         m = PAT_REVERSED_REDEMPTION.matcher(description);
         if (m.matches()) {
-            return new ClassifiedRow(TransactionType.TRANSACTION, resolveSymbol(m.group(1).trim()), 0.0);
+            return instrument(TransactionType.TRANSACTION, m.group(1).trim(), 0.0, quiet);
         }
 
-        log.warn("[AJBell cash] Unclassified row, defaulting to CONTRIBUTION: {}", description);
-        return new ClassifiedRow(TransactionType.CONTRIBUTION, "GBP", 0.0);
+        if (!quiet) {
+            log.warn("[{} cash] Unclassified row, defaulting to CONTRIBUTION: {}",
+                    account.dbValue(), description);
+        }
+        return cash(TransactionType.CONTRIBUTION);
+    }
+
+    /** A row that moves cash and names no instrument. */
+    private static ClassifiedRow cash(TransactionType type) {
+        return new ClassifiedRow(type, "GBP", 0.0, false);
+    }
+
+    /**
+     * A row that names an instrument. An unmapped name is kept as the cleaned-up description — it
+     * is visible and fixable that way — but flagged {@code mapped=false}, because it joins to
+     * nothing: the holdings file calls the same position PHP while the ledger would call it
+     * PRIMARY HEALTH PROPERTIES PLC, the reconciliation panel reports the whole position as drift,
+     * and no price feed resolves a long name. Warn with the fix at parse time rather than leaving
+     * it to be noticed downstream.
+     */
+    private ClassifiedRow instrument(TransactionType type, String name, double qty, boolean quiet) {
+        String mapped = resolveSymbolOrNull(name);
+        if (mapped != null) return new ClassifiedRow(type, mapped, qty, true);
+        String cleaned = cleanName(name);
+        if (!quiet) {
+            log.warn("[{} cash] No symbol rule for \"{}\" — storing it as \"{}\". Map it from the "
+                    + "Open orders tab (saving a name mapping there also rewrites ledger rows "
+                    + "already stored under the long name), or this position will not price or "
+                    + "reconcile.", account.dbValue(), name, cleaned);
+        }
+        return new ClassifiedRow(type, cleaned, qty, false);
     }
 
     // Ordered description-keyword → portfolio ticker rules; matched against uppercased name.
@@ -356,7 +441,9 @@ public class AJBellCashStatementParser implements CashTransactionParser {
     private record SymbolRule(Pattern pattern, String ticker) {
     }
 
-    private record ClassifiedRow(TransactionType type, String symbol, double quantity) {
+    /** @param mapped whether {@code symbol} is a real internal symbol rather than a raw name */
+    private record ClassifiedRow(TransactionType type, String symbol, double quantity,
+                                 boolean mapped) {
     }
 
     private record RawRow(String date, String description, double receipt, double payment, double balance) {

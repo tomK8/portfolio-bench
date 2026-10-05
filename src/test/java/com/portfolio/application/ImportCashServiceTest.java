@@ -59,7 +59,7 @@ class ImportCashServiceTest {
 
     private ImportCashResult ajBell(ImportCashService service) {
         return service.importCash().stream()
-                .filter(r -> "AJBell".equals(r.source()))
+                .filter(r -> "AJ Bell SIPP".equals(r.source()))
                 .findFirst().orElseThrow();
     }
 
@@ -68,9 +68,9 @@ class ImportCashServiceTest {
     }
 
     private static void assertAllNotFound(List<ImportCashResult> results) {
-        assertEquals(3, results.size(), "one NOT_FOUND row per source (AJBell, RothIRA, II)");
+        assertEquals(3, results.size(), "one NOT_FOUND row per source (AJ Bell SIPP, RothIRA, II)");
         assertTrue(results.stream().allMatch(r -> r.status() == ImportCashResult.Status.NOT_FOUND));
-        assertTrue(results.stream().anyMatch(r -> "AJBell".equals(r.source())));
+        assertTrue(results.stream().anyMatch(r -> "AJ Bell SIPP".equals(r.source())));
         assertTrue(results.stream().anyMatch(r -> "RothIRA".equals(r.source())));
         assertTrue(results.stream().anyMatch(r -> "II SIPP".equals(r.source())));
     }

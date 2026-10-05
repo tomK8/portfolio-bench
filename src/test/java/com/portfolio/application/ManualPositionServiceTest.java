@@ -193,4 +193,37 @@ class ManualPositionServiceTest {
     void theBrokerListOffersOnlyHandEnteredAccounts() {
         assertEquals(List.of("Equate"), service().view().brokers());
     }
+
+    // ---- transfers out ------------------------------------------------------
+
+    /**
+     * Loading the row is not replaying it — the mistake three other lot engines made before this
+     * one. A manual account that transferred its position away must stop reporting it: the shares
+     * are in the receiving broker's own export, so a position left standing here is counted twice
+     * in the portfolio and shows up on the Assets reconciliation at exactly double.
+     */
+    @Test
+    void aPositionTransferredAwayStopsBeingHeld() {
+        ManualPositionService s = withBarc();
+        new AssetTransferService(cashRepo).transfer(
+                LocalDate.parse("2026-09-24"), Account.EQUATE, Account.AJBELL_DEALING, "BARC");
+
+        assertTrue(s.holdings().isEmpty(),
+                "the shares are at the receiving account now, and it has its own export");
+        assertTrue(s.view().positions().isEmpty());
+    }
+
+    /** Only the transferred part leaves; a manual account that kept some still holds it. */
+    @Test
+    void whatWasNotTransferredIsStillHeld() {
+        ManualPositionService s = service();
+        s.buy(Account.EQUATE, "BARC", new BigDecimal("7227"), new BigDecimal("18500"), BOUGHT, null);
+        s.buy(Account.EQUATE, "AZN", new BigDecimal("30"), new BigDecimal("3900"), BOUGHT, null);
+        new AssetTransferService(cashRepo).transfer(
+                LocalDate.parse("2026-09-24"), Account.EQUATE, Account.AJBELL_DEALING, "BARC");
+
+        List<Holding> left = s.holdings();
+        assertEquals(1, left.size());
+        assertEquals("AZN", left.get(0).getSecurityId());
+    }
 }

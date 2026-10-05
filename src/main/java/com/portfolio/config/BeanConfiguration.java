@@ -8,6 +8,7 @@ import com.portfolio.adapter.EdgarEarningsFetcher;
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
 import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.GiltPriceFetcher;
+import com.portfolio.adapter.AjBellFileRouter;
 import com.portfolio.adapter.HoldingFileLocator;
 import com.portfolio.adapter.NasdaqEarningsFetcher;
 import com.portfolio.adapter.SmtpAlertNotifier;
@@ -17,7 +18,9 @@ import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.*;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.application.EarningsService;
+import com.portfolio.parser.AJBellCashStatementParser;
 import com.portfolio.parser.AJBellOrdersParser;
+import com.portfolio.parser.OrderParser;
 import com.portfolio.parser.IIOrdersParser;
 import com.portfolio.application.LadderService;
 import com.portfolio.application.ShareClassRegistry;
@@ -175,6 +178,17 @@ public class BeanConfiguration {
         return new HoldingFileLocator(inputDir(inputDir));
     }
 
+    /**
+     * Tells the two AJ Bell accounts' cash statements and order exports apart. They are identical
+     * in filename, header and format, so the only evidence is which account holds the instruments
+     * a file names — read from the holdings exports, which do state their account. Shared by the
+     * orders panel and the cash import so both route on one registry and one cache.
+     */
+    @Bean
+    public AjBellFileRouter ajBellFileRouter(HoldingFileLocator holdingFileLocator) {
+        return new AjBellFileRouter(holdingFileLocator);
+    }
+
     @Bean
     public ExcelReportWriter excelReportWriter() {
         return new ExcelReportWriter();
@@ -192,8 +206,10 @@ public class BeanConfiguration {
     @Bean
     public PortfolioGatherer portfolioGatherer(FxRateProvider fxRateProvider,
                                                HoldingFileLocator holdingFileLocator,
-                                               ManualPositionService manualPositionService) {
-        return new PortfolioGatherer(fxRateProvider, holdingFileLocator, manualPositionService);
+                                               ManualPositionService manualPositionService,
+                                               CashTransactionRepository cashTransactionRepository) {
+        return new PortfolioGatherer(fxRateProvider, holdingFileLocator, manualPositionService,
+                cashTransactionRepository);
     }
 
     @Bean
@@ -215,14 +231,27 @@ public class BeanConfiguration {
                                                LadderService ladderService,
                                                SwitchService switchService,
                                                OrderFillReconciler orderFillReconciler,
+                                               AjBellFileRouter ajBellFileRouter,
                                                @Value("${portfolio.output-dir:}") String outputDir) {
         Path dir = outputDir.isBlank()
                 ? Path.of(System.getProperty("user.home"), "Documents")
                 : Path.of(outputDir);
-        return new OpenOrdersService(holdingFileLocator, List.of(
-                new AJBellOrdersParser(instrumentMappingRepository::loadAliases),
-                new IIOrdersParser(),
-                new RothOrdersParser()), fxRateProvider, excelReportWriter, dir,
+        // One AJ Bell orders parser per account, each claiming only the exports routed to it, so
+        // the "newest supported file wins" lookup yields the newest export per account. Without the
+        // split the dealing account's activeorders file — newer, because it was downloaded second —
+        // would hide the SIPP's entirely, with nothing anywhere saying so.
+        AJBellOrdersParser ajBellOrderNames = new AJBellOrdersParser(
+                instrumentMappingRepository::loadAliases);
+        List<OrderParser> ajBellOrders = AjBellFileRouter.accounts().stream()
+                .map(account -> (OrderParser) new AJBellOrdersParser(
+                        account, instrumentMappingRepository::loadAliases,
+                        file -> ajBellFileRouter.accountFor(file, ajBellOrderNames::symbolsIn)))
+                .toList();
+        List<OrderParser> orderParsers = new java.util.ArrayList<>(ajBellOrders);
+        orderParsers.add(new IIOrdersParser());
+        orderParsers.add(new RothOrdersParser());
+        return new OpenOrdersService(holdingFileLocator, orderParsers,
+                fxRateProvider, excelReportWriter, dir,
                 intradayPriceRepository, priceHistoryRepository, yahooTickerMap, keyValueStore,
                 // Off-cycle quote warm for symbols whose feed is visibly behind. One daemon thread,
                 // so a burst of tab clicks queues instead of racing Yahoo — and the panel never
@@ -264,7 +293,14 @@ public class BeanConfiguration {
                 // against the trade they produced in the cash ledger. Here because this panel is
                 // where an order is first filed as gone; the cash import calls the same service for
                 // the opposite order of arrival.
-                orderFillReconciler);
+                orderFillReconciler)
+                // An activeorders file whose account cannot be established is claimed by neither AJ
+                // Bell parser, so nothing above would ever mention it. Said here instead, on the
+                // panel, rather than left to look like a broker with no resting orders.
+                .withFileWarnings(() -> ajBellFileRouter.select(
+                        holdingFileLocator.inputDir(),
+                        AJBellOrdersParser::isAjBellOrdersFile,
+                        ajBellOrderNames::symbolsIn).warnings());
     }
 
     /**
@@ -678,9 +714,10 @@ public class BeanConfiguration {
     @Bean
     public AjBellCashImporter ajBellCashImporter(JdbcConnectionFactory jdbcConnectionFactory,
                                                  CashTransactionRepository cashTransactionRepository,
-                                                 InstrumentMappingRepository instrumentMappingRepository) {
+                                                 InstrumentMappingRepository instrumentMappingRepository,
+                                                 AjBellFileRouter ajBellFileRouter) {
         return new AjBellCashImporter(jdbcConnectionFactory.dbDir(), cashTransactionRepository,
-                instrumentMappingRepository::loadAliases);
+                instrumentMappingRepository::loadAliases, ajBellFileRouter);
     }
 
     @Bean

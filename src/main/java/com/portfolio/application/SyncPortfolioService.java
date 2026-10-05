@@ -6,6 +6,7 @@ import com.portfolio.domain.CashLedgerReconstructor.Position;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PortfolioAggregator;
 import com.portfolio.domain.PortfolioMetrics;
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.Holding;
@@ -101,7 +102,7 @@ public class SyncPortfolioService {
         kv.putStringSet(PriceFetchSupport.HELD_SYMBOLS_KEY, heldSymbols);
 
         List<String> sources = new ArrayList<>(gathered.sources().keySet());
-        List<SyncResult.CashRecon> recon = reconcileCash(aggregated, iiCash, gathered.rates());
+        List<SyncResult.CashRecon> recon = reconcileCash(gathered.holdings(), iiCash, gathered.rates());
         List<String> missingIntraday = missingIntradayPrices(aggregated);
         for (String sym : missingIntraday) log.warn("No intraday price for held symbol {}", sym);
         List<SyncResult.UnpricedSymbol> unpriced = unpricedSymbols(missingIntraday, tickerBySymbol, priceHistory);
@@ -261,16 +262,26 @@ public class SyncPortfolioService {
      * cash balances. The dashboard highlights any row whose GBP diff exceeds a small
      * threshold — a long-lived drift means broker fees or contributions aren't flowing into
      * one side or the other, and that's worth eyeballing.
+     *
+     * <p><b>Reads the unaggregated holdings on purpose.</b> The aggregator groups by security, and
+     * every account's cash is the one security {@code CASH} — so two accounts holding sterling
+     * merge into a single row whose {@code sources} is "AJ Bell SIPP, AJ Bell Dealing" and whose
+     * value is their sum. That names no account, so it keyed against none, and the panel reported
+     * the whole balance as drift on both sides at once: £89,244.09 missing from the ledger and the
+     * same £89,244.09 missing from the holdings. One account per source row is the only form in
+     * which cash can be compared per account at all.
      */
-    private List<SyncResult.CashRecon> reconcileCash(List<AggHolding> aggregated,
+    private List<SyncResult.CashRecon> reconcileCash(List<Holding> holdings,
                                                      IiCash iiCash,
                                                      Map<String, BigDecimal> rates) {
         Map<String, BigDecimal> holdingsByKey = new LinkedHashMap<>();
-        for (AggHolding h : aggregated) {
-            if (!"CASH".equals(h.securityId())) continue;
-            String source = h.sources();   // e.g. "AJ Bell SIPP" or "Roth IRA"
-            String account = ACCOUNT_KEY_BY_SOURCE.getOrDefault(source, source);
-            holdingsByKey.merge(account + "|" + h.currencyCode(), h.marketValueGbp(), BigDecimal::add);
+        for (Holding h : holdings) {
+            if (!"CASH".equals(h.getSecurityId())) continue;
+            String account = accountKeyForSource(h.getSource());   // e.g. "AJ Bell SIPP"
+            BigDecimal gbp = PortfolioAggregator.toGbp(h, rates);
+            if (gbp == null) continue;   // an unconvertible balance is unknown, not zero
+            holdingsByKey.merge(account + "|" + h.getCurrency().getCurrencyCode(), gbp,
+                    BigDecimal::add);
         }
         // One row per currency the form offers, so an II euro balance is compared against the
         // ledger's euro balance rather than disappearing into the sterling row.
@@ -322,15 +333,16 @@ public class SyncPortfolioService {
     /** Diff threshold beyond which the reconciliation row goes red in the dashboard. */
     private static final BigDecimal CASH_DRIFT_WARN_GBP = new BigDecimal("50");
 
-    /** Map from parser source labels (as shown in the {@code sources} column) to the DB account key. */
-    private static final Map<String, String> ACCOUNT_KEY_BY_SOURCE = Map.of(
-            "AJ Bell SIPP", "AJBell",
-            "Roth IRA", "RothIRA",
-            "II SIPP", "II",
-            // A manual account's source label is its own db value, so the identity fallback below
-            // would resolve it anyway. Stated explicitly because relying on that coincidence is
-            // how a silent phantom-drift row would appear if either name ever changed.
-            "Equate", "Equate");
+    /**
+     * The DB account key a parser source label (as shown in the {@code sources} column) stands for,
+     * or the label itself when it names no account. {@link Account#displayName} is the one home for
+     * that mapping; a manual account's source label is already its own db value, so the fallback
+     * resolves it either way.
+     */
+    private static String accountKeyForSource(String source) {
+        Account a = Account.fromDisplayName(source);
+        return a == null ? source : a.dbValue();
+    }
 
     /**
      * Bulk-load the latest cached intraday price per holding, re-keyed by <b>internal symbol</b>

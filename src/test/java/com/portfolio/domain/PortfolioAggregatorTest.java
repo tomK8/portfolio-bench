@@ -149,4 +149,58 @@ class PortfolioAggregatorTest {
         assertNull(h.totalGainGbp());       // undefined without price appreciation
         assertNull(h.totalGainPct());
     }
+
+    // ---- cash is per account, securities are not --------------------------
+
+    private static Holding cash(String source, Currency ccy, String amount) {
+        return Holding.builder("CASH", new BigDecimal(amount), ccy, source)
+                .avgPricePaid(BigDecimal.ONE)
+                .currentMarketValue(new BigDecimal(amount))
+                .currentMarketValueGbp(new BigDecimal(amount))
+                .costBasisGbp(new BigDecimal(amount))
+                .build();
+    }
+
+    /**
+     * Two accounts' sterling pooled into one row answers a question nobody asks: the £89,244.09 it
+     * reported was a figure neither AJ Bell account held. Cash is "how much is at this broker".
+     */
+    @Test
+    void cashIsKeptPerAccountRatherThanPooled() {
+        List<AggHolding> rows = new PortfolioAggregator().aggregate(List.of(
+                cash("AJ Bell SIPP", GBP, "89244.09"),
+                cash("AJ Bell Dealing", GBP, "0")), RATES, Map.of());
+
+        List<AggHolding> cashRows = rows.stream()
+                .filter(h -> "CASH".equals(h.securityId())).toList();
+        assertEquals(2, cashRows.size());
+        assertEquals("AJ Bell Dealing", cashRows.get(0).sources(), "cash rows sort by account");
+        eq("0", cashRows.get(0).marketValueGbp());
+        assertEquals("AJ Bell SIPP", cashRows.get(1).sources());
+        eq("89244.09", cashRows.get(1).marketValueGbp());
+    }
+
+    @Test
+    void cashInDifferentCurrenciesStaysSeparateAsBefore() {
+        List<AggHolding> rows = new PortfolioAggregator().aggregate(List.of(
+                cash("Roth IRA", USD, "1000"),
+                cash("AJ Bell SIPP", GBP, "500")), RATES, Map.of());
+
+        assertEquals(2, rows.stream().filter(h -> "CASH".equals(h.securityId())).count());
+    }
+
+    /** A security held at two brokers is still one position — that merge is the point. */
+    @Test
+    void aSecurityHeldAtTwoBrokersIsStillOneRow() {
+        List<AggHolding> rows = new PortfolioAggregator().aggregate(List.of(
+                usd("AMZN", "100", "10", "2000"),
+                Holding.builder("AMZN", new BigDecimal("5"), USD, "Roth IRA")
+                        .avgPricePaid(new BigDecimal("10"))
+                        .currentMarketValue(new BigDecimal("100"))
+                        .build()), RATES, Map.of());
+
+        AggHolding amzn = only(rows, "AMZN");
+        eq("105", amzn.quantity());
+        assertEquals("II SIPP, Roth IRA", amzn.sources());
+    }
 }

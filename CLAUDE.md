@@ -65,7 +65,8 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
 `domain`, `application`, `adapter`, `parser` and `persistence` are framework-free.
 
 - `domain` — pure logic. `PortfolioAggregator` (two-pass: `groupAccumulators` →
-  `buildAggHolding`), `PortfolioMetrics` (totals + `rtTotalGbp` for intraday valuation),
+  `buildAggHolding`; keyed on `(securityId, currency)`, **plus the account for cash** — a security
+  pools across accounts, a cash balance never does), `PortfolioMetrics` (totals + `rtTotalGbp` for intraday valuation),
   `DividendAttributor` (FIFO), `CashLedgerReconstructor` (FIFO position-from-ledger
   reconstruction), `Irr` (the app's only XIRR solver) + `PositionIrr`, `Instruments`
   (`isBond`, `giltId`, `couponOf`, `assetClassOf` — single home of all four), `DividendYield`,

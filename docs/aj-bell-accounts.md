@@ -98,8 +98,8 @@ such a holding:
 
 ## What the second account broke elsewhere
 
-Both of these were latent and only a second account could surface them. Both were found by running
-a sync, not by a test.
+All three were latent, and only a second account could surface any of them. All three were found by
+running a sync, not by a test.
 
 **Cash reconciled against no account at all.** `reconcileCash` read the *aggregated* holdings, and
 the aggregator groups by security — every account's cash is the one security `CASH`. Two accounts
@@ -108,6 +108,16 @@ which names no account, so it keyed against none: the panel reported the whole �
 twice over, missing from the ledger on one row and missing from the holdings on the other. Cash is
 reconciled per account, so it has to be read **before** aggregation — the unaggregated `Holding`
 list, one row per source.
+
+**Cash pooled across accounts in the holdings table.** `PortfolioAggregator` keys on
+`(securityId, currency)`, and every account's cash is the one security `CASH` — so the Files tab
+showed a single £89,244.09 row sourced "AJ Bell SIPP, AJ Bell Dealing", a figure neither account
+holds. Merging a *security* across accounts is the point of the aggregator (105 AMZN split between
+the Roth and the II SIPP is one position with one cost basis), but cash is not held in common, has
+no gain to pool, and the only question asked of it is "how much is at this broker" — what can be
+deployed there, what the per-account reconciliation compares, where a contribution lands. The key
+carries the account for cash rows only. The Ladders and Switches exports already refuse to total a
+cash column for the same reason: that total *is* the netting across accounts.
 
 **A fourth lot engine that loaded `TRANSFER` rows without replaying them.**
 `ManualPositionService.positions` filtered to `TRANSACTION` only, so Equate went on reporting the

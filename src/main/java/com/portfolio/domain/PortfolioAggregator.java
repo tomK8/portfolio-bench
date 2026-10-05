@@ -66,16 +66,34 @@ public class PortfolioAggregator {
         return aggregate(holdings, gbpRates, dividendsBySymbol, Map.of(), Map.of());
     }
 
-    /** Pass 1: fold raw holdings into per-{@code (securityId, currency)} totals. */
+    /**
+     * Pass 1: fold raw holdings into per-{@code (securityId, currency)} totals — except cash, which
+     * is also kept per account.
+     *
+     * <p>Merging a security across accounts is the point: 105 AMZN split between the Roth and the
+     * II SIPP is one position, one cost basis, one gain, and the Sources column says where it sits.
+     * Cash is not that. It is not held in common, it has no gain to pool, and the figure that
+     * matters about it is always "how much is at this broker" — what can be deployed there, what
+     * the per-account reconciliation compares, what a contribution lands in. Pooled, it answers a
+     * question nobody asks: two AJ Bell accounts reported one £89,244.09 row sourced "AJ Bell SIPP,
+     * AJ Bell Dealing", which is a figure neither account holds. The Ladders and Switches exports
+     * already refuse to total a cash column for the same reason — that total <em>is</em> the
+     * netting across accounts.
+     */
     private static Map<Key, Accumulator> groupAccumulators(List<Holding> holdings,
                                                            Map<String, BigDecimal> gbpRates) {
         Map<Key, Accumulator> accs = new LinkedHashMap<>();
         for (Holding h : holdings) {
-            Key key = new Key(h.getSecurityId(), h.getCurrency().getCurrencyCode());
+            Key key = new Key(h.getSecurityId(), h.getCurrency().getCurrencyCode(),
+                    isCash(h.getSecurityId()) ? h.getSource() : "");
             Accumulator acc = accs.computeIfAbsent(key, k -> new Accumulator(h.getSecurityId(), h.getCurrency()));
             acc.add(h, gbpRates);
         }
         return accs;
+    }
+
+    private static boolean isCash(String securityId) {
+        return "CASH".equals(securityId);
     }
 
     /** Pass 2: derive the per-symbol view (averages, gains, dividends, RT) from one accumulator. */
@@ -150,11 +168,16 @@ public class PortfolioAggregator {
         };
     }
 
+    /**
+     * Cash sorts last within its currency section, and the several cash rows sort among themselves
+     * by account — a tie would leave their order to however the parsers happened to run.
+     */
     private String sortKey(AggHolding h) {
-        return h.securityId().equals("CASH") ? "~" : h.securityId();
+        return isCash(h.securityId()) ? "~" + h.sources() : h.securityId();
     }
 
-    private record Key(String id, String ccy) {
+    /** @param account the source account for cash, empty for anything poolable across accounts */
+    private record Key(String id, String ccy, String account) {
     }
 
     /**

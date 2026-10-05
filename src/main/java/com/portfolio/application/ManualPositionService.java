@@ -118,11 +118,23 @@ public class ManualPositionService {
         Map<String, Set<String>> brokersBySymbol = new LinkedHashMap<>();
         for (CashTransactionRepository.LedgerRow r : stored) {
             CashTransaction t = r.tx();
-            // The reconstructor reads TRANSACTION rows only; the funding rows are cash, not shares.
-            if (t.type() != TransactionType.TRANSACTION) continue;
+            // TRANSACTION and TRANSFER move shares; the funding rows are cash, not shares.
+            //
+            // TRANSFER is here because loading the row is not replaying it — the mistake three
+            // other lot engines made before this one (see docs/transfers.md). Without it a manual
+            // account goes on reporting a position it transferred away: the shares appear at the
+            // receiving broker's export *and* here, so the portfolio holds them twice and the
+            // Assets reconciliation shows the position at exactly double. Only the manual accounts'
+            // rows are loaded here, so a transfer out zeroes the timeline and the position drops,
+            // which is the whole intent — the receiving account has its own export.
+            if (t.type() != TransactionType.TRANSACTION && t.type() != TransactionType.TRANSFER) {
+                continue;
+            }
             txs.add(t);
-            brokersBySymbol.computeIfAbsent(t.symbol().toUpperCase(), k -> new LinkedHashSet<>())
-                    .add(t.account().dbValue());
+            if (t.type() == TransactionType.TRANSACTION) {
+                brokersBySymbol.computeIfAbsent(t.symbol().toUpperCase(), k -> new LinkedHashSet<>())
+                        .add(t.account().dbValue());
+            }
         }
         List<CashLedgerReconstructor.Position> reconstructed =
                 new CashLedgerReconstructor().reconstruct(txs);

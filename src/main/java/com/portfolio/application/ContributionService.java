@@ -31,11 +31,6 @@ import java.util.Map;
  */
 public class ContributionService {
 
-    private static final Map<Account, String> ACCOUNT_LABELS = Map.of(
-            Account.AJBELL, "AJ Bell SIPP",
-            Account.II, "II SIPP",
-            Account.ROTH_IRA, "Roth IRA",
-            Account.EQUATE, "Equate");
 
     private final CashTransactionRepository repo;
     private final KeyValueStore settings;
@@ -59,18 +54,18 @@ public class ContributionService {
         // is exact: Roth's first dollar lands on rothStart, not at the start of AJBell history.
         List<TimedEvent> events = new ArrayList<>();
         for (CashTransaction t : contribs) {
-            String label = ACCOUNT_LABELS.getOrDefault(t.account(), t.account().dbValue());
+            String label = t.account().displayName();
             events.add(new TimedEvent(t.transactionDate(), label,
                     BigDecimal.valueOf(t.amountGbp()).setScale(2, RoundingMode.HALF_UP)));
         }
         boolean hasRothSeed = rothSeed.signum() > 0 && rothStart != null;
         if (hasRothSeed) {
-            events.add(new TimedEvent(rothStart, ACCOUNT_LABELS.get(Account.ROTH_IRA), rothSeed));
+            events.add(new TimedEvent(rothStart, Account.ROTH_IRA.displayName(), rothSeed));
         }
         events.sort(java.util.Comparator.comparing(TimedEvent::date));
 
         Map<String, List<DataPoint>> byAccount = new LinkedHashMap<>();
-        for (String label : ACCOUNT_LABELS.values()) byAccount.put(label, new ArrayList<>());
+        for (Account a : Account.values()) byAccount.put(a.displayName(), new ArrayList<>());
         Map<String, BigDecimal> running = new LinkedHashMap<>();
         BigDecimal runningTotal = BigDecimal.ZERO;
         List<DataPoint> totalPoints = new ArrayList<>();
@@ -87,7 +82,7 @@ public class ContributionService {
         // stays visible across the rest of the chart range.
         if (hasRothSeed && !events.isEmpty()) {
             String latest = events.get(events.size() - 1).date();
-            List<DataPoint> roth = byAccount.get(ACCOUNT_LABELS.get(Account.ROTH_IRA));
+            List<DataPoint> roth = byAccount.get(Account.ROTH_IRA.displayName());
             if (!roth.isEmpty() && !roth.get(roth.size() - 1).date().equals(latest)) {
                 roth.add(new DataPoint(latest, rothSeed));
             }

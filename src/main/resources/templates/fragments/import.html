@@ -21,7 +21,20 @@
                 <span th:if="${imp.status.name() == 'NOT_FOUND'}" class="muted">
                     <b th:text="${imp.source}">src</b> — no matching file in ~/Downloads.
                 </span>
+                <span th:if="${imp.status.name() == 'REFUSED'}">
+                    <b th:text="${imp.source}">src</b> —
+                    found <code th:text="${imp.sourceFile}">file</code>,
+                    <b>imported nothing from it</b>, left it in place.
+                </span>
             </li>
+        </ul>
+    </div>
+    <div class="value-warnings"
+         th:if="${#lists.size(cashImports.?[status.name() == 'REFUSED']) > 0}">
+        <h4>Not imported</h4>
+        <ul>
+            <li th:each="imp : ${cashImports}" th:if="${imp.status.name() == 'REFUSED'}"
+                th:text="${imp.detail}">reason</li>
         </ul>
     </div>
 </div>

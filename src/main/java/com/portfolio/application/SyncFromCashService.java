@@ -8,6 +8,7 @@ import com.portfolio.domain.DividendAttributor.Attribution;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PortfolioMetrics;
 import com.portfolio.domain.PositionIrr;
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayPrice;
@@ -55,12 +56,6 @@ public class SyncFromCashService {
 
     private static final Logger log = LoggerFactory.getLogger(SyncFromCashService.class);
     private static final ZoneId LONDON = ZoneId.of("Europe/London");
-
-    private static final Map<String, String> ACCOUNT_LABELS = Map.of(
-            "AJBell", "AJ Bell SIPP",
-            "RothIRA", "Roth IRA",
-            "II", "II SIPP",
-            "Equate", "Equate");
 
     private final CashTransactionRepository repo;
     private final IntradayPriceRepository intraday;
@@ -157,7 +152,7 @@ public class SyncFromCashService {
         PortfolioMetrics.Totals totals = new PortfolioMetrics().compute(aggregated, BigDecimal.ZERO);
         List<String> sources = new ArrayList<>();
         for (CashBalance cb : cashBalances) {
-            String label = ACCOUNT_LABELS.getOrDefault(cb.accountDbValue(), cb.accountDbValue());
+            String label = Account.displayNameOf(cb.accountDbValue());
             if (!sources.contains(label)) sources.add(label);
         }
         if (sources.isEmpty()) sources.add("cash ledger");
@@ -209,7 +204,7 @@ public class SyncFromCashService {
         StringBuilder srcStr = new StringBuilder();
         for (String acc : p.accounts()) {
             if (srcStr.length() > 0) srcStr.append(", ");
-            srcStr.append(ACCOUNT_LABELS.getOrDefault(acc, acc));
+            srcStr.append(Account.displayNameOf(acc));
         }
         return new AggHolding(p.securityId(), p.quantity(), null,
                 marketValueGbp, gainGbp, gainPct, dividend, totalGain, totalGainPct,
@@ -236,7 +231,7 @@ public class SyncFromCashService {
                     ? nativeAmount.divide(rate, 10, RoundingMode.HALF_UP)
                     : BigDecimal.valueOf(cb.cashGbp());
         }
-        String src = ACCOUNT_LABELS.getOrDefault(cb.accountDbValue(), cb.accountDbValue());
+        String src = Account.displayNameOf(cb.accountDbValue());
         return new AggHolding("CASH", nativeAmount, BigDecimal.ONE, gbp,
                 null, null, BigDecimal.ZERO, null, null,
                 ccy, src, null, null, null, null);

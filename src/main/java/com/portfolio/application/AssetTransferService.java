@@ -199,12 +199,7 @@ public class AssetTransferService {
      * trade time. A USD leg would have to invent a rate for a conversion that never happened.
      */
     private static String accountLabel(Account a) {
-        return switch (a) {
-            case AJBELL -> "AJ Bell SIPP";
-            case ROTH_IRA -> "Roth IRA";
-            case II -> "II SIPP";
-            case EQUATE -> "Equate";
-        };
+        return a.displayName();
     }
 
     /** A position that could be transferred, with the quantity and cost that would move with it. */

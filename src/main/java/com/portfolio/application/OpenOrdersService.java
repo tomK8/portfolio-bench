@@ -46,6 +46,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Read-only view of resting (open) orders across brokers. Locates the most recent order-status
@@ -219,6 +220,8 @@ public class OpenOrdersService {
 
     private final HoldingFileLocator fileLocator;
     private final List<OrderParser> parsers;
+    /** See {@link #withFileWarnings}; never null, defaults to saying nothing. */
+    private Supplier<List<String>> fileWarnings = List::of;
     private final FxRateProvider fxRateProvider;
     private final ExcelReportWriter excelReportWriter;
     private final Path outputDir;
@@ -437,6 +440,21 @@ public class OpenOrdersService {
     }
 
     /**
+     * Warnings about the input directory itself, rather than about any one parser's file — folded
+     * into every {@link #load} alongside the parse and quote warnings.
+     *
+     * <p>It exists for files that match a pattern but belong to no parser. The loop below is built
+     * on "newest file this parser supports", which has nothing to say about a file every parser
+     * declined: two AJ Bell accounts export the same filename, so a statement or order list whose
+     * account cannot be established is claimed by neither AJ Bell parser — and without this it
+     * would vanish from the panel as silently as if it had never been downloaded.
+     */
+    public OpenOrdersService withFileWarnings(Supplier<List<String>> source) {
+        this.fileWarnings = source == null ? List::of : source;
+        return this;
+    }
+
+    /**
      * Writes the current open orders to a date-stamped {@code Open Orders-YYYYMMDD.xlsx} in the
      * output directory (defaults to ~/Documents — same place the portfolio exports land, not the
      * browser's download folder). Returns the written path, or {@link ExportResult#nothing()} when
@@ -636,6 +654,8 @@ public class OpenOrdersService {
             warnings.add("FX rates unavailable — GBP amounts not shown (" + e.getMessage() + ")");
             log.warn("FX fetch failed for open-orders GBP conversion", e);
         }
+
+        warnings.addAll(fileWarnings.get());
 
         for (OrderParser parser : parsers) {
             Optional<Path> file;

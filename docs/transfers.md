@@ -71,9 +71,10 @@ to manual accounts (unlike `deleteManualRow`) and safely so: a `TRANSFER` row ex
 export, so no import can re-create or collide with it. It asserts `type = 'TRANSFER'` in the
 statement and rolls back unless exactly two rows match — half a transfer is worse than none.
 
-**Loading the row is not replaying it.** Three engines replay the ledger per `(account, symbol)` —
-`CashLedgerReconstructor`, `PositionDetailService.LotEngine` and `DividendAttributor.Timeline` — and
-`loadDividendTransactions()` hands the `TRANSFER` rows to all three. Only the first acted on them.
+**Loading the row is not replaying it.** Four engines replay the ledger per `(account, symbol)` —
+`CashLedgerReconstructor`, `PositionDetailService.LotEngine`, `DividendAttributor.Timeline` and
+`ManualPositionService.positions` — and `loadDividendTransactions()` hands the `TRANSFER` rows to
+the first three. Only the first acted on them.
 The other two dropped the type on their opening guard (`if (t.type() != TRANSACTION) return;`, and a
 `switch` with no `TRANSFER` arm), so for them the shares never left the losing account and never
 arrived at the gaining one. Nothing failed loudly, because a transfer both legs ignore is
@@ -90,6 +91,13 @@ at AJ Bell, 200 sold there, 100 moved to II on 2026-08-20, all 100 sold on 2026-
   transferred shares divided by a zero share count and was "attributed to nothing": GOOG's £48.95
   of 2026-09-15, silently, with no reconciliation warning because the losing account's phantom
   shares still made the symbol's total come out right.
+- **Manual positions**, found later and in a different shape (2026-10-05). `positions()` filtered to
+  `TRANSACTION` on its own query of the manual accounts' rows, so a hand-entered account that
+  transferred a position away went on projecting it onto the Files tab *while the receiving broker's
+  export reported it too*. The portfolio held the shares twice: BARC showed £63,512.23 against the
+  ledger's £31,756.12 on the Assets reconciliation, exactly double. Only the manual accounts' rows
+  are loaded there, so the outbound leg alone zeroes the timeline and the position drops — which is
+  the whole intent, since the receiving account has an export of its own.
 
 **The lots travel; they are not closed and re-opened.** Both engines now hand the consumed lot
 slices across the pair, so the gaining account keeps each slice's original open date, its own

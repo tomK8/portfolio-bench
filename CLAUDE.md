@@ -71,6 +71,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   (`isBond`, `giltId`, `couponOf`, `assetClassOf` — single home of all four), `DividendYield`,
   `Reminders` (when a reminder is due, and the once-a-day key),
   `OrderFills` (the rule that reads a vanished order's fill out of the cash ledger),
+  `AjBellPortfolios` (which AJ Bell account an export that does not name one belongs to),
   `VolForecast` + `AssetClass` (the open-orders touch model), `Ladders` (rung layout + per-account
   cash), `RoundTrips` (the path a ladder's next round trip has to walk), `Switches` (share-class switch: one yardstick, the index/FX split, progress in units),
   `ShareClasses` (the declared one-holding pairs), `PriceStats`, `StyleClassifier`,
@@ -82,7 +83,8 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `PriceBar`, `IntradayBar`, `IntradayPrice`.
 - `port` — `FxRateProvider`, `HistoricalFxRateProvider`, `EarningsCalendarProvider`,
   `EarningsCalendarFeed`, `AlertNotifier` (interfaces, faked in tests).
-- `adapter` — `FrankfurterFxClient`, `HoldingFileLocator`, `YahooPriceFetcher` (incl. `probe` + `search`),
+- `adapter` — `FrankfurterFxClient`, `HoldingFileLocator`, `AjBellFileRouter` (which of the two AJ
+  Bell accounts a nameless export belongs to), `YahooPriceFetcher` (incl. `probe` + `search`),
   `YahooQuoteSummaryFetcher`, `YahooTickerMap`, `GiltPriceFetcher` (HL),
   `TradewebGiltPriceParser`, `NasdaqEarningsFetcher`, `EdgarEarningsFetcher` + `CikRegistry`,
   `SmtpAlertNotifier`.
@@ -185,9 +187,15 @@ not a stale row) and negative quantities are kept (a short is a real position).
 `DividendService.reconcile` already treats an absent holding as zero shares, so dropping the row
 changes nothing there.
 
-File-detection: `Holdings*.xlsx` (Roth), `portfolio*.csv` (AJBell SIPP), UUID `.csv` (II SIPP
-holdings; distinguished from II cash by header sniff), `cashstatements*.csv` (AJBell cash),
-`History*.xlsx` (Roth cash), UUID `.csv` with `Debit,Credit,Running Balance` header (II cash).
+File-detection: `Holdings*.xlsx` (Roth), `portfolio*.csv` (AJBell — SIPP or Dealing, told apart by
+the file's own `Portfolio` column), UUID `.csv` (II SIPP holdings; distinguished from II cash by
+header sniff), `cashstatements*.csv` (AJBell cash), `History*.xlsx` (Roth cash), UUID `.csv` with
+`Debit,Credit,Running Balance` header (II cash).
+
+**Two AJ Bell accounts, and only their holdings export says which.** The cash and order exports are
+identical in name, header and format for both, so which account one belongs to is decided on the
+instruments it names — and an export that cannot be placed is read by nobody and reported, never
+guessed. See [docs/aj-bell-accounts.md](docs/aj-bell-accounts.md).
 
 ## Adding a new cash source (broker)
 
@@ -233,7 +241,8 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [reminders.md](docs/reminders.md) | change the Reminders tab, a reminder rule or the send job | Nothing here is evaluated — a watchlist trigger fires when the market says so, a reminder when the **calendar** does, and `rule`/`action` are free text nothing parses; a hand-entered reminder is open-ended (only a person stops it) while an earnings one is a window whose **lower** bound is what keeps a stale snapshot date from mailing a print that already happened; earnings reminders are **derived, never stored** — only the mute is, and it is a standing instruction about the symbol, not one print; `nextEarnings` returns three outcomes (dated / undated / not applicable) because a gilt's silence is an answer and a company's is a gap; "daily" is the per-day dedup key, not the schedule, and the sent-set is written only after the mail actually goes |
 | [earnings.md](docs/earnings.md) | change the earnings calendar, the holdings section, or the next-earnings date on a fundamentals row | Three-valued feed: `[]` is a successful empty read, `null` is a failure; three earnings sources answer three different questions, and the holdings section reads two of them in a fixed order — the calendar outranks the snapshot, a snapshot date counts only while still ahead, and `REPORTING`/`EXPECTED`/`NOT_COVERED`/`NONE_SCHEDULED` are four distinct silences; the snapshot's date rides the quoteSummary call already being made and stores **no** date rather than a zero, an estimated day is marked, never shown as fixed, and a day already reported is muted, never blanked and never relabelled |
 | [manual-positions.md](docs/manual-positions.md) | change hand-entered positions | Each acquisition is **two** rows; `OPENING_BALANCE`, not `CONTRIBUTION`; balances are recomputed, never supplied |
-| [transfers.md](docs/transfers.md) | change in-specie transfers, or any per-account lot engine | Both legs or neither; the magnitude is the source account's **FIFO cost**, not market value and not the broker's pooled figure; **every per-`(account, symbol)` lot engine must replay `TRANSFER`** — loading the row is not replaying it, and the two that ignored it showed a sold-out position as still held; lots travel with their open date, cost and accrued dividend, and a payment reaching an emptied timeline follows the shares |
+| [aj-bell-accounts.md](docs/aj-bell-accounts.md) | touch any AJ Bell parser, or add a second account at one broker | Only the holdings export names its account, so cash and orders are routed by the instruments they name against it — a live registry, never a maintained list; evidence must be **exclusive** to one account, and a file naming two or naming none is read by nobody and reported rather than guessed; selection is newest-per-**account**, because newest-overall silently hid one account's orders behind the other's; a broker's zero cost against a real value is **unknown**, and the ledger's FIFO basis stands in for it only where the export states none and the share counts agree |
+| [transfers.md](docs/transfers.md) | change in-specie transfers, or any per-account lot engine | Both legs or neither; the magnitude is the source account's **FIFO cost**, not market value and not the broker's pooled figure; **every per-`(account, symbol)` lot engine must replay `TRANSFER`** — loading the row is not replaying it; the two that ignored it showed a sold-out position as still held, and a fourth (`ManualPositionService`) showed a transferred-away position at double; lots travel with their open date, cost and accrued dividend, and a payment reaching an emptied timeline follows the shares |
 | [strategy-swing.md](docs/strategy-swing.md) | change the swing lab | Every flush family reports its placebo and matched bootstrap beside it; pooled cells report episodes, not just events |
 | [strategy-trend.md](docs/strategy-trend.md) | change the trend filter | Every variant starts at the latest `firstValid` of any configured signal; the pre-1999 splice is a price-only proxy and is labelled |
 | [strategy-momentum.md](docs/strategy-momentum.md) | change momentum or the signal comparison | V1 must reproduce the Momentum tab bit-for-bit; the adoption rule is pre-registered and printed verbatim; controls run on the fit window only |

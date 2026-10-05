@@ -4,6 +4,7 @@ import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.CashLedgerReconstructor;
 import com.portfolio.domain.CashLedgerReconstructor.Position;
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.MarketState;
@@ -64,12 +65,6 @@ public class LivePricesService {
     private static final Duration FX_TTL = Duration.ofMinutes(5);
     /** How recent a quote must be to imply a live market, when no published calendar is held. */
     private static final Duration QUOTE_LIVE_WINDOW = Duration.ofMinutes(60);
-
-    private static final Map<String, String> ACCOUNT_LABELS = Map.of(
-            "AJBell", "AJ Bell SIPP",
-            "RothIRA", "Roth IRA",
-            "II", "II SIPP",
-            "Equate", "Equate");
 
     private final CashTransactionRepository repo;
     private final IntradayPriceRepository intraday;
@@ -343,7 +338,7 @@ public class LivePricesService {
         StringBuilder sb = new StringBuilder();
         for (String a : accounts) {
             if (sb.length() > 0) sb.append(", ");
-            sb.append(ACCOUNT_LABELS.getOrDefault(a, a));
+            sb.append(Account.displayNameOf(a));
         }
         return sb.toString();
     }

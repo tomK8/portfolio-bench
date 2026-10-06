@@ -6,6 +6,7 @@ import com.portfolio.application.CachedHistoricalFxRateProvider;
 import com.portfolio.adapter.CikRegistry;
 import com.portfolio.adapter.EdgarEarningsFetcher;
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
+import com.portfolio.adapter.EdgarXbrlFetcher;
 import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.GiltPriceFetcher;
 import com.portfolio.adapter.AjBellFileRouter;
@@ -28,6 +29,7 @@ import com.portfolio.application.SwitchService;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
 import com.portfolio.persistence.InstrumentMappingRepository;
+import com.portfolio.persistence.OperatingLineRepository;
 import com.portfolio.persistence.OrderGroupRepository;
 import com.portfolio.persistence.OrderHistoryRepository;
 import com.portfolio.persistence.EarningsDateRepository;
@@ -824,9 +826,38 @@ public class BeanConfiguration {
             YahooQuoteSummaryFetcher yahooQuoteSummaryFetcher,
             YahooTickerMap yahooTickerMap,
             KeyValueStore keyValueStore,
-            FundamentalsRepository fundamentalsRepository) {
+            FundamentalsRepository fundamentalsRepository,
+            OperatingLineService operatingLineService) {
         return new PortfolioFundamentalsService(yahooQuoteSummaryFetcher, yahooTickerMap,
-                keyValueStore, fundamentalsRepository);
+                keyValueStore, fundamentalsRepository, operatingLineService);
+    }
+
+    @Bean
+    public OperatingLineRepository operatingLineRepository(JdbcConnectionFactory connections) {
+        return new OperatingLineRepository(connections);
+    }
+
+    /**
+     * The operating line's own source. Shares {@link CikRegistry} with the earnings proxy — one
+     * copy of SEC's ticker file serves both — and is the only reader of {@code companyconcept}.
+     */
+    @Bean
+    public EdgarXbrlFetcher edgarXbrlFetcher(JdbcConnectionFactory jdbcConnectionFactory) {
+        return new EdgarXbrlFetcher(new CikRegistry(jdbcConnectionFactory.dbDir()));
+    }
+
+    @Bean
+    public OperatingLineService operatingLineService(EdgarXbrlFetcher edgarXbrlFetcher,
+                                                     YahooTickerMap yahooTickerMap,
+                                                     FundamentalsRepository fundamentalsRepository,
+                                                     OperatingLineRepository operatingLineRepository) {
+        return new OperatingLineService(edgarXbrlFetcher, yahooTickerMap, fundamentalsRepository,
+                operatingLineRepository);
+    }
+
+    @Bean
+    public OperatingLineFetchJob operatingLineFetchJob(OperatingLineService operatingLineService) {
+        return new OperatingLineFetchJob(operatingLineService);
     }
 
     @Bean

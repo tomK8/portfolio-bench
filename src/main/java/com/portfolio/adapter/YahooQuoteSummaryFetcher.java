@@ -278,10 +278,21 @@ public class YahooQuoteSummaryFetcher {
         BigDecimal totalDebt = num(fin, "totalDebt");
         BigDecimal totalCash = num(fin, "totalCash");
 
-        // Capex (TTM) = OCF − FCF (positive = cash outflow)
-        BigDecimal capexTtm = (ocfTtm != null && fcfTtm != null)
-                ? ocfTtm.subtract(fcfTtm) : null;
-        // FCF Margin = FCF / Revenue
+        // No capex. It used to be derived as OCF - freeCashflow, which is not capital
+        // expenditure: Yahoo's freeCashflow is its own modelled *levered* free cash flow, not
+        // the cash-flow statement's OCF minus purchases of property, plant and equipment. The
+        // residual is therefore a quantity with no name, and measurably so - on a live fetch of
+        // 68 symbols it came out *negative* for 5 of the 52 that carried both sides (BRK.B
+        // -25.34bn, NFLX -13.42bn, LGEN -5.46bn, SNPS -0.49bn, MRVL -0.21bn), because Yahoo's
+        // FCF exceeds its own OCF there. A negative capital expenditure is not a measurement,
+        // and no sign convention repairs it: for ORCL and BABA the same subtraction exceeds OCF
+        // entirely (93bn against 47bn, 161bn against 78bn) because their levered FCF is
+        // negative while operating cash flow is strongly positive. The feed carries no capital
+        // expenditure anywhere now that the quarterly cash-flow statement comes back null, so
+        // the column is gone rather than relabelled - see docs/fundamentals.md.
+        //
+        // The margin keeps Yahoo's numerator and is labelled for what that numerator is. Both
+        // sides are statement-side figures from one module, so it needs no currency gate.
         BigDecimal fcfMarginTtm = (fcfTtm != null && revTtm != null && revTtm.signum() != 0)
                 ? fcfTtm.divide(revTtm, 6, RoundingMode.HALF_UP) : null;
         // Net Debt = Total Debt − Cash
@@ -326,7 +337,6 @@ public class YahooQuoteSummaryFetcher {
         putIf(extra, "enterpriseValue", num(dks, "enterpriseValue"));
         // Cash flow (TTM)
         putIf(extra, "operatingCashflow", ocfTtm);
-        putIf(extra, "capexTtm", capexTtm);
         putIf(extra, "freeCashflow", fcfTtm);
         putIf(extra, "fcfMarginTtm", fcfMarginTtm);
         // Quality & returns. No operatingMargins: Yahoo's is the latest quarter, not the TTM

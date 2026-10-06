@@ -174,6 +174,9 @@ class YahooQuoteSummaryFetcherTest {
         QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());
         assertEquals(0, q.extra().get("priceToBook").compareTo(new BigDecimal("58.226000")),
                 "291.13 / 5.00, not Yahoo's published 55.10");
+
+        // The denominator is kept too, so the ratio can be checked on the row: 291.13 / 5.00.
+        assertEquals(0, q.extra().get("bookValue").compareTo(new BigDecimal("5.00")));
     }
 
     /**

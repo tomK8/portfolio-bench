@@ -4066,7 +4066,8 @@
                 ]},
                 { title: 'Valuation', fields: [
                     ['enterpriseToEbitda', 'EV/EBITDA', 'ratio', 'Enterprise Value ÷ EBITDA (TTM). Measures how expensive the business is relative to cash earnings before interest, taxes, depreciation and amortisation. Lower = cheaper; negative means EBITDA is negative.', true, 'ev-ebitda'],
-                    ['priceToBook', 'P/B', 'ratio', 'Price ÷ Book Value per share. Compares market cap to net assets on the balance sheet. Below 1 may indicate undervaluation; most meaningful for asset-heavy businesses and financials.', false, 'pb'],
+                    ['priceToBook', 'P/B', 'ratio', 'Price ÷ Book Value per share. Compares market cap to net assets on the balance sheet. Below 1 may indicate undervaluation; most meaningful for asset-heavy businesses and financials. Recomputed here rather than read: Yahoo divides the quoted price by the filed book value with no unit handling, which on a pence-quoted London line divides pence by pounds and inflated every UK ratio exactly 100× (REL published at 3676 against a real 36.8). The denominator is shown below so the division can be checked on this row.', false, 'pb'],
+                    ['bookValue', 'Book Value / share', 'priceMajor', 'Net assets per share, in the quote currency\'s major unit — pounds on a pence-quoted line, which is the whole reason the P/B above is recomputed instead of taken from the feed. It is the denominator of that ratio, so P/B = price ÷ this, with the price converted to the same major unit first.', false, 'pb'],
                     ['priceToSalesTrailing12Months', 'P/S (TTM)', 'ratio', 'Price ÷ Revenue per share (trailing 12 months). Useful for loss-making companies where P/E is unavailable. Lower values mean you are paying less per unit of revenue.', false, 'ps'],
                     ['enterpriseValue', 'Enterprise Value', 'cap', 'Market cap + total debt − cash. Represents the theoretical takeover price of the whole business, independent of capital structure.', true, 'enterprise-value']
                 ]},
@@ -4307,6 +4308,23 @@
             if (type === 'ratio') return n.toFixed(2);
             if (type === 'count') return n.toFixed(0);
             if (type === 'price') return fmtPrice(v, ccy);
+            // A per-share amount that is NOT as-quoted: book value per share is filed in the
+            // major unit while the price beside it is in pence on a GBp line. Rendering it with
+            // the quote currency would restate pounds as pence — the inverse of the mistake that
+            // made Yahoo's own P/B 100× too high on every London row.
+            //
+            // Four decimals under 10 rather than the usual two, because this figure exists to be
+            // divided into the price on its own row: LGEN's £0.3857 book value shown as '£0.39'
+            // reproduces a P/B of 7.39 against the 7.47 published beside it, and a denominator
+            // that cannot reproduce the ratio it is the denominator of is not an audit. Small
+            // book values are precisely the banks and REITs P/B is the primary yardstick for.
+            if (type === 'priceMajor') {
+                var major = majorCurrency(ccy);
+                return Math.abs(n) < 10
+                        ? currencySymbol(major) + n.toLocaleString('en-GB',
+                                { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+                        : fmtPrice(v, major);
+            }
             // 'cap' is a market-side amount (market cap, enterprise value) and so belongs to the
             // quote currency; 'capFiled' comes off the statements and belongs to
             // financialCurrency, which is not always the same — AstraZeneca is quoted in pence

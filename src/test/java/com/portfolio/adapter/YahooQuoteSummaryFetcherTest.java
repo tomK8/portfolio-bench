@@ -98,16 +98,42 @@ class YahooQuoteSummaryFetcherTest {
     void computesCashFlowMetrics() throws Exception {
         QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());
 
-        // Capex = OCF (118B) - FCF (108B) = 10B
         assertEquals(0, q.extra().get("operatingCashflow").compareTo(new BigDecimal("118000000000")));
-        assertEquals(0, q.extra().get("capexTtm").compareTo(new BigDecimal("10000000000")));
         assertEquals(0, q.extra().get("freeCashflow").compareTo(new BigDecimal("108000000000")));
-        // FCF Margin = 108B / 400B = 0.27
+        // Levered FCF margin = 108B / 400B = 0.27
         assertEquals(0, q.extra().get("fcfMarginTtm").compareTo(new BigDecimal("0.270000")));
+        // No capex is derived from the two — see omitsCapexDerivedFromLeveredFcf.
+        assertNull(q.extra().get("capexTtm"));
         // Net Debt = 109B - 65B = 44B
         assertEquals(0, q.extra().get("netDebt").compareTo(new BigDecimal("44000000000")));
         // Net Debt / EBITDA = 44B / 130B ≈ 0.338462
         assertNotNull(q.extra().get("netDebtToEbitda"));
+    }
+
+    /**
+     * Capex was derived as {@code operatingCashflow - freeCashflow} and must not come back.
+     * Yahoo's {@code freeCashflow} is its own modelled <em>levered</em> free cash flow, not the
+     * statement's OCF minus purchases of property, plant and equipment, so the residual is a
+     * quantity with no name — and on a live 68-symbol fetch it was negative for 5 of the 52
+     * rows carrying both sides, because Yahoo's FCF exceeded its own OCF there. This fixture is
+     * that shape: FCF (125B) above OCF (118B), which would have published a capital expenditure
+     * of -7B. The margin still computes, on the numerator Yahoo actually supplies.
+     * See docs/fundamentals.md.
+     */
+    @Test
+    void omitsCapexDerivedFromLeveredFcf() throws Exception {
+        String leveredAboveOcf = sample()
+                .replace("\"freeCashflow\": { \"raw\": 108000000000, \"fmt\": \"108.00B\" }",
+                         "\"freeCashflow\": { \"raw\": 125000000000, \"fmt\": \"125.00B\" }");
+        assertNotEquals(sample(), leveredAboveOcf, "fixture shape changed; patch no longer applies");
+
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", leveredAboveOcf);
+
+        assertEquals(0, q.extra().get("freeCashflow").compareTo(new BigDecimal("125000000000")));
+        assertEquals(0, q.extra().get("operatingCashflow").compareTo(new BigDecimal("118000000000")));
+        assertNull(q.extra().get("capexTtm"), "a negative capex is not a measurement");
+        // 125B / 400B = 0.3125 — unaffected by the absent capex.
+        assertEquals(0, q.extra().get("fcfMarginTtm").compareTo(new BigDecimal("0.312500")));
     }
 
     /**

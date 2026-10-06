@@ -193,7 +193,7 @@
     <h3>Cash flow</h3>
     <ul>
         <li><a href="#operating-cash-flow">Operating Cash Flow</a></li>
-        <li><a href="#free-cash-flow">Free Cash Flow &amp; FCF Margin</a></li>
+        <li><a href="#free-cash-flow">Free Cash Flow, Levered FCF &amp; Capex</a></li>
         <li><a href="#ebitda">EBITDA</a></li>
     </ul>
     <h3>Quality &amp; returns</h3>
@@ -596,7 +596,7 @@ P/B = Share price / Book value per share</div>
 </div>
 
 <div class="entry" id="free-cash-flow">
-    <h2>Free Cash Flow &amp; FCF Margin</h2>
+    <h2>Free Cash Flow, Levered FCF &amp; Capex</h2>
     <p class="tagline">Cash left over after maintaining and growing the business — available to shareholders.</p>
     <p>
         Free Cash Flow is the cash remaining after spending on capital expenditures (Capex) —
@@ -606,6 +606,26 @@ P/B = Share price / Book value per share</div>
     </p>
     <div class="formula">FCF = Operating Cash Flow − Capital Expenditure
 FCF Margin = FCF / Revenue</div>
+    <div class="caveat">
+        <strong>The panel shows Yahoo's levered FCF, and carries no Capex column</strong>
+        The formula above is the textbook one. It is not what the feed supplies: Yahoo's cash-flow
+        field is its own <em>levered</em> free cash flow — after interest and debt service, on a
+        model it does not publish — and the quarterly cash-flow statement, which would have
+        carried the real capital-expenditure line, now comes back null. The panel therefore
+        labels the figure <em>Levered FCF</em> and shows no Capex.
+        <br><br>
+        Capex had been derived as Operating Cash Flow − Levered FCF, which the two definitions
+        above make clear is not capital expenditure at all. On a 68-symbol fetch that subtraction
+        came out <em>negative</em> for five symbols — a negative capital expenditure — and for two
+        others it exceeded operating cash flow outright, because levered FCF can be negative while
+        operating cash flow is strongly positive. A quantity that is sometimes roughly capex and
+        sometimes impossible cannot be read off a comparison screen, so it was removed rather than
+        relabelled.
+        <br><br>
+        Read Levered FCF as a ranking between symbols — the same model is applied to all of them —
+        and not as cash left after capex. It will not tie to Operating Cash Flow on its own row,
+        and the benchmark bands below describe the textbook margin, which it only approximates.
+    </div>
     <div class="example">
         <strong>Worked example — capital intensity matters</strong>
         Company A (software): OCF £200M, Capex £15M → FCF = <strong>£185M</strong> (FCF margin: 37%)<br>
@@ -616,6 +636,7 @@ FCF Margin = FCF / Revenue</div>
     </div>
     <div class="benchmarks">
         <table>
+            <tr><td colspan="2" style="font-weight:600; font-size:0.8rem; color:#888; padding-top:0.4rem;">Textbook FCF margin — the panel's levered figure only approximates it</td></tr>
             <tr><td>FCF Margin &lt; 5%</td><td>Capital-intensive; thin; limited shareholder returns</td></tr>
             <tr><td>5 – 15%</td><td>Typical for industrials, retailers, manufacturers</td></tr>
             <tr><td>15 – 25%</td><td>Good; healthy platform or technology business</td></tr>

@@ -69,6 +69,47 @@ EPS only) — which is GAAP by construction and names its own periods. US filers
 The glossary keeps both entries, with a note saying the panel does not carry the metric and why.
 The idea still governs how to read what *is* shown; only our ability to measure it went away.
 
+**Capex.** Derived as `operatingCashflow − freeCashflow`, which is not capital expenditure.
+Yahoo's `freeCashflow` is its own modelled **levered** free cash flow — after interest and debt
+service, on a formula it does not publish — not the cash-flow statement's OCF minus purchases of
+property, plant and equipment. The residual of the two is therefore a quantity with no name, and
+measurably so. On a live 68-symbol fetch (2026-10-06), 52 rows carried both sides and the
+subtraction came out **negative on five of them**:
+
+| Symbol | OCF | Yahoo `freeCashflow` | the "capex" we published |
+|---|---|---|---|
+| BRK.B | 46.63B | 71.98B | **−25.34B** |
+| NFLX | 11.97B | 25.39B | **−13.42B** |
+| LGEN | 2.22B | 7.69B | **−5.46B** |
+| SNPS | 2.94B | 3.43B | −0.49B |
+| MRVL | 2.20B | 2.41B | −0.21B |
+| BABA | 78.49B | −82.64B | 161.13B — 2.05× OCF |
+| ORCL | 46.94B | −45.85B | 92.79B — 1.98× OCF |
+
+A negative capital expenditure is not a measurement, and no sign convention repairs it: the last
+two rows are the same defect in the other direction, where a negative levered FCF against
+strongly positive operating cash flow makes the residual exceed OCF outright. **Three of the five
+negatives were on screen** — NFLX, SNPS and MRVL; BRK.B's and LGEN's were hidden only by accident
+of `isFinancialRow`, which skips the whole cash-flow group for financials. NVDA's 92.55B against a
+fabless business was the same arithmetic (134.36 − 41.81), and it is ours, not Yahoo's.
+
+This is not the hollow-module failure: it is a **label claiming something the feed never said**,
+the P/B defect's sibling — two figures that do not belong in one subtraction. There is no repair
+available, because the feed carries no capital expenditure anywhere now that the quarterly
+cash-flow statement comes back null, so the column is **removed** rather than relabelled. Were it
+needed later, EDGAR XBRL's `PaymentsToAcquirePropertyPlantAndEquipment` is the honest source, on
+the same terms as ROIC above.
+
+**Free cash flow and FCF margin were relabelled rather than removed**, which is the opposite call
+to operating margin's and worth saying why. Yahoo's levered FCF *can* state what it is: one named
+figure, TTM, the same model applied to every row — so it is comparable, which is what this screen
+is for, and the headers now read **Levered FCF** and **Levered FCF Margin** with the model's
+unpublished formula named in the tooltip. That is the ROE treatment (a base the feed will not
+identify, disclosed and kept) rather than the operating-margin one (a period that differs from its
+neighbours', deleted). The keys `freeCashflow` and `fcfMarginTtm` are **unchanged on purpose**: a
+watchlist column layout stores `f:fcfMarginTtm`, one list uses it, and re-keying the field would
+have dropped that column silently while the label is the only thing that was ever wrong.
+
 ## The unit gate: which ratios may be divided at all
 
 A ratio is trustworthy only when its two sides share a currency **and** a unit scale. Yahoo

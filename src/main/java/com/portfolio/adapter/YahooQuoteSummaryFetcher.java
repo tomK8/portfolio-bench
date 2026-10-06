@@ -46,6 +46,24 @@ import java.util.regex.Pattern;
  * extracted with {@link #num} which tolerates Yahoo's {@code {"raw": 1.23, "fmt": "1.23"}}
  * wrapping as well as bare primitives and missing nodes (returns null in all those cases).
  *
+ * <p><b>The feed states no period and no accounting basis, and is not internally consistent
+ * about either.</b> Nothing here can be assumed TTM because its neighbour is. Within the one
+ * {@code financialData} module, {@code profitMargins}, {@code grossMargins} and
+ * {@code ebitdaMargins} are TTM while {@code operatingMargins} is the <b>most recent quarter</b> —
+ * measured on AVGO 2026-10-06, where 0.54307 × 29.591B (the latest quarter's revenue) returns
+ * that quarter's operating income to five decimals. So a field is surfaced here only once its
+ * period is known, and a field whose period cannot be established does not get a column at
+ * all: this screen exists to compare symbols, so one that means different things in different
+ * rows is worse than an absent one. See docs/fundamentals.md for the per-field audit.
+ *
+ * <p>The three {@code *HistoryQuarterly} modules are deliberately <b>not</b> requested. Yahoo
+ * still answers them, but hollowed out — the income statement keeps only {@code totalRevenue}
+ * and {@code netIncome}, while {@code grossProfit}, {@code ebit} and {@code incomeTaxExpense}
+ * come back as a literal {@code 0} and the balance-sheet and cash-flow statements are entirely
+ * null. The ROIC and FCF-growth-YoY derivations that read them were removed in favour of no
+ * column; those zeros made them a standing "absent is never zero" hazard, one non-null
+ * {@code incomeBeforeTax} away from publishing a NOPAT of 0 as a measured return.
+ *
  * <p>Failures degrade — empty {@link QuoteSummary} on HTTP error, parse error, or unknown
  * ticker. Callers should not crash the snapshot for one bad ticker.
  */
@@ -56,9 +74,7 @@ public class YahooQuoteSummaryFetcher {
     private static final String URL_FMT =
             "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s" +
                     "?modules=price,summaryDetail,defaultKeyStatistics,financialData,summaryProfile" +
-                    ",topHoldings" +
-                    ",cashflowStatementHistoryQuarterly,incomeStatementHistoryQuarterly" +
-                    ",balanceSheetHistoryQuarterly,earningsTrend,calendarEvents" +
+                    ",topHoldings,earningsTrend,calendarEvents" +
                     "&crumb=%s";
     private static final String CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb";
     // Bootstrap host for the A1/A3 session cookies the crumb endpoint requires. fc.yahoo.com is
@@ -232,9 +248,6 @@ public class YahooQuoteSummaryFetcher {
         JsonNode fin = r.path("financialData");
         JsonNode prof = r.path("summaryProfile");
         JsonNode th = r.path("topHoldings");
-        JsonNode cfsQ = r.path("cashflowStatementHistoryQuarterly").path("cashflowStatements");
-        JsonNode issQ = r.path("incomeStatementHistoryQuarterly").path("incomeStatementHistory");
-        JsonNode bsQ = r.path("balanceSheetHistoryQuarterly").path("balanceSheetStatements");
         JsonNode et = r.path("earningsTrend").path("trend");
         JsonNode cal = r.path("calendarEvents").path("earnings");
 
@@ -271,12 +284,6 @@ public class YahooQuoteSummaryFetcher {
         BigDecimal netDebtToEbitda = (netDebt != null && ebitdaTtm != null && ebitdaTtm.signum() != 0)
                 ? netDebt.divide(ebitdaTtm, 6, RoundingMode.HALF_UP) : null;
 
-        // FCF Growth YoY: compare TTM (quarters 0-3) vs prior-year TTM (quarters 4-7)
-        BigDecimal fcfGrowthYoy = fcfGrowthFromQuarterly(cfsQ);
-
-        // ROIC = NOPAT / Invested Capital, both derived from quarterly statements
-        BigDecimal roic = roicFromQuarterly(issQ, bsQ);
-
         // Secondary fields (popup detail)
         Map<String, BigDecimal> extra = new LinkedHashMap<>();
         // Valuation
@@ -289,13 +296,12 @@ public class YahooQuoteSummaryFetcher {
         putIf(extra, "capexTtm", capexTtm);
         putIf(extra, "freeCashflow", fcfTtm);
         putIf(extra, "fcfMarginTtm", fcfMarginTtm);
-        putIf(extra, "fcfGrowthYoy", fcfGrowthYoy);
-        // Quality & returns
-        putIf(extra, "roic", roic);
+        // Quality & returns. No operatingMargins: Yahoo's is the latest quarter, not the TTM
+        // the rest of this block is on, and the feed carries no TTM operating income to put in
+        // its place now that the quarterly statements are hollow.
         putIf(extra, "returnOnEquity", num(fin, "returnOnEquity"));
         putIf(extra, "returnOnAssets", num(fin, "returnOnAssets"));
         putIf(extra, "profitMargins", num(fin, "profitMargins"));
-        putIf(extra, "operatingMargins", num(fin, "operatingMargins"));
         putIf(extra, "grossMargins", num(fin, "grossMargins"));
         // Balance sheet / leverage
         putIf(extra, "netDebtToEbitda", netDebtToEbitda);
@@ -457,68 +463,6 @@ public class YahooQuoteSummaryFetcher {
             }
         }
         return List.copyOf(out);
-    }
-
-    /**
-     * FCF growth YoY using quarterly cashflow statements. Sums the most-recent 4 quarters
-     * (TTM) and the prior 4 quarters, then returns (ttm − prior) / |prior|. Returns null if
-     * fewer than 8 quarters are available or if any quarter's freeCashflow is missing.
-     */
-    private static BigDecimal fcfGrowthFromQuarterly(JsonNode stmts) {
-        if (!stmts.isArray() || stmts.size() < 8) return null;
-        BigDecimal ttm = BigDecimal.ZERO, prior = BigDecimal.ZERO;
-        for (int i = 0; i < 4; i++) {
-            BigDecimal v = num(stmts.get(i), "freeCashflow");
-            if (v == null) return null;
-            ttm = ttm.add(v);
-        }
-        for (int i = 4; i < 8; i++) {
-            BigDecimal v = num(stmts.get(i), "freeCashflow");
-            if (v == null) return null;
-            prior = prior.add(v);
-        }
-        if (prior.signum() == 0) return null;
-        return ttm.subtract(prior).divide(prior.abs(), 6, RoundingMode.HALF_UP);
-    }
-
-    /**
-     * ROIC = NOPAT / Invested Capital, both on a TTM basis.
-     * NOPAT = TTM EBIT × (1 − effective tax rate from last 4 quarters).
-     * Invested Capital = most-recent-quarter (equity + total debt − cash).
-     * Effective tax rate is clamped to [0, 0.5] to avoid distortion from one-off items.
-     */
-    private static BigDecimal roicFromQuarterly(JsonNode incStmts, JsonNode bsStmts) {
-        if (!incStmts.isArray() || incStmts.size() < 4) return null;
-        if (!bsStmts.isArray() || bsStmts.isEmpty()) return null;
-
-        BigDecimal ttmEbit = BigDecimal.ZERO, ttmTax = BigDecimal.ZERO, ttmPretax = BigDecimal.ZERO;
-        for (int i = 0; i < 4; i++) {
-            BigDecimal ebit    = num(incStmts.get(i), "ebit");
-            BigDecimal tax     = num(incStmts.get(i), "incomeTaxExpense");
-            BigDecimal pretax  = num(incStmts.get(i), "incomeBeforeTax");
-            if (ebit == null || tax == null || pretax == null) return null;
-            ttmEbit   = ttmEbit.add(ebit);
-            ttmTax    = ttmTax.add(tax);
-            ttmPretax = ttmPretax.add(pretax);
-        }
-
-        JsonNode latest = bsStmts.get(0);
-        BigDecimal equity    = num(latest, "totalStockholderEquity");
-        BigDecimal ltDebt    = firstNonNull(num(latest, "longTermDebt"), BigDecimal.ZERO);
-        BigDecimal stDebt    = firstNonNull(num(latest, "shortLongTermDebt"), BigDecimal.ZERO);
-        BigDecimal bsCash    = num(latest, "cash");
-        if (equity == null || bsCash == null) return null;
-
-        BigDecimal taxRate = BigDecimal.ZERO;
-        if (ttmPretax.signum() != 0) {
-            taxRate = ttmTax.divide(ttmPretax, 6, RoundingMode.HALF_UP);
-            if (taxRate.compareTo(BigDecimal.ZERO) < 0) taxRate = BigDecimal.ZERO;
-            if (taxRate.compareTo(new BigDecimal("0.5")) > 0) taxRate = new BigDecimal("0.5");
-        }
-        BigDecimal nopat = ttmEbit.multiply(BigDecimal.ONE.subtract(taxRate));
-        BigDecimal investedCapital = equity.add(ltDebt).add(stDebt).subtract(bsCash);
-        if (investedCapital.signum() == 0) return null;
-        return nopat.divide(investedCapital, 6, RoundingMode.HALF_UP);
     }
 
     /**

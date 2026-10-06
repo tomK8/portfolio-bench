@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url);
 const WlColumns = require(path.resolve(here, '../../main/resources/static/js/wl-columns.js'));
 
 /** A stand-in registry: the defaults plus a couple of fundamentals keys. */
-const REGISTRY = WlColumns.DEFAULTS.concat(['f:fcfMarginTtm', 'f:roic', 'beta', 'gainPct']);
+const REGISTRY = WlColumns.DEFAULTS.concat(['f:fcfMarginTtm', 'f:returnOnEquity', 'beta', 'gainPct']);
 
 test('a list that was never customised gets the shipped default set', () => {
     assert.deepEqual(WlColumns.resolve([], REGISTRY), WlColumns.DEFAULTS);
@@ -72,13 +72,13 @@ test('move swaps with the neighbour and is a no-op at either end', () => {
 });
 
 test('addFirst puts a new column right after Symbol, which is where a comparison wants it', () => {
-    assert.deepEqual(WlColumns.addFirst(['price', 'todayPct'], 'f:roic'),
-        ['f:roic', 'price', 'todayPct']);
+    assert.deepEqual(WlColumns.addFirst(['price', 'todayPct'], 'f:returnOnEquity'),
+        ['f:returnOnEquity', 'price', 'todayPct']);
 });
 
 test('addFirst moves a column already present rather than duplicating it', () => {
-    assert.deepEqual(WlColumns.addFirst(['price', 'f:roic', 'todayPct'], 'f:roic'),
-        ['f:roic', 'price', 'todayPct']);
+    assert.deepEqual(WlColumns.addFirst(['price', 'f:returnOnEquity', 'todayPct'], 'f:returnOnEquity'),
+        ['f:returnOnEquity', 'price', 'todayPct']);
 });
 
 test('a pinned key cannot be added to a layout', () => {

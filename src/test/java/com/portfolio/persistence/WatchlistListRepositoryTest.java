@@ -311,7 +311,7 @@ class WatchlistListRepositoryTest {
     void deletingAListTakesItsColumnLayoutWithIt(@TempDir Path dir) {
         WatchlistRepository repo = repo(dir);
         long chips = repo.createList("chips");
-        repo.saveColumns(chips, List.of("f:roic", "price"));
+        repo.saveColumns(chips, List.of("f:returnOnEquity", "price"));
         repo.deleteList(chips);
         assertEquals(List.of(), repo.columnsFor(chips),
                 "a later list reusing the id must not inherit a dead layout");

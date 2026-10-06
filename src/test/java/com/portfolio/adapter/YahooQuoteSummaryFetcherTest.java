@@ -108,25 +108,31 @@ class YahooQuoteSummaryFetcherTest {
         assertNotNull(q.extra().get("netDebtToEbitda"));
     }
 
+    /**
+     * The three fields that were dropped for lack of a stateable period, asserted absent
+     * against a fixture that offers all three. The fixture still carries full quarterly
+     * statements and an {@code operatingMargins}, because Yahoo's live payload still carries
+     * the shapes too — hollow statements and an MRQ margin. Surfacing any of them again is
+     * the regression this guards: an MRQ operating margin among TTM figures compares against
+     * nothing, and a ROIC derived from statements whose line items arrive as a literal 0
+     * publishes a manufactured zero as a measured return. See docs/fundamentals.md.
+     */
     @Test
-    void computesFcfGrowthAndRoic() throws Exception {
+    void omitsFieldsWithNoStateablePeriod() throws Exception {
         QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());
 
-        // TTM FCF = 30+28+26+24 = 108B, prior = 22+20+18+16 = 76B, growth = (108-76)/76
-        BigDecimal fcfGrowth = q.extra().get("fcfGrowthYoy");
-        assertNotNull(fcfGrowth);
-        // (108-76)/76 ≈ 0.421053
-        assertTrue(fcfGrowth.compareTo(new BigDecimal("0.42")) > 0);
-        assertTrue(fcfGrowth.compareTo(new BigDecimal("0.43")) < 0);
+        // Present in the fixture's financialData, deliberately not surfaced: Yahoo's
+        // operatingMargins is the latest quarter while profitMargins/grossMargins are TTM.
+        assertNull(q.extra().get("operatingMargins"));
+        // Derived from the *HistoryQuarterly modules, which are no longer requested.
+        assertNull(q.extra().get("roic"));
+        assertNull(q.extra().get("fcfGrowthYoy"));
 
-        // ROIC: TTM EBIT = 35+33+31+29=128B, TTM Tax = 21B, TTM Pretax = 132B
-        // taxRate = 21/132 ≈ 0.159, NOPAT = 128 * 0.841 ≈ 107.6B
-        // Invested Capital = 62 + 85 + 10 - 20 = 137B
-        // ROIC ≈ 107.6/137 ≈ 0.785
-        BigDecimal roic = q.extra().get("roic");
-        assertNotNull(roic);
-        assertTrue(roic.compareTo(new BigDecimal("0.7")) > 0);
-        assertTrue(roic.compareTo(new BigDecimal("0.9")) < 0);
+        // The TTM figures from the same module are unaffected.
+        assertNotNull(q.extra().get("profitMargins"));
+        assertNotNull(q.extra().get("grossMargins"));
+        assertNotNull(q.extra().get("returnOnEquity"));
+        assertNotNull(q.extra().get("fcfMarginTtm"));
     }
 
     @Test

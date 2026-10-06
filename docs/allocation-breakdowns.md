@@ -59,8 +59,11 @@ both, and how much of it pays an income.
 4. **A missing `dividendYield` means "pays none", not "unknown".** Yahoo omits the field entirely
    for a non-payer, so it is read as a genuine zero whenever any other metric is present —
    otherwise the denominator shrinks and every growth name gets a free pass on the value axis.
-   `fcfGrowthYoy` has **zero coverage** in practice (Yahoo isn't returning 8 quarters); it is still
-   wired and simply abstains.
+   `fcfGrowthYoy` is now a **permanent** null: it was derived from the quarterly cash-flow
+   statements, which Yahoo returns stripped of their line items, so it never carried a value for
+   any symbol and the fetcher no longer computes it (see [fundamentals.md](fundamentals.md)). The
+   classifier's vote stays wired and abstains, so the growth axis is unchanged — but nothing will
+   revive it short of a different source.
 
 **Funds sit outside the 2×2 on purpose.** Yahoo publishes a fund's aggregate price multiples but
 returns null for `threeYearEarningsGrowth` on every fund held here, so there is no growth axis to

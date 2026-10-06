@@ -362,6 +362,12 @@ public class YahooQuoteSummaryFetcher {
         putIf(extra, "heldPercentInstitutions", num(dks, "heldPercentInstitutions"));
         putIf(extra, "numberOfAnalystOpinions", num(fin, "numberOfAnalystOpinions"));
         putIf(extra, "sharesOutstanding", num(dks, "sharesOutstanding"));
+        // TTM net income attributable to common shareholders, on a GAAP basis. Shown beside
+        // revenue and EBITDA to complete the income block, and it is also what makes the
+        // trailing P/E auditable: AVGO's trailingEps of 7.83 into this 38.265B implies 4.887B
+        // diluted shares, which is the check that says the trailing side is GAAP. The forward
+        // side is consensus and is not.
+        putIf(extra, "netIncomeToCommon", num(dks, "netIncomeToCommon"));
 
         putFundValuation(extra, th);
 

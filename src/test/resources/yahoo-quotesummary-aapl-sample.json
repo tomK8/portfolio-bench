@@ -29,6 +29,7 @@
           "enterpriseToEbitda": { "raw": 28.4, "fmt": "28.40" },
           "enterpriseValue": { "raw": 4500000000000, "fmt": "4.50T" },
           "sharesOutstanding": { "raw": 15350000000, "fmt": "15.35B" },
+          "netIncomeToCommon": { "raw": 96500000000, "fmt": "96.5B" },
           "52WeekChange": { "raw": 0.245, "fmt": "24.50%" },
           "SandP52WeekChange": { "raw": 0.183, "fmt": "18.30%" },
           "shortPercentOfFloat": { "raw": 0.0084, "fmt": "0.84%" },

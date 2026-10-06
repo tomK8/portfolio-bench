@@ -265,6 +265,17 @@ class YahooQuoteSummaryFetcherTest {
         assertNull(q.labels().get("excluded:priceToSalesTrailing12Months"));
     }
 
+    /**
+     * Net income is what makes the trailing P/E auditable, so it is stored rather than left to
+     * be inferred. It is also the figure the forward P/E is *not* built on.
+     */
+    @Test
+    void capturesGaapNetIncome() throws Exception {
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());
+        assertEquals(0, q.extra().get("netIncomeToCommon")
+                .compareTo(new BigDecimal("96500000000")));
+    }
+
     @Test
     void storesForwardEstimatesFromEarningsTrend() throws Exception {
         // Intel's real earningsTrend shape: positive EPS base, so both estimates are usable.

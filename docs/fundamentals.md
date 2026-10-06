@@ -243,6 +243,17 @@ ruinously expensive. P/B is therefore **recomputed** from `price / minorUnitsPer
 observed), so there is one path and no fallback, and the fixture publishes a `priceToBook` that
 disagrees with its own `bookValue` so a test can only pass the recomputing way.
 
+**The denominator is now shown**, for the same reason `netIncomeToCommon` sits beside the
+trailing P/E: a recomputed ratio nobody can check is still taken on trust. Book value per share
+is a *fifth* rendering — per-share, but in the **major** unit while the price beside it is
+as-quoted — so it has its own type (`'priceMajor'`), because labelling it with the quote currency
+would restate pounds as pence, the exact inverse of the defect being fixed. It also carries four
+decimals under 10 rather than the usual two: LGEN's £0.3857 rounded to `£0.39` reproduces a P/B of
+7.39 against the 7.47 published next to it, and a denominator that cannot reproduce the ratio it
+is the denominator of is not an audit. Small book values are precisely the banks and REITs this
+column is the primary yardstick for. Verified on both conventions: BARC 450.05p → £4.5005 ÷
+£4.8720 = 0.92, AAPL $332.89 ÷ $7.3600 = 45.23, LGEN 288.20p → £2.8820 ÷ £0.3860 = 7.47.
+
 ### Withheld, with the reason attached
 
 A gated field is **not** silently dropped. `putOrExclude` records one `excluded:<field>` label

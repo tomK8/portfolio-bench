@@ -335,6 +335,11 @@ public class YahooQuoteSummaryFetcher {
                     comparable, currency, finCurrency);
         }
         putIf(extra, "enterpriseValue", num(dks, "enterpriseValue"));
+        // The P/B denominator, kept so the recomputed ratio is auditable on the row itself —
+        // the same reason netIncomeToCommon is stored beside the trailing P/E. Ungated: it is
+        // an amount rather than a ratio, so a currency mismatch does not make it untrue, only
+        // the division it feeds. Market-side, in the quote currency's major unit.
+        putIf(extra, "bookValue", bookValue);
         // Cash flow (TTM)
         putIf(extra, "operatingCashflow", ocfTtm);
         putIf(extra, "freeCashflow", fcfTtm);

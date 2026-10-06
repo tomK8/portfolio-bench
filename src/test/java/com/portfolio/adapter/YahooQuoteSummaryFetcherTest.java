@@ -41,7 +41,9 @@ class YahooQuoteSummaryFetcherTest {
 
         assertEquals(0, q.extra().get("dividendYield").compareTo(new BigDecimal("0.0042")));
         assertEquals(0, q.extra().get("payoutRatio").compareTo(new BigDecimal("0.15")));
-        assertEquals(0, q.extra().get("priceToBook").compareTo(new BigDecimal("55.10")));
+        // Recomputed from price / bookValue (291.13 / 5.00), deliberately not the 55.10 Yahoo
+        // publishes in the same payload — see recomputesPriceToBookRatherThanTrustingYahoo.
+        assertEquals(0, q.extra().get("priceToBook").compareTo(new BigDecimal("58.226000")));
         assertEquals(0, q.extra().get("returnOnEquity").compareTo(new BigDecimal("1.52")));
         assertEquals(0, q.extra().get("52WeekChange").compareTo(new BigDecimal("0.245")));
         assertEquals(0, q.extra().get("SandP52WeekChange").compareTo(new BigDecimal("0.183")));
@@ -133,6 +135,134 @@ class YahooQuoteSummaryFetcherTest {
         assertNotNull(q.extra().get("grossMargins"));
         assertNotNull(q.extra().get("returnOnEquity"));
         assertNotNull(q.extra().get("fcfMarginTtm"));
+    }
+
+    /**
+     * Yahoo's own {@code priceToBook} is price / bookValue with no unit handling, so it is
+     * ignored in favour of a ratio we scale ourselves. The fixture publishes 55.10 against a
+     * bookValue of 5.00 on a price of 291.13, so trusting Yahoo and recomputing give visibly
+     * different answers and this test can only pass one way.
+     */
+    @Test
+    void recomputesPriceToBookRatherThanTrustingYahoo() throws Exception {
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());
+        assertEquals(0, q.extra().get("priceToBook").compareTo(new BigDecimal("58.226000")),
+                "291.13 / 5.00, not Yahoo's published 55.10");
+    }
+
+    /**
+     * A London line quotes in pence and files in pounds, so its price has to be scaled before
+     * it meets a book value. Yahoo does not do this, which is what put REL at 3676 instead of
+     * 36.8 and British Land at 66.6 instead of 0.67 — on the metric that matters most for the
+     * banks and REITs it broke.
+     */
+    @Test
+    void scalesPenceQuotesBeforeDividingByAPoundBookValue() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "price":{"currency":"GBp","regularMarketPrice":{"raw":1877.5}},
+                  "defaultKeyStatistics":{"bookValue":{"raw":4.135}},
+                  "financialData":{"financialCurrency":"GBP"}}]}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("BA.L", json);
+
+        // 1877.5p = GBP 18.775, over a book value of GBP 4.135 -> 4.54, not 454.
+        BigDecimal pb = q.extra().get("priceToBook");
+        assertNotNull(pb);
+        assertTrue(pb.compareTo(new BigDecimal("4.5")) > 0 && pb.compareTo(new BigDecimal("4.6")) < 0,
+                "expected ~4.54, got " + pb);
+        // GBp against GBP is a scale difference, not a currency one: nothing is withheld.
+        assertNull(q.labels().get("excluded:priceToBook"));
+    }
+
+    /**
+     * When the statements are filed in a different currency from the quote, a ratio spanning the
+     * two divides pounds by dollars. Withheld with a reason rather than published or silently
+     * dropped, so a reader can tell "could not be trusted" from "the feed never sent it".
+     */
+    @Test
+    void withholdsRatiosThatWouldDivideTwoCurrencies() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "price":{"currency":"GBp","regularMarketPrice":{"raw":12074.0}},
+                  "summaryDetail":{"priceToSalesTrailing12Months":{"raw":3.05}},
+                  "defaultKeyStatistics":{"bookValue":{"raw":24.28},
+                                          "enterpriseToEbitda":{"raw":10.55}},
+                  "financialData":{"financialCurrency":"USD","ebitda":{"raw":19904000000}}}]}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AZN.L", json);
+
+        for (String key : new String[]{"priceToBook", "priceToSalesTrailing12Months",
+                                       "enterpriseToEbitda"}) {
+            assertNull(q.extra().get(key), key + " spans two currencies and must not be published");
+            String why = q.labels().get("excluded:" + key);
+            assertNotNull(why, key + " must say why it was withheld");
+            assertTrue(why.contains("USD") && why.contains("GBp"), why);
+        }
+        assertEquals("USD", q.labels().get("financialCurrency"));
+    }
+
+    /**
+     * Net Debt / EBITDA takes both sides from financialData, so it shares a currency whatever
+     * the line is quoted in and must survive the gate that stops the others.
+     */
+    @Test
+    void keepsRatiosWhoseBothSidesComeFromTheStatements() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "price":{"currency":"GBp","regularMarketPrice":{"raw":12074.0}},
+                  "financialData":{"financialCurrency":"USD","ebitda":{"raw":20000000000},
+                                   "totalDebt":{"raw":32000000000},
+                                   "totalCash":{"raw":4000000000}}}]}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AZN.L", json);
+        // (32B - 4B) / 20B, both USD.
+        assertEquals(0, q.extra().get("netDebtToEbitda").compareTo(new BigDecimal("1.400000")));
+        assertNull(q.labels().get("excluded:netDebtToEbitda"));
+    }
+
+    /**
+     * A negative EV/EBITDA is not merely meaningless, it sorts to the top of a cheapest-first
+     * scan — which is how SKHY's -0.45 and MRNA's -35.21 read as the two best values on the
+     * screen. Withheld on a non-positive EBITDA regardless of currency.
+     */
+    @Test
+    void withholdsEvEbitdaWhenEbitdaIsNotPositive() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "price":{"currency":"USD","regularMarketPrice":{"raw":25.0}},
+                  "defaultKeyStatistics":{"enterpriseToEbitda":{"raw":-35.21}},
+                  "financialData":{"financialCurrency":"USD","ebitda":{"raw":-2195000064}}}]}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("MRNA", json);
+        assertNull(q.extra().get("enterpriseToEbitda"));
+        assertTrue(q.labels().get("excluded:enterpriseToEbitda").contains("not positive"));
+    }
+
+    /**
+     * The three provenance fields ride a call we already make. Without them the panel can only
+     * claim a period in a column heading, for every symbol at once.
+     */
+    @Test
+    void capturesStatementCurrencyAndPeriodDates() throws Exception {
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());
+        assertEquals("USD", q.labels().get("financialCurrency"));
+        assertEquals("2026-07-31", q.labels().get("mostRecentQuarter"));
+        assertEquals("2025-11-02", q.labels().get("lastFiscalYearEnd"));
+    }
+
+    /**
+     * A fund files no statements, so {@code financialCurrency} is absent. That must not be read
+     * as a mismatch — it would report an exclusion on every ETF for a ratio the feed never sent
+     * them anyway.
+     */
+    @Test
+    void absentStatementCurrencyIsNotTreatedAsAMismatch() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "price":{"currency":"GBp","regularMarketPrice":{"raw":500.0}},
+                  "summaryDetail":{"priceToSalesTrailing12Months":{"raw":2.5}},
+                  "defaultKeyStatistics":{"bookValue":{"raw":2.0}}}]}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("EQQQ.L", json);
+        assertEquals(0, q.extra().get("priceToSalesTrailing12Months")
+                .compareTo(new BigDecimal("2.5")));
+        assertNull(q.labels().get("excluded:priceToSalesTrailing12Months"));
     }
 
     @Test

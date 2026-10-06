@@ -23,6 +23,9 @@
         "defaultKeyStatistics": {
           "pegRatio": { "raw": 2.85, "fmt": "2.85" },
           "priceToBook": { "raw": 55.10, "fmt": "55.10" },
+          "bookValue": { "raw": 5.00, "fmt": "5.00" },
+          "mostRecentQuarter": { "raw": 1785456000, "fmt": "2026-07-31" },
+          "lastFiscalYearEnd": { "raw": 1762041600, "fmt": "2025-11-02" },
           "enterpriseToEbitda": { "raw": 28.4, "fmt": "28.40" },
           "enterpriseValue": { "raw": 4500000000000, "fmt": "4.50T" },
           "sharesOutstanding": { "raw": 15350000000, "fmt": "15.35B" },
@@ -33,6 +36,7 @@
         },
         "financialData": {
           "currentPrice": { "raw": 291.13, "fmt": "291.13" },
+          "financialCurrency": "USD",
           "targetMeanPrice": { "raw": 305.00, "fmt": "305.00" },
           "recommendationKey": "buy",
           "numberOfAnalystOpinions": { "raw": 42, "fmt": "42" },

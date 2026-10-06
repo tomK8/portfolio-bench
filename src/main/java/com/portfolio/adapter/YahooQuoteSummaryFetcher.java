@@ -262,6 +262,13 @@ public class YahooQuoteSummaryFetcher {
         BigDecimal week52Low = num(sd, "fiftyTwoWeekLow");
         BigDecimal targetMeanPrice = num(fin, "targetMeanPrice");
         String currency = text(price, "currency");
+        // The currency the *statements* are filed in, which is not always the one the line is
+        // quoted in (ASML quotes USD and files EUR; AZN.L quotes GBp and files USD). Every
+        // ratio below that divides a market-side figure by a statement-side one is only
+        // meaningful when these two agree — see comparable() and docs/fundamentals.md.
+        String finCurrency = text(fin, "financialCurrency");
+        boolean comparable = comparable(currency, finCurrency);
+        Map<String, String> excluded = new LinkedHashMap<>();
 
         // TTM cash-flow inputs from financialData
         BigDecimal ocfTtm   = num(fin, "operatingCashflow");
@@ -280,16 +287,42 @@ public class YahooQuoteSummaryFetcher {
         // Net Debt = Total Debt − Cash
         BigDecimal netDebt = (totalDebt != null && totalCash != null)
                 ? totalDebt.subtract(totalCash) : null;
-        // Net Debt / EBITDA
+        // Net Debt / EBITDA. Both sides come from financialData, so they share a currency
+        // whatever the line is quoted in — this one needs no gate.
         BigDecimal netDebtToEbitda = (netDebt != null && ebitdaTtm != null && ebitdaTtm.signum() != 0)
                 ? netDebt.divide(ebitdaTtm, 6, RoundingMode.HALF_UP) : null;
 
+        // P/B is recomputed rather than read, because Yahoo's own priceToBook is literally
+        // price / bookValue with no unit handling — and for a pence-quoted line that divides
+        // pence by pounds, inflating every UK ratio exactly 100x. It published REL at 3676
+        // (really 36.8), BARC at 92.6 (0.93) and BLND at 66.6 (0.67) — and P/B is the primary
+        // yardstick for precisely the banks and REITs it broke. bookValue is present whenever
+        // priceToBook is (61 of 61 observed), so there is one path and no fallback.
+        BigDecimal bookValue = num(dks, "bookValue");
+        BigDecimal priceToBook = (currentPrice != null && bookValue != null
+                && bookValue.signum() != 0)
+                ? currentPrice.divide(minorUnitsPerMajor(currency), 10, RoundingMode.HALF_UP)
+                        .divide(bookValue, 6, RoundingMode.HALF_UP)
+                : null;
+
         // Secondary fields (popup detail)
         Map<String, BigDecimal> extra = new LinkedHashMap<>();
-        // Valuation
-        putIf(extra, "priceToBook", num(dks, "priceToBook"));
-        putIf(extra, "priceToSalesTrailing12Months", num(sd, "priceToSalesTrailing12Months"));
-        putIf(extra, "enterpriseToEbitda", num(dks, "enterpriseToEbitda"));
+        // Valuation. These three divide a market-side figure (price, market cap, enterprise
+        // value) by a statement-side one (book value, revenue, EBITDA), so each is gated on the
+        // two sides sharing a currency; a gated field is recorded by name with its reason rather
+        // than quietly dropped.
+        putOrExclude(extra, excluded, "priceToBook", priceToBook, comparable, currency, finCurrency);
+        putOrExclude(extra, excluded, "priceToSalesTrailing12Months",
+                num(sd, "priceToSalesTrailing12Months"), comparable, currency, finCurrency);
+        // EBITDA at or below zero makes the ratio meaningless *and* actively misleading: a
+        // negative EV/EBITDA sorts to the top of a cheapest-first scan.
+        BigDecimal evEbitda = num(dks, "enterpriseToEbitda");
+        if (ebitdaTtm != null && ebitdaTtm.signum() <= 0) {
+            excluded.put("enterpriseToEbitda", "EBITDA is not positive, so the ratio has no scale");
+        } else {
+            putOrExclude(extra, excluded, "enterpriseToEbitda", evEbitda,
+                    comparable, currency, finCurrency);
+        }
         putIf(extra, "enterpriseValue", num(dks, "enterpriseValue"));
         // Cash flow (TTM)
         putIf(extra, "operatingCashflow", ocfTtm);
@@ -344,6 +377,14 @@ public class YahooQuoteSummaryFetcher {
         // fallback only because a name is better than none.
         String name = text(price, "longName");
         labels.put("companyName", name != null ? name : text(price, "shortName"));
+        // Provenance. All three ride the call we already make and were previously discarded,
+        // which is why "as of when, in what currency" could only ever be claimed by a column
+        // heading for every row at once instead of answered per row.
+        labels.put("financialCurrency", finCurrency);
+        labels.put("mostRecentQuarter", epochDay(dks, "mostRecentQuarter"));
+        labels.put("lastFiscalYearEnd", epochDay(dks, "lastFiscalYearEnd"));
+        // Excluded, and said so: one entry per gated field, keyed "excluded:<field>".
+        excluded.forEach((k, why) -> labels.put("excluded:" + k, why));
         putNextEarnings(labels, cal);
 
         return new QuoteSummary(ticker, currency, currentPrice, marketCap, trailingPe, forwardPe,
@@ -463,6 +504,64 @@ public class YahooQuoteSummaryFetcher {
             }
         }
         return List.copyOf(out);
+    }
+
+    /**
+     * Whether a market-side figure and a statement-side figure may be divided by one another.
+     *
+     * <p>True when the line is quoted in the same currency it files in. {@code GBp} and
+     * {@code GBP} count as the same currency — a London line quoted in pence files in pounds,
+     * which is a *scale* difference handled by {@link #minorUnitsPerMajor}, not a currency one.
+     * A missing {@code financialCurrency} is treated as comparable: funds and trusts file no
+     * statements at all, and the fields this gates are absent for them anyway, so refusing on
+     * absence would report an exclusion nobody asked about.
+     */
+    private static boolean comparable(String quoteCurrency, String financialCurrency) {
+        if (quoteCurrency == null || financialCurrency == null) return true;
+        return major(quoteCurrency).equalsIgnoreCase(major(financialCurrency));
+    }
+
+    /** The major unit a minor-unit quote belongs to — {@code GBp} prices a {@code GBP} company. */
+    private static String major(String currency) {
+        return "GBp".equals(currency) ? "GBP" : currency;
+    }
+
+    /**
+     * How many of the quote's units make one unit of everything else in the payload. London
+     * lines quote in pence while market cap, book value, enterprise value and every statement
+     * figure are in pounds, so a price has to be scaled before it meets any of them.
+     */
+    private static BigDecimal minorUnitsPerMajor(String quoteCurrency) {
+        return "GBp".equals(quoteCurrency) ? new BigDecimal("100") : BigDecimal.ONE;
+    }
+
+    /**
+     * Store a gated field, or record why it was withheld. Keeps "excluded, and said so" in one
+     * place: a reader can tell a ratio we could not trust from one the feed never sent, which a
+     * bare absence cannot express.
+     */
+    private static void putOrExclude(Map<String, BigDecimal> extra, Map<String, String> excluded,
+                                     String key, BigDecimal value, boolean comparable,
+                                     String quoteCurrency, String financialCurrency) {
+        if (value == null) return;
+        if (comparable) {
+            extra.put(key, value);
+            return;
+        }
+        excluded.put(key, "statements are in " + financialCurrency + " but the line is quoted in "
+                + quoteCurrency + ", so this ratio divides two currencies");
+    }
+
+    /**
+     * An epoch-second date field as an ISO day, or null. Yahoo sends these as
+     * {@code {"raw": 1785628800, "fmt": "2026-07-31"}}; the raw seconds are authoritative and
+     * the {@code fmt} is localised, so the day is derived rather than read.
+     */
+    private static String epochDay(JsonNode parent, String field) {
+        BigDecimal secs = num(parent, field);
+        if (secs == null || secs.signum() <= 0) return null;
+        return Instant.ofEpochSecond(secs.longValue()).atZone(ZoneOffset.UTC)
+                .toLocalDate().toString();
     }
 
     /**

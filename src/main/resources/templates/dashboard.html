@@ -1174,8 +1174,12 @@
         }
         .snap-kv .k { color: #555; }
         .snap-kv .v { font-variant-numeric: tabular-nums; font-weight: 500; }
+        /* A ratio the fetcher withheld because it could not be trusted for this symbol. Muted
+           and italic so it reads as "not shown on purpose" rather than as a value. */
+        .snap-withheld { font-style: italic; font-weight: 400; color: #999; cursor: help; }
         html[data-theme="dark"] .snap-group-title { color: #999; border-bottom-color: #2e3137; }
         html[data-theme="dark"] .snap-kv .k { color: #b4b4b4; }
+        html[data-theme="dark"] .snap-withheld { color: #7e848c; }
 
         /* An earnings date that has already been reported — Yahoo publishes the most recent one
            when it has no forward date. Muted italics say "this is not a forward date" in the

@@ -3796,6 +3796,10 @@
         var snapshotInitialized = false;
         var snapshotRowsCache = [];
         var snapshotExtra = [];          // user-added (non-held) symbols, for the remove control
+        // The filings-sourced operating line, keyed by symbol. Kept beside the rows rather than
+        // merged into them because only the detail view needs the quarterly series; the two TTM
+        // figures the grid and the watchlist columns read are already merged server-side.
+        var snapshotOperatingLines = {};
         var snapshotRefreshTimer = null;
 
         function setupSnapshot() {
@@ -3819,6 +3823,7 @@
             fetch('/portfolio-fundamentals').then(function (r) { return r.json(); })
                     .then(function (data) {
                         snapshotExtra = data.extraSymbols || [];
+                        snapshotOperatingLines = data.operatingLines || {};
                         renderSnapshot(data.rows || []);
                         status.textContent = formatLastUpdated(data.lastUpdatedAt);
                     })
@@ -3837,6 +3842,7 @@
                     .then(function (data) {
                         input.value = '';
                         snapshotExtra = data.extraSymbols || [];
+                        snapshotOperatingLines = data.operatingLines || {};
                         renderSnapshot(data.rows || []);
                         status.textContent = formatLastUpdated(data.lastUpdatedAt);
                     })
@@ -3849,6 +3855,7 @@
                     .then(function (r) { return r.json(); })
                     .then(function (data) {
                         snapshotExtra = data.extraSymbols || [];
+                        snapshotOperatingLines = data.operatingLines || {};
                         renderSnapshot(data.rows || []);
                     });
         }
@@ -4014,10 +4021,17 @@
             var n = parseFloat(v);
             if (!isFinite(n)) return null;
             var sym = currencySymbol(majorCurrency(ccy));
-            if (n >= 1e12) return sym + (n / 1e12).toFixed(2) + 'T';
-            if (n >= 1e9)  return sym + (n / 1e9).toFixed(2) + 'B';
-            if (n >= 1e6)  return sym + (n / 1e6).toFixed(1) + 'M';
-            return sym + n.toLocaleString('en-GB');
+            // Scale on the magnitude and carry the sign separately. Comparing the signed value
+            // against the thresholds sent every negative amount to the last branch, so a net
+            // cash position printed as '$-121,682,993,152' against a '$120.79B' total debt two
+            // rows above it — the two figures it most needs to be comparable with. Negatives are
+            // ordinary here: net cash, a levered FCF Yahoo models below zero (ORCL, BABA), a
+            // corrupt enterprise value (SKHY), and an operating loss (INTC).
+            var abs = Math.abs(n), sign = n < 0 ? '-' : '';
+            if (abs >= 1e12) return sign + sym + (abs / 1e12).toFixed(2) + 'T';
+            if (abs >= 1e9)  return sign + sym + (abs / 1e9).toFixed(2) + 'B';
+            if (abs >= 1e6)  return sign + sym + (abs / 1e6).toFixed(1) + 'M';
+            return sign + sym + abs.toLocaleString('en-GB');
         }
 
         /** The major unit a minor-unit quote belongs to — a GBp line prices a GBP company. */
@@ -4064,7 +4078,8 @@
                 { title: 'Quality & Returns', fields: [
                     ['returnOnEquity', 'Return on Equity', 'pct', 'Net income ÷ shareholders\' equity. Measures profitability relative to what shareholders have invested. Can be inflated by high leverage, so compare alongside Debt/Equity. Yahoo divides TTM income by a trailing equity base it does not publish, so this will not tie to the P/B on this row — AVGO\'s 44.25% implies equity of 86.5bn against a current book value of 99.7bn. Comparable between symbols, which is what it is here for; not reconcilable against anything else on the screen.', false, 'roe'],
                     ['returnOnAssets', 'Return on Assets', 'pct', 'Net income ÷ total assets. How efficiently the company uses all its assets to generate profit, regardless of how those assets are financed.', false, 'roa'],
-                    ['profitMargins', 'Profit Margin', 'pct', 'Net income ÷ Revenue. Bottom-line profitability after all costs, interest and taxes.', false, 'margins'],
+                    ['operatingMarginTtm', 'Operating Margin', 'pct', 'Operating income ÷ revenue, both trailing twelve months and both from the filings — the missing middle step between gross and net margin. Worth more than the net margin beside it wherever the two diverge: GOOG\'s reported net margin of 54.8% is inflated by a large non-operating equity gain, while the operating business runs at 33.1%. The denominator is chosen by which revenue tag reproduces this row\'s own TTM revenue, so the margin and the Revenue column are always the same figure; where none does, the margin is withheld with the reason rather than divided anyway. US filers only.', false, 'margins'],
+                    ['profitMargins', 'Profit Margin', 'pct', 'Net income ÷ Revenue. Bottom-line profitability after all costs, interest and taxes. Includes everything non-operating — gains on investments, one-off tax items — so a wide gap to the operating margin above is the signal, not noise.', false, 'margins'],
                     ['grossMargins', 'Gross Margin', 'pct', 'Gross profit ÷ Revenue. Revenue minus direct production costs. Reflects pricing power and production efficiency before overhead.', false, 'margins']
                 ]},
                 { title: 'Balance Sheet / Leverage', noFinancial: true, fields: [
@@ -4076,6 +4091,7 @@
                 ]},
                 { title: 'Income (TTM)', fields: [
                     ['totalRevenue', 'Revenue', 'capFiled', 'Total sales over the trailing 12 months.'],
+                    ['operatingIncomeTtm', 'Operating Income', 'capEdgar', 'Trailing-twelve-month operating income, summed from the four quarters of the company\'s own 10-K/10-Q XBRL at the SEC — GAAP by construction, and the only figure here whose window the source actually states (shown in the quarterly table below). Yahoo supplies no TTM operating income at all, which is why its single-quarter operating margin was deleted rather than relabelled. A 10-K rarely tags its own fourth quarter, so that one quarter is recovered by subtracting the nine months from the year — arithmetic on two filed figures, and marked as derived below. US filers only.', false, 'margins'],
                     ['netIncomeToCommon', 'Net Income', 'capFiled', 'Profit attributable to common shareholders over the trailing 12 months, on a GAAP basis — after every cost, including the share-based compensation and acquisition amortisation that a company\'s own "adjusted" figures typically exclude. This is the number the trailing P/E is built on; the forward P/E is not.', false, 'margins'],
                     ['ebitda', 'EBITDA', 'capFiled', 'Earnings Before Interest, Taxes, Depreciation and Amortisation — a proxy for operating cash generation that strips out capital structure and accounting choices.', true, 'ebitda'],
                     ['revenueGrowth', 'Revenue Growth', 'pct', 'Year-over-year revenue growth rate.'],
@@ -4172,7 +4188,8 @@
             // doesn't get empty "—" boxes.
             // Field tuple: [key, label, type, tooltip, noFinancial?, glossaryAnchor?]
             // Group: { title, fields, noFinancial? } — noFinancial skips the whole group.
-            document.getElementById('snapshot-detail-body').innerHTML = fundamentalsHtml(row, isFinancial);
+            document.getElementById('snapshot-detail-body').innerHTML =
+                    fundamentalsHtml(row, isFinancial) + operatingQuartersHtml(row.symbol);
             document.getElementById('snapshot-detail-modal').classList.add('open');
         }
 
@@ -4297,7 +4314,58 @@
             // those with the quote symbol is how "$27.38B" came to read "p27.38B".
             if (type === 'cap') return fmtMarketCap(v, ccy);
             if (type === 'capFiled') return fmtMarketCap(v, filedCurrency(row, ccy));
+            // 'capEdgar' is a filings-side amount whose unit the filing itself states, which is
+            // not necessarily the one Yahoo reports as financialCurrency — ASML files its
+            // operating income in EUR on a USD-quoted line. Taking the unit as filed is the same
+            // discipline as the other two: label a figure in the currency it is actually in.
+            if (type === 'capEdgar') {
+                return fmtMarketCap(v, (row && row.labels && row.labels.operatingUnit)
+                        || filedCurrency(row, ccy));
+            }
             return n.toString();
+        }
+
+        /**
+         * The four filed quarters behind the TTM operating income, oldest first.
+         *
+         * <p>A point estimate cannot show a direction, and the direction is most of what these
+         * figures are for: AVGO's margin widening 41.7% → 53.9% across four quarters and MSFT's
+         * narrowing 48.9% → 45.1% say different things about two businesses whose TTM margins
+         * look similar. Each row carries the window the filer tagged it with, so a quarter is
+         * never shown as covering a period it does not, and the one a 10-K leaves implicit is
+         * marked derived rather than presented as filed. Nothing is drawn for a symbol with no
+         * line — a London listing has no SEC filing to read, which is an absence, not a gap.
+         */
+        function operatingQuartersHtml(symbol) {
+            var line = snapshotOperatingLines[symbol];
+            if (!line || !line.quarters || !line.quarters.length) return '';
+            var unit = line.unit || '';
+            var rows = line.quarters.map(function (q) {
+                var derived = q.derived
+                    ? ' <span class="snap-withheld" title="A 10-K presents the year, not its' +
+                      ' fourth quarter. This one is the year minus the nine months that share' +
+                      ' its start — arithmetic on two filed figures, not an estimate.">derived</span>'
+                    : '';
+                // A quarter whose revenue tag covers a different set of periods than operating
+                // income does has no margin of its own, and says so with a dash.
+                var margin = (q.revenue && q.revenue != 0)
+                        ? ((q.operatingIncome / q.revenue) * 100).toFixed(1) + '%'
+                        : '—';
+                return '<div class="snap-kv"><span class="k">' + escapeHtml(q.start) + ' → ' +
+                        escapeHtml(q.end) + derived + '</span><span class="v">' +
+                        fmtMarketCap(q.operatingIncome, unit) + ' · ' + margin + '</span></div>';
+            }).join('');
+            var note = 'Operating income and margin per filed quarter, oldest first, from this' +
+                    ' company\'s own 10-K/10-Q XBRL at the SEC — trailing twelve months to ' +
+                    escapeHtml(line.periodEnd || '') +
+                    (line.revenueConcept
+                        ? '. The denominator is the ' + escapeHtml(line.revenueConcept) +
+                          ' tag, chosen because it reproduces this row\'s own TTM revenue.'
+                        : '.');
+            return '<div class="snap-group"><div class="snap-group-title">' +
+                    'Operating income by quarter</div>' + rows +
+                    '<div class="snap-kv" style="margin-top:0.25rem"><span class="k"' +
+                    ' style="font-size:0.72rem">' + note + '</span></div></div>';
         }
 
         function closeSnapshotDetail() {

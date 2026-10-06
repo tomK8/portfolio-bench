@@ -1,6 +1,7 @@
 package com.portfolio.web;
 
 import com.portfolio.application.FundamentalsFetchJob;
+import com.portfolio.application.OperatingLineFetchJob;
 import com.portfolio.application.FundamentalsService;
 import com.portfolio.application.FundamentalsService.FundamentalsReport;
 import com.portfolio.application.HealthService;
@@ -51,6 +52,7 @@ public class AnalysisController {
     private final FundamentalsService fundamentalsService;
     private final PortfolioFundamentalsService portfolioFundamentalsService;
     private final FundamentalsFetchJob fundamentalsFetchJob;
+    private final OperatingLineFetchJob operatingLineFetchJob;
     private final WhatIfService whatIfService;
     private final HistoricalScenarioService scenarioService;
     private final TradeNotesService tradeNotesService;
@@ -61,6 +63,7 @@ public class AnalysisController {
     public AnalysisController(FundamentalsService fundamentalsService,
                               PortfolioFundamentalsService portfolioFundamentalsService,
                               FundamentalsFetchJob fundamentalsFetchJob,
+                              OperatingLineFetchJob operatingLineFetchJob,
                               WhatIfService whatIfService,
                               HistoricalScenarioService scenarioService,
                               TradeNotesService tradeNotesService,
@@ -70,6 +73,7 @@ public class AnalysisController {
         this.fundamentalsService = fundamentalsService;
         this.portfolioFundamentalsService = portfolioFundamentalsService;
         this.fundamentalsFetchJob = fundamentalsFetchJob;
+        this.operatingLineFetchJob = operatingLineFetchJob;
         this.whatIfService = whatIfService;
         this.scenarioService = scenarioService;
         this.tradeNotesService = tradeNotesService;
@@ -119,7 +123,14 @@ public class AnalysisController {
     public Map<String, Object> refreshPortfolioFundamentals() {
         boolean wasRunning = fundamentalsFetchJob.isRunning();
         if (!wasRunning) {
-            Thread t = new Thread(fundamentalsFetchJob::run, "fundamentals-refresh-manual");
+            // Both sources, in order and on one thread: the operating line is published only
+            // where EDGAR's revenue reconciles with the Yahoo revenue on the same row, so it
+            // needs the fresh row. Forced, because a person pressing Refresh means now — the
+            // scheduled pass deliberately leaves rows under 20 hours old alone.
+            Thread t = new Thread(() -> {
+                fundamentalsFetchJob.run();
+                operatingLineFetchJob.runForced();
+            }, "fundamentals-refresh-manual");
             t.setDaemon(true);
             t.start();
         }

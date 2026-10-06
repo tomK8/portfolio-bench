@@ -2,6 +2,7 @@ package com.portfolio.web;
 
 import com.portfolio.application.CachedHistoricalFxRateProvider;
 import com.portfolio.application.FundamentalsFetchJob;
+import com.portfolio.application.OperatingLineFetchJob;
 import com.portfolio.application.GiltPriceFetchJob;
 import com.portfolio.application.BackupService;
 import com.portfolio.application.ImportGiltPricesService;
@@ -38,6 +39,7 @@ public class PriceFetchScheduler {
     private final GiltPriceFetchJob giltJob;
     private final ImportGiltPricesService giltImportService;
     private final FundamentalsFetchJob fundamentalsJob;
+    private final OperatingLineFetchJob operatingLineJob;
     private final WatchlistAlertJob watchlistAlertJob;
     private final ReminderJob reminderJob;
     private final CachedHistoricalFxRateProvider historicalFx;
@@ -47,6 +49,7 @@ public class PriceFetchScheduler {
                                GiltPriceFetchJob giltJob,
                                ImportGiltPricesService giltImportService,
                                FundamentalsFetchJob fundamentalsJob,
+                               OperatingLineFetchJob operatingLineJob,
                                WatchlistAlertJob watchlistAlertJob,
                                ReminderJob reminderJob,
                                CachedHistoricalFxRateProvider historicalFx,
@@ -56,6 +59,7 @@ public class PriceFetchScheduler {
         this.giltJob = giltJob;
         this.giltImportService = giltImportService;
         this.fundamentalsJob = fundamentalsJob;
+        this.operatingLineJob = operatingLineJob;
         this.watchlistAlertJob = watchlistAlertJob;
         this.reminderJob = reminderJob;
         this.historicalFx = historicalFx;
@@ -68,7 +72,15 @@ public class PriceFetchScheduler {
         startDaemon("price-fetch-intraday-startup", this::intradayQuietly);
         startDaemon("price-fetch-gilt-startup", this::giltQuietly);
         startDaemon("gilt-prices-import-startup", this::giltImportQuietly);
-        startDaemon("fundamentals-refresh-startup", fundamentalsJob::run);
+        // One daemon, two jobs, in this order. The operating line is published only where
+        // EDGAR's assembled revenue reconciles with the Yahoo revenue on the same row, so it
+        // needs that row cached first — running them as separate daemons would race, and the
+        // re-entrance guard would make the loser skip rather than wait. Rows fetched in the
+        // last 20 hours are skipped inside the job, so a restart re-reads SEC for nothing.
+        startDaemon("fundamentals-refresh-startup", () -> {
+            fundamentalsJob.run();
+            operatingLineJob.run();
+        });
         // Warms the whole USD/EUR history in one call each, so a cold start during a Frankfurter
         // outage can still value non-GBP positions instead of silently reporting them as £0.
         startDaemon("fx-history-warm-startup", historicalFx::warm);
@@ -107,6 +119,16 @@ public class PriceFetchScheduler {
     @Scheduled(fixedDelay = 4 * 60 * 60 * 1000, initialDelay = 4 * 60 * 60 * 1000)
     public void fundamentals() {
         fundamentalsJob.run();
+    }
+
+    /**
+     * The operating line, daily. Filings land quarterly, so the only reason to look more often
+     * than that is to catch one on the day it is filed; the job itself skips any row fetched in
+     * the last 20 hours, so this cadence costs one SEC pass a day over ~40 US lines.
+     */
+    @Scheduled(fixedDelay = 24 * 60 * 60 * 1000, initialDelay = 30 * 60 * 1000)
+    public void operatingLine() {
+        operatingLineJob.run();
     }
 
     /**

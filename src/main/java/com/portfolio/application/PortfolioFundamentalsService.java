@@ -4,16 +4,19 @@ import com.portfolio.adapter.YahooQuoteSummaryFetcher;
 import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.model.OperatingLine;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.FundamentalsRepository.Cached;
 import com.portfolio.persistence.KeyValueStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -54,15 +57,18 @@ public class PortfolioFundamentalsService {
     private final YahooTickerMap tickerMap;
     private final KeyValueStore keyValueStore;
     private final FundamentalsRepository repo;
+    private final OperatingLineService operatingLines;
 
     public PortfolioFundamentalsService(YahooQuoteSummaryFetcher fetcher,
                                         YahooTickerMap tickerMap,
                                         KeyValueStore keyValueStore,
-                                        FundamentalsRepository repo) {
+                                        FundamentalsRepository repo,
+                                        OperatingLineService operatingLines) {
         this.fetcher = fetcher;
         this.tickerMap = tickerMap;
         this.keyValueStore = keyValueStore;
         this.repo = repo;
+        this.operatingLines = operatingLines;
     }
 
     /**
@@ -73,19 +79,67 @@ public class PortfolioFundamentalsService {
     public Snapshot snapshot() {
         List<String> heldSorted = heldInternalSymbols();
         Map<String, Cached> cached = repo.loadAll();
+        Map<String, OperatingLine> operating = operatingLines.all();
 
         List<QuoteSummary> rows = new ArrayList<>(heldSorted.size());
+        // Only the lines belonging to rows this response actually carries. The refresh covers
+        // every cached symbol, which can include one that has since left the universe (the
+        // snapshot table outlives it by design — see docs/fundamentals.md), and a payload that
+        // described a symbol absent from the table would be describing nothing.
+        Map<String, OperatingLine> shown = new LinkedHashMap<>();
         Instant latest = null;
         for (String internal : heldSorted) {
             Cached c = cached.get(internal);
             if (c == null) {
                 rows.add(QuoteSummary.empty(internal));
-            } else {
-                rows.add(withSymbol(c.quote(), internal));
-                if (latest == null || c.fetchedAt().isAfter(latest)) latest = c.fetchedAt();
+                continue;
+            }
+            OperatingLine line = operating.get(internal);
+            if (line != null) shown.put(internal, line);
+            rows.add(withOperatingLine(withSymbol(c.quote(), internal), line));
+            if (latest == null || c.fetchedAt().isAfter(latest)) latest = c.fetchedAt();
+        }
+        return new Snapshot(rows, latest, filteredExtraSymbols(), shown);
+    }
+
+    /**
+     * Fold the filings-sourced operating line into a Yahoo row, at <b>read</b> time.
+     *
+     * <p>It deliberately does not go into the stored blob. {@code extra_json} is rewritten whole
+     * every four hours, which is what lets a removed Yahoo field migrate itself; filings move
+     * quarterly, so merging here keeps each source on its own cadence and leaves that property
+     * intact. See {@link com.portfolio.persistence.OperatingLineRepository}.
+     *
+     * <p>A withheld line contributes the {@code excluded:} labels and no figures, so the panel
+     * renders the same muted "withheld" with its reason that a currency-gated ratio gets — a
+     * bare dash could not distinguish a filer that reports no operating income from one whose
+     * figures we declined to divide.
+     */
+    private static QuoteSummary withOperatingLine(QuoteSummary q, OperatingLine line) {
+        if (line == null) return q;
+        Map<String, BigDecimal> extra = new LinkedHashMap<>(
+                q.extra() == null ? Map.of() : q.extra());
+        Map<String, String> labels = new LinkedHashMap<>(
+                q.labels() == null ? Map.of() : q.labels());
+
+        if (line.withheld()) {
+            labels.put("excluded:operatingIncomeTtm", line.withheldReason());
+            labels.put("excluded:operatingMarginTtm", line.withheldReason());
+        } else {
+            extra.put("operatingIncomeTtm", line.operatingIncomeTtm());
+            extra.put("operatingMarginTtm", line.operatingMarginTtm());
+            labels.put("operatingPeriodEnd", line.periodEnd().toString());
+            labels.put("operatingUnit", line.unit() == null ? "" : line.unit());
+            labels.put("operatingRevenueConcept",
+                    line.revenueConcept() == null ? "" : line.revenueConcept());
+            if (line.derivedQuarterEnd() != null) {
+                labels.put("operatingDerivedQuarterEnd", line.derivedQuarterEnd().toString());
             }
         }
-        return new Snapshot(rows, latest, filteredExtraSymbols());
+        return new QuoteSummary(q.symbol(), q.currency(), q.price(), q.marketCap(),
+                q.trailingPe(), q.forwardPe(), q.pegRatio(), q.beta(),
+                q.week52High(), q.week52Low(), q.targetMeanPrice(),
+                extra, labels, q.sectorWeights(), q.topHoldings(), q.missing());
     }
 
     /**
@@ -205,8 +259,14 @@ public class PortfolioFundamentalsService {
                 q.extra(), q.labels(), q.missing());
     }
 
-    /** {@code extraSymbols} are the user-added (non-held) rows the UI can offer a remove control for. */
-    public record Snapshot(List<QuoteSummary> rows, Instant lastUpdatedAt, List<String> extraSymbols) {}
+    /**
+     * {@code extraSymbols} are the user-added (non-held) rows the UI can offer a remove control
+     * for. {@code operatingLines} carries the filings-sourced quarterly series keyed by symbol —
+     * the grid reads the two TTM figures merged into each row, the detail view reads the series
+     * from here, and a symbol with no SEC filing to read is simply absent.
+     */
+    public record Snapshot(List<QuoteSummary> rows, Instant lastUpdatedAt, List<String> extraSymbols,
+                           Map<String, OperatingLine> operatingLines) {}
 
     public record RefreshResult(int fetched, long elapsedMs) {}
 }

@@ -779,13 +779,24 @@ ROIC            = NOPAT / Invested Capital</div>
 Operating Margin = Operating Income / Revenue   (after overhead, before interest &amp; tax)
 Net Margin       = Net Income / Revenue          (after everything)</div>
     <div class="caveat">
-        <strong>The panel shows gross and net, not operating</strong>
+        <strong>Operating margin comes from the filings, not the feed</strong>
         Yahoo's operating margin is the <em>latest quarter</em> while every other margin it
-        publishes is trailing-twelve-month, and the feed no longer carries a TTM operating
-        income to put in its place. A quarter's figure sitting in a row of TTM ones compares
-        neither against its neighbours nor against the same column on another symbol, so the
-        column was removed rather than relabelled. The gap between gross and net still tells
-        you what the waterfall above describes, minus one step.
+        publishes is trailing-twelve-month, and the feed carries no TTM operating income to put
+        in its place. A quarter's figure sitting in a row of TTM ones compares neither against
+        its neighbours nor against the same column on another symbol, so that column was removed
+        rather than relabelled.
+        <br><br>
+        What the panel shows instead is assembled from the company's own 10-K/10-Q XBRL at the
+        SEC: four filed quarters of operating income, each carrying the window the filer tagged
+        it with, over the revenue tag that reproduces the row's own TTM revenue. GAAP by
+        construction, and the only figure on the screen whose period the source actually states.
+        <strong>US filers only</strong> — a London listing has no SEC filing to read, and a
+        company that reports no operating-income subtotal (banks have none) or files on Form 20-F
+        is told apart from one we simply could not read, with the reason shown in place of the
+        figure.
+        <br><br>
+        The gap to the net margin beside it is the point. GOOG's reported net margin of 54.8%
+        is inflated by a large non-operating equity gain; the operating business runs at 33.1%.
     </div>
     <div class="example">
         <strong>Worked example — following the waterfall</strong>

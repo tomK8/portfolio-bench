@@ -63,8 +63,9 @@ that can print a confident zero for a company earning billions is not a coverage
 wrong answer waiting for the feed to shift again.
 
 The modules are therefore **no longer requested**. If ROIC matters later, the honest source is
-SEC EDGAR XBRL — `EdgarFundamentalsFetcher` and `CikRegistry` already exist (currently diluted
-EPS only) — which is GAAP by construction and names its own periods. US filers only.
+SEC EDGAR XBRL, which is GAAP by construction and names its own periods — and that path now
+exists and is proven: see "The operating line comes from the filings" below, which does exactly
+this for operating income. US filers only.
 
 The glossary keeps both entries, with a note saying the panel does not carry the metric and why.
 The idea still governs how to read what *is* shown; only our ability to measure it went away.
@@ -109,6 +110,94 @@ identify, disclosed and kept) rather than the operating-margin one (a period tha
 neighbours', deleted). The keys `freeCashflow` and `fcfMarginTtm` are **unchanged on purpose**: a
 watchlist column layout stores `f:fcfMarginTtm`, one list uses it, and re-keying the field would
 have dropped that column silently while the label is the only thing that was ever wrong.
+
+## The operating line comes from the filings
+
+Deleting Yahoo's single-quarter operating margin left the panel with **no operating figure at
+all**, which matters most exactly where reported earnings diverge from the business: GOOG's net
+margin reads 54.8% because a large non-operating equity gain runs through it, while the operating
+business is at 33.1%. Nothing on the screen could show that, and nothing in `quoteSummary` can —
+there is no TTM operating income in it, and `ebit` in the quarterly statements arrives as a
+literal 0.
+
+SEC XBRL can. `OperatingIncomeLoss` is tagged by the filer, GAAP by construction, and **states
+its own window** — the one property the whole of this document is otherwise about working around.
+`EdgarXbrlFetcher` reads one concept at a time from `companyconcept` (tens of KB, against
+megabytes for a whole-company `companyfacts` blob), `FiledPeriods` assembles the twelve months,
+`OperatingLineService` applies the two gates below, and `edgar_operating_line` caches the result.
+
+### Assembling twelve months out of filed periods
+
+Two things make this more than addition, and `FiledPeriods` refuses rather than approximates
+either:
+
+- **A 10-Q tags more than its own quarter.** The filing for a fiscal Q3 carries Q3 alone (~91
+  days) *and* the nine-month year-to-date (~273); a Q2 filing carries the half-year beside the
+  quarter. Adding everything on file counts the same months two and three times, so facts are
+  bucketed by the length of their own window and only quarter-length ones are summed.
+- **The final quarter is usually not filed as a quarter.** A 10-K presents the year. For
+  `OperatingIncomeLoss` the Q4 window is simply absent, so it is recovered as *year minus the
+  nine months that share its start* — arithmetic on two filed figures, not an estimate. NVDA
+  FY2026: 130.387 − 86.088 = **44.299bn**, which lands in sequence between the 36.010 before it
+  and the 53.536 after. The quarter is **marked derived** in the panel rather than shown as
+  though the filer had tagged it.
+
+A TTM is published only when four quarters **tile a year contiguously** (within three days, since
+fiscal quarters end on weekdays). Three quarters summed and called a year is the manufactured
+figure this repo keeps deleting.
+
+### The revenue tag is chosen by reconciliation, not by a preference list
+
+Filers do not agree on one revenue concept — `Revenues`, `RevenueFromContractWithCustomer…`
+(two of them), `SalesRevenueNet` — and ranking them by hand would be the maintained list this
+repo rejects. Instead the tag used is **whichever one reproduces the TTM revenue already on the
+row**, within 0.5%. One test then does four jobs:
+
+| It confirms | Because otherwise |
+|---|---|
+| the CIK is the same company | SEC keys bare tickers and so do we: **`BLND` is British Land here and Blend Labs there**, and `BA.` is BAE against Boeing's `BA` |
+| the window is current | KLAC's latest tagged `OperatingIncomeLoss` window is **2015-03-31**, which would have published an eleven-year-old margin beside today's price |
+| the revenue definition matches the column beside it | WMT's contract-revenue tag **excludes membership income** and came out 1.0% light; `Revenues` reproduces the row exactly, so the gate picks it |
+| the margin's denominator is the panel's own revenue | a margin that cannot be checked against the Revenue cell on its own row is a second opinion, not a measurement |
+
+This is a reconciliation between two independent sources of the *same* quantity — the device
+`DividendService` already uses on share counts — not a plausibility band on a figure, which is
+the thing rejected for BRK.B's P/B. The evidence that it is tight enough to trust: **26 of the 30
+candidates reproduced Yahoo's TTM revenue to the dollar**, and all four that did not were
+genuinely wrong to publish (the three above, plus MU, whose EDGAR window is a quarter behind
+Yahoo's).
+
+A symbol is also skipped before any request unless it is **its own Yahoo ticker** — `AAPL` maps
+to `AAPL`, `BLND` maps to `BLND.L` — which is what keeps the 27 London lines and ETFs out of SEC
+entirely and is the first line of defence against the ticker collision.
+
+### Four silences, told apart
+
+"No operating margin" is four different facts and the panel says which, because `excluded:` is
+how this screen reports anything it will not show:
+
+| Outcome | What the row says | Measured |
+|---|---|---|
+| `UNTAGGED` (404, or a unit with no facts) | this filer never tags an operating income — banks have no such subtotal | BAC, LLY (404); V (200, empty `USD`) |
+| `NOT_DOMESTIC` | reports on Form 20-F, so the figures are on another basis and often another currency | ASML: 51 facts, every one a 20-F, in EUR |
+| revenue will not reconcile | names the window it was looking at | KLAC (2015), MU (a quarter behind) |
+| `UNAVAILABLE` | **nothing is stored** | an outage is not a verdict about the company — storing one would leave a refusal reading like a finding |
+
+Current coverage: **30 of 68 symbols publish**, 16 are withheld with a reason, and the rest are
+not US lines. GOOG at 33.1% against a 54.8% net margin, MRVL at 16.5% against 27.9%, AMZN at
+12.1% against 17.4%, INTC at −0.1% against −19.8%.
+
+### Why its own table, and its own cadence
+
+`fundamentals_snapshot.extra_json` is rewritten whole every four hours, which is what lets a
+removed Yahoo field migrate itself (below). Filings move quarterly. Folding EDGAR figures into
+that blob would either re-read SEC every four hours for data that cannot have changed, or make
+the blob depend on its own previous value — so `edgar_operating_line` is a separate table on a
+daily job, and the two are merged **at read time** in `PortfolioFundamentalsService.snapshot()`.
+The blob keeps its self-clearing property and each source keeps its own clock. The refresh skips
+any row younger than 20 hours, so restarts cost nothing, and it runs *after* the Yahoo pass in
+the same startup daemon — the reconciliation needs that row cached first, and two daemons would
+race with the loser skipping rather than waiting.
 
 ## The unit gate: which ratios may be divided at all
 
@@ -187,7 +276,25 @@ had been labelling all of them with the quote currency:
 |---|---|---|---|
 | As quoted | `price`, `targetMeanPrice`, 52-week high/low, moving averages | quote currency, as quoted — **pence** on a GBp line | `fmtPrice`, unchanged (it was already right) |
 | Market side, bulk | `marketCap`, `enterpriseValue` | quote currency's **major** unit | `'cap'` → `fmtMarketCap`, which now normalises GBp → GBP |
-| Statement side | revenue, EBITDA, net income, debt, cash, OCF, FCF, capex, net debt | `financialCurrency` | `'capFiled'` → `fmtMarketCap(v, filedCurrency(row))` |
+| Statement side | revenue, EBITDA, net income, debt, cash, OCF, levered FCF, net debt | `financialCurrency` | `'capFiled'` → `fmtMarketCap(v, filedCurrency(row))` |
+| Filing side | `operatingIncomeTtm` | the unit the **filing** states, which Yahoo does not supply | `'capEdgar'` → `fmtMarketCap(v, labels.operatingUnit)` |
+
+The fourth class is not pedantry: EDGAR reports the unit per concept and it need not agree with
+Yahoo's `financialCurrency` for the same company (ASML's `OperatingIncomeLoss` is filed in EUR on
+a USD-quoted line). Taking the unit as filed is the same discipline as the other three — label a
+figure in the currency it is actually in, never in the one its neighbour happens to use.
+
+### Negative amounts were not being scaled at all
+
+`fmtMarketCap` compared the **signed** value against its thresholds (`n >= 1e9`), so every
+negative amount fell through to the last branch and printed unscaled: GOOG's net cash position
+read `$-121,682,993,152` directly above a `$120.79B` total debt — the one figure it most needs to
+be comparable with. It now scales on the magnitude and carries the sign, giving `-$121.68B`.
+
+Negatives are ordinary on this screen, not an edge case: a net cash position, a levered FCF Yahoo
+models below zero (ORCL −45.85B, BABA −82.64B), a corrupt enterprise value (SKHY), and an
+operating loss (INTC's TTM operating income is −77.0M). Adding a field that can be negative is
+what surfaced it.
 
 Verified by measurement: for BA.L, `price × sharesOutstanding ÷ marketCap` is exactly **100.0**
 (likewise BATS.L and AZN.L), so market cap is in pounds while the price is in pence. The

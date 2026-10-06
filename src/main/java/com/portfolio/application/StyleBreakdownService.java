@@ -283,7 +283,12 @@ public class StyleBreakdownService {
                 x.get("priceToSalesTrailing12Months"),
                 x.get("revenueGrowth"),
                 x.get("earningsGrowth"),
-                x.get("fcfGrowthYoy"),
+                // FCF growth YoY: no source. It was derived from the quarterly cash-flow
+                // statements, which Yahoo now returns empty, so it never carried a value for any
+                // symbol and the fetcher no longer computes it. The classifier's vote stays
+                // wired and abstains on null (see StyleClassifier), so the growth axis is
+                // unchanged — this is a null by fact, not a lookup that might one day hit.
+                null,
                 x.get("forwardRevenueGrowth"),
                 x.get("forwardEarningsGrowth"),
                 x.get("fundPriceToEarnings"),

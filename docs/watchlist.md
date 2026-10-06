@@ -105,11 +105,12 @@ touches an order.
   - The picker marks each fundamentals field with how many symbols **on this list** have a value
     (`13/18`, or "no data for this list"). Several metrics are empty for whole asset classes — an
     ETF has no FCF margin, a bank no EV/EBITDA — and picking one blind to find a column of dashes
-    is a wasted trip. Two are currently empty for *everything*: `roic` and `fcfGrowthYoy` are
-    computed from the `*HistoryQuarterly` quoteSummary modules, which Yahoo has stopped
-    returning — 0 of 71 stored rows carry either, while every `financialData`-derived metric is
-    fine. The computation is correct and will start working if the feed does; the coverage mark
-    is what stops that being a surprise.
+    is a wasted trip. The two that were empty for *everything* — `roic` and `fcfGrowthYoy`,
+    derived from the `*HistoryQuarterly` modules Yahoo now returns hollow — are **gone**, not
+    marked: a column no symbol can ever fill is not a coverage problem to report but one to
+    delete, and the same pass dropped `operatingMargins` for stating a period the panel does not
+    (see [fundamentals.md](fundamentals.md)). The mark still earns its place for the metrics that
+    are empty per asset class rather than outright.
 - `WatchlistRepository` — `watchlist` table (symbol PK + two thresholds + added_at). The
   symbol set is **mirrored** to `KeyValueStore` under `watchlist_symbols` on every mutation,
   so `PriceFetchSupport.tickersToFetch` and `PortfolioFundamentalsService` union watchlist

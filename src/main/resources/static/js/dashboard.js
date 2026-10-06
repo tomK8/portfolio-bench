@@ -3918,7 +3918,13 @@
                 tr.appendChild(td(fmtPrice(row.targetMeanPrice, row.currency)));
                 tr.appendChild(td(fmtRatio(row.trailingPe)));
                 tr.appendChild(td(fmtRatio(row.forwardPe)));
-                tr.appendChild(td(fmtRatio(row.extra ? row.extra['enterpriseToEbitda'] : null)));
+                // EV/EBITDA, under the same financial-sector guard the detail view applies.
+                // Without it the grid printed a figure for banks and insurers (LGEN 22.21,
+                // AV. 1.76, LSEG 16.74) that the detail view for the same symbol suppressed,
+                // while Yahoo's own silence blanked others (HSBA, BARC) — so financials were
+                // inconsistent against each other in the one column meant to rank them.
+                tr.appendChild(td(isFinancialRow(row) ? null
+                        : fmtRatio(row.extra ? row.extra['enterpriseToEbitda'] : null)));
                 tr.appendChild(td(fmtRatio(row.pegRatio)));
                 tr.appendChild(td(fmtRatio(row.beta)));
                 tr.appendChild(td(fmtMarketCap(row.marketCap, row.currency)));
@@ -4088,13 +4094,21 @@
                     var key = f[0], label = f[1], type = f[2], tip = f[3], noFin = f[4], anchor = f[5];
                     if (isFinancial && noFin) return;
                     var v = fundFieldValue(row, key, f[6]);
-                    if (v == null) return;
+                    // A field the fetcher withheld is shown as withheld, with the reason in the
+                    // tooltip. Rendering it as a plain absence would make "we could not trust
+                    // this ratio" indistinguishable from "the feed never sent it".
+                    var why = fundExclusionReason(row, key);
+                    if (v == null && !why) return;
                     var anchorAttr = anchor ? ' data-anchor="' + anchor + '"' : '';
                     var labelHtml = tip
                         ? '<span class="snap-tip" data-tip="' + tip.replace(/"/g, '&quot;') + '"' + anchorAttr + '>' + label + '</span>'
                         : label;
+                    var valueHtml = why
+                        ? '<span class="snap-tip snap-withheld" data-tip="Withheld: ' +
+                            why.replace(/"/g, '&quot;') + '">withheld</span>'
+                        : fmtSnapValue(v, type, row.currency, row);
                     inner += '<div class="snap-kv"><span class="k">' + labelHtml + '</span>' +
-                            '<span class="v">' + fmtSnapValue(v, type, row.currency, row) + '</span></div>';
+                            '<span class="v">' + valueHtml + '</span></div>';
                 });
                 if (inner) {
                     html += '<div class="snap-group"><div class="snap-group-title">' + g.title +
@@ -4116,12 +4130,21 @@
             if (sector) subParts.push(sector);
             if (industry) subParts.push(industry);
             if (rec) subParts.push('Analyst consensus: ' + rec);
+            // Provenance, so the row can answer "as of when, in what currency" itself instead
+            // of leaning on a group heading that claims one period for every symbol at once.
+            // The statement currency is named only when it differs from the quote currency —
+            // that difference is exactly what makes the gated ratios untrustworthy.
+            var asOf = (row.labels && row.labels.mostRecentQuarter) || '';
+            var finCcy = (row.labels && row.labels.financialCurrency) || '';
+            if (asOf) {
+                subParts.push('Statements to ' + asOf +
+                        (finCcy && finCcy !== row.currency ? ' (' + finCcy + ')' : ''));
+            } else if (finCcy && finCcy !== row.currency) {
+                subParts.push('Statements in ' + finCcy);
+            }
             document.getElementById('snapshot-detail-sub').textContent = subParts.join(' · ');
 
-            // Financial-sector companies (banks, insurers, asset managers) use debt as their
-            // product and hold huge investment portfolios as assets, which breaks Yahoo's EV,
-            // Net Debt, EBITDA and FCF calculations — suppress those groups/fields for them.
-            var isFinancial = /financial|insurance|bank/i.test(sector);
+            var isFinancial = isFinancialRow(row);
 
             // Group secondary fields by theme so the modal reads as a compact summary, not a
             // wall of key=value pairs. Each group's rows are skipped entirely when every
@@ -4144,6 +4167,25 @@
             var bag = source === 'labels' ? row.labels : row.extra;
             var v = bag ? bag[key] : null;
             return (v == null || v === '') ? null : v;
+        }
+
+        /**
+         * Why a field was withheld, or null if it was not. The fetcher records one
+         * `excluded:<field>` label per gated field — see YahooQuoteSummaryFetcher.putOrExclude.
+         */
+        function fundExclusionReason(row, key) {
+            if (!row || !row.labels) return null;
+            var v = row.labels['excluded:' + key];
+            return (v == null || v === '') ? null : v;
+        }
+
+        /**
+         * Banks and insurers hold debt as their product, which breaks every EV, Net Debt, EBITDA
+         * and FCF figure Yahoo derives for them. One home for the test, so the comparison grid
+         * and the two detail views cannot disagree about who counts as a financial.
+         */
+        function isFinancialRow(row) {
+            return /financial|insurance|bank/i.test((row && row.labels && row.labels.sector) || '');
         }
 
         /** Today as an ISO day, in the viewer's own zone — the basis every stored day is judged on. */
@@ -8561,8 +8603,7 @@
                         ' yet — the background refresh may still be running, or Yahoo has no data for this listing.</p>';
                     return;
                 }
-                var sector = (q.labels && q.labels.sector) || '';
-                var isFinancial = /financial|insurance|bank/i.test(sector);
+                var isFinancial = isFinancialRow(q);
                 // Core valuation not already in the stats strip, then the shared grouped
                 // renderer (same one the Snapshot-diff modal uses), laid out in columns.
                 var core = '<div class="snap-group"><div class="snap-group-title">Key</div>' +

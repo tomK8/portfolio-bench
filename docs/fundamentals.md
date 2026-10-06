@@ -73,30 +73,105 @@ EPS only) — which is GAAP by construction and names its own periods. US filers
 The glossary keeps both entries, with a note saying the panel does not carry the metric and why.
 The idea still governs how to read what *is* shown; only our ability to measure it went away.
 
+## The unit gate: which ratios may be divided at all
+
+A ratio is trustworthy only when its two sides share a currency **and** a unit scale. Yahoo
+checks neither, and the two sides come from different halves of the payload:
+
+- **market side** — `price`, `marketCap`, `enterpriseValue`, `bookValue`: the quote currency's
+  **major** unit, except `price`, which is the quote currency as quoted (pence on a `GBp` line).
+- **statement side** — `totalRevenue`, `ebitda`, `totalDebt`, `totalCash`: `financialCurrency`.
+
+`financialCurrency` is now captured, and `comparable()` is the single test. `GBp` and `GBP` count
+as the **same currency** — a London line quoted in pence files in pounds, which is a scale
+difference handled by `minorUnitsPerMajor`, not a currency one. An **absent**
+`financialCurrency` counts as comparable: funds and trusts file no statements, and the gated
+fields are absent for them anyway, so refusing on absence would report an exclusion nobody asked
+about.
+
+| Ratio | Sides | Treatment |
+|---|---|---|
+| `priceToBook` | price (as quoted) ÷ book value (major) | **Recomputed**, never read |
+| `priceToSalesTrailing12Months` | market cap (major quote) ÷ revenue (statement) | Gated on currency |
+| `enterpriseToEbitda` | EV (major quote) ÷ EBITDA (statement) | Gated on currency **and** EBITDA > 0 |
+| `netDebtToEbitda` | both from `financialData` | **Ungated** — one currency by construction |
+| margins, ROE, ROA, FCF margin | both from `financialData` | Ungated, same reason |
+
+### P/B was wrong by exactly 100× on every London line
+
+Yahoo's `priceToBook` is literally `price / bookValue` with no unit handling — verified as an
+exact identity across 64 payloads. On a `GBp` line that divides **pence by pounds**:
+
+| Symbol | Published | Reality |
+|---|---|---|
+| REL | 3676.55 | 36.77 |
+| LGEN | 753.37 | 7.53 |
+| BA. | 455.26 | 4.55 |
+| BARC | 92.64 | 0.93 |
+| BLND | 66.61 | 0.67 |
+
+All 13 GBp rows carrying a P/B were affected, and the metric is the *primary* yardstick for
+exactly the banks and REITs it broke — a scan for cheap-on-book showed every UK name as
+ruinously expensive. P/B is therefore **recomputed** from `price / minorUnitsPerMajor` ÷
+`bookValue` rather than read. `bookValue` is present whenever `priceToBook` is (61 of 61
+observed), so there is one path and no fallback, and the fixture publishes a `priceToBook` that
+disagrees with its own `bookValue` so a test can only pass the recomputing way.
+
+### Withheld, with the reason attached
+
+A gated field is **not** silently dropped. `putOrExclude` records one `excluded:<field>` label
+carrying why, and the panel renders that cell as a muted *withheld* with the reason in its
+tooltip. A bare absence cannot distinguish "we could not trust this ratio" from "the feed never
+sent it", and this screen is read by someone deciding between two symbols.
+
+Eight symbols currently mismatch: ASML (USD/EUR), BABA (USD/CNY), NVO (USD/DKK), SKHY (USD/KRW),
+TSM (USD/TWD), AZN (GBp/USD), BP. (GBp/USD), HSBA (GBp/USD). Where the figures are merely
+mis-denominated the error is the FX rate — BABA's 2.05 × 7.1 ≈ 14.6x, NVO's 1.50 × 6.4 ≈ 9.6x —
+but ASML's and SKHY's `defaultKeyStatistics` is corrupt outright, not merely in the wrong
+currency: ASML's EV is 39.68T against its own 714.37B market cap, its P/B 1615.80 and its
+EV/Revenue 1123.25, all implausible by a similar large factor; SKHY's EV is −65.17T on a positive
+market cap with positive net debt. **Converting rather than withholding would therefore not be
+enough**, which is why no FX is wired in here — the gate refuses the comparison instead of
+guessing at it.
+
+### The sector guard now applies in the grid too
+
+`renderSnapshot` printed EV/EBITDA for every row while the detail view suppressed it for
+financials, so the same symbol disagreed with itself and financials disagreed with each other:
+LGEN 22.21, AV. 1.76 and LSEG 16.74 were shown, while Yahoo's own silence blanked HSBA and BARC.
+`isFinancialRow` is now the single home for the test, used by the grid and both detail views.
+
 ## Still open
 
-- **`enterpriseToEbitda` is unreliable where the statement currency differs from the quote
-  currency.** It divides `defaultKeyStatistics.enterpriseValue` by `financialData.ebitda`, and
-  those are not guaranteed to be in the same currency. `financialData.financialCurrency` says
-  which, and **we do not capture it**. Of 58 symbols showing a value, 8 mismatch (ASML USD/EUR,
-  BABA USD/CNY, NVO USD/DKK, SKHY USD/KRW, TSM USD/TWD, AZN GBp/USD, BP. GBp/USD, HSBA GBp/USD);
-  the error is the FX rate — BABA's 2.05 × 7.1 ≈ 14.6x, NVO's 1.50 × 6.4 ≈ 9.6x. ASML (EV 39.68T
-  against its own 714.37B market cap) and SKHY (EV −65.17T on a positive market cap, net debt
-  positive) are worse: `enterpriseValue` itself reconciles in no currency, so an FX correction
-  cannot rescue them.
-- **The comparison grid applies no sector filter.** `renderSnapshot` prints EV/EBITDA for every
-  row; the `isFinancial` guard (`/financial|insurance|bank/i` on sector) runs only in the
-  per-symbol detail view. So LGEN 22.21, AV. 1.76 and LSEG 16.74 appear where the metric is
-  meaningless while HSBA and BARC are blank — financials inconsistent against each other.
 - **Currency amounts are labelled with the wrong currency.** Yahoo's `marketCap` for a
   GBp-quoted line is in **GBP** while `price` is in pence — exactly 100.0× on BA.L, BATS.L and
   AZN.L. `fmtMarketCap` prefixes the quote symbol and `currencySymbol('GBp')` is `'p'`, so BAE's
   £54.96B renders "p54.96B". Every `financialData` amount (net debt, total cash/debt, OCF, FCF,
   capex, revenue, EBITDA) is in `financialCurrency` but labelled from the quote currency. 18 of
-  80 rows are GBp; AZN/BP./HSBA are wrong twice over, USD figures under a pence label.
-- **`mostRecentQuarter` and `lastFiscalYearEnd`** are in the response we already make and are
-  discarded. Storing them is what would let a row say *as of when*, instead of a column heading
-  claiming it for every row at once.
+  80 rows are GBp; AZN/BP./HSBA are wrong twice over, USD figures under a pence label. The
+  captured `financialCurrency` is what this needs.
+- **Trailing and forward P/E are different accounting bases in adjacent columns** (GAAP vs
+  non-GAAP consensus) and nothing on the screen says so.
+- **ROE's equity base is unidentified**, so it will not reconcile against the P/B on the same
+  row. It is at least applied consistently across symbols, which is why it was kept.
+- **BRK.B's P/B is 0.000966**, because Yahoo's `bookValue` for it is 522,225.9 — the Class **A**
+  book value per share, against a Class **B** price of 504.26 (the classes differ 1500:1).
+  Berkshire's real P/B is about 1.45. This is Yahoo's own figure to the digit — it published
+  0.00096559746 before any of this and the recompute reproduces it exactly, so it is not a
+  regression — but it *is* the same defect class as the currency gate: a market-side figure
+  divided by a statement-side one on a different scale. It was deliberately **not** fixed here,
+  because every available test is a magic number. A plausibility band would also suppress
+  legitimate extremes (REL at 36.8 and MA at 88.3 are real, as is a distressed bank at 0.3),
+  which is the maintained-list anti-pattern this repo rejects: such a threshold can only ever be
+  wrong, never right. A principled fix needs a share-count basis the feed does not state.
+
+## Rows outside the fetch universe keep their stale blob
+
+`fundamentals_snapshot` holds 80 rows while the fetch universe (held ∪ watchlist) is 68, so a
+symbol that has left the universe is never refetched and keeps whatever its blob last said. REL
+still carries the pre-gate `priceToBook` of 3676.6 and no `financialCurrency` for that reason.
+Harmless — nothing reads a row outside the universe, and it corrects itself the moment the symbol
+returns — but worth knowing before reading a figure straight out of the table.
 
 ## The stored blobs clear themselves
 

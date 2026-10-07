@@ -267,6 +267,63 @@ that depend on it are redrawn: the cell, and the group blocks.
     opens the price popup, so typing a note cannot open a chart. Closed rows carry an editable note
     too: same input, same endpoint, no second code path.
 
+#### Reading one security's history — the filter
+
+Sorting the closed table answered *in what order*; a filter above it answers *which rows*, and the
+two compose. Pick NVDA, click **Closed**, and the result is that security's whole life in the panel
+— every order placed on it across every broker, and what became of each — oldest first. Three
+dropdowns, Security / Side / Outcome, plus **Clear**.
+
+- **It is a view, not a query.** The history already arrived with the panel (`OrdersReport.history`,
+  one payload, no second endpoint), so narrowing it client-side costs nothing, while a round trip
+  would re-parse three broker exports and re-read the price feed in order to show *fewer* of the
+  rows the browser is already holding — and would collapse the `<details>` the user is reading
+  inside, which is the same reason `POST /orders/status` is a `fetch`.
+- **Every choice is derived from the rows.** `ord-filter.js` builds the three option lists off the
+  rendered cells, so a dropdown can only ever offer what is in the table. A list of securities
+  restated in the template is wrong the first time an order is placed on a new one, and a list of
+  outcomes is wrong the first time `OrderStatus` learns a label — and either, being wrong, hides
+  rows without saying so. This is [the same rule as the gilt SEDOLs and the CIKs](../CLAUDE.md):
+  self-regulating over maintained. The option **order** is alphabetical for the same reason: a
+  hand-picked one (fills first, say) is one more thing to keep in step with a vocabulary that lives
+  in Java.
+- **Hidden, not removed**, which is what lets the sort and the filter ignore each other entirely:
+  `sortBody` re-appends the same `<tr>` elements, so a hidden row is still there to be ordered and
+  comes back in place the moment the filter is cleared. Neither feature knows the other exists.
+- **The state is read from the cell, the rest from the row.** `data-security` / `data-side` ride on
+  the `<tr>` because they are fixed for its lifetime. The state is not — the Status dropdown can
+  change it under the user — so the filter reads the state cell's `data-sort-value`, the attribute
+  the sorter reads and the verdict handler already writes. A row settled a second ago therefore
+  filters as what it *now* says, and settling the last "No longer listed" row while filtered to
+  that outcome re-runs the filter rather than leaving an excluded row on screen beside a count that
+  does not count it.
+- **A selection no row carries any more is kept in its dropdown.** That exact case — the last row of
+  an outcome settled while filtering on it — would otherwise reset the select to "All" and silently
+  widen the view back out. Kept, the selection stands and the count reads `(0 of 60)`, which is the
+  truth. A filter matching nothing also prints a line saying so: an empty table under a full header
+  reads as a bug.
+- **Absence is not a choice.** A cell printing `—` is offered by no dropdown — one listing it would
+  read as a security called "—". Such a row is still in "All" and still in the total, so nothing is
+  excluded; it simply cannot be singled out, which is the honest answer for a row that names nothing.
+- **Side is matched case-blind, security verbatim.** Each parser lifts the side straight out of its
+  own export, and these three brokers have already been caught writing one thing six ways in the
+  Status column — were one to write "SELL", a case-sensitive filter would offer Sell and SELL as two
+  sides of the market. A security is a ticker or an exported name, where case is part of the identity.
+- **The filter survives a re-render, and re-opens the block when it does.** The fragment is swapped
+  whole on every tab click and on both model checkboxes; ticking a checkbox is a request to re-price
+  the numbers, never to widen the list back out. `ordersSort` now remembers **both** tables for the
+  same reason — reading one security's history means narrowing it *and* ordering it by date, and
+  restoring half of that is worse than restoring neither. A restored filter forces the `<details>`
+  open, because a filter applied to a block the user cannot see is a panel quietly showing fewer
+  rows than it holds; the `(shown of total)` count in the summary says so even while collapsed.
+- **What this list is not.** It is the orders *this tool has seen*, kept for `RETENTION_DAYS`, so
+  filtering to Filled leaves the trades it knows about — not a complete trade history. That lives in
+  the cash ledger: the **Position** tab reads it per symbol, and the **Journal** tab lists it whole.
+
+The rule itself is in `static/js/ord-filter.js` — DOM-free and network-free, unit-tested under plain
+node (`src/test/js/ord-filter.test.mjs`), the same split as `wl-columns.js`. `dashboard.js` owns the
+DOM half only.
+
 - **Pre-trade limit probe (`Test a limit before you place it`).** The touch probability is the
   number that says whether a limit is ambitious or lazy, and until now it was only readable *after*
   the order existed at a broker — the wrong way round for calibrating one. A card at the top of the

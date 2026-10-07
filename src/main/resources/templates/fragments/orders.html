@@ -436,11 +436,20 @@
     <details class="order-history" th:if="${!#lists.isEmpty(orders.history)}">
         <summary>
             Closed orders
-            <span class="muted" th:text="'(' + ${#lists.size(orders.history)} + ')'">(0)</span>
+            <!--
+              Rewritten to "(shown of total)" while the filter below is narrowing the table, and
+              deliberately so while this block is collapsed: a filter still applied to a list the
+              user cannot see would otherwise be a count disagreeing with the table under it.
+            -->
+            <span class="muted" id="orders-history-count"
+                  th:attr="data-total=${#lists.size(orders.history)}"
+                  th:text="'(' + ${#lists.size(orders.history)} + ')'">(0)</span>
         </summary>
         <p class="muted" style="font-size: 0.82rem; margin: 0.5rem 0;">
             Orders that have filled, been cancelled, or been replaced by a modified version — kept
-            with their notes for <b>31 days</b> after they closed, then deleted. A broker issues a
+            with their notes for
+            <b th:text="${T(com.portfolio.persistence.OrderHistoryRepository).RETENTION_DAYS} + ' days'">365 days</b>
+            after they closed, then deleted. A broker issues a
             new reference when you modify an order, so the version you replaced keeps its own note
             and you can read it against the one above.
             <br/>
@@ -465,11 +474,53 @@
             word is the evidence and nothing here overrules it.
         </p>
         <!--
+          The filter. Sorting the table answers "in what order"; this answers "which rows", and
+          the two compose: pick a security, click Closed, and the result is that security's whole
+          order history in date order — every order placed on it and what became of each.
+
+          The dropdowns are filled in by JS from the rows themselves (see ord-filter.js), not
+          rendered here from a list: a security list restated in this template is wrong the first
+          time an order is placed on a new one, and an outcome list is wrong the first time
+          OrderStatus learns a label. Options taken off the rendered cells can only offer what is
+          actually in the table. With JS off the selects show "All" only, which is the behaviour
+          this block had before.
+
+          Outcome is the one that answers "my transactions" rather than "my orders": set it to
+          Filled and what is left is the trades. Note what this list is *not*, though — it is the
+          orders this tool has seen, kept for a year, so it is not a complete trade history. That
+          lives in the cash ledger, which the Position tab reads per symbol.
+        -->
+        <div class="order-filter" id="orders-history-filter">
+            <label>Security
+                <select id="ohf-security" title="One security, every order placed on it.">
+                    <option value="">All</option>
+                </select>
+            </label>
+            <label>Side
+                <select id="ohf-side">
+                    <option value="">All</option>
+                </select>
+            </label>
+            <label>Outcome
+                <select id="ohf-state"
+                        title="The normalised state, as the Status column prints it. Filled leaves the trades; No longer listed leaves the rows nobody has settled yet.">
+                    <option value="">All</option>
+                </select>
+            </label>
+            <button type="button" id="ohf-clear">Clear</button>
+            <!-- An empty table under a full header reads as a bug; a filter matching nothing says so. -->
+            <span class="muted ohf-note ord-hidden" id="ohf-empty">No closed order matches this filter.</span>
+        </div>
+
+        <!--
           Sortable on every column, like the open table above it. No JS of its own: the
           htmx:afterSettle handler already calls attachSort on every table inside #orders-result,
           so the headers only had to declare what they hold. Both dates are ISO yyyy-MM-dd, where
           a text sort *is* chronological — no date parser needed, and none that could disagree
           with the one the rest of the panel uses.
+
+          Sorting and filtering coexist by construction: the sorter re-appends the same <tr>
+          elements, so a row the filter has hidden stays hidden through any number of sorts.
         -->
         <table id="orders-history-table" class="swing-tbl">
             <thead>
@@ -487,7 +538,16 @@
             </tr>
             </thead>
             <tbody>
-            <tr th:each="h : ${orders.history}">
+            <!--
+              data-security / data-side are the filter's keys. They are on the row because they
+              are fixed for its lifetime — unlike the state, which the Status dropdown can change
+              under the user, and which the filter therefore reads from that cell's
+              data-sort-value (the attribute the sorter reads and the verdict handler updates, so
+              a row settled a second ago filters as what it now says rather than what it said when
+              the panel rendered).
+            -->
+            <tr th:each="h : ${orders.history}"
+                th:attr="data-security=${h.display()},data-side=${h.side}">
                 <td class="txt" th:text="${h.closedAt}">—</td>
                 <td class="txt" th:text="${h.broker}">—</td>
                 <td class="txt" th:text="${h.display()}">—</td>

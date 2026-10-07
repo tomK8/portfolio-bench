@@ -84,3 +84,10 @@ wherever they are used:
   does it after a group layout, the fundamentals snapshot after a background refresh, and the
   watchlist after every quote poll, fundamentals fill and reconcile (see
   [watchlist.md](watchlist.md) for the two states where it stands down).
+- **Filtering a sortable table hides rows, never removes them.** `sortBody` re-appends the same
+  `<tr>` elements, so a row carrying `.ord-hidden` is still there to be ordered and returns in
+  place when the filter clears. The two features then need to know nothing about each other — the
+  closed-orders filter ([open-orders.md](open-orders.md)) adds no call to `reapplyActiveSort` and
+  the sorter has no concept of a hidden row. `.ord-hidden` is a class rather than the `hidden`
+  attribute because `[hidden]` is one of the weakest rules in the UA sheet and a `<tr>` on this
+  page picks up a `display` from more than one place.

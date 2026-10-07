@@ -222,6 +222,38 @@
         }
         .order-history table { margin-top: 0.25rem; }
 
+        /* The closed-orders filter — the same compact control row as the probe form above, since
+           it is the same kind of thing: a few inputs that re-draw what is under them. */
+        .order-filter {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.7rem;
+            align-items: flex-end;
+            margin: 0.5rem 0 0.1rem;
+        }
+        .order-filter label {
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+            font-size: 0.72rem;
+            color: #777;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .order-filter select {
+            padding: 0.28rem 0.4rem;
+            font-size: 0.9rem;
+            text-transform: none;
+            letter-spacing: normal;
+            max-width: 16rem;
+        }
+        .order-filter .ohf-note { font-size: 0.82rem; padding-bottom: 0.3rem; }
+        html[data-theme="dark"] .order-filter label { color: #9aa0a6; }
+
+        /* A class rather than the hidden attribute: [hidden] is one of the weakest rules in the
+           UA sheet, and a <tr> picks up a display from more than one place on this page. */
+        .ord-hidden { display: none !important; }
+
 
         /* ── Cash-ledger grouping ─────────────────────────────────────────────
            A group header is a row of the same table, not a caption above a nested one: the
@@ -4545,6 +4577,7 @@
 <script src="/js/wl-edit-sync.js"></script>
 <script src="/js/wl-poll.js"></script>
 <script src="/js/wl-columns.js"></script>
+<script src="/js/ord-filter.js"></script>
 <script src="/js/dashboard.js"></script>
 </body>
 </html>

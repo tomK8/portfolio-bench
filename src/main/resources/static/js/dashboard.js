@@ -174,24 +174,35 @@
         // or unticking a checkbox is a request to re-price the numbers, never to re-order the
         // rows. The state is held in JS for the page session precisely because the DOM it used to
         // live in is what the swap destroys.
-        var ordersSort = null;
+        //
+        // Both tables in the panel are remembered, keyed by id. The closed-orders table joined
+        // the open one when it became filterable: reading one security's history means narrowing
+        // it *and* ordering it by date, and a re-render that kept the filter while throwing away
+        // the date order would hand back half of what the user had set up.
+        var ORDERS_SORTED_TABLES = ['orders-table', 'orders-history-table'];
+        var ordersSort = {};
 
         document.body.addEventListener('click', function (e) {
-            var th = e.target.closest && e.target.closest('#orders-table thead th[data-sort]');
+            var th = e.target.closest && e.target.closest(ORDERS_SORTED_TABLES
+                .map(function (id) { return '#' + id + ' thead th[data-sort]'; }).join(', '));
             if (!th) return;   // bubbled past attachSort's own handler, so the marker is already set
+            var table = th.closest('table');
             var ths = Array.from(th.closest('thead').querySelectorAll('th[data-sort]'));
-            ordersSort = th.dataset.sortDir ? {idx: ths.indexOf(th), dir: th.dataset.sortDir} : null;
+            if (th.dataset.sortDir) ordersSort[table.id] = {idx: ths.indexOf(th), dir: th.dataset.sortDir};
+            else delete ordersSort[table.id];
         });
 
         // Put the marker back on the rebuilt thead and re-sort. attachSort reads the marker at
         // click time, so the restored order and the next click's direction agree by construction.
         function restoreOrdersSort() {
-            var table = document.getElementById('orders-table');
-            if (!ordersSort || !table) return;    // nothing stored, or no open orders to sort
-            var th = Array.from(table.querySelectorAll('thead th[data-sort]'))[ordersSort.idx];
-            if (!th) return;
-            th.dataset.sortDir = ordersSort.dir;
-            reapplyActiveSort(table);
+            ORDERS_SORTED_TABLES.forEach(function (id) {
+                var saved = ordersSort[id], table = document.getElementById(id);
+                if (!saved || !table) return;   // nothing stored, or no such table in this render
+                var th = Array.from(table.querySelectorAll('thead th[data-sort]'))[saved.idx];
+                if (!th) return;
+                th.dataset.sortDir = saved.dir;
+                reapplyActiveSort(table);
+            });
         }
 
         document.body.addEventListener('htmx:afterSettle', function () {
@@ -204,6 +215,7 @@
                     }
                 });
             });
+            restoreHistoryFilter();
             syncLedgerExpandAll();
         });
 
@@ -300,6 +312,11 @@
                     sel.classList.toggle('muted', !value);
                     sel.classList.add('order-state-saved');
                     setTimeout(function () { sel.classList.remove('order-state-saved'); }, 1200);
+                    // The row's state has just changed, so the filter's answer may have too: a row
+                    // settled to Filled no longer belongs in a list of unsettled ones, and Filled
+                    // may be an outcome the dropdown could not offer a moment ago. Leaving it
+                    // would show a row the filter excludes beside a count that does not count it.
+                    refreshHistoryFilter();
                     refreshGroupBlocks();
                 })
                 .catch(function (err) {
@@ -323,6 +340,113 @@
                 } catch (err) { /* the blocks are redrawn on the next tab click anyway */ }
             });
         }
+
+        // ── Closed orders: filtering ────────────────────────────────────────────
+        // Narrowing the history table to one security, one side, one outcome — or any combination
+        // — so a security's whole life in the panel can be read on its own. The rule itself lives
+        // in ord-filter.js (DOM-free and unit-tested); this is the DOM half: read the rows, fill
+        // the dropdowns from them, hide what does not match.
+        //
+        // Hiding rather than removing is what lets the sorter and the filter ignore each other:
+        // sortBody re-appends the same <tr> elements, so a hidden row is still there to be
+        // ordered and comes back in place the moment the filter is cleared.
+        //
+        // The filter is held in JS for the page session, like the sort above it and for the same
+        // reason — the fragment is swapped whole on every tab click and on both model checkboxes.
+        //
+        // Spelt as a literal rather than OrdFilter.blank(): this line runs while the whole
+        // dashboard IIFE is being evaluated, and a cross-file call there would turn a missing
+        // /js/ord-filter.js into a blank page instead of a missing filter. Every other use is
+        // inside a function, by which time the script has loaded or nothing else is working either.
+        var historyFilter = {security: '', side: '', state: ''};
+
+        /** The filter's view of the table: one descriptor per row, plus the row to hide. */
+        function historyRows() {
+            var table = document.getElementById('orders-history-table');
+            if (!table) return [];
+            return Array.from(table.querySelectorAll('tbody tr')).map(function (tr) {
+                var cell = tr.querySelector('.order-state-cell');
+                return {
+                    tr: tr,
+                    security: tr.dataset.security || '',
+                    side: tr.dataset.side || '',
+                    // Not a cell's text: the state cell holds a <select> on every row nobody has
+                    // settled. data-sort-value is where that cell's value lives — the attribute
+                    // the sorter reads and the verdict handler writes — so a row settled a second
+                    // ago filters as what it now says.
+                    state: cell ? (cell.dataset.sortValue || '') : ''
+                };
+            });
+        }
+
+        /** Fill the three dropdowns from the rows, keeping whatever is currently selected. */
+        function rebuildHistoryOptions(rows) {
+            var opts = OrdFilter.options(rows, historyFilter);
+            OrdFilter.FIELDS.forEach(function (field) {
+                var sel = document.getElementById('ohf-' + field);
+                if (!sel) return;
+                var want = historyFilter[field] || OrdFilter.ANY;
+                sel.textContent = '';
+                sel.appendChild(new Option('All', OrdFilter.ANY));
+                opts[field].forEach(function (v) { sel.appendChild(new Option(v, v)); });
+                // options() keeps the selected value even when no row carries it, so this never
+                // silently falls back to "All" and widens the view the user narrowed.
+                sel.value = want;
+            });
+        }
+
+        /** Hide what does not match, and make the count and the empty note say what is showing. */
+        function applyHistoryFilter(rows) {
+            rows.forEach(function (r) {
+                r.tr.classList.toggle('ord-hidden', !OrdFilter.matches(r, historyFilter));
+            });
+            var count = document.getElementById('orders-history-count');
+            if (count) count.textContent = OrdFilter.label(rows, historyFilter);
+            var empty = document.getElementById('ohf-empty');
+            if (empty) {
+                empty.classList.toggle('ord-hidden',
+                    OrdFilter.count(rows, historyFilter).shown > 0 || !OrdFilter.active(historyFilter));
+            }
+        }
+
+        /** Both halves, for any change that can alter which rows match or what the rows hold. */
+        function refreshHistoryFilter() {
+            if (!document.getElementById('orders-history-table')) return;   // no closed orders
+            var rows = historyRows();
+            rebuildHistoryOptions(rows);
+            applyHistoryFilter(rows);
+        }
+
+        /**
+         * After a re-render. The dropdowns come back empty (the server renders "All" only) and the
+         * rows come back shown, so the stored filter has to be put back on both. A filter that
+         * survived also re-opens the <details>: applying one to a block the user cannot see would
+         * leave the panel quietly showing fewer rows than the table it has just rebuilt holds.
+         */
+        function restoreHistoryFilter() {
+            var table = document.getElementById('orders-history-table');
+            if (!table) return;
+            refreshHistoryFilter();
+            if (OrdFilter.active(historyFilter)) {
+                var block = table.closest('details');
+                if (block) block.open = true;
+            }
+        }
+
+        // Delegated from body, like everything else in this panel: the fragment is replaced whole.
+        document.body.addEventListener('change', function (e) {
+            var sel = e.target;
+            var field = sel.id && sel.id.indexOf('ohf-') === 0 ? sel.id.slice(4) : null;
+            if (!field || OrdFilter.FIELDS.indexOf(field) < 0) return;
+            historyFilter[field] = sel.value;
+            refreshHistoryFilter();
+        });
+
+        document.body.addEventListener('click', function (e) {
+            if (!e.target.closest || !e.target.closest('#ohf-clear')) return;
+            historyFilter = OrdFilter.blank();
+            refreshHistoryFilter();
+        });
 
         // ── Intended rungs: editable price and quantity ─────────────────────────
         // Only the rungs the user recorded here are editable — a rung that came from a broker's CSV

@@ -49,7 +49,7 @@ class ExcelOrdersWorkbookTest {
             assertEquals("Broker", hdr.getCell(0).getStringCellValue());
             assertEquals("Symbol", hdr.getCell(1).getStringCellValue());
             assertEquals("Side", hdr.getCell(2).getStringCellValue());
-            assertEquals("Price", hdr.getCell(5).getStringCellValue());
+            assertEquals("Limit", hdr.getCell(5).getStringCellValue());
             assertEquals("Current", hdr.getCell(6).getStringCellValue());
             assertEquals("Quote", hdr.getCell(7).getStringCellValue());
             assertEquals("Vs limit", hdr.getCell(8).getStringCellValue());

@@ -8298,7 +8298,7 @@
         var WL_FUND_TOP = {
             marketCap: ['Market cap', 'cap', 'Share price × shares outstanding.'],
             forwardPe: ['Fwd P/E', 'ratio', 'Price ÷ next year\'s consensus earnings per share. Consensus EPS is whatever basis the company guides, which for most large caps is a non-GAAP one that excludes share-based compensation and acquisition amortisation — so this is usually NOT comparable with the trailing P/E beside it. AVGO shows 46.3 trailing against 18.7 forward, and most of that collapse is the change of basis, not earnings growth.'],
-            pegRatio: ['PEG', 'ratio', 'Forward P/E ÷ expected earnings growth. Below 1 is often read as growth being under-priced.'],
+            pegRatio: ['PEG', 'ratio', 'Forward P/E ÷ an expected earnings growth rate. Below 1 is often read as growth being under-priced. Both halves need care: the numerator is the forward P/E beside it, so it carries the same non-GAAP consensus basis and does not tie to the trailing P/E; and Yahoo names neither the growth window nor whose estimate it is, so the denominator cannot be reproduced from anything else on this row. A ranking aid between symbols, not a figure to check.'],
             targetMeanPrice: ['Target', 'price', 'Mean of analysts\' 12-month price targets, in the instrument\'s own currency.'],
             week52High: ['52w high', 'price', 'Highest price over the past 52 weeks.'],
             week52Low: ['52w low', 'price', 'Lowest price over the past 52 weeks.']
@@ -8653,28 +8653,32 @@
 
             var stats = document.getElementById('wl-modal-stats');
             stats.innerHTML = '';
-            stats.appendChild(wlStat('Today', wlPctText(r.todayPct)));
-            stats.appendChild(wlStat('2d', wlPctText(r.pct2d)));
-            stats.appendChild(wlStat('3d', wlPctText(r.pct3d)));
-            stats.appendChild(wlStat('5d', wlPctText(r.pct5d)));
-            stats.appendChild(wlStat('10d', wlPctText(r.pct10d)));
-            stats.appendChild(wlStat('30d', wlPctText(r.pct30d)));
-            stats.appendChild(wlStat('52wk high', r.week52High == null ? '—' : fmtPrice(r.week52High, r.currency)));
-            stats.appendChild(wlStat('52wk low', r.week52Low == null ? '—' : fmtPrice(r.week52Low, r.currency)));
+            stats.appendChild(wlStat('Today', wlPctText(r.todayPct), wlTip('todayPct')));
+            stats.appendChild(wlStat('2d', wlPctText(r.pct2d), wlTip('pct2d')));
+            stats.appendChild(wlStat('3d', wlPctText(r.pct3d), wlTip('pct3d')));
+            stats.appendChild(wlStat('5d', wlPctText(r.pct5d), wlTip('pct5d')));
+            stats.appendChild(wlStat('10d', wlPctText(r.pct10d), wlTip('pct10d')));
+            stats.appendChild(wlStat('30d', wlPctText(r.pct30d), wlTip('pct30d')));
+            stats.appendChild(wlStat('52wk high', r.week52High == null ? '—' : fmtPrice(r.week52High, r.currency),
+                    wlTip('f:week52High')));
+            stats.appendChild(wlStat('52wk low', r.week52Low == null ? '—' : fmtPrice(r.week52Low, r.currency),
+                    wlTip('f:week52Low')));
             // Placeholders for the selected window's own high/low — filled by applyWlRange when
             // the series lands, and relabelled every time the window changes. They sit next to
             // the fixed 52-week pair on purpose: the 52-week levels are the alert's yardstick and
             // stay put, these two follow whatever the chart is showing.
             stats.appendChild(wlRangeStat('high'));
             stats.appendChild(wlRangeStat('low'));
-            stats.appendChild(wlStat('% vs high', wlPctText(r.pctFromHigh)));
-            if (r.priceAbove != null) stats.appendChild(wlStat('Above', fmtPrice(r.priceAbove, r.currency)));
-            if (r.priceBelow != null) stats.appendChild(wlStat('Below', fmtPrice(r.priceBelow, r.currency)));
-            stats.appendChild(wlStat('P/E', r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1)));
-            stats.appendChild(wlStat('Beta', r.beta == null ? '—' : parseFloat(r.beta).toFixed(2)));
+            stats.appendChild(wlStat('% vs high', wlPctText(r.pctFromHigh), wlTip('pctFromHigh')));
+            if (r.priceAbove != null) stats.appendChild(wlStat('Above', fmtPrice(r.priceAbove, r.currency), wlTip('thrAbove')));
+            if (r.priceBelow != null) stats.appendChild(wlStat('Below', fmtPrice(r.priceBelow, r.currency), wlTip('thrBelow')));
+            stats.appendChild(wlStat('P/E', r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1),
+                    wlTip('trailingPe')));
+            stats.appendChild(wlStat('Beta', r.beta == null ? '—' : parseFloat(r.beta).toFixed(2), wlTip('beta')));
             if (r.held) {
-                stats.appendChild(wlStat('Position', r.positionValueGbp == null ? '—' : fmtPrice(r.positionValueGbp, 'GBP')));
-                stats.appendChild(wlStat('Gain', r.gainGbp == null ? '—' : fmtPrice(r.gainGbp, 'GBP')));
+                stats.appendChild(wlStat('Position', r.positionValueGbp == null ? '—' : fmtPrice(r.positionValueGbp, 'GBP'),
+                        wlTip('position')));
+                stats.appendChild(wlStat('Gain', r.gainGbp == null ? '—' : fmtPrice(r.gainGbp, 'GBP'), wlTip('gain')));
             }
             loadWlVol(r.symbol, stats);
 
@@ -8699,19 +8703,36 @@
                 .then(function (r) { return r.json(); })
                 .then(function (v) {
                     if (wlCurrentSymbol !== symbol) return;
-                    statsEl.appendChild(wlStat('Vol 5D', wlVolText(v.vol5d)));
-                    statsEl.appendChild(wlStat('Vol 10D', wlVolText(v.vol10d)));
-                    statsEl.appendChild(wlStat('Vol 30D', wlVolText(v.vol30d)));
-                    statsEl.appendChild(wlStat('Vol 1Y', wlVolText(v.vol1y)));
+                    statsEl.appendChild(wlStat('Vol 5D', wlVolText(v.vol5d), wlTip('vol5d')));
+                    statsEl.appendChild(wlStat('Vol 10D', wlVolText(v.vol10d), wlTip('vol10d')));
+                    statsEl.appendChild(wlStat('Vol 30D', wlVolText(v.vol30d), wlTip('vol30d')));
+                    statsEl.appendChild(wlStat('Vol 1Y', wlVolText(v.vol1y), wlTip('vol1y')));
                 })
                 .catch(function () { /* leave stats without vol */ });
         }
 
-        function wlStat(label, value) {
+        function wlStat(label, value, tip) {
             var d = document.createElement('div');
             d.className = 'snap-kv';
-            d.innerHTML = '<span class="k">' + label + '</span><span class="v">' + value + '</span>';
+            d.innerHTML = wlTipLabel(label, tip) + '<span class="v">' + value + '</span>';
             return d;
+        }
+
+        /**
+         * The tooltip the column registry already holds for a field, by its registry key
+         * ('beta', 'f:week52High'). The strip and the picker name the same facts with different
+         * labels — 'Today' against 'Today %' — but there is only ever one explanation of what
+         * the fact is, and this is where both read it from.
+         */
+        function wlTip(key) {
+            var meta = wlColumnRegistry().byKey[key];
+            return meta ? meta.title : null;
+        }
+
+        /** The headline-fundamentals tooltip for a top-level quoteSummary field. */
+        function wlTopTip(key) {
+            var d = WL_FUND_TOP[key];
+            return d ? d[2] : null;
         }
 
         function wlPctText(frac) {
@@ -8750,7 +8771,11 @@
 
         // An empty range cell, labelled once the series says which window it belongs to.
         function wlRangeStat(kind) {
-            var d = wlStat('', '—');
+            // The label and tooltip are both written by applyWlRange — the window they describe
+            // is not known until the series lands, and changes every time it is switched.
+            var d = wlStat('', '—',
+                    'The highest and lowest price actually traded over the window the chart is '
+                    + 'showing. Filled in once the series lands.');
             d.id = 'wl-range-' + kind;
             return d;
         }
@@ -8771,18 +8796,23 @@
                     var el = document.getElementById('wl-range-' + spec[0]);
                     if (!el) return;
                     var kind = spec[0], value = spec[1], on = spec[2], closeOnly = spec[3];
-                    el.querySelector('.k').textContent = s.window + ' ' + kind;
-                    el.querySelector('.v').textContent = value == null ? '—'
+                    var k = el.querySelector('.k'), vEl = el.querySelector('.v');
+                    k.textContent = s.window + ' ' + kind;
+                    vEl.textContent = value == null ? '—'
                         : fmtPrice(value, wlCurrentCurrency) + (closeOnly ? '*' : '');
-                    el.title = value == null
+                    var tip = (value == null
                         ? 'No prices stored for this window.'
                         : (closeOnly
                             ? 'A closing price — nothing is stored about how that day traded, so '
                               + 'the real ' + kind + ' may lie past it.'
                             : 'The ' + kind + 'est price actually traded in the window, auctions '
                               + 'included — not just a closing price, so it can sit outside the '
-                              + 'charted line.')
+                              + 'charted line.'))
                           + (on ? ' Set ' + wlRangeDate(on) + '.' : '');
+                    // On the value as well as the label: the '*' is the thing a reader doubts,
+                    // and it is printed on the value side.
+                    k.dataset.tip = tip;
+                    vEl.dataset.tip = tip;
                 });
         }
 
@@ -8861,11 +8891,16 @@
                 var isFinancial = isFinancialRow(q);
                 // Core valuation not already in the stats strip, then the shared grouped
                 // renderer (same one the Snapshot-diff modal uses), laid out in columns.
+                // The tooltips come from WL_FUND_TOP rather than being written again here, so the
+                // gloss on PEG is the same sentence whether it is read in this block or on the
+                // column it also fills in the grid.
                 var core = '<div class="snap-group"><div class="snap-group-title">Key</div>' +
-                        wlKv('Forward P/E', fmtNumOrDash(q.forwardPe, 1)) +
-                        wlKv('PEG', fmtNumOrDash(q.pegRatio, 2)) +
-                        wlKv('Market cap', q.marketCap == null ? '—' : fmtMarketCap(q.marketCap, q.currency)) +
-                        wlKv('Target (mean)', q.targetMeanPrice == null ? '—' : fmtPrice(q.targetMeanPrice, q.currency)) +
+                        wlKv('Forward P/E', fmtNumOrDash(q.forwardPe, 1), wlTopTip('forwardPe')) +
+                        wlKv('PEG', fmtNumOrDash(q.pegRatio, 2), wlTopTip('pegRatio')) +
+                        wlKv('Market cap', q.marketCap == null ? '—' : fmtMarketCap(q.marketCap, q.currency),
+                             wlTopTip('marketCap')) +
+                        wlKv('Target (mean)', q.targetMeanPrice == null ? '—' : fmtPrice(q.targetMeanPrice, q.currency),
+                             wlTopTip('targetMeanPrice')) +
                         '</div>';
                 body.innerHTML = '<div class="wl-fund-cols">' + core + fundamentalsHtml(q, isFinancial) + '</div>';
             }
@@ -8937,8 +8972,21 @@
             wlReapplySort();
         }
 
-        function wlKv(label, value) {
-            return '<div class="snap-kv"><span class="k">' + label + '</span><span class="v">' + value + '</span></div>';
+        /**
+         * The label half of a popup key/value, with the self-explaining tooltip attached when
+         * one exists. The Key block sits in the same column flow as the fundamentals groups, and
+         * those groups explain every label they print — a field that stays silent beside them
+         * reads as one nobody got round to documenting rather than one that needs no gloss.
+         */
+        function wlTipLabel(label, tip) {
+            if (!tip) return '<span class="k">' + label + '</span>';
+            return '<span class="k snap-tip" data-tip="' + tip.replace(/"/g, '&quot;') + '">' +
+                    label + '</span>';
+        }
+
+        function wlKv(label, value, tip) {
+            return '<div class="snap-kv">' + wlTipLabel(label, tip) +
+                    '<span class="v">' + value + '</span></div>';
         }
 
         function fmtNumOrDash(v, dp) {

@@ -33,7 +33,14 @@
     </div>
 </div>
 
-<!-- The full mapping list: the user's rows (editable) above the committed baseline (read-only). -->
+<!--
+  The full mapping list: an add row, then the user's rows (removable), then the committed baseline
+  (read-only). The body is rendered by dashboard.js (mapRenderList) because it is fetched, not
+  server-rendered; the add row is built there too, so this fragment is only the disclosure shell.
+
+  That add row is the only editor here not attached to a gap the app noticed, and it is why
+  UnresolvedSymbols.FIX_HINT can name this list at all.
+-->
 <details th:fragment="list" class="map-list">
     <summary class="map-list-toggle">All instrument mappings</summary>
     <div class="map-list-body">Loading…</div>

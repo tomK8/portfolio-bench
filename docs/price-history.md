@@ -120,8 +120,12 @@ states, not two: **priced / still fetching / asked and refused.**
   the title rather than grey `(fetching…)`. A null reader (the 7-arg test constructor) degrades to
   the old undiagnosed behaviour — a missing diagnosis must never blank a working row.
 - The message names where to fix it. There is **no standalone mappings tab**: the editor is the
-  "All instrument mappings" list at the foot of Open orders, plus the inline unpriced-symbol
-  editors on the two sync tabs. `UnresolvedSymbols.FIX_HINT` is the one place that wording lives.
+  "Add a mapping" row that opens the "All instrument mappings" list at the foot of Open orders,
+  plus the inline unpriced-symbol editors on the two sync tabs. `UnresolvedSymbols.FIX_HINT` is the
+  one place that wording lives. Until that add row existed the hint was **false** — it named a
+  list that carried Remove buttons and no editor, and the symbols this class is written for
+  (watchlist names, not holdings) reached none of the reactive editors either. Naming the wrong
+  place is worse than naming none; see [instrument-mappings.md](instrument-mappings.md).
 
 **Two mapping layers, both now user-editable at runtime** — a new instrument is only fully wired
 when both exist. PHP (Primary Health Properties, Aug 2026) is the worked example of what each one

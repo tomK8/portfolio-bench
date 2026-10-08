@@ -797,8 +797,29 @@
             });
         }
 
-        function mapRenderList(container, view) {
+        // The add row is the one mapping editor not attached to a gap the app itself noticed.
+        // Every other one is: an unpriced holding on a sync tab, an order description that
+        // resolves to nothing on Open orders. A symbol in neither state — a watchlist name Yahoo
+        // rejects, a listing being mapped before it is held — had no reachable editor at all, and
+        // UnresolvedSymbols.FIX_HINT pointed the reader at this list, which was read-only.
+        // `notice` carries a save confirmation across the repaint that follows it.
+        function mapRenderList(container, view, notice) {
             var html = '';
+            if (notice) html += '<p class="map-status map-good">' + escapeHtml(notice) + '</p>';
+            html += '<h5>Add a mapping</h5>'
+                + '<div class="map-row map-add" data-reload="list">'
+                + '<div class="map-instrument"><strong>Symbol \u2192 Yahoo ticker</strong>'
+                + '<span class="muted">Check it first \u2014 a ticker that resolves to the wrong '
+                + 'listing prices the position wrongly rather than not at all. Yours overrides '
+                + 'the built-in one.</span></div>'
+                + '<label>Symbol<input class="map-symbol" type="text" size="8" spellcheck="false" '
+                + 'placeholder="EQQU"></label>'
+                + '<label>Yahoo ticker<input class="map-ticker" type="text" size="12" '
+                + 'spellcheck="false" placeholder="EQQU.L"></label>'
+                + '<button type="button" class="map-verify">Check</button>'
+                + '<button type="button" class="map-save">Save</button>'
+                + '<button type="button" class="map-save map-force" data-force="1" hidden>Save anyway</button>'
+                + '<span class="map-status"></span></div>';
             if (view.aliases && view.aliases.length) {
                 html += '<h5>Name mappings (yours)</h5><table class="map-table"><tr>'
                     + '<th class="lbl">Match text</th><th class="lbl">Symbol</th>'
@@ -827,7 +848,8 @@
                 });
                 html += '</table>';
             } else {
-                html += '<p class="muted">None yet — mappings you add from a warning panel appear here.</p>';
+                html += '<p class="muted">None yet \u2014 add one above, or from the warning strip '
+                    + 'wherever a gap shows.</p>';
             }
             if (view.builtIn && view.builtIn.length) {
                 html += '<h5>Built in (' + view.builtIn.length + ')</h5>'
@@ -841,11 +863,11 @@
             container.innerHTML = html;
         }
 
-        function mapLoadList(container) {
+        function mapLoadList(container, notice) {
             container.textContent = 'Loading\u2026';
             fetch('/mappings')
                 .then(function (r) { return r.json(); })
-                .then(function (view) { mapRenderList(container, view); })
+                .then(function (view) { mapRenderList(container, view, notice); })
                 .catch(function (err) {
                     container.textContent = 'Could not load the mapping list — ' + err.message;
                 });
@@ -942,6 +964,13 @@
                     // Prices are backfilled on a background thread, so give it a moment before
                     // repainting — otherwise the row comes back mapped but still priceless.
                     if (row.dataset.reload === 'orders') setTimeout(loadOrders, 3500);
+                    // Same 3.5s for the same reason: the add row sits in the list its own save
+                    // changes, and repainting immediately would show the mapping with no prices
+                    // behind it yet. The message rides across the repaint rather than vanishing.
+                    if (row.dataset.reload === 'list') {
+                        var body = row.closest('.map-list-body');
+                        if (body) setTimeout(function () { mapLoadList(body, res.message); }, 3500);
+                    }
                 })
                 .catch(function (err) {
                     btn.disabled = false;

@@ -33,8 +33,24 @@ Three things happen together on save, and all three are load-bearing:
 
 **UI**: `fragments/mappings.html` holds two shared fragments — `unpriced(...)` (ticker-only editor,
 used by both sync tabs' unpriced-symbols panels) and `list` (the collapsible "All instrument
-mappings" list at the foot of Open orders: your rows with Remove buttons, then the committed
-baseline read-only). Open orders renders its own richer row (match text + symbol + ticker) from
+mappings" list at the foot of Open orders: an **add row**, then your rows with Remove buttons, then
+the committed baseline read-only).
+
+**The add row is the only editor not attached to a gap the app noticed**, and that is the point of
+it. Every other one is reactive — `unpriced(...)` needs a *held* symbol that has never priced,
+the Open orders row needs an order description that resolves to no symbol. A symbol in neither
+state had no reachable editor anywhere in the app: a watchlist name Yahoo rejects is the ordinary
+case, and `2330` (TSMC's Taipei listing, which the user neither holds nor has an order on) is the
+one that found it. Worse, `UnresolvedSymbols.FIX_HINT` — the message that very symbol
+produces — named this list as the place to fix it, and the list was its own inventory and
+nothing else. The hint was pointing at a read-only table.
+
+It is rendered by `mapRenderList`, not by the fragment, because the body is fetched rather than
+server-rendered; it reuses the same `.map-row` markup and the same two endpoints as the reactive
+editors, so there is still exactly one save path. `data-reload="list"` is what tells the shared
+click handler to repaint the list it sits in, after the same 3.5s the orders panel waits — the
+save's own confirmation is passed through `mapLoadList(body, notice)` so it survives the repaint
+rather than being wiped by it. Open orders renders its own richer row (match text + symbol + ticker) from
 `OrdersReport.unmapped`, computed by `OpenOrdersService.unmappedInstruments` after enrichment:
 `needsAlias` is exactly `symbol.equals(name)` (the AJ Bell parser's fall-through contract — the
 other two brokers export a real ticker alongside a descriptive name, which never collide), else the

@@ -46,11 +46,18 @@ public class UnresolvedSymbols {
     private static final int MAX_SUGGESTIONS = 4;
     /**
      * Where the reader fixes it. There is no standalone mappings tab — the editor is the
-     * "All instrument mappings" list at the foot of Open orders, plus the inline unpriced-symbol
-     * editors on the two sync tabs. Naming the wrong place is worse than naming none.
+     * "Add a mapping" row that opens the "All instrument mappings" list at the foot of Open
+     * orders, plus the inline unpriced-symbol editors on the two sync tabs.
+     *
+     * <p>Naming the wrong place is worse than naming none, and until that add row existed this
+     * hint did exactly that: the list it points at was its own inventory, Remove buttons and
+     * nothing else. Every other editor in the app is attached to a gap the app itself noticed
+     * — an unpriced <em>holding</em>, an order description that resolves to no symbol —
+     * so a symbol in neither state had no reachable editor at all. A watchlist name Yahoo rejects
+     * is exactly that symbol, and it is the one this class is written for.
      */
     static final String FIX_HINT =
-            "Map it under \"All instrument mappings\" at the foot of the Open orders tab";
+            "Add it under \"All instrument mappings\" at the foot of the Open orders tab";
 
     private final KeyValueStore kv;
 

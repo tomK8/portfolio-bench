@@ -1044,6 +1044,8 @@
         .map-list-toggle { cursor: pointer; color: #666; }
         .map-list-body { padding: 0.5rem 0 0 0.6rem; }
         .map-list-body h5 { margin: 0.7rem 0 0.3rem 0; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: #666; }
+        /* The add row sits under its own h5, so the separator the inline editors need is noise here. */
+        .map-list-body .map-row { border-top: none; padding: 0 0 0.6rem 0; }
         .map-table { border-collapse: collapse; font-size: 0.85rem; }
         .map-table th, .map-table td { padding: 0.15rem 0.7rem 0.15rem 0; text-align: left; font-weight: normal; }
         .map-table th { color: #888; font-size: 0.75rem; text-transform: uppercase; }

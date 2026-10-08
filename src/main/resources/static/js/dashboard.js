@@ -4154,10 +4154,28 @@
             // ordinary here: net cash, a levered FCF Yahoo models below zero (ORCL, BABA), a
             // corrupt enterprise value (SKHY), and an operating loss (INTC).
             var abs = Math.abs(n), sign = n < 0 ? '-' : '';
-            if (abs >= 1e12) return sign + sym + (abs / 1e12).toFixed(2) + 'T';
-            if (abs >= 1e9)  return sign + sym + (abs / 1e9).toFixed(2) + 'B';
-            if (abs >= 1e6)  return sign + sym + (abs / 1e6).toFixed(1) + 'M';
-            return sign + sym + abs.toLocaleString('en-GB');
+            return sign + sym + scaledMagnitude(abs);
+        }
+
+        /** T/B/M scaling for a bulk figure, with no unit attached — see fmtMarketCap, fmtCount. */
+        function scaledMagnitude(abs) {
+            if (abs >= 1e12) return (abs / 1e12).toFixed(2) + 'T';
+            if (abs >= 1e9)  return (abs / 1e9).toFixed(2) + 'B';
+            if (abs >= 1e6)  return (abs / 1e6).toFixed(1) + 'M';
+            return abs.toLocaleString('en-GB');
+        }
+
+        /**
+         * A count of things, scaled like a bulk amount but with no currency on it. Shares
+         * outstanding went through fmtMarketCap and so published KLAC's 1,305,006,492 shares as
+         * "$1.31B" — a share count is not money, and on a London line it would have claimed
+         * pounds for a figure that is not even an amount.
+         */
+        function fmtCount(v) {
+            if (v == null) return null;
+            var n = parseFloat(v);
+            if (!isFinite(n)) return null;
+            return (n < 0 ? '-' : '') + scaledMagnitude(Math.abs(n));
         }
 
         /** The major unit a minor-unit quote belongs to — a GBp line prices a GBP company. */
@@ -4180,7 +4198,10 @@
         }
 
         // Single home for the fundamentals field grouping (label, type, tooltip, anchor).
-        // Field tuple: [key, label, type, tooltip, noFinancial?, glossaryAnchor?, source?].
+        // Field tuple: [key, label, type, tooltip, noFinancial?, glossaryAnchor?, source?, note?].
+        // `note` is a {text, title} qualifier the value carries in a key/value block — the clock
+        // an amount is on, say — and nowhere else: in the grid every row would repeat the same
+        // words, so there the column's own tooltip carries it instead.
         // Group: { title, fields, noFinancial? } — noFinancial skips the whole group for
         // banks/insurers where EV/Net Debt/EBITDA/FCF don't apply.
         // `source` names which bag on the quoteSummary row holds the value: the default is the
@@ -4191,11 +4212,11 @@
                     ['earningsDate', 'Next earnings', 'date', 'The next scheduled results date, from Yahoo\'s company calendar. A trailing ~ means Yahoo is estimating it from the past reporting rhythm rather than repeating an announcement, so it can still move by weeks; two dates are a window Yahoo has not narrowed to a single day. A date in muted italics has already been reported: Yahoo has published no forward date and this is the most recent one it knows. Funds and bonds have none.', false, null, 'labels']
                 ]},
                 { title: 'Valuation', fields: [
-                    ['enterpriseToEbitda', 'EV/EBITDA', 'ratio', 'Enterprise Value ÷ EBITDA (TTM). Measures how expensive the business is relative to cash earnings before interest, taxes, depreciation and amortisation. Lower = cheaper; negative means EBITDA is negative.', true, 'ev-ebitda'],
+                    ['enterpriseToEbitda', 'EV/EBITDA', 'ratio', 'Enterprise Value ÷ EBITDA (TTM). Measures how expensive the business is relative to cash earnings before interest, taxes, depreciation and amortisation. Lower = cheaper; negative means EBITDA is negative. Built on the same previous-close enterprise value as the row below, so it lags today\'s price by a session — see that tooltip.', true, 'ev-ebitda'],
                     ['priceToBook', 'P/B', 'ratio', 'Price ÷ Book Value per share. Compares market cap to net assets on the balance sheet. Below 1 may indicate undervaluation; most meaningful for asset-heavy businesses and financials. Recomputed here rather than read: Yahoo divides the quoted price by the filed book value with no unit handling, which on a pence-quoted London line divides pence by pounds and inflated every UK ratio exactly 100× (REL published at 3676 against a real 36.8). The denominator is shown below so the division can be checked on this row.', false, 'pb'],
                     ['bookValue', 'Book Value / share', 'priceMajor', 'Net assets per share, in the quote currency\'s major unit — pounds on a pence-quoted line, which is the whole reason the P/B above is recomputed instead of taken from the feed. It is the denominator of that ratio, so P/B = price ÷ this, with the price converted to the same major unit first.', false, 'pb'],
                     ['priceToSalesTrailing12Months', 'P/S (TTM)', 'ratio', 'Price ÷ Revenue per share (trailing 12 months). Useful for loss-making companies where P/E is unavailable. Lower values mean you are paying less per unit of revenue.', false, 'ps'],
-                    ['enterpriseValue', 'Enterprise Value', 'cap', 'Market cap + total debt − cash. Represents the theoretical takeover price of the whole business, independent of capital structure.', true, 'enterprise-value']
+                    ['enterpriseValue', 'Enterprise Value', 'cap', 'Market cap + total debt − cash: the theoretical takeover price of the whole business, independent of capital structure. Yahoo prices the equity half of it at the PREVIOUS CLOSE while the market cap on this row is live, so on a day the shares have moved the two do not reconcile — KLAC showed EV $258.42B against a market cap of $262.02B with $1.25B of net debt outstanding, which is the clock rather than an error. Measured: EV − net debt reproduces the previous close\'s market cap to the cent on AAPL, MSFT, AVGO, AMZN and TSLA, and the EV itself did not move at all between two fetches 2.7% apart in price. It also carries whatever else Yahoo puts in it — minority interest, preferred — so it is not exactly market cap + net debt on every row either: WMT lands 0.8% above that sum, INTC 2% below.', true, 'enterprise-value', null, { text: 'prev. close', title: 'Yahoo prices the equity half of enterprise value at the previous close, so this figure lags the market cap above it by one session.' }]
                 ]},
                 { title: 'Cash Flow (TTM)', noFinancial: true, fields: [
                     ['operatingCashflow', 'Operating Cash Flow', 'capFiled', 'Cash generated by core business operations over the trailing 12 months, before investing or financing activities. A more reliable earnings proxy than net income for many businesses.', false, 'operating-cash-flow'],
@@ -4239,7 +4260,7 @@
                     ['shortPercentOfFloat', 'Short % of Float', 'pct', 'Freely tradeable shares currently sold short as a percentage of the float. High short interest signals bearish sentiment; a sharp price rise can force a short squeeze.', false, 'short-float'],
                     ['heldPercentInstitutions', '% Held by Institutions', 'pct', 'Proportion of shares owned by institutions (funds, pension managers, etc.). High institutional ownership may signal validation but also concentration risk if they sell together.', false, 'institutional-ownership'],
                     ['numberOfAnalystOpinions', '# Analyst Opinions', 'count', 'Number of analyst ratings contributing to the consensus recommendation shown in the subtitle.'],
-                    ['sharesOutstanding', 'Shares Outstanding', 'cap', 'Total shares in existence, including restricted shares. Used to compute market cap and per-share metrics.']
+                    ['sharesOutstanding', 'Shares Outstanding', 'shares', 'Total shares in existence, including restricted shares. Used to compute market cap and per-share metrics. A count, not an amount — it is the only field in this panel scaled to B/M that carries no currency at all.']
                 ]}
             ];
         }
@@ -4269,7 +4290,7 @@
                     var valueHtml = why
                         ? '<span class="snap-tip snap-withheld" data-tip="Withheld: ' +
                             why.replace(/"/g, '&quot;') + '">withheld</span>'
-                        : fmtSnapValue(v, type, row.currency, row);
+                        : fmtSnapValue(v, type, row.currency, row) + snapNote(f[7]);
                     inner += '<div class="snap-kv"><span class="k">' + labelHtml + '</span>' +
                             '<span class="v">' + valueHtml + '</span></div>';
                 });
@@ -4424,6 +4445,18 @@
             return labels.earningsDateEstimate === 'true' ? text + '~' : text;
         }
 
+        /**
+         * A field's {text, title} qualifier as a muted suffix, or ''. Kept here rather than
+         * written at each call site so the words and their explanation travel with the field
+         * definition — the same rule the labels and tooltips already follow.
+         */
+        function snapNote(note) {
+            if (!note || !note.text) return '';
+            return '<span class="snap-note"' +
+                (note.title ? ' title="' + note.title.replace(/"/g, '&quot;') + '"' : '') +
+                '>' + note.text + '</span>';
+        }
+
         function fmtSnapValue(v, type, ccy, row) {
             // A date is not a number, so this branch has to precede the numeric guard below —
             // which would otherwise reject every ISO day as '—'.
@@ -4433,6 +4466,9 @@
             if (type === 'pct') return (n * 100).toFixed(2) + '%';
             if (type === 'ratio') return n.toFixed(2);
             if (type === 'count') return n.toFixed(0);
+            // A count big enough to need scaling — shares outstanding. Deliberately NOT 'cap':
+            // it is not a currency amount, and borrowing that type printed it with a $ on it.
+            if (type === 'shares') return fmtCount(v);
             if (type === 'price') return fmtPrice(v, ccy);
             // A per-share amount that is NOT as-quoted: book value per share is filed in the
             // major unit while the price beside it is in pence on a GBp line. Rendering it with
@@ -8297,7 +8333,7 @@
          */
         var WL_FUND_TOP = {
             marketCap: ['Market cap', 'cap', 'Share price × shares outstanding.'],
-            forwardPe: ['Fwd P/E', 'ratio', 'Price ÷ next year\'s consensus earnings per share. Consensus EPS is whatever basis the company guides, which for most large caps is a non-GAAP one that excludes share-based compensation and acquisition amortisation — so this is usually NOT comparable with the trailing P/E beside it. AVGO shows 46.3 trailing against 18.7 forward, and most of that collapse is the change of basis, not earnings growth.'],
+            forwardPe: ['Fwd P/E', 'ratio', 'Price ÷ a consensus earnings per share. Two things it does not say for itself. (1) The basis: consensus EPS is whatever the company guides, which for most large caps is a non-GAAP one that excludes share-based compensation and acquisition amortisation, so this is usually NOT comparable with the trailing P/E beside it — AVGO shows 46.3 trailing against 18.7 forward, and most of that collapse is the change of basis, not earnings growth. (2) The year: it is not "next twelve months", and not the year in progress either. Yahoo builds it from the consensus for the fiscal year AFTER the current one — on a live fetch it matched that estimate exactly on 11 of 13 symbols — so KLAC\'s is priced on the year ending June 2028 against a last reported year ending June 2026, while a December filer\'s is only a year out. The popup for a symbol names the year its own figure uses.'],
             pegRatio: ['PEG', 'ratio', 'Forward P/E ÷ an expected earnings growth rate. Below 1 is often read as growth being under-priced. Both halves need care: the numerator is the forward P/E beside it, so it carries the same non-GAAP consensus basis and does not tie to the trailing P/E; and Yahoo names neither the growth window nor whose estimate it is, so the denominator cannot be reproduced from anything else on this row. A ranking aid between symbols, not a figure to check.'],
             targetMeanPrice: ['Target', 'price', 'Mean of analysts\' 12-month price targets, in the instrument\'s own currency.'],
             week52High: ['52w high', 'price', 'Highest price over the past 52 weeks.'],
@@ -8879,6 +8915,27 @@
             });
         }
 
+        /**
+         * The fiscal year this row's forward P/E is actually priced on, as a muted suffix —
+         * 'FY to Jun 2028'. The feed names no period for forwardEps, so the fetcher works out
+         * which of the two consensus years reproduces it and stores that year's end; where the
+         * figure sits between the two candidates nothing is stored and nothing is shown, because
+         * a year we cannot attribute is not a year we may print.
+         */
+        function fwdPeriodNote(q) {
+            var end = q && q.labels && q.labels.forwardEpsPeriodEnd;
+            if (!end || q.forwardPe == null) return '';
+            var d = new Date(end + 'T00:00:00Z');
+            if (isNaN(d.getTime())) return '';
+            var label = d.toLocaleDateString('en-GB',
+                    { month: 'short', year: 'numeric', timeZone: 'UTC' });
+            return snapNote({ text: 'FY to ' + label,
+                title: 'The fiscal year behind this multiple: Yahoo\'s forward EPS reproduces '
+                     + 'the analyst consensus for the year ending ' + end + '. Usually the year '
+                     + 'after the one in progress, so how far out it reaches depends on the '
+                     + 'company\'s fiscal calendar and the time of year.' });
+        }
+
         function renderWlFundamentals(symbol) {
             var body = document.getElementById('wl-fund-body');
             function render() {
@@ -8895,7 +8952,8 @@
                 // gloss on PEG is the same sentence whether it is read in this block or on the
                 // column it also fills in the grid.
                 var core = '<div class="snap-group"><div class="snap-group-title">Key</div>' +
-                        wlKv('Forward P/E', fmtNumOrDash(q.forwardPe, 1), wlTopTip('forwardPe')) +
+                        wlKv('Forward P/E', fmtNumOrDash(q.forwardPe, 1) + fwdPeriodNote(q),
+                             wlTopTip('forwardPe')) +
                         wlKv('PEG', fmtNumOrDash(q.pegRatio, 2), wlTopTip('pegRatio')) +
                         wlKv('Market cap', q.marketCap == null ? '—' : fmtMarketCap(q.marketCap, q.currency),
                              wlTopTip('marketCap')) +

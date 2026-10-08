@@ -88,6 +88,11 @@ public class YahooQuoteSummaryFetcher {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(20);
     /** Yahoo's own day label, when it has given us one. */
     private static final Pattern ISO_DAY = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
+    /**
+     * How near a forward EPS must sit to one fiscal year's consensus — as a fraction of the gap
+     * between the two candidate years — before that year is named. See {@link #putForwardPeriod}.
+     */
+    private static final BigDecimal MATCH_BAND = new BigDecimal("0.2");
 
     // Yahoo's quoteSummary endpoint requires a session crumb + matching cookie (anti-scraping,
     // introduced ~2024). HttpClient's CookieManager stores Set-Cookie headers from the
@@ -407,6 +412,7 @@ public class YahooQuoteSummaryFetcher {
         // Excluded, and said so: one entry per gated field, keyed "excluded:<field>".
         excluded.forEach((k, why) -> labels.put("excluded:" + k, why));
         putNextEarnings(labels, cal);
+        putForwardPeriod(labels, et, num(dks, "forwardEps"));
 
         return new QuoteSummary(ticker, currency, currentPrice, marketCap, trailingPe, forwardPe,
                 pegRatio, beta, week52High, week52Low, targetMeanPrice, extra, labels,
@@ -452,6 +458,57 @@ public class YahooQuoteSummaryFetcher {
         BigDecimal nextEps = num(nextYear.path("earningsEstimate"), "avg");
         if (baseEps != null && baseEps.signum() > 0 && nextEps != null && nextEps.signum() > 0) {
             putIf(extra, "forwardEarningsGrowth", num(nextYear, "growth"));
+        }
+    }
+
+    /**
+     * <b>Which fiscal year the forward P/E is built on</b>, read off the feed rather than
+     * assumed. Nothing in {@code summaryDetail} or {@code defaultKeyStatistics} names the period
+     * behind {@code forwardEps}, and "next year" is not a safe reading of it: the year
+     * {@code earningsTrend} calls {@code 0y} is the one <em>in progress</em>, and the forward EPS
+     * is the one after that. Measured on a live fetch (2026-10-06), {@code forwardEps} reproduced
+     * the {@code +1y} consensus on 11 of 13 symbols carrying both estimates, exactly — KLAC
+     * 6.74039, MSFT 23.67732, NVDA 15.9146, TSLA 2.14567 — so KLAC's forward multiple is priced
+     * on the year ending <b>June 2028</b> while its last reported one ended June 2026. How far out
+     * that is varies with the fiscal calendar and the time of year, which is precisely why the
+     * screen has to say it instead of leaving the reader to assume twelve months.
+     *
+     * <p>The period is therefore chosen by <b>reconciliation</b> — the device the operating line
+     * already uses on revenue tags — not by a rule about which entry Yahoo "should" have used:
+     * whichever year's consensus EPS reproduces {@code forwardEps} is the year it was built from.
+     * The two modules refresh on their own clocks, so the match is not always exact (AMZN was
+     * 0.58% off its {@code +1y}, META 1.35%, TSM 0.57%), and the test is a <b>separation</b> one
+     * rather than an absolute tolerance: the figure must sit within {@link #MATCH_BAND} of the gap
+     * between the two years' estimates. A forward EPS in the middle ground names no year at all,
+     * which is the honest answer — the two candidates are a year of growth apart (KLAC 5.44
+     * against 6.74), so anything equidistant cannot be attributed to either.
+     */
+    private static void putForwardPeriod(Map<String, String> labels, JsonNode trend,
+                                         BigDecimal forwardEps) {
+        if (forwardEps == null || !trend.isArray()) return;
+        JsonNode currentYear = null, nextYear = null;
+        for (JsonNode e : trend) {
+            String period = text(e, "period");
+            if ("0y".equals(period)) currentYear = e;
+            else if ("+1y".equals(period)) nextYear = e;
+        }
+        if (currentYear == null || nextYear == null) return;
+
+        BigDecimal thisYear = num(currentYear.path("earningsEstimate"), "avg");
+        BigDecimal afterThat = num(nextYear.path("earningsEstimate"), "avg");
+        if (thisYear == null || afterThat == null) return;
+
+        BigDecimal separation = afterThat.subtract(thisYear).abs();
+        if (separation.signum() == 0) return;         // two identical candidates name no year
+        BigDecimal toThisYear = forwardEps.subtract(thisYear).abs();
+        BigDecimal toAfterThat = forwardEps.subtract(afterThat).abs();
+        boolean later = toAfterThat.compareTo(toThisYear) < 0;
+        BigDecimal nearest = later ? toAfterThat : toThisYear;
+        if (nearest.compareTo(separation.multiply(MATCH_BAND)) > 0) return;
+
+        String end = text(later ? nextYear : currentYear, "endDate");
+        if (end != null && ISO_DAY.matcher(end).matches()) {
+            labels.put("forwardEpsPeriodEnd", end);
         }
     }
 

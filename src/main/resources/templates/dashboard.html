@@ -1215,9 +1215,17 @@
         /* A ratio the fetcher withheld because it could not be trusted for this symbol. Muted
            and italic so it reads as "not shown on purpose" rather than as a value. */
         .snap-withheld { font-style: italic; font-weight: 400; color: #999; cursor: help; }
+        /* A qualifier the figure beside it cannot carry on its own: which clock an amount is on
+           (enterprise value is priced at the previous close), which fiscal year a forward
+           multiple is built from. Small and muted so it reads as a footnote to the number rather
+           than as part of it — and it is only ever rendered in a key/value block, never in a
+           grid cell, where every row would carry the same words. */
+        .snap-note { font-size: 0.72rem; font-weight: 400; color: #999; margin-left: 0.3rem;
+                     cursor: help; }
         html[data-theme="dark"] .snap-group-title { color: #999; border-bottom-color: #2e3137; }
         html[data-theme="dark"] .snap-kv .k { color: #b4b4b4; }
         html[data-theme="dark"] .snap-withheld { color: #7e848c; }
+        html[data-theme="dark"] .snap-note { color: #8b8f96; }
 
         /* An earnings date that has already been reported — Yahoo publishes the most recent one
            when it has no forward date. Muted italics say "this is not a forward date" in the

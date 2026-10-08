@@ -4131,11 +4131,23 @@
         <p class="muted" style="margin-top: 0">
             Decomposes a stock's price growth into <b>earnings growth</b> vs <b>multiple expansion</b>.
             TTM diluted EPS comes from SEC EDGAR (XBRL <code>EarningsPerShareDiluted</code>); price
-            from <code>price_history.close</code>. Quarterly EPS records are keyed by period end,
-            the latest filing wins (so restated values are preferred), and each value is rescaled
-            to today's per-share basis using the split factor at its filing date — so prices and
-            EPS share a consistent basis through splits. The series only uses values that were
-            already filed on each chart date. P/E gaps when TTM earnings are negative.<br/>
+            from <code>price_history.close</code>. EPS records are keyed by the window the filer
+            tagged them with, the latest filing wins (so restated values are preferred), and each
+            value is rescaled to today's per-share basis using the split factor at its filing date
+            — so prices and EPS share a consistent basis through splits. The series only uses
+            values that were already filed on each chart date. P/E gaps when TTM earnings are
+            negative.<br/>
+            <b>The twelve months are assembled, not just summed.</b> Four quarters count as a year
+            only if they <b>tile one contiguously</b>. That matters because a 10-K rarely tags its
+            own fourth quarter — GOOGL, NVDA, MU, KLAC, LRCX, INTC and ORCL all leave a six-month
+            hole every year — so that quarter is recovered by subtracting the nine-month
+            year-to-date from the annual, which is arithmetic on two filed figures rather than an
+            estimate. Where even that is unavailable the line stops rather than quietly spanning
+            five quarters' calendar time with four quarters' earnings.<br/>
+            <b>Any US filer in your universe is offered</b> — held, watched, or added to the
+            fundamentals grid — resolved through SEC's own ticker registry. A London or European
+            line is not (its bare ticker at the SEC is a different company), and a name that
+            reports on 20-F, or has never tagged a diluted EPS, says so when you pick it.<br/>
             <b>Sharp drops in the chart are usually real,</b> not bugs: NVDA in mid-2023 (AI
             revenue suddenly doubled, P/E briefly spiked then normalised); AMZN in 2022 (Rivian
             writedown turned TTM EPS negative). Pre-2018 values for some tickers can be off

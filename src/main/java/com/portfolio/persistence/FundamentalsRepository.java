@@ -14,6 +14,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Types;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -175,6 +176,26 @@ public class FundamentalsRepository {
             }
         } catch (Exception e) {
             log.warn("Could not load fundamentals snapshot", e);
+        }
+        return out;
+    }
+
+    /**
+     * Just the symbols on file — the fetch universe as of the last refresh, without paying to
+     * deserialise every row's blob. What the P/E-history picker offers is derived from this, so
+     * that screen inherits the held-plus-watched-plus-extras rule rather than keeping a second
+     * copy of it.
+     */
+    public List<String> symbols() {
+        List<String> out = new ArrayList<>();
+        if (!connections.dbExists()) return out;
+        try (Connection conn = connections.open();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT internal_symbol FROM fundamentals_snapshot ORDER BY internal_symbol")) {
+            while (rs.next()) out.add(rs.getString(1));
+        } catch (Exception e) {
+            log.warn("Could not list fundamentals symbols", e);
         }
         return out;
     }

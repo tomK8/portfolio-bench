@@ -738,7 +738,7 @@ public class ExcelReportWriter {
         // and σ eff / Vol source say which forecast produced it — a probability read months later
         // is only judgeable against the model that made it, so the sheet carries both.
         String[] headers = {"Broker", "Symbol", "Side", "Type", "Quantity",
-                "Price", "Current", "Quote", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
+                "Limit", "Current", "Quote", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
                 "Horizon (sessions)", "Horizon from", "P(touch horizon)", "P(low)", "P(high)",
                 "σ eff", "σ eff (diffusive)", "Vol source", "Drift (annual)", "Events in horizon",
                 "Amount", "Amount GBP", "Date entered", "Expiry"};

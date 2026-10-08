@@ -345,6 +345,80 @@ class YahooQuoteSummaryFetcherTest {
                 "growth measured off a negative EPS base must not be published");
     }
 
+    /**
+     * KLAC's real shape, which is the whole reason this exists: forwardEps reproduces the
+     * <b>+1y</b> consensus to the digit, and that year ends June 2028 while the company's last
+     * reported one ended June 2026. "Next year" would have been the wrong label by a year.
+     */
+    @Test
+    void namesTheFiscalYearTheForwardMultipleIsPricedOn() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "defaultKeyStatistics":{"forwardEps":{"raw":6.74039}},
+                  "earningsTrend":{"trend":[
+                   {"period":"0q","endDate":"2026-09-30"},
+                   {"period":"0y","endDate":"2027-06-30",
+                    "earningsEstimate":{"avg":{"raw":5.43753}}},
+                   {"period":"+1y","endDate":"2028-06-30",
+                    "earningsEstimate":{"avg":{"raw":6.74039}}}
+                ]}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("KLAC", json);
+        assertEquals("2028-06-30", q.labels().get("forwardEpsPeriodEnd"));
+    }
+
+    /**
+     * The two modules refresh on their own clocks, so the match is near rather than exact —
+     * META's forward EPS ran 1.35% above its own +1y estimate on a live fetch while the two
+     * candidate years were 9.8% apart. The year is still unambiguous and is still named.
+     */
+    @Test
+    void anEstimateThatHasMovedSinceStillNamesItsYear() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "defaultKeyStatistics":{"forwardEps":{"raw":34.54533}},
+                  "earningsTrend":{"trend":[
+                   {"period":"0y","endDate":"2026-12-31",
+                    "earningsEstimate":{"avg":{"raw":31.04905}}},
+                   {"period":"+1y","endDate":"2027-12-31",
+                    "earningsEstimate":{"avg":{"raw":34.08393}}}
+                ]}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("META", json);
+        assertEquals("2027-12-31", q.labels().get("forwardEpsPeriodEnd"));
+    }
+
+    /** A forward EPS that sits between the two years is attributable to neither, so it names none. */
+    @Test
+    void aForwardEpsBetweenTwoYearsNamesNoYear() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "defaultKeyStatistics":{"forwardEps":{"raw":6.00}},
+                  "earningsTrend":{"trend":[
+                   {"period":"0y","endDate":"2027-06-30",
+                    "earningsEstimate":{"avg":{"raw":5.43753}}},
+                   {"period":"+1y","endDate":"2028-06-30",
+                    "earningsEstimate":{"avg":{"raw":6.74039}}}
+                ]}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("KLAC", json);
+        assertNull(q.labels().get("forwardEpsPeriodEnd"),
+                "a figure equidistant from both candidates must not be attributed to either");
+    }
+
+    /** The year in progress is a real answer too, when that is the one the feed reproduces. */
+    @Test
+    void namesTheCurrentYearWhenThatIsTheOneReproduced() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "defaultKeyStatistics":{"forwardEps":{"raw":5.43753}},
+                  "earningsTrend":{"trend":[
+                   {"period":"0y","endDate":"2027-06-30",
+                    "earningsEstimate":{"avg":{"raw":5.43753}}},
+                   {"period":"+1y","endDate":"2028-06-30",
+                    "earningsEstimate":{"avg":{"raw":6.74039}}}
+                ]}}],"error":null}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("KLAC", json);
+        assertEquals("2027-06-30", q.labels().get("forwardEpsPeriodEnd"));
+    }
+
     @Test
     void missingEarningsTrendYieldsNoForwardKeys() throws Exception {
         QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", sample());

@@ -278,9 +278,9 @@ financials, so the same symbol disagreed with itself and financials disagreed wi
 LGEN 22.21, AV. 1.76 and LSEG 16.74 were shown, while Yahoo's own silence blanked HSBA and BARC.
 `isFinancialRow` is now the single home for the test, used by the grid and both detail views.
 
-## Three unit classes, three labels
+## Unit classes, and the one field that has no unit at all
 
-A currency amount's unit is not the row's quote currency. There are three classes, and the panel
+A currency amount's unit is not the row's quote currency. There are several classes, and the panel
 had been labelling all of them with the quote currency:
 
 | Class | Fields | Unit | Rendered as |
@@ -289,6 +289,14 @@ had been labelling all of them with the quote currency:
 | Market side, bulk | `marketCap`, `enterpriseValue` | quote currency's **major** unit | `'cap'` → `fmtMarketCap`, which now normalises GBp → GBP |
 | Statement side | revenue, EBITDA, net income, debt, cash, OCF, levered FCF, net debt | `financialCurrency` | `'capFiled'` → `fmtMarketCap(v, filedCurrency(row))` |
 | Filing side | `operatingIncomeTtm` | the unit the **filing** states, which Yahoo does not supply | `'capEdgar'` → `fmtMarketCap(v, labels.operatingUnit)` |
+| Not an amount | `sharesOutstanding` | none — it is a **count of things** | `'shares'` → `fmtCount`, the same T/B/M scaling with no symbol |
+
+The last row is the one that was wrong for longest and read as an outright mistake: shares
+outstanding borrowed the `'cap'` type, so KLAC's 1,305,006,492 shares published as **`$1.31B`**.
+A share count is not money — and on a London line the borrowed type would have claimed pounds for
+a figure that is not an amount in any currency. The scaling is shared (`scaledMagnitude`) and only
+the unit differs, which is the whole point: one place decides what B means, each type decides what
+precedes it.
 
 The fourth class is not pedantry: EDGAR reports the unit per concept and it need not agree with
 Yahoo's `financialCurrency` for the same company (ASML's `OperatingIncomeLoss` is filed in EUR on
@@ -345,6 +353,59 @@ is the same magic number rejected for BRK.B's P/B: a recovering cyclical can gen
 EPS, so any cut-off is wrong for someone. Naming the basis is honest; inferring a verdict from a
 ratio is not.
 
+### Which fiscal year the forward P/E is on, by reconciliation
+
+Naming the basis left the other half of the question open: **which year**. Nothing in
+`summaryDetail` or `defaultKeyStatistics` says, and the obvious reading — "the next twelve
+months" — is wrong often enough to matter. `earningsTrend` calls the fiscal year *in progress*
+`0y`, and `forwardEps` is built from `+1y`, the one after that:
+
+| Symbol | `forwardEps` | `0y` estimate (ends) | `+1y` estimate (ends) | last reported FY |
+|---|---|---|---|---|
+| KLAC | 6.74039 | 5.43753 (2027-06-30) | **6.74039** (2028-06-30) | 2026-06-30 |
+| MSFT | 23.67732 | 19.76867 (2027-06-30) | **23.67732** (2028-06-30) | 2026-06-30 |
+| NVDA | 15.9146 | 9.31242 (2027-01-31) | **15.9146** (2028-01-31) | 2026-01-25 |
+| AAPL | 9.58285 | 8.82022 (2026-09-30) | **9.57579** (2027-09-30) | 2025-09-27 |
+
+So KLAC's 29.8× is priced on earnings **two fiscal years out**, against a last reported year that
+ended in June 2026, while a December filer's forward multiple reaches barely a year. The distance
+is a property of the fiscal calendar and the date, not of the company — which is exactly why the
+row has to say it rather than leave the reader to assume.
+
+The year is chosen by **reconciliation**, the same device the operating line uses on revenue tags:
+whichever consensus year reproduces `forwardEps` is the year it was built from. On a live fetch
+(2026-10-06) that was `+1y` for 11 of the 13 symbols carrying both estimates, exactly. The two
+modules refresh on their own clocks, so the match is not always exact — AMZN was 0.58% off its own
+`+1y`, META 1.35%, TSM 0.57% — and the test is therefore a **separation** one rather than an
+absolute tolerance: the figure must sit within 20% of the gap between the two candidate years.
+A forward EPS in the middle ground names no year and the panel shows none, because two candidates
+a year of growth apart (KLAC's 5.44 against 6.74) cannot both be it.
+
+The label travels as `labels.forwardEpsPeriodEnd` and the popup renders it as a muted
+*FY to Jun 2028* beside the multiple. The grid keeps a plain number: every row there would carry a
+different year, so that one goes in the column's tooltip instead.
+
+## Enterprise value is priced at the previous close
+
+EV and market cap sit four rows apart in the same block and **do not reconcile on a day the shares
+have moved**. KLAC showed EV $258.42B under a market cap of $262.02B with $1.25B of net debt
+outstanding — EV below market cap with debt on the balance sheet, which is arithmetically
+impossible for one moment in time.
+
+It is two moments. `defaultKeyStatistics.enterpriseValue` is an **end-of-day** figure built on the
+previous close, while `price.marketCap` is live. Measured on 2026-10-08: `EV − netDebt` divided by
+`sharesOutstanding` reproduces `regularMarketPreviousClose` **to the cent** on AAPL (336.67),
+MSFT (529.76), AVGO (376.51), AMZN (259.92) and TSLA (377.98 against 377.81) — and KLAC's stored
+EV was byte-identical to a live refetch taken after the price had moved 2.7%.
+
+It is not *only* a clock: EV also carries whatever else Yahoo puts in it — minority interest,
+preferred — so it is not exactly `marketCap + netDebt` on every row either (WMT lands 0.8% above
+that sum, INTC 2% below). Both facts argue against the obvious repair. **Recomputing EV as market
+cap plus net debt would be publishing our own definition under Yahoo's name**, which is the capex
+mistake again: two figures that do not belong in one arithmetic. So the figure stays as fetched
+and the panel discloses the clock — a muted `prev. close` beside the amount, the measurement in
+its tooltip, and the same note on EV/EBITDA, which is built on the same stale numerator.
+
 ## Still open
 
 - **BRK.B's P/B is 0.000966**, because Yahoo's `bookValue` for it is 522,225.9 — the Class **A**
@@ -365,7 +426,8 @@ ratio is not.
   the EV/EBITDA built from it is withheld. It is labelled in the quote currency's major unit,
   which is right for the ordinary case, but ASML's is corrupt (39.68T against a 714.37B market
   cap) and no currency makes it true. Withholding an *amount* on the same evidence that
-  withholds a *ratio* would need a cross-check against market cap that does not exist yet.
+  withholds a *ratio* would need a cross-check against market cap that does not exist yet. The
+  separate question of *when* it is priced is answered below.
 
 ## Rows outside the fetch universe keep their stale blob
 

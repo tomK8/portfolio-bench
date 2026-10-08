@@ -118,6 +118,13 @@ public final class GroupRungs {
      * the only one carrying the enrichment. Failing that the history, which is where an order goes
      * when it fills, is cancelled, or stops being listed.
      *
+     * <p>"Live" here is the whole live book, not just the resting half: an order the broker is
+     * mid-cancellation on is still listed, so it is in neither the open-orders table nor the
+     * history, and a rung assigned to it would otherwise resolve to null and be reported as a rung
+     * whose order has vanished. It reads as {@link Rung.State#CANCELLING} — still priced, because
+     * it can still fill, and counted in nothing, because the rung that replaced it is on the same
+     * ladder.
+     *
      * <p>Null when the key is in neither. That happens to a rung whose order was pruned before
      * groups existed to protect it, and the caller reports it rather than dropping it silently — a
      * group quietly one rung short is a wrong total.
@@ -127,8 +134,10 @@ public final class GroupRungs {
                          Map<String, String> notes, TouchPricer touch) {
         OpenOrder o = live.get(key);
         if (o != null) {
+            Rung.State state = OrderStatus.of(o.status()).resting()
+                    ? Rung.State.WORKING : Rung.State.CANCELLING;
             return new Rung(key, null, o.broker(), o.symbol(), o.side(), o.quantity(), o.price(),
-                    o.currency(), Rung.State.WORKING, null, notes.get(key), o,
+                    o.currency(), state, null, notes.get(key), o,
                     touch.at(o, NEAR_HORIZON_SESSIONS), touch.at(o, FAR_HORIZON_SESSIONS));
         }
         OrderHistoryRepository.HistoricalOrder h = closed.get(key);
@@ -159,10 +168,12 @@ public final class GroupRungs {
         return switch (state) {
             case FILLED, PART_FILLED -> Rung.State.FILLED;
             case CANCELLED, EXPIRED, REJECTED -> Rung.State.CANCELLED;
-            // WORKING or UNKNOWN on a closed row means nobody has said what became of it. Not
-            // counted as a fill: which it was is what the export declined to say, and no match in
-            // the ledger explained it either.
-            case WORKING, UNKNOWN -> Rung.State.UNLISTED;
+            // WORKING, UNKNOWN or PENDING_CANCEL on a closed row means nobody has said what became
+            // of it. Not counted as a fill: which it was is what the export declined to say, and no
+            // match in the ledger explained it either. A cancel that was pending when the row last
+            // appeared is not a cancel that happened — the broker stopped listing the order before
+            // confirming either way, which is the definition of this state.
+            case WORKING, UNKNOWN, PENDING_CANCEL -> Rung.State.UNLISTED;
         };
     }
 
@@ -199,8 +210,11 @@ public final class GroupRungs {
         for (OpenOrder o : live) {
             String key = o.identity();
             if (taken.contains(key)) continue;
+            // The order's own state, not a hardcoded "Working": the live book includes orders the
+            // broker is mid-cancellation on, and a picker offering one of those as though it were
+            // resting is offering a rung that will be gone by tomorrow without saying so.
             out.add(new Candidate(key, o.broker(), o.symbol(), o.side(), o.quantity(), o.price(),
-                    o.currency(), OrderStatus.WORKING.label(), null));
+                    o.currency(), OrderStatus.of(o.status()).label(), null));
         }
         for (OrderHistoryRepository.HistoricalOrder h : history) {
             if (taken.contains(h.orderKey())) continue;

@@ -15,6 +15,7 @@ import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.model.AggHolding;
 import com.portfolio.domain.model.Holding;
 import com.portfolio.domain.model.OpenOrder;
+import com.portfolio.domain.model.OrderStatus;
 import com.portfolio.domain.model.Rung;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -737,7 +738,11 @@ public class ExcelReportWriter {
         // P(low)/P(high) bracket the headline with the same probability computed off RV10 and RV30,
         // and σ eff / Vol source say which forecast produced it — a probability read months later
         // is only judgeable against the model that made it, so the sheet carries both.
-        String[] headers = {"Broker", "Symbol", "Side", "Type", "Quantity",
+        // Status rides with every row because the sheet carries the whole live book, the orders
+        // mid-cancellation included — they are kept off the panel's main table (the replacement is
+        // beside them) but a spreadsheet that simply dropped them would understate the exposure,
+        // and one that listed them unlabelled would repeat the duplicate the table was fixed for.
+        String[] headers = {"Broker", "Symbol", "Side", "Type", "Status", "Quantity",
                 "Limit", "Current", "Quote", "Vs limit", "RV10", "RV30", "σ→lim (5d)", "P(touch 5d)",
                 "Horizon (sessions)", "Horizon from", "P(touch horizon)", "P(low)", "P(high)",
                 "σ eff", "σ eff (diffusive)", "Vol source", "Drift (annual)", "Events in horizon",
@@ -752,39 +757,42 @@ public class ExcelReportWriter {
             styledCell(row, 1, dashIfNull(o.symbol()), text);
             styledCell(row, 2, dashIfNull(o.side()), text);
             styledCell(row, 3, dashIfNull(o.orderType()), text);
-            if (o.quantity() != null) setNumeric(row, 4, o.quantity(), qtyNum);
-            if (o.price() != null) setMoney(row, 5, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
-            if (o.currentPrice() != null) setMoney(row, 6, o.currentPrice(), o.currency(), false, wb, moneyStyles);
-            styledCell(row, 7, quoteSessionCell(o), text);
-            if (o.distancePct() != null) setStyled(row, 8, o.distancePct(), pctStyle);
-            if (o.dailyVol10() != null) setStyled(row, 9, o.dailyVol10(), volPctStyle);
-            if (o.dailyVol30() != null) setStyled(row, 10, o.dailyVol30(), volPctStyle);
-            if (o.sigmaToLimit() != null) setStyled(row, 11, o.sigmaToLimit(), sigmaStyle);
-            if (o.touchProb5d() != null) setStyled(row, 12, o.touchProb5d(), touchPctStyle);
-            if (o.horizonSessions() != null) setNumeric(row, 13, BigDecimal.valueOf(o.horizonSessions()), qtyNum);
-            styledCell(row, 14, o.horizonSessions() == null ? "" : (o.horizonFromExpiry() ? "expiry" : "GTC default"), text);
-            if (o.touchProbHorizon() != null) setStyled(row, 15, o.touchProbHorizon(), touchPctStyle);
-            if (o.touchProbLow() != null) setStyled(row, 16, o.touchProbLow(), touchPctStyle);
-            if (o.touchProbHigh() != null) setStyled(row, 17, o.touchProbHigh(), touchPctStyle);
-            if (o.sigmaEff() != null) setStyled(row, 18, o.sigmaEff(), volPctStyle);
+            // The classification, not the broker's raw word — the same vocabulary the panel
+            // prints, so "Dealt" and "EXECUTED" cannot sort as two outcomes in a filter.
+            styledCell(row, 4, OrderStatus.of(o.status()).label(), text);
+            if (o.quantity() != null) setNumeric(row, 5, o.quantity(), qtyNum);
+            if (o.price() != null) setMoney(row, 6, o.price(), o.currency(), o.priceEstimated(), wb, moneyStyles);
+            if (o.currentPrice() != null) setMoney(row, 7, o.currentPrice(), o.currency(), false, wb, moneyStyles);
+            styledCell(row, 8, quoteSessionCell(o), text);
+            if (o.distancePct() != null) setStyled(row, 9, o.distancePct(), pctStyle);
+            if (o.dailyVol10() != null) setStyled(row, 10, o.dailyVol10(), volPctStyle);
+            if (o.dailyVol30() != null) setStyled(row, 11, o.dailyVol30(), volPctStyle);
+            if (o.sigmaToLimit() != null) setStyled(row, 12, o.sigmaToLimit(), sigmaStyle);
+            if (o.touchProb5d() != null) setStyled(row, 13, o.touchProb5d(), touchPctStyle);
+            if (o.horizonSessions() != null) setNumeric(row, 14, BigDecimal.valueOf(o.horizonSessions()), qtyNum);
+            styledCell(row, 15, o.horizonSessions() == null ? "" : (o.horizonFromExpiry() ? "expiry" : "GTC default"), text);
+            if (o.touchProbHorizon() != null) setStyled(row, 16, o.touchProbHorizon(), touchPctStyle);
+            if (o.touchProbLow() != null) setStyled(row, 17, o.touchProbLow(), touchPctStyle);
+            if (o.touchProbHigh() != null) setStyled(row, 18, o.touchProbHigh(), touchPctStyle);
+            if (o.sigmaEff() != null) setStyled(row, 19, o.sigmaEff(), volPctStyle);
             // The diffusive σ beside the one actually used: the gap between them is exactly what the
             // calendar contributed, and it is the only way to see afterwards how much of a
             // probability came from a scheduled print rather than from the trailing windows.
-            if (o.sigmaEffDiffusive() != null) setStyled(row, 19, o.sigmaEffDiffusive(), volPctStyle);
-            styledCell(row, 20, dashIfNull(o.volSource()), text);
+            if (o.sigmaEffDiffusive() != null) setStyled(row, 20, o.sigmaEffDiffusive(), volPctStyle);
+            styledCell(row, 21, dashIfNull(o.volSource()), text);
             // Annualised back up from the per-session figure the model consumed (×252), because a
             // reader comparing this file against a policy ("we assume 8% for equities") is thinking
             // in years, and 0.000238 is the same number in a unit nobody states.
-            if (o.touchProbHorizon() != null) setStyled(row, 21, o.driftAnnual(), volPctStyle);
+            if (o.touchProbHorizon() != null) setStyled(row, 22, o.driftAnnual(), volPctStyle);
             if (o.touchProbHorizon() != null) {
-                setNumeric(row, 22, BigDecimal.valueOf(o.eventCount()), qtyNum);
+                setNumeric(row, 23, BigDecimal.valueOf(o.eventCount()), qtyNum);
             }
-            if (o.amount() != null) setMoney(row, 23, o.amount(), o.currency(), false, wb, moneyStyles);
-            if (o.amountGbp() != null) setMoney(row, 24, o.amountGbp(), "GBP", false, wb, moneyStyles);
-            styledCell(row, 25, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
+            if (o.amount() != null) setMoney(row, 24, o.amount(), o.currency(), false, wb, moneyStyles);
+            if (o.amountGbp() != null) setMoney(row, 25, o.amountGbp(), "GBP", false, wb, moneyStyles);
+            styledCell(row, 26, o.dateEntered() != null ? o.dateEntered().toString() : "", text);
             String expiry = o.expiry() != null ? o.expiry().toString()
                     : (o.duration() != null ? o.duration() : "");
-            styledCell(row, 26, expiry, text);
+            styledCell(row, 27, expiry, text);
         }
         sheet.setAutoFilter(new CellRangeAddress(0, Math.max(0, orders.size()), 0, headers.length - 1));
         autoSizeColumns(sheet, headers.length);

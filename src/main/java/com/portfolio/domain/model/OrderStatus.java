@@ -24,6 +24,14 @@ import java.util.Map;
  * <p>Note what is <em>not</em> here: an order the broker simply stopped listing. That is the third
  * state the history table shows, and no broker ever writes it — it is inferred from absence, by
  * {@code OrderHistoryRepository.HistoricalOrder}, whose status stays whatever it was last seen as.
+ *
+ * <p><b>Open and resting are two questions, and {@link #PENDING_CANCEL} is the status that answers
+ * them differently.</b> {@link #open()} asks whether the order can still trade — whether anything
+ * terminal has been said about it — and drives the history, the ledger matcher and the user's
+ * verdict. {@link #resting()} asks whether it is one of the orders the user is actually working,
+ * and drives the open-orders table. An order the broker is in the middle of cancelling is both
+ * open and not resting: it has been superseded, usually by the replacement sitting beside it in
+ * the same export, but the cancel is not confirmed and it can still fill until it is.
  */
 public enum OrderStatus {
 
@@ -35,6 +43,12 @@ public enum OrderStatus {
     REJECTED("Rejected"),
     /** The broker says the order is still working: "Open" / "In progress" / "PENDING". */
     WORKING("Working"),
+    /**
+     * A cancel has been submitted and not yet confirmed. Not terminal — the broker has not said
+     * the order is gone, and a marketable limit can still trade before the cancel takes — but not
+     * resting either: it is on its way out, and what replaced it is a separate order.
+     */
+    PENDING_CANCEL("Cancelling"),
     /** No status, or a word this map has never seen. Counts as open — see the class doc. */
     UNKNOWN("Unknown");
 
@@ -47,8 +61,16 @@ public enum OrderStatus {
         put(CANCELLED, "cancelled", "canceled");
         put(EXPIRED, "expired");
         put(REJECTED, "rejected");
-        // Still working — the three spellings the live exports carry.
+        // Still working — the three spellings the live exports carry. AJ Bell's "Pending" is an
+        // order awaiting the market, not one awaiting a cancellation; the two must not collapse.
         put(WORKING, "open", "in progress", "pending");
+        // Leaving. Citi writes "Pending Cancel" on the order you have just modified, and the
+        // replacement arrives in the same export as a second row — which is what put the same
+        // security on the panel twice (TSM, 2026-10-08). The siblings are the FIX order states a
+        // broker reaching for this wording picks from (6 = Pending Cancel, E = Pending Replace);
+        // an unlisted spelling is still UNKNOWN, i.e. shown, so the family costs nothing to carry.
+        put(PENDING_CANCEL, "pending cancel", "pending cancellation", "pending replace",
+                "pending cancel replace", "cancel pending", "cancel requested");
     }
 
     private final String label;
@@ -79,6 +101,19 @@ public enum OrderStatus {
 
     /** True while the order can still trade — the denylist's "everything that isn't terminal". */
     public boolean open() {
+        return this == WORKING || this == UNKNOWN || this == PENDING_CANCEL;
+    }
+
+    /**
+     * True when this is an order the user is still working — what the open-orders table lists.
+     *
+     * <p>Narrower than {@link #open()} by exactly one state. An order mid-cancellation is open:
+     * nothing terminal has been said about it, so it is not filed into the history as a
+     * cancellation nobody confirmed, the cash ledger is still asked to explain it, and the user may
+     * still record a verdict on it. It is not resting: the user has already replaced it, and
+     * listing it beside its replacement shows one decision as two orders.
+     */
+    public boolean resting() {
         return this == WORKING || this == UNKNOWN;
     }
 

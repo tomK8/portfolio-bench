@@ -49,84 +49,90 @@ class ExcelOrdersWorkbookTest {
             assertEquals("Broker", hdr.getCell(0).getStringCellValue());
             assertEquals("Symbol", hdr.getCell(1).getStringCellValue());
             assertEquals("Side", hdr.getCell(2).getStringCellValue());
-            assertEquals("Limit", hdr.getCell(5).getStringCellValue());
-            assertEquals("Current", hdr.getCell(6).getStringCellValue());
-            assertEquals("Quote", hdr.getCell(7).getStringCellValue());
-            assertEquals("Vs limit", hdr.getCell(8).getStringCellValue());
-            assertEquals("RV10", hdr.getCell(9).getStringCellValue());
-            assertEquals("RV30", hdr.getCell(10).getStringCellValue());
-            assertEquals("σ→lim (5d)", hdr.getCell(11).getStringCellValue());
-            assertEquals("P(touch 5d)", hdr.getCell(12).getStringCellValue());
+            // Status is in the sheet because the sheet carries the whole live book — including the
+            // orders mid-cancellation the panel keeps out of its main table — and an unlabelled one
+            // in a spreadsheet would read as a second resting order on the same security.
+            assertEquals("Status", hdr.getCell(4).getStringCellValue());
+            assertEquals("Working", sheet.getRow(1).getCell(4).getStringCellValue(),
+                    "the normalised state, not the broker's raw word");
+            assertEquals("Limit", hdr.getCell(6).getStringCellValue());
+            assertEquals("Current", hdr.getCell(7).getStringCellValue());
+            assertEquals("Quote", hdr.getCell(8).getStringCellValue());
+            assertEquals("Vs limit", hdr.getCell(9).getStringCellValue());
+            assertEquals("RV10", hdr.getCell(10).getStringCellValue());
+            assertEquals("RV30", hdr.getCell(11).getStringCellValue());
+            assertEquals("σ→lim (5d)", hdr.getCell(12).getStringCellValue());
+            assertEquals("P(touch 5d)", hdr.getCell(13).getStringCellValue());
             // The 20-session column is gone: P(N) runs to each order's own expiry now, and the
             // sheet carries the forecast that priced it rather than a second fixed horizon.
-            assertEquals("Horizon (sessions)", hdr.getCell(13).getStringCellValue());
-            assertEquals("Horizon from", hdr.getCell(14).getStringCellValue());
-            assertEquals("P(touch horizon)", hdr.getCell(15).getStringCellValue());
-            assertEquals("P(low)", hdr.getCell(16).getStringCellValue());
-            assertEquals("P(high)", hdr.getCell(17).getStringCellValue());
-            assertEquals("σ eff", hdr.getCell(18).getStringCellValue());
-            assertEquals("σ eff (diffusive)", hdr.getCell(19).getStringCellValue());
-            assertEquals("Vol source", hdr.getCell(20).getStringCellValue());
-            assertEquals("Drift (annual)", hdr.getCell(21).getStringCellValue());
-            assertEquals("Events in horizon", hdr.getCell(22).getStringCellValue());
-            assertEquals("Amount", hdr.getCell(23).getStringCellValue());
-            assertEquals("Amount GBP", hdr.getCell(24).getStringCellValue());
-            assertEquals("Expiry", hdr.getCell(26).getStringCellValue());
+            assertEquals("Horizon (sessions)", hdr.getCell(14).getStringCellValue());
+            assertEquals("Horizon from", hdr.getCell(15).getStringCellValue());
+            assertEquals("P(touch horizon)", hdr.getCell(16).getStringCellValue());
+            assertEquals("P(low)", hdr.getCell(17).getStringCellValue());
+            assertEquals("P(high)", hdr.getCell(18).getStringCellValue());
+            assertEquals("σ eff", hdr.getCell(19).getStringCellValue());
+            assertEquals("σ eff (diffusive)", hdr.getCell(20).getStringCellValue());
+            assertEquals("Vol source", hdr.getCell(21).getStringCellValue());
+            assertEquals("Drift (annual)", hdr.getCell(22).getStringCellValue());
+            assertEquals("Events in horizon", hdr.getCell(23).getStringCellValue());
+            assertEquals("Amount", hdr.getCell(24).getStringCellValue());
+            assertEquals("Amount GBP", hdr.getCell(25).getStringCellValue());
+            assertEquals("Expiry", hdr.getCell(27).getStringCellValue());
 
             Row ajbRow = sheet.getRow(1);
             assertEquals("EQQQ", ajbRow.getCell(1).getStringCellValue());
-            assertEquals(538.00, ajbRow.getCell(5).getNumericCellValue(), 1e-6);
-            assertEquals(540.00, ajbRow.getCell(6).getNumericCellValue(), 1e-6);
-            assertEquals("", ajbRow.getCell(7).getStringCellValue(),
+            assertEquals(538.00, ajbRow.getCell(6).getNumericCellValue(), 1e-6);
+            assertEquals(540.00, ajbRow.getCell(7).getNumericCellValue(), 1e-6);
+            assertEquals("", ajbRow.getCell(8).getStringCellValue(),
                     "a regular-hours quote carries no session label");
-            assertEquals(0.0037, ajbRow.getCell(8).getNumericCellValue(), 1e-6);
-            assertTrue(ajbRow.getCell(8).getCellStyle().getDataFormatString().contains("%"),
+            assertEquals(0.0037, ajbRow.getCell(9).getNumericCellValue(), 1e-6);
+            assertTrue(ajbRow.getCell(9).getCellStyle().getDataFormatString().contains("%"),
                     "distance cell should be percent-formatted");
             // RV10 / RV30 carry the raw daily-σ fraction, percent-formatted
-            assertEquals(0.0200, ajbRow.getCell(9).getNumericCellValue(), 1e-9);
-            assertTrue(ajbRow.getCell(9).getCellStyle().getDataFormatString().contains("%"));
-            assertEquals(0.0250, ajbRow.getCell(10).getNumericCellValue(), 1e-9);
+            assertEquals(0.0200, ajbRow.getCell(10).getNumericCellValue(), 1e-9);
+            assertTrue(ajbRow.getCell(10).getCellStyle().getDataFormatString().contains("%"));
+            assertEquals(0.0250, ajbRow.getCell(11).getNumericCellValue(), 1e-9);
             // σ→limit is a plain signed number; touch probability is a percent-formatted fraction
-            assertEquals(0.50, ajbRow.getCell(11).getNumericCellValue(), 1e-9);
-            assertEquals(0.6170, ajbRow.getCell(12).getNumericCellValue(), 1e-9);
-            assertTrue(ajbRow.getCell(12).getCellStyle().getDataFormatString().contains("%"));
+            assertEquals(0.50, ajbRow.getCell(12).getNumericCellValue(), 1e-9);
+            assertEquals(0.6170, ajbRow.getCell(13).getNumericCellValue(), 1e-9);
+            assertTrue(ajbRow.getCell(13).getCellStyle().getDataFormatString().contains("%"));
             // The horizon travels in sessions — the number the √-scaling actually consumed — and
             // says where it came from, since 11 sessions to an expiry and 11 typed into a box are
             // different claims about the same figure.
-            assertEquals(11, ajbRow.getCell(13).getNumericCellValue(), 1e-9);
-            assertEquals("expiry", ajbRow.getCell(14).getStringCellValue());
-            assertEquals(0.7400, ajbRow.getCell(15).getNumericCellValue(), 1e-9);
-            assertTrue(ajbRow.getCell(15).getCellStyle().getDataFormatString().contains("%"));
+            assertEquals(11, ajbRow.getCell(14).getNumericCellValue(), 1e-9);
+            assertEquals("expiry", ajbRow.getCell(15).getStringCellValue());
+            assertEquals(0.7400, ajbRow.getCell(16).getNumericCellValue(), 1e-9);
+            assertTrue(ajbRow.getCell(16).getCellStyle().getDataFormatString().contains("%"));
             // The RV10/RV30 bracket, and the forecast that produced the headline: a probability
             // read months later is only judgeable against the model that made it.
-            assertEquals(0.7100, ajbRow.getCell(16).getNumericCellValue(), 1e-9);
-            assertEquals(0.7700, ajbRow.getCell(17).getNumericCellValue(), 1e-9);
-            assertEquals(0.0210, ajbRow.getCell(18).getNumericCellValue(), 1e-9);
-            assertEquals("BLEND", ajbRow.getCell(20).getStringCellValue());
+            assertEquals(0.7100, ajbRow.getCell(17).getNumericCellValue(), 1e-9);
+            assertEquals(0.7700, ajbRow.getCell(18).getNumericCellValue(), 1e-9);
+            assertEquals(0.0210, ajbRow.getCell(19).getNumericCellValue(), 1e-9);
+            assertEquals("BLEND", ajbRow.getCell(21).getStringCellValue());
             // Driftless, event-free row: 0% and 0, stated rather than blank — "no adjustment was
             // applied" is a fact about the number beside it, not missing data. And σ eff equals its
             // own diffusive value, which is what "no calendar contribution" looks like.
-            assertEquals(0.0, ajbRow.getCell(21).getNumericCellValue(), 1e-12);
             assertEquals(0.0, ajbRow.getCell(22).getNumericCellValue(), 1e-12);
-            assertEquals(ajbRow.getCell(18).getNumericCellValue(),
-                    ajbRow.getCell(19).getNumericCellValue(), 1e-12);
-            assertEquals(26901.41, ajbRow.getCell(24).getNumericCellValue(), 1e-6);
-            assertEquals("2026-07-29", ajbRow.getCell(26).getStringCellValue());
+            assertEquals(0.0, ajbRow.getCell(23).getNumericCellValue(), 1e-12);
+            assertEquals(ajbRow.getCell(19).getNumericCellValue(),
+                    ajbRow.getCell(20).getNumericCellValue(), 1e-12);
+            assertEquals(26901.41, ajbRow.getCell(25).getNumericCellValue(), 1e-6);
+            assertEquals("2026-07-29", ajbRow.getCell(27).getStringCellValue());
 
             Row iiRow = sheet.getRow(2);
             // value stays numeric; the "~" lives only in the display number format
-            assertEquals(224.8596, iiRow.getCell(5).getNumericCellValue(), 1e-6);
-            assertTrue(iiRow.getCell(5).getCellStyle().getDataFormatString().contains("~"),
+            assertEquals(224.8596, iiRow.getCell(6).getNumericCellValue(), 1e-6);
+            assertTrue(iiRow.getCell(6).getCellStyle().getDataFormatString().contains("~"),
                     "estimated price cell should carry a ~ in its number format");
             // no live price / vols for this order → those columns stay blank
-            assertNull(iiRow.getCell(6));
-            assertNull(iiRow.getCell(8));
+            assertNull(iiRow.getCell(7));
             assertNull(iiRow.getCell(9));
-            assertNull(iiRow.getCell(12));
-            assertNull(iiRow.getCell(13), "unpriced row → no horizon column either");
-            assertNull(iiRow.getCell(15));
-            assertNull(iiRow.getCell(18));
-            assertNull(iiRow.getCell(21), "unpriced row → no model columns either");
+            assertNull(iiRow.getCell(10));
+            assertNull(iiRow.getCell(13));
+            assertNull(iiRow.getCell(14), "unpriced row → no horizon column either");
+            assertNull(iiRow.getCell(16));
+            assertNull(iiRow.getCell(19));
+            assertNull(iiRow.getCell(22), "unpriced row → no model columns either");
         }
     }
 
@@ -156,9 +162,9 @@ class ExcelOrdersWorkbookTest {
             // rounded to 10 dp, so annualising it back lands at 0.0799999956 — 8.00% once the cell
             // format is applied. The per-session number is the one that has to be faithful. This
             // fixture nets no yield, so mu_price is the class's gross figure.
-            assertEquals(0.08, row.getCell(21).getNumericCellValue(), 1e-6,
+            assertEquals(0.08, row.getCell(22).getNumericCellValue(), 1e-6,
                     "the per-session drift, stated back in the year it was quoted in");
-            assertTrue(row.getCell(21).getCellStyle().getDataFormatString().contains("%"));
+            assertTrue(row.getCell(22).getCellStyle().getDataFormatString().contains("%"));
         }
     }
 
@@ -176,8 +182,8 @@ class ExcelOrdersWorkbookTest {
         try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(
                 new ExcelReportWriter().ordersWorkbook(List.of(pre))))) {
             Row row = wb.getSheet("Open Orders").getRow(1);
-            assertEquals(160.90, row.getCell(6).getNumericCellValue(), 1e-6);
-            assertEquals("pre-market", row.getCell(7).getStringCellValue());
+            assertEquals(160.90, row.getCell(7).getNumericCellValue(), 1e-6);
+            assertEquals("pre-market", row.getCell(8).getStringCellValue());
         }
     }
 }

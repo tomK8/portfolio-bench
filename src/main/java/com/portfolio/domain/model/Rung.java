@@ -52,6 +52,13 @@ public record Rung(String key, Long intentId, String account, String symbol, Str
         INTENDED("Intended"),
         /** Resting at the broker right now. */
         WORKING("Working"),
+        /**
+         * Resting, but with a cancel submitted and unconfirmed — what a rung whose limit the user
+         * has just moved looks like for the rest of the session. Kept on the ladder and counted in
+         * nothing: the rung that replaced it is the one now carrying the intention, and counting
+         * both would put this rung's cash and quantity on the ladder twice.
+         */
+        CANCELLING("Cancelling"),
         /** Traded. Stays visible — a ladder whose sell filled and whose buy filled later is the
          *  completed round trip, which is the thing the panel exists to show. */
         FILLED("Filled"),
@@ -85,9 +92,17 @@ public record Rung(String key, Long intentId, String account, String symbol, Str
         return state == State.FILLED;
     }
 
-    /** Cancelled, or stopped being listed. Kept on the ladder, counted in nothing. */
+    /**
+     * Cancelled, stopped being listed, or on its way out. Kept on the ladder, counted in nothing.
+     *
+     * <p>{@link State#CANCELLING} is in here rather than in {@link #remaining()} because the rung
+     * that replaced it is already on the ladder: counting a withdrawn rung among the fills still to
+     * come double-counts one decision. It can still trade until the broker confirms the cancel, and
+     * if it does the next export restates it as filled and it is counted then — as a fill, which is
+     * what it would be.
+     */
     public boolean gone() {
-        return state == State.CANCELLED || state == State.UNLISTED;
+        return state == State.CANCELLED || state == State.UNLISTED || state == State.CANCELLING;
     }
 
     /**

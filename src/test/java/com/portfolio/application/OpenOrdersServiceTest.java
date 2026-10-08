@@ -17,6 +17,7 @@ import com.portfolio.persistence.InstrumentMappingRepository;
 import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
+import com.portfolio.persistence.OrderHistoryRepository;
 import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.port.FxRateProvider;
 import org.apache.poi.ss.usermodel.Row;
@@ -390,7 +391,7 @@ class OpenOrdersServiceTest {
         try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
                 Files.newInputStream(Path.of(export.files().get(0))))) {
             var row = wb.getSheet("Open Orders").getRow(1);
-            assertEquals(0.08, row.getCell(21).getNumericCellValue(), 1e-6, "Drift (annual)");
+            assertEquals(0.08, row.getCell(22).getNumericCellValue(), 1e-6, "Drift (annual)");
         }
 
         service.setUseDrift(false);
@@ -585,6 +586,75 @@ class OpenOrdersServiceTest {
         OpenOrder snps = find(report.orders(), "SNPS");
         assertEquals(0, new BigDecimal("2760").compareTo(snps.amount()));
         assertEquals(0, new BigDecimal("2208.00").compareTo(snps.amountGbp()));
+    }
+
+    /**
+     * The duplicate, from the export that produced it (Citi, 2026-10-08).
+     *
+     * <p>Modifying an order at Citi is a cancel and a new order, and both rows arrive in the same
+     * export: the old limit carrying "Pending Cancel" and the new one carrying "Pending". Read as
+     * one state they are two resting buys of 30 TSM, which is the panel claiming $28k of exposure
+     * against one $13.9k decision.
+     */
+    @Test
+    void aSupersededOrderLeavesTheTableForItsOwnBlock(@TempDir Path dir) throws Exception {
+        writeRothOrders(dir.resolve("Order+Status.xlsx"), new String[][]{
+                {"10/08/2026 7:15:13 AM", "Buy", "TSM", "30", "Limit", "462.14", "GTC", "Pending"},
+                {"10/07/2026 1:02:38 PM", "Buy", "TSM", "30", "Limit", "471.14", "GTC", "Pending Cancel"},
+        });
+
+        OrdersReport report = service(dir).load();
+
+        assertEquals(1, report.orders().size(), "one decision, one row in the table");
+        assertEquals(0, new BigDecimal("462.14").compareTo(report.orders().get(0).price()),
+                "and it is the replacement, not the order being withdrawn");
+
+        // Not dropped: the cancel is unconfirmed, so the old limit is still live at the broker and
+        // can still fill. It is shown, in its own block, labelled.
+        assertEquals(1, report.cancelling().size());
+        assertEquals(0, new BigDecimal("471.14").compareTo(report.cancelling().get(0).price()));
+        assertEquals("Pending Cancel", report.cancelling().get(0).status(),
+                "the broker's own word is kept verbatim — it is the evidence");
+
+        // The whole live book is what the spreadsheet carries, so neither half is lost on export.
+        assertEquals(2, report.live().size());
+    }
+
+    /**
+     * An order mid-cancellation is still listed by the broker, so it must not be filed as closed.
+     *
+     * <p>Closing it would put "No longer listed" on a row the export is still printing, start the
+     * cash ledger hunting for a trade to explain it, and — when the cancel does confirm — leave the
+     * history holding our inference instead of the broker's word for it.
+     */
+    @Test
+    void anOrderBeingCancelledIsNotClosedByAbsence(@TempDir Path dir) throws Exception {
+        JdbcConnectionFactory connections = new JdbcConnectionFactory(dir.resolve("db"));
+        OrderHistoryRepository historyRepo = new OrderHistoryRepository(connections);
+        OpenOrdersService svc = new OpenOrdersService(new HoldingFileLocator(dir),
+                List.of(new RothOrdersParser()), FX, new ExcelReportWriter(), outDir,
+                new IntradayPriceRepository(connections), new PriceHistoryRepository(connections),
+                new YahooTickerMap(), new KeyValueStore(dir.resolve("db")),
+                tickers -> { }, symbol -> { }, null, null, null, historyRepo);
+
+        writeRothOrders(dir.resolve("Order+Status.xlsx"), new String[][]{
+                {"10/08/2026 7:15:13 AM", "Buy", "TSM", "30", "Limit", "462.14", "GTC", "Pending"},
+                {"10/07/2026 1:02:38 PM", "Buy", "TSM", "30", "Limit", "471.14", "GTC", "Pending Cancel"},
+        });
+        assertTrue(svc.load().history().isEmpty(), "still listed — nothing has closed");
+
+        // The cancel lands, and the broker says so. *Now* it is history, with the broker's own
+        // outcome on it rather than ours.
+        writeRothOrders(dir.resolve("Order+Status.xlsx"), new String[][]{
+                {"10/08/2026 7:15:13 AM", "Buy", "TSM", "30", "Limit", "462.14", "GTC", "Pending"},
+                {"10/07/2026 1:02:38 PM", "Buy", "TSM", "30", "Limit", "471.14", "GTC", "Canceled"},
+        });
+        OrdersReport after = svc.load();
+        assertTrue(after.cancelling().isEmpty());
+        assertEquals(1, after.history().size());
+        assertEquals("Cancelled", after.history().get(0).state());
+        assertFalse(after.history().get(0).stateInferred(),
+                "the broker accounted for it, so nothing here is inferred");
     }
 
     @Test
@@ -1061,6 +1131,21 @@ class OpenOrdersServiceTest {
         assertFalse(OpenOrdersService.isOpen("EXECUTED"));
         assertFalse(OpenOrdersService.isOpen("Canceled"));
         assertFalse(OpenOrdersService.isOpen("cancelled"));
+    }
+
+    /** A Citi Order+Status workbook holding exactly the given rows, in the export's own layout. */
+    private static void writeRothOrders(Path file, String[][] rows) throws Exception {
+        try (Workbook wb = new XSSFWorkbook()) {
+            Sheet sheet = wb.createSheet("Order Status");
+            sheet.createRow(1).createCell(1).setCellValue("Order Status");
+            Row hdr = sheet.createRow(3);
+            String[] cols = {"Date", "Transaction", "Security ID", "Quantity", "Order Type", "Price", "Duration", "Status"};
+            for (int i = 0; i < cols.length; i++) hdr.createCell(1 + i).setCellValue(cols[i]);
+            for (int i = 0; i < rows.length; i++) row(sheet, 4 + i, rows[i]);
+            try (OutputStream os = Files.newOutputStream(file)) {
+                wb.write(os);
+            }
+        }
     }
 
     private static void writeRothWorkbook(Path file) throws Exception {

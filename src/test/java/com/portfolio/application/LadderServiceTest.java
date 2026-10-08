@@ -133,6 +133,40 @@ class LadderServiceTest {
                 report.unassigned().stream().map(GroupRungs.Candidate::key).toList());
     }
 
+    /**
+     * A rung whose order the broker is mid-cancellation on is still a rung.
+     *
+     * <p>Such an order is live — the broker is still listing it — but it is not resting, so it is
+     * in neither the open-orders table nor the history. Resolved off the resting half alone the
+     * rung would come back null and the ladder would report itself a rung short. It reads as
+     * CANCELLING: still priced, because the cancel is unconfirmed and a marketable limit can still
+     * trade, and counted in nothing, because the rung that replaced it is on the same ladder.
+     */
+    @Test
+    void aRungWhoseOrderIsBeingCancelledStaysOnTheLadderAndCountsInNothing() {
+        LadderService s = service();
+        long id = s.createLadder("TSM buys", "TSM");
+        OpenOrder leaving = OpenOrder.parsed("Roth IRA", "TSM", null, "Buy", "Limit",
+                new BigDecimal("30"), new BigDecimal("471.14"), false, new BigDecimal("14134.20"),
+                "USD", DAY, null, "GTC", "Pending Cancel", "REF1");
+        OpenOrder replacement = order("Roth IRA", "TSM", "Buy", "30", "462.14", "REF2");
+        s.addRungs(id, List.of(leaving.identity(), replacement.identity()));
+
+        var report = s.assemble(List.of(replacement, leaving), List.of(), List.of(), Map.of(),
+                ACCOUNTS, TOUCH, TRIPS, TRIP_SESSIONS);
+
+        var ladder = report.ladders().get(0);
+        assertEquals(2, ladder.rungs().size(), "neither rung is lost");
+        Rung withdrawn = ladder.rungs().stream()
+                .filter(r -> r.key().equals(leaving.identity())).findFirst().orElseThrow();
+        assertEquals(Rung.State.CANCELLING, withdrawn.state());
+        assertTrue(withdrawn.gone(), "counted in nothing — the replacement carries the intention");
+        assertFalse(withdrawn.remaining());
+        assertNotNull(withdrawn.touchNear(), "still priced: it can fill until the cancel confirms");
+        // 30 bought, once. Counting the withdrawn rung too would put one decision on twice.
+        assertEquals(0, new BigDecimal("30").compareTo(ladder.totals().netQuantity()));
+    }
+
     /** The picker offers this ladder's security only — the rule of this group type, in one place. */
     @Test
     void thePickerOffersOrdersOnTheLaddersOwnSecurity() {

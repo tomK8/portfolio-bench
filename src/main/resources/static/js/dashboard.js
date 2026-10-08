@@ -3779,7 +3779,7 @@
                 }
                 explain.innerHTML = data.symbol + ': price ×' + fmtMult(s.priceMult) +
                         ' = EPS ×' + fmtMult(s.epsMult) + ' × multiple ×' + fmtMult(s.peMult) +
-                        '. Drivers: ' + driver;
+                        '. Drivers: ' + driver + fundWindowNote(data);
             } else {
                 summary.style.display = 'none';
                 explain.style.display = 'none';
@@ -3793,6 +3793,21 @@
             if (s == null) return '—';
             var n = parseFloat(s);
             return n.toFixed(2);
+        }
+
+        /**
+         * Which twelve months the latest P/E is a price over — a quarter or so behind today,
+         * because the denominator can only be what has been filed. Says so explicitly rather than
+         * leaving the right-hand end of the chart to imply "as of today", and marks the case where
+         * the fourth quarter in that window was recovered from the 10-K by subtraction instead of
+         * tagged by the filer.
+         */
+        function fundWindowNote(data) {
+            if (!data.epsThrough) return '';
+            return ' Latest EPS window ends ' + data.epsThrough +
+                (data.finalQuarterDerived
+                    ? ', with its fourth quarter derived from the 10-K (the annual minus the nine months before it).'
+                    : '.');
         }
 
         function quantile(sorted, q) {

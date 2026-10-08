@@ -805,15 +805,24 @@ public class BeanConfiguration {
         return new GiltPriceFetcher();
     }
 
+    /**
+     * Shares {@link CikRegistry} with the earnings proxy and the operating line — one SEC ticker
+     * file on disk, resolved dynamically, so the P/E chart offers whatever the universe holds
+     * rather than a hand-written list of seven names.
+     */
     @Bean
-    public EdgarFundamentalsFetcher edgarFundamentalsFetcher() {
-        return new EdgarFundamentalsFetcher();
+    public EdgarFundamentalsFetcher edgarFundamentalsFetcher(
+            JdbcConnectionFactory jdbcConnectionFactory) {
+        return new EdgarFundamentalsFetcher(new CikRegistry(jdbcConnectionFactory.dbDir()));
     }
 
     @Bean
     public FundamentalsService fundamentalsService(EdgarFundamentalsFetcher edgarFundamentalsFetcher,
-                                                   PriceHistoryRepository priceHistoryRepository) {
-        return new FundamentalsService(edgarFundamentalsFetcher, priceHistoryRepository);
+                                                   PriceHistoryRepository priceHistoryRepository,
+                                                   FundamentalsRepository fundamentalsRepository,
+                                                   YahooTickerMap yahooTickerMap) {
+        return new FundamentalsService(edgarFundamentalsFetcher, priceHistoryRepository,
+                fundamentalsRepository, yahooTickerMap);
     }
 
     @Bean

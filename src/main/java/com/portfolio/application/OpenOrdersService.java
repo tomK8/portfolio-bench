@@ -467,7 +467,7 @@ public class OpenOrdersService {
     public ExportResult export() {
         OrdersReport report = load();
         if (report.empty()) return ExportResult.nothing();
-        return writeWorkbook("Open Orders-", () -> excelReportWriter.ordersWorkbook(report.orders()));
+        return writeWorkbook("Open Orders-", () -> excelReportWriter.ordersWorkbook(report.live()));
     }
 
     /**
@@ -675,6 +675,10 @@ public class OpenOrdersService {
                 for (OpenOrder o : parsed) {
                     if (!isOpen(o.status())) continue;
                     open.add(o.withAmountGbp(toGbp(o.amount(), o.currency(), rates)));
+                    // Every live row, cancelling ones included: `openKeys` is what stops `record`
+                    // closing an order by absence, and an order the broker is still listing has
+                    // not gone anywhere. Splitting the two happens at the end of the load, after
+                    // both have been priced by the same pass.
                     openKeys.add(o.identity());
                 }
                 open.sort(Comparator
@@ -775,7 +779,19 @@ public class OpenOrdersService {
         if (orderHistory != null) {
             orderHistory.prune(today, ladders == null ? Set.of() : ladders.rungOrderKeys());
         }
-        return new OrdersReport(orders, sources, warnings, orders.isEmpty() && sources.isEmpty(),
+        // The table lists what is *resting*. An order the broker is mid-cancellation on is live —
+        // it is in `orders` above, so it keeps its feed warm, resolves any group rung assigned to
+        // it, and is never filed as closed by absence — but it is not one of the orders the user
+        // is working: the replacement arrived in the same export, and listing both put one
+        // decision on the panel as two (TSM, 2026-10-08). Split here rather than at the parse, so
+        // both halves come out of the *same* enrichment pass and the block below cannot price
+        // differently from the table above it.
+        List<OpenOrder> resting = new ArrayList<>();
+        List<OpenOrder> cancelling = new ArrayList<>();
+        for (OpenOrder o : orders) (isResting(o.status()) ? resting : cancelling).add(o);
+
+        return new OrdersReport(resting, cancelling, sources, warnings,
+                orders.isEmpty() && sources.isEmpty(),
                 unmappedInstruments(orders), quotes.notes(), quotes.asOf(),
                 chartableSymbols(universe, lineSymbols), cfg, orderNotes, closed,
                 ladderReport, switchReport);
@@ -1763,13 +1779,22 @@ public class OpenOrdersService {
     }
 
     /**
-     * Whether a parsed row still belongs in the table. The vocabulary lives in
-     * {@link OrderStatus} — the same classification the closed-orders table prints — and it is a
-     * denylist: an unrecognised status reads as {@code UNKNOWN}, which is open, so a broker's
-     * unseen "still working" wording is shown rather than silently dropped.
+     * Whether a parsed row is still live at the broker — the rows this panel reads at all. The
+     * vocabulary lives in {@link OrderStatus} — the same classification the closed-orders table
+     * prints — and it is a denylist: an unrecognised status reads as {@code UNKNOWN}, which is
+     * open, so a broker's unseen "still working" wording is shown rather than silently dropped.
      */
     static boolean isOpen(String status) {
         return OrderStatus.of(status).open();
+    }
+
+    /**
+     * Whether a live row is one of the orders the user is <em>working</em>, as opposed to one the
+     * broker is in the middle of cancelling. Both are open (see {@link #isOpen}); only these go in
+     * the main table. See {@link OrderStatus#resting()}.
+     */
+    static boolean isResting(String status) {
+        return OrderStatus.of(status).resting();
     }
 
     /**
@@ -1833,7 +1858,15 @@ public class OpenOrdersService {
      *                capped at a month by construction, so it is small, and the panel can render
      *                it collapsed with no extra round trip.
      */
-    public record OrdersReport(List<OpenOrder> orders, List<String> sources,
+    /**
+     * @param orders     the resting book — what the table lists
+     * @param cancelling live orders the broker is in the middle of cancelling: shown in their own
+     *                   block rather than mixed into the table, because the order that replaced
+     *                   one is sitting beside it, but never dropped — the cancel is not confirmed
+     *                   and a marketable limit can still fill before it is
+     */
+    public record OrdersReport(List<OpenOrder> orders, List<OpenOrder> cancelling,
+                               List<String> sources,
                                List<String> warnings, boolean empty,
                                List<UnmappedInstrument> unmapped,
                                Map<String, String> priceNotes, String quotesAsOf,
@@ -1860,6 +1893,13 @@ public class OpenOrdersService {
          */
         public boolean chartable(OpenOrder o) {
             return o != null && o.symbol() != null && chartableSymbols.contains(o.symbol());
+        }
+
+        /** Resting and cancelling together — the whole live book, which is what the export writes. */
+        public List<OpenOrder> live() {
+            List<OpenOrder> all = new java.util.ArrayList<>(orders);
+            all.addAll(cancelling);
+            return all;
         }
     }
 }

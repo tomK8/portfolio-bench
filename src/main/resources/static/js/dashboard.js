@@ -175,11 +175,13 @@
         // rows. The state is held in JS for the page session precisely because the DOM it used to
         // live in is what the swap destroys.
         //
-        // Both tables in the panel are remembered, keyed by id. The closed-orders table joined
+        // All three tables in the panel are remembered, keyed by id. The closed-orders table joined
         // the open one when it became filterable: reading one security's history means narrowing
         // it *and* ordering it by date, and a re-render that kept the filter while throwing away
-        // the date order would hand back half of what the user had set up.
-        var ORDERS_SORTED_TABLES = ['orders-table', 'orders-history-table'];
+        // the date order would hand back half of what the user had set up. The cancelling block is
+        // in for the same reason the open table is — it is sorted by the same header handler, and a
+        // re-render is a re-price, never a request to undo the reader's ordering.
+        var ORDERS_SORTED_TABLES = ['orders-table', 'orders-cancelling-table', 'orders-history-table'];
         var ordersSort = {};
 
         document.body.addEventListener('click', function (e) {
@@ -613,7 +615,7 @@
                 // The Ladders and Share-class switches blocks are included on the same terms: their
                 // rungs and legs carry data-symbol only when the listing resolved to a ticker, so an
                 // unmapped one stays inert here for the same reason it does in the table.
-                if (!e.target.closest('#orders-table, #ladders-result, #switches-result')) return;
+                if (!e.target.closest('#orders-table, #orders-cancelling-table, #ladders-result, #switches-result')) return;
                 if (e.target.closest('input, button, a, select, label')) return;  // the days box lives in a cell
                 var el = e.target.closest('tr[data-symbol], .ladder-symbol[data-symbol]');
                 if (el) openSymbolModal(el.dataset.symbol);

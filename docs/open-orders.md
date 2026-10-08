@@ -161,6 +161,60 @@ the RV windows + 5-session columns via `withVolatility`, and the whole P(N) bloc
       two it was is exactly what the export declined to say. `HistoricalOrder.stateInferred()`
       is what separates our inference from the broker's statement, and drives the muting.
 
+### The order being cancelled — open, but not resting
+
+Modifying an order at Citi is a cancel and a new order, and **both arrive in the same export**: the
+old limit restated as `Pending Cancel`, the replacement beside it as `Pending`. Read as one state
+they are two resting buys of 30 TSM — $28k of claimed exposure against one $13.9k decision — which
+is what the panel showed on 2026-10-08, and had shown before.
+
+The word was simply missing from the vocabulary: `OrderStatus.of("Pending Cancel")` was `UNKNOWN`,
+which counts as open, so the row sat in the table indistinguishable from the order that replaced it.
+Teaching the map the word is the fix, but **not as a terminal status** — the broker has not said the
+order is gone, and a cancel that is still pending is a cancel that has not happened.
+
+So `OrderStatus` now answers two questions instead of one.
+
+- **`open()`** — can this order still trade; has anything terminal been said about it. Unchanged for
+  every other status, and **true** for `PENDING_CANCEL`. This is what the history, the cash-ledger
+  matcher and the user's verdict read, and it is why a cancelling order is **never filed as closed
+  by absence**: it is in `openKeys`, so `record` leaves it alone. Closing it would print *No longer
+  listed* against a row the export is still printing, start the ledger hunting for a trade to
+  explain it, and leave the history holding our inference where the broker's own word was about to
+  arrive. When the cancel does land the next export says `Canceled` and it closes properly, with
+  `stateInferred()` false.
+- **`resting()`** — is this one of the orders the user is working. **False** for `PENDING_CANCEL`,
+  true for everything else open, including `UNKNOWN`: the denylist is untouched, and an unseen "still
+  working" wording is still shown rather than dropped. This is the only thing that moved, and it
+  drives one thing: which block of the panel the row renders in.
+
+`OpenOrdersService.load` splits the live book on `isResting` **at the end of the load, not at the
+parse**, so both halves come out of the same enrichment pass and the two blocks cannot price
+differently. `OrdersReport.orders` is the resting half; `OrdersReport.cancelling` is the other;
+`live()` is both, and that is what the Excel export writes (with a **Status** column, since a sheet
+that silently dropped them would understate the exposure and one that listed them unlabelled would
+reprint the duplicate).
+
+- **The block is open by default and the rows are muted** — but the amber through-limit highlight
+  still wins. A buy limit sitting *above* the market with an unconfirmed cancel against it is the one
+  row here that can cost money, and it is exactly the shape that produces one (you move a limit
+  because the market has run through it). `vs limit` is in the block for that and nothing else;
+  there is no P(N), because the question "will it fill before it expires" is not the question for an
+  order whose expiry is "whenever the broker gets round to it".
+- **Nothing is assumed about the outcome.** The next export either restates the row `Canceled` or
+  restates it filled, and it moves to Closed orders as whichever happened. A row that disappears
+  while still saying `Pending Cancel` is `UNLISTED`, not cancelled — a pending cancel is not a
+  cancellation, and `GroupRungs.stateOf` says so in the same switch that handles `WORKING`.
+- **A rung assigned to one stays on its ladder.** The group services are handed the whole live book,
+  not the resting half: an order that is in neither the table nor the history would otherwise
+  resolve to `null` and be reported as a rung whose order has vanished. It reads as
+  `Rung.State.CANCELLING` — still priced, because it can still fill, and `gone()`, because the rung
+  that replaced it is on the same ladder and counting both would put one decision's cash and
+  quantity on it twice. The order picker labels candidates from their own status for the same
+  reason, instead of the hardcoded "Working" it used before.
+- **AJ Bell's bare `Pending` is not this.** It is an order awaiting the market, and it stays
+  `WORKING`. Collapsing the two would empty the AJ Bell half of the table.
+
 ### Settling a "No longer listed" order
 
 An order export is a snapshot of what is **resting**, so a fill appears in it only on the day it

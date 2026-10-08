@@ -429,6 +429,86 @@
     </div>
 
     <!--
+      Cancelling: live orders with an unconfirmed cancel against them. Their own block rather than
+      a row in the table above, because the order that replaced one arrives in the *same* export
+      and the panel then showed one decision as two orders. Not dropped: the cancel is not
+      confirmed, and a limit already through the market can still fill before it is — which is
+      exactly the case worth seeing, so the block is open by default.
+    -->
+    <details class="order-cancelling" open th:if="${!#lists.isEmpty(orders.cancelling)}">
+        <summary>
+            Cancelling
+            <span class="muted" th:text="'(' + ${#lists.size(orders.cancelling)} + ')'">(0)</span>
+        </summary>
+        <p class="muted" style="font-size: 0.82rem; margin: 0.5rem 0;">
+            Orders the broker has accepted a cancellation for but not yet confirmed — what you see
+            for the rest of the session after moving a limit. The replacement is a separate order
+            and is in the table above; these are kept out of it so one decision doesn't read as two.
+            <br/>
+            <b>They can still trade.</b> Until the cancel is confirmed the order is live at the
+            broker, so a limit sitting on the wrong side of the market may fill — the
+            <b>vs limit</b> column is here for that and nothing else. When the cancel lands, the next
+            export restates the row as cancelled and it moves to Closed orders below; if it fills
+            first, it moves there as a fill. Neither outcome is assumed here.
+        </p>
+        <table id="orders-cancelling-table" class="swing-tbl">
+            <thead>
+            <tr>
+                <th class="txt" data-sort="text">Broker</th>
+                <th class="txt" data-sort="text">Symbol</th>
+                <th class="txt" data-sort="text">Side</th>
+                <th class="txt" data-sort="text">Type</th>
+                <th data-sort="num">Qty</th>
+                <th data-sort="num">Limit</th>
+                <th data-sort="num" title="Latest live price, in the order's currency">Current</th>
+                <th data-sort="num" title="(current − limit) ÷ limit. A buy at or above the market, or a sell at or below it, can still fill while the cancel is unconfirmed.">vs limit</th>
+                <th data-sort="num">Amount</th>
+                <th data-sort="num">Amount £</th>
+                <th class="txt" data-sort="text">Date entered</th>
+                <th class="txt" data-sort="text">Status</th>
+                <th class="txt" data-sort="text"
+                    title="Your note on this order. The same cell as the table above and saved against the same key, so a note written while the order was resting is still here while it is being withdrawn — and still here afterwards, in Closed orders.">Note</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="o : ${orders.cancelling}"
+                th:classappend="${o.throughLimit()} ? 'order-through' : ''"
+                th:attr="title=${o.throughLimit()} ? 'On the wrong side of its own limit and not yet confirmed cancelled — this one can still trade.' : null,
+                         data-symbol=${orders.chartable(o)} ? ${o.symbol} : null">
+                <td class="txt" th:text="${o.broker}">Broker</td>
+                <td class="txt" th:text="${o.symbol != null ? o.symbol : '—'}">SYM</td>
+                <td class="txt"
+                    th:classappend="${o.side != null ? (#strings.equalsIgnoreCase(o.side, 'Buy') ? 'val-pos' : (#strings.equalsIgnoreCase(o.side, 'Sell') ? 'val-neg' : '')) : ''}"
+                    th:text="${o.side != null ? o.side : '—'}">Side</td>
+                <td class="txt" th:text="${o.orderType != null ? o.orderType : '—'}">Type</td>
+                <td th:text="${o.quantity != null ? #numbers.formatDecimal(o.quantity, 1, 'COMMA', 2, 'POINT') : '—'}">0</td>
+                <td th:text="${o.price != null ? (o.priceEstimated ? '~' : '') + o.currencySymbol + #numbers.formatDecimal(o.price, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <!-- Same `as of` / pre-market label the table above carries. A price labelled in
+                     one block and bare in the other would read as two different kinds of quote. -->
+                <td><span th:text="${o.currentPrice != null ? o.currencySymbol + #numbers.formatDecimal(o.currentPrice, 1, 'COMMA', 2, 'POINT') : '—'}">—</span><span
+                        class="price-note" th:if="${orders.priceNotes.get(o.symbol) != null}"
+                        th:text="${orders.priceNotes.get(o.symbol)}">as of</span></td>
+                <td th:classappend="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? 'val-pos' : (o.distancePct.signum() &lt; 0 ? 'val-neg' : '')) : ''}"
+                    th:text="${o.distancePct != null ? (o.distancePct.signum() &gt; 0 ? '+' : '') + #numbers.formatDecimal(o.distancePct.multiply(100), 1, 'COMMA', 2, 'POINT') + '%' : '—'}">—</td>
+                <td th:text="${o.amount != null ? o.currencySymbol + #numbers.formatDecimal(o.amount, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td th:text="${o.amountGbp != null ? '£' + #numbers.formatDecimal(o.amountGbp, 1, 'COMMA', 2, 'POINT') : '—'}">—</td>
+                <td class="txt" th:text="${o.dateEntered != null ? o.dateEntered.toString() : '—'}">—</td>
+                <!-- The classification, with the broker's own word on hover — the same bargain the
+                     closed-orders Status cell strikes. -->
+                <td class="txt muted"
+                    th:title="${'The broker''s own word: ' + (o.status != null ? o.status : 'none')}"
+                    th:text="${T(com.portfolio.domain.model.OrderStatus).of(o.status).label()}">Cancelling</td>
+                <td class="txt order-note-cell" th:attr="data-sort-value=${orders.noteFor(o)}">
+                    <input class="order-note" type="text" placeholder="add a note…"
+                           th:attr="data-order-key=${o.identity()}"
+                           th:value="${orders.noteFor(o)}"/>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </details>
+
+    <!--
       Closed orders: what a broker has stopped listing as open, either by restating it with a
       terminal status or by dropping it from the export. Collapsed by default and carried in the
       same payload as the table above — a month's worth is small, so it costs no second request.

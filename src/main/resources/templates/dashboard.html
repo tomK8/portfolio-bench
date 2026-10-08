@@ -214,13 +214,19 @@
         html[data-theme="dark"] .order-state-set { color: #4ade80; }
         html[data-theme="dark"] .state-src { color: #70767e; }
 
-        .order-history { margin-top: 1.25rem; }
-        .order-history > summary {
+        .order-history, .order-cancelling { margin-top: 1.25rem; }
+        .order-history > summary, .order-cancelling > summary {
             cursor: pointer;
             font-weight: 600;
             padding: 0.35rem 0;
         }
-        .order-history table { margin-top: 0.25rem; }
+        .order-history table, .order-cancelling table { margin-top: 0.25rem; }
+        /* Muted like a closed row, because that is what these are on their way to being — but the
+           amber through-limit highlight still wins, since a cancelling order on the wrong side of
+           its limit is the one case in this block that can cost money. */
+        .order-cancelling tbody td { color: #777; }
+        .order-cancelling tbody tr.order-through td { color: inherit; }
+        html[data-theme="dark"] .order-cancelling tbody td { color: #8b9199; }
 
         /* The closed-orders filter — the same compact control row as the probe form above, since
            it is the same kind of thing: a few inputs that re-draw what is under them. */

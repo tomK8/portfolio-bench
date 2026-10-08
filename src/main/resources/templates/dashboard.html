@@ -1423,6 +1423,10 @@
         .wl-stats .snap-kv { break-inside: avoid; border-bottom: 1px solid #f0f0f0; padding: 0.24rem 0; font-size: 0.8rem; }
         .wl-stats .snap-kv .k { color: #8a8f96; font-weight: 400; }
         .wl-stats .snap-kv .v { font-weight: 500; font-variant-numeric: tabular-nums; }
+        /* The strip's labels explain themselves like the fundamentals ones, but keep the grid's
+           own quiet sans face — .snap-tip carries the tooltip behaviour here, not the serif. */
+        .wl-stats .snap-tip { font-family: inherit; }
+        .wl-stats .snap-kv [data-tip] { cursor: help; }
 
         /* ---- Swing stats tab ---- */
         .swing-controls { flex-wrap: wrap; row-gap: 0.35rem; }
@@ -1567,10 +1571,12 @@
         .wl-fund-toggle::before { content: '▸ '; }
         .wl-fund-toggle.open::before { content: '▾ '; }
 
+        /* A label that explains itself on hover. `help` rather than `default` so the pointer
+           says which labels carry a tooltip — nothing else on the row advertises it. */
         .snap-tip {
             display: inline-block;
             font-family: Georgia, Cambria, serif;
-            cursor: default;
+            cursor: help;
         }
 
         .js-tip-box {

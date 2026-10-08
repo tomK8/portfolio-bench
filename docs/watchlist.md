@@ -182,6 +182,20 @@ touches an order.
   overnight/weekend gaps don't draw diagonal lines — 1D labels are times, multi-day/30D labels
   are dates. Popup fundamentals reuse the Snapshot-diff renderer (`fundamentalsHtml` /
   `fundamentalsFieldGroups` in `dashboard.js`) laid out in columns.
+- **Every label in the popup explains itself, and no label writes its own explanation.** The stats
+  strip and the Key block were hand-built key/value rows, so they bypassed the `[data-tip]` box the
+  fundamentals groups print and one screen answered "what is PEG?" for some fields and stayed silent
+  for the ones beside them. Both now build their label through `wlTipLabel`, and neither holds any
+  prose: the strip reads `wlColumnRegistry()` — the column picker's own descriptions, which is why
+  the differing labels don't matter (`Today` in the strip, `Today %` in the picker: one fact, one
+  explanation) — the Key block reads `WL_FUND_TOP`, and the fundamentals groups read
+  `fundamentalsFieldGroups()` as before. A field added to any of those three therefore arrives in
+  the popup with its tooltip already written. The pointer is `help` over anything that carries one,
+  because nothing else on the row advertises that it does, and `.wl-stats .snap-tip` drops the
+  serif `.snap-tip` normally imposes so the quiet stat grid keeps its own face.
+- **The window high/low pair carries its tooltip on the value as well as the label**, and through
+  the same box as everything else rather than the browser's `title`. The `*` marking a close-only
+  extreme is printed on the *value* side, and that asterisk is the character a reader doubts.
 - **The window's own high/low** sits beside the fixed 52-week pair and is relabelled as the window
   changes (`5D high`, `1Y low`, …), so the same two cells answer whichever term is selected. The
   52-week pair stays put: it is the near-high alert's yardstick and comes from the fundamentals

@@ -1,8 +1,8 @@
 package com.portfolio.application;
 
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
-import com.portfolio.adapter.EdgarFundamentalsFetcher.EpsFact;
-import com.portfolio.adapter.EdgarFundamentalsFetcher.EpsHistory;
+import com.portfolio.adapter.EdgarFundamentalsFetcher.FiledFact;
+import com.portfolio.adapter.EdgarFundamentalsFetcher.FiledHistory;
 import com.portfolio.adapter.EdgarXbrlFetcher.Status;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.FiledPeriods;
@@ -61,6 +61,51 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Decomposition uses the identity {@code priceMult ≡ epsMult × peMult}, which holds exactly
  * when both series are positive at the window endpoints. The summary surfaces all three
  * multiples so the user can read off which side of the equation drove the move.
+ *
+ * <h2>The EPS term is split again, because GAAP EPS is not all operating</h2>
+ *
+ * <p>Diluted EPS is the right denominator for a P/E — it is what the market prices, and it means
+ * the same thing in every row. It is also, for some filers in some years, mostly something other
+ * than the operating business. GOOG's twelve months to 2026-06-30 carry $244.2bn of net income
+ * against $147.6bn of operating income: 40% of it arrived below the operating line, chiefly as
+ * marks on equity stakes, against 14% in the window's base year. Two-term decomposition then
+ * credits those marks to <em>earnings growth</em> (×9.12 rather than ×6.44) and, because the
+ * price did not follow them, books the residual as a 33% <em>de-rating</em> that never happened.
+ * The same distortion is why {@link OperatingLineService} exists at all.
+ *
+ * <p>So the EPS term is split by a second exact identity:
+ *
+ * <pre>priceMult ≡ opEpsMult × mixMult × peMult</pre>
+ *
+ * where {@code opEpsMult} is the move in operating income per share and {@code mixMult} is the
+ * move in net income ÷ operating income. Both come from the filer's own
+ * {@code OperatingIncomeLoss} and {@code NetIncomeLoss}, assembled into a trailing twelve months
+ * by the same {@link FiledPeriods} rules and read as a <b>ratio</b>. Taking the ratio is what
+ * makes this cheap and exact: the share count cancels (a weighted-average share count is a stock,
+ * and would not survive quarter-tiling), and so does the split basis, so the two dollar series
+ * need no rescaling.
+ *
+ * <p><b>The mix term is not "non-operating income".</b> Two things sit between the operating line
+ * and the bottom line — non-operating items <em>and tax</em> — and nothing in the filings
+ * separates them into a per-share figure without a modelled tax rate, which is the manufactured
+ * number this repo keeps deleting. So the term is named for what it literally is, a ratio of two
+ * filed figures, and the sentence under the cards says both things are in it. It is also why the
+ * ratio is published net ÷ operating rather than the other way up: tax usually exceeds
+ * non-operating income, so operating income exceeds net income for most filers and "operating is
+ * 132% of net income" reads as an error.
+ *
+ * <p>Operating income is <b>pre-tax</b>, so the level of price ÷ operating income per share is
+ * not a P/E and is never labelled one. Only its <em>change</em> over the window is published, and
+ * only beside the GAAP P/E rather than in place of it.
+ *
+ * <p>Both legs are read on the <b>latest filed</b> value, the convention the EPS beside them
+ * already uses — so a restated year is on its restated basis. GOOG's 2018 operating income was
+ * $26.321bn as filed and $27.524bn as restated a year later, and the window's base ratio is the
+ * second: the same figure the rest of the chart is drawn on.
+ *
+ * <p>Plenty of real filers tag no operating-income subtotal — banks have none, and several large
+ * caps present straight to pre-tax income. Those get the split <b>withheld with its reason</b>,
+ * the same way the operating line stores a refusal; the GAAP decomposition above it is unaffected.
  */
 public class FundamentalsService {
 
@@ -125,7 +170,7 @@ public class FundamentalsService {
                     "SEC's company registry lists no filer under " + ticker + ".");
         }
 
-        EpsHistory history = cachedEps(ticker);
+        FiledHistory history = cachedEps(ticker);
         if (history.isEmpty()) {
             return FundamentalsReport.empty(ticker, false, switch (history.status()) {
                 case UNTAGGED -> "SEC's XBRL carries no diluted EPS for " + ticker
@@ -155,7 +200,7 @@ public class FundamentalsService {
         // filing date, *before* any of them are added or subtracted, so the whole series lands in
         // today's per-share basis and the recovered fourth quarter is a subtraction of two figures
         // on one footing.
-        List<EpsFact> facts = rescaleEpsToTodayBasis(ticker, history.facts());
+        List<FiledFact> facts = rescaleEpsToTodayBasis(ticker, history.facts());
 
         List<Step> steps = ttmSteps(facts);
         if (steps.isEmpty()) {
@@ -173,7 +218,7 @@ public class FundamentalsService {
             }
             if (current == null) continue;          // nothing filed yet at this date
             BigDecimal price = BigDecimal.valueOf(b.close());
-            BigDecimal ttm = current.ttmEps();
+            BigDecimal ttm = current.ttm();
             BigDecimal pe = ttm.signum() > 0
                     ? price.divide(ttm, SCALE, RoundingMode.HALF_UP)
                     : null;                         // negative TTM → undefined P/E, leave a gap
@@ -182,8 +227,114 @@ public class FundamentalsService {
         }
 
         Step last = steps.get(steps.size() - 1);
-        return new FundamentalsReport(ticker, points, summarise(points), false, null,
-                last.periodEnd().toString(), last.derived());
+        Summary summary = summarise(points);
+        Split split = summary == null ? new Split(null, null) : operatingSplit(ticker, steps, summary);
+        return new FundamentalsReport(ticker, points, summary, false, null,
+                last.periodEnd().toString(), last.derived(),
+                split.operating(), split.withheld());
+    }
+
+    /**
+     * The second identity: {@code epsMult ≡ opEpsMult × mixMult}, where the mix is net income ÷
+     * operating income — everything below the operating line, as one factor. Computed at the two
+     * endpoints of the window the summary already chose, so the three published multiples and the
+     * two new ones close on {@code priceMult} exactly.
+     *
+     * <p>Both legs are read off the <em>same twelve months</em> as the EPS behind them. A filer
+     * can be a quarter further along in one concept than another — EDGAR carries whatever each
+     * filing tagged — and a ratio of two differently-dated windows is not the mix of either, so
+     * that case is withheld rather than approximated.
+     *
+     * <p>Everything here is a ratio of two aggregate dollar figures, which is why neither needs
+     * the split rescaling the per-share series does, and why no share count is fetched.
+     */
+    private Split operatingSplit(String ticker, List<Step> epsSteps, Summary summary) {
+        FiledHistory operating = cachedConcept(ticker, EdgarFundamentalsFetcher.OPERATING_INCOME,
+                EdgarFundamentalsFetcher.DOLLARS);
+        if (operating.isEmpty()) {
+            return Split.withheld(switch (operating.status()) {
+                case UNTAGGED -> ticker + " tags no operating-income subtotal "
+                        + "(us-gaap:OperatingIncomeLoss). Banks have none, and several large caps "
+                        + "present straight to pre-tax income — so there is nothing to split the "
+                        + "EPS term with.";
+                case NOT_DOMESTIC -> ticker + " tags operating income only on foreign forms, "
+                        + "which are on another basis.";
+                default -> "EDGAR did not answer for " + ticker
+                        + "'s operating income — that says nothing about the filer, so try again.";
+            });
+        }
+        FiledHistory net = cachedConcept(ticker, EdgarFundamentalsFetcher.NET_INCOME,
+                EdgarFundamentalsFetcher.DOLLARS);
+        if (net.isEmpty()) {
+            return Split.withheld(net.status() == Status.UNAVAILABLE
+                    ? "EDGAR did not answer for " + ticker + "'s net income, so try again."
+                    : ticker + " tags no us-gaap:NetIncomeLoss, so the operating share of net "
+                            + "income cannot be formed.");
+        }
+
+        List<Step> opSteps = ttmSteps(operating.facts());
+        List<Step> niSteps = ttmSteps(net.facts());
+        LocalDate startDate = LocalDate.parse(summary.start().date());
+        LocalDate endDate = LocalDate.parse(summary.end().date());
+        Step epsStart = stepAt(epsSteps, startDate);
+        Step epsEnd = stepAt(epsSteps, endDate);
+        if (epsStart == null || epsEnd == null) return Split.withheld(null);
+
+        BigDecimal start = netToOperating(opSteps, niSteps, startDate, epsStart.periodEnd());
+        BigDecimal end = netToOperating(opSteps, niSteps, endDate, epsEnd.periodEnd());
+        if (start == null || end == null) {
+            return Split.withheld("Operating and net income do not assemble into the same twelve "
+                    + "months as the EPS at " + (start == null ? summary.start().date()
+                    : summary.end().date()) + ", so the ratio of the two there would span two "
+                    + "different windows.");
+        }
+
+        // mixMult first, so the identity closes on the epsMult the cards already print rather
+        // than on a second rounding of the same quantity.
+        BigDecimal mixMult = end.divide(start, SCALE, RoundingMode.HALF_UP);
+        BigDecimal opEpsMult = summary.epsMult().divide(mixMult, SCALE, RoundingMode.HALF_UP);
+        if (opEpsMult.signum() <= 0) return Split.withheld(null);
+        BigDecimal opMultipleMult = summary.priceMult().divide(opEpsMult, SCALE, RoundingMode.HALF_UP);
+        return new Split(new OperatingSplit(opEpsMult, mixMult, start, end, opMultipleMult), null);
+    }
+
+    /**
+     * Net income ÷ operating income over the twelve months ending {@code epsThrough}, as of
+     * {@code date}. Null when either series has nothing filed by then, when either window ends
+     * somewhere other than the EPS window's own end, or when either figure is not positive — a
+     * ratio spanning a loss is not a mix of anything.
+     *
+     * <p>This direction, not operating ÷ net. Tax sits between the two, so for the great
+     * majority of filers operating income <em>exceeds</em> net income and "operating is 132% of
+     * net income" reads as an error. Net ÷ operating is below 1 for the ordinary case, above it
+     * for a filer carrying large non-operating income, and is the factor the mix multiple is a
+     * move in.
+     */
+    private static BigDecimal netToOperating(List<Step> opSteps, List<Step> niSteps,
+                                             LocalDate date, LocalDate epsThrough) {
+        Step op = stepAt(opSteps, date);
+        Step ni = stepAt(niSteps, date);
+        if (op == null || ni == null) return null;
+        if (!op.periodEnd().equals(epsThrough) || !ni.periodEnd().equals(epsThrough)) return null;
+        if (ni.ttm().signum() <= 0 || op.ttm().signum() <= 0) return null;
+        return ni.ttm().divide(op.ttm(), SCALE, RoundingMode.HALF_UP);
+    }
+
+    /** The last step that had landed on or before {@code date}, or null if none had. */
+    private static Step stepAt(List<Step> steps, LocalDate date) {
+        Step current = null;
+        for (Step s : steps) {
+            if (s.from().isAfter(date)) break;
+            current = s;
+        }
+        return current;
+    }
+
+    /** Either the split or the reason there isn't one; a null reason means "nothing to say". */
+    private record Split(OperatingSplit operating, String withheld) {
+        static Split withheld(String why) {
+            return new Split(null, why);
+        }
     }
 
     /** Does this symbol reach its own listing without a Yahoo mapping? See the class note. */
@@ -198,17 +349,20 @@ public class FundamentalsService {
      * <p>A step is emitted per distinct filing date and kept only when it moves the figure, so a
      * 10-Q that merely re-tags comparatives costs nothing. Walking price bars against these is
      * what keeps the series look-ahead-free: a bar sees the TTM that the market could see.
+     *
+     * <p>Concept-agnostic — the same walk builds the EPS series and the two aggregate series the
+     * operating split is a ratio of.
      */
-    private static List<Step> ttmSteps(List<EpsFact> facts) {
+    private static List<Step> ttmSteps(List<FiledFact> facts) {
         TreeSet<LocalDate> filingDates = new TreeSet<>();
-        for (EpsFact f : facts) filingDates.add(f.availableFrom());
+        for (FiledFact f : facts) filingDates.add(f.availableFrom());
 
         List<Step> steps = new ArrayList<>();
         for (LocalDate asOf : filingDates) {
             List<Fact> visible = new ArrayList<>(facts.size());
-            for (EpsFact f : facts) {
+            for (FiledFact f : facts) {
                 if (!f.availableFrom().isAfter(asOf)) {
-                    visible.add(new Fact(f.start(), f.periodEnd(), f.eps()));
+                    visible.add(new Fact(f.start(), f.periodEnd(), f.value()));
                 }
             }
             Optional<Ttm> ttm = FiledPeriods.trailingFourQuarters(visible);
@@ -216,7 +370,7 @@ public class FundamentalsService {
             Step step = new Step(asOf, ttm.get().total(), ttm.get().periodEnd(),
                     ttm.get().derivedQuarterEnd() != null);
             Step previous = steps.isEmpty() ? null : steps.get(steps.size() - 1);
-            if (previous == null || previous.ttmEps().compareTo(step.ttmEps()) != 0
+            if (previous == null || previous.ttm().compareTo(step.ttm()) != 0
                     || !previous.periodEnd().equals(step.periodEnd())) {
                 steps.add(step);
             }
@@ -232,28 +386,34 @@ public class FundamentalsService {
      * still raw (splitFactor at filing = N). Dividing each value by splitFactor-at-its-own-filed-
      * date normalises both.
      */
-    private List<EpsFact> rescaleEpsToTodayBasis(String ticker, List<EpsFact> facts) {
-        List<EpsFact> out = new ArrayList<>(facts.size());
-        for (EpsFact f : facts) {
+    private List<FiledFact> rescaleEpsToTodayBasis(String ticker, List<FiledFact> facts) {
+        List<FiledFact> out = new ArrayList<>(facts.size());
+        for (FiledFact f : facts) {
             PriceBar ref = priceRepo.getPriceOn(ticker, f.valueFiled());
             double sf = ref != null ? ref.splitFactor() : 1.0;
-            BigDecimal adj = sf == 1.0 ? f.eps()
-                    : f.eps().divide(BigDecimal.valueOf(sf), 8, RoundingMode.HALF_UP);
-            out.add(new EpsFact(f.start(), f.periodEnd(), adj, f.availableFrom(), f.valueFiled()));
+            BigDecimal adj = sf == 1.0 ? f.value()
+                    : f.value().divide(BigDecimal.valueOf(sf), 8, RoundingMode.HALF_UP);
+            out.add(new FiledFact(f.start(), f.periodEnd(), adj, f.availableFrom(), f.valueFiled()));
         }
         return out;
     }
 
-    private EpsHistory cachedEps(String ticker) {
-        CachedSeries c = cache.get(ticker);
+    private FiledHistory cachedEps(String ticker) {
+        return cachedConcept(ticker, EdgarFundamentalsFetcher.EPS_DILUTED,
+                EdgarFundamentalsFetcher.PER_SHARE);
+    }
+
+    private FiledHistory cachedConcept(String ticker, String concept, String unit) {
+        String key = ticker + '/' + concept;
+        CachedSeries c = cache.get(key);
         if (c != null && Instant.now().isBefore(c.expiresAt)) return c.history;
-        EpsHistory fresh = edgar.fetch(ticker);
+        FiledHistory fresh = edgar.fetch(ticker, concept, unit);
         // A failure is not cached for a day: the next visit to the tab should retry rather than
         // repeat an outage back at the user until tomorrow.
         if (fresh.isEmpty() && fresh.status() == Status.UNAVAILABLE) {
             return fresh;
         }
-        cache.put(ticker, new CachedSeries(fresh, Instant.now().plus(CACHE_TTL)));
+        cache.put(key, new CachedSeries(fresh, Instant.now().plus(CACHE_TTL)));
         return fresh;
     }
 
@@ -281,10 +441,10 @@ public class FundamentalsService {
         return new Summary(start, end, priceMult, epsMult, peMult, days);
     }
 
-    private record CachedSeries(EpsHistory history, Instant expiresAt) {}
+    private record CachedSeries(FiledHistory history, Instant expiresAt) {}
 
-    /** One trailing-twelve-month figure, from the filing date it became readable on. */
-    private record Step(LocalDate from, BigDecimal ttmEps, LocalDate periodEnd, boolean derived) {}
+    /** One trailing-twelve-month figure of one concept, from the filing date it became readable on. */
+    private record Step(LocalDate from, BigDecimal ttm, LocalDate periodEnd, boolean derived) {}
 
     /** One (date, price, TTM EPS, P/E) sample. {@code pe} is null if TTM EPS ≤ 0. */
     public record Point(String date, BigDecimal price, BigDecimal ttmEps, BigDecimal pe) {}
@@ -294,10 +454,35 @@ public class FundamentalsService {
                           long spanDays) {}
 
     /**
+     * The EPS term split in two: {@code epsMult ≡ opEpsMult × mixMult}. Published only beside the
+     * GAAP decomposition, never instead of it.
+     *
+     * @param opEpsMult        the move in operating income per share — <b>pre-tax</b>, so a level
+     *                         built on it is not a P/E and is not published as one
+     * @param mixMult          the move in net income ÷ operating income: everything between the
+     *                         operating line and the bottom line, as one factor
+     * @param netToOperatingStart net income ÷ operating income over the window's base twelve
+     *                         months. Not a share of anything — tax sits between the two, so the
+     *                         ratio is below 1 for most filers and above it for one carrying
+     *                         large non-operating income
+     * @param netToOperatingEnd   the same ratio over the window's latest twelve months
+     * @param opMultipleMult   {@code priceMult ÷ opEpsMult} — what the multiple did once the EPS
+     *                         term is the operating business alone
+     */
+    public record OperatingSplit(BigDecimal opEpsMult, BigDecimal mixMult,
+                                 BigDecimal netToOperatingStart, BigDecimal netToOperatingEnd,
+                                 BigDecimal opMultipleMult) {}
+
+    /**
      * @param epsThrough      the end of the twelve months behind the latest point — a P/E is a
      *                        price over a window, and the window is a quarter or so behind today
      * @param finalQuarterDerived whether that window's fourth quarter was recovered from the 10-K
      *                        by subtraction rather than tagged by the filer
+     * @param operatingSplit  the EPS term split into operating and everything below the operating
+     *                        line, or null
+     * @param operatingSplitWithheld why there is no split, when that is worth saying — a filer
+     *                        with no operating-income subtotal is a fact about the filer, so it
+     *                        is reported rather than left as a blank card
      */
     public record FundamentalsReport(String symbol,
                                      List<Point> points,
@@ -305,9 +490,12 @@ public class FundamentalsService {
                                      boolean missingPrices,
                                      String message,
                                      String epsThrough,
-                                     boolean finalQuarterDerived) {
+                                     boolean finalQuarterDerived,
+                                     OperatingSplit operatingSplit,
+                                     String operatingSplitWithheld) {
         public static FundamentalsReport empty(String sym, boolean missingPrices, String msg) {
-            return new FundamentalsReport(sym, List.of(), null, missingPrices, msg, null, false);
+            return new FundamentalsReport(sym, List.of(), null, missingPrices, msg, null, false,
+                    null, null);
         }
     }
 }

@@ -20,12 +20,19 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Diluted EPS as the filer tagged it, from SEC XBRL's {@code companyconcept} endpoint —
- * {@code us-gaap:EarningsPerShareDiluted} in {@code USD/shares}. Free, no auth, ~18 years of
- * history for a long-standing US filer. Feeds the P/E-history chart, which needs a trailing
- * twelve months as of every past date, so what comes back here is <b>every period the filer
- * tagged</b> — quarters, nine-month year-to-dates and the annual — and {@link
- * com.portfolio.domain.FiledPeriods} decides which of them may be added together.
+ * One us-gaap concept as the filer tagged it, from SEC XBRL's {@code companyconcept} endpoint.
+ * Free, no auth, ~18 years of history for a long-standing US filer. Feeds the P/E-history chart,
+ * which needs a trailing twelve months as of every past date, so what comes back here is
+ * <b>every period the filer tagged</b> — quarters, nine-month year-to-dates and the annual — and
+ * {@link com.portfolio.domain.FiledPeriods} decides which of them may be added together.
+ *
+ * <p>Three concepts are read, because the chart's identity needs three series on one footing:
+ * {@link #EPS_DILUTED} in {@code USD/shares} is the denominator of the P/E, and
+ * {@link #OPERATING_INCOME} with {@link #NET_INCOME} in {@code USD} are what split the EPS term
+ * into the part the operating business earned and the part that arrived below the operating line.
+ * Taken as a <em>ratio</em>, the two dollar series need no split rescaling and no share count —
+ * a weighted-average share count is a stock, not a flow, and would not survive the quarter-tiling
+ * this class's whole output exists to feed.
  *
  * <p><b>Nothing here is a maintained list.</b> CIKs resolve through {@link CikRegistry} (SEC's
  * own {@code company_tickers.json}), as they do for the earnings proxy and the operating line.
@@ -56,9 +63,17 @@ public class EdgarFundamentalsFetcher {
 
     private static final String CONCEPT_URL =
             "https://data.sec.gov/api/xbrl/companyconcept/CIK%010d/us-gaap/%s.json";
-    private static final String CONCEPT = "EarningsPerShareDiluted";
+    /** Diluted EPS — the P/E's denominator. */
+    public static final String EPS_DILUTED = "EarningsPerShareDiluted";
+    /** Operating income, the subtotal above everything non-operating. Not every filer tags one. */
+    public static final String OPERATING_INCOME = "OperatingIncomeLoss";
+    /** Net income attributable to the parent — the EPS numerator, give or take preferred dividends. */
+    public static final String NET_INCOME = "NetIncomeLoss";
+
     /** A per-share figure is filed in this unit; a {@code pure} or bare {@code USD} copy is not it. */
-    private static final String UNIT = "USD/shares";
+    public static final String PER_SHARE = "USD/shares";
+    /** The unit the two aggregate concepts are filed in. */
+    public static final String DOLLARS = "USD";
     private static final String USER_AGENT = "PortfolioBench tomaszp@gmail.com";
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
 
@@ -73,30 +88,31 @@ public class EdgarFundamentalsFetcher {
     }
 
     /**
-     * One filed EPS figure, over the window the filer tagged it with.
+     * One filed figure, over the window the filer tagged it with.
      *
      * @param availableFrom when the figure first became public (earliest filing) — what gates it
      *                      into the trailing twelve months at a past chart date
      * @param valueFiled    the filing date of the value kept (latest filing) — which per-share
-     *                      basis it is in, so the split rescaling pivots on the right factor
+     *                      basis it is in, so the split rescaling pivots on the right factor. An
+     *                      aggregate concept needs no rescaling and ignores it.
      */
-    public record EpsFact(LocalDate start, LocalDate periodEnd, BigDecimal eps,
-                          LocalDate availableFrom, LocalDate valueFiled) {}
+    public record FiledFact(LocalDate start, LocalDate periodEnd, BigDecimal value,
+                            LocalDate availableFrom, LocalDate valueFiled) {}
 
     /**
-     * What one symbol's EPS history came back as. The four silences are the same four the
-     * operating line tells apart, and for the same reason: "this filer does not report in
-     * us-gaap", "SEC lists no filer under this ticker" and "EDGAR did not answer" are different
-     * facts and only one of them is worth retrying.
+     * What one symbol's filed history for one concept came back as. The four silences are the
+     * same four the operating line tells apart, and for the same reason: "this filer does not
+     * report in us-gaap", "SEC lists no filer under this ticker" and "EDGAR did not answer" are
+     * different facts and only one of them is worth retrying.
      */
-    public record EpsHistory(List<EpsFact> facts, Status status) {
+    public record FiledHistory(List<FiledFact> facts, Status status) {
 
         public boolean isEmpty() {
             return facts.isEmpty();
         }
 
-        public static EpsHistory of(Status status) {
-            return new EpsHistory(List.of(), status);
+        public static FiledHistory of(Status status) {
+            return new FiledHistory(List.of(), status);
         }
     }
 
@@ -110,18 +126,28 @@ public class EdgarFundamentalsFetcher {
      * with a {@link Status} rather than an exception on any failure, unknown ticker, or filer
      * that does not tag the concept.
      */
-    public EpsHistory fetch(String ticker) {
+    public FiledHistory fetch(String ticker) {
+        return fetch(ticker, EPS_DILUTED, PER_SHARE);
+    }
+
+    /**
+     * Every filed figure for one us-gaap {@code concept} in {@code unit}, sorted by period end
+     * ascending. Empty with a {@link Status} rather than an exception on any failure, unknown
+     * ticker, or filer that does not tag the concept — a 404 on {@link #OPERATING_INCOME} is an
+     * ordinary answer, since a bank has no operating-income subtotal to tag.
+     */
+    public FiledHistory fetch(String ticker, String concept, String unit) {
         Optional<Integer> cik = cik(ticker);
-        if (cik.isEmpty()) return EpsHistory.of(Status.UNAVAILABLE);
-        String url = String.format(CONCEPT_URL, cik.get(), CONCEPT);
+        if (cik.isEmpty()) return FiledHistory.of(Status.UNAVAILABLE);
+        String url = String.format(CONCEPT_URL, cik.get(), concept);
         Response resp = get(url);
-        if (resp.status() == 404) return EpsHistory.of(Status.UNTAGGED);
-        if (resp.body() == null) return EpsHistory.of(Status.UNAVAILABLE);
+        if (resp.status() == 404) return FiledHistory.of(Status.UNTAGGED);
+        if (resp.body() == null) return FiledHistory.of(Status.UNAVAILABLE);
         try {
-            return parse(resp.body());
+            return parse(resp.body(), unit);
         } catch (Exception e) {
-            log.warn("EDGAR EPS parse failed for {}", ticker, e);
-            return EpsHistory.of(Status.UNAVAILABLE);
+            log.warn("EDGAR {} parse failed for {}", concept, ticker, e);
+            return FiledHistory.of(Status.UNAVAILABLE);
         }
     }
 
@@ -133,11 +159,11 @@ public class EdgarFundamentalsFetcher {
                     .timeout(REQUEST_TIMEOUT).GET().build();
             HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) return new Response(200, resp.body());
-            if (resp.statusCode() == 404) log.debug("EDGAR EPS 404 (untagged) for {}", url);
-            else log.warn("EDGAR EPS HTTP {} for {}", resp.statusCode(), url);
+            if (resp.statusCode() == 404) log.debug("EDGAR 404 (untagged) for {}", url);
+            else log.warn("EDGAR HTTP {} for {}", resp.statusCode(), url);
             return new Response(resp.statusCode(), null);
         } catch (Exception e) {
-            log.warn("EDGAR EPS error {}", url, e);
+            log.warn("EDGAR error {}", url, e);
         }
         return new Response(0, null);
     }
@@ -165,9 +191,13 @@ public class EdgarFundamentalsFetcher {
      *       nothing a domestic series may use.
      * </ol>
      */
-    EpsHistory parse(String json) throws Exception {
-        JsonNode units = mapper.readTree(json).path("units").path(UNIT);
-        if (!units.isArray() || units.isEmpty()) return EpsHistory.of(Status.UNTAGGED);
+    FiledHistory parse(String json) throws Exception {
+        return parse(json, PER_SHARE);
+    }
+
+    FiledHistory parse(String json, String unit) throws Exception {
+        JsonNode units = mapper.readTree(json).path("units").path(unit);
+        if (!units.isArray() || units.isEmpty()) return FiledHistory.of(Status.UNTAGGED);
 
         // Per-window bookkeeping: the LATEST filing's value (so a restatement wins) with the
         // EARLIEST filing's date (so availability is when the figure first became public).
@@ -202,14 +232,14 @@ public class EdgarFundamentalsFetcher {
             }
         }
 
-        List<EpsFact> out = new ArrayList<>(perWindow.size());
-        perWindow.forEach((key, slot) -> out.add(new EpsFact(key.start(), key.end(),
+        List<FiledFact> out = new ArrayList<>(perWindow.size());
+        perWindow.forEach((key, slot) -> out.add(new FiledFact(key.start(), key.end(),
                 slot.latestVal(), slot.earliestFiled(), slot.latestFiled())));
         out.sort((a, b) -> a.periodEnd.compareTo(b.periodEnd));
         // Figures on file but none of them domestic: the filer reports on 20-F/40-F/6-K, so its
         // EPS is on another basis rather than simply missing.
         Status status = !out.isEmpty() ? Status.OK
                 : (seen > 0 ? Status.NOT_DOMESTIC : Status.UNTAGGED);
-        return new EpsHistory(out, status);
+        return new FiledHistory(out, status);
     }
 }

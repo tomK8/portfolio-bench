@@ -1,7 +1,7 @@
 package com.portfolio.adapter;
 
-import com.portfolio.adapter.EdgarFundamentalsFetcher.EpsFact;
-import com.portfolio.adapter.EdgarFundamentalsFetcher.EpsHistory;
+import com.portfolio.adapter.EdgarFundamentalsFetcher.FiledFact;
+import com.portfolio.adapter.EdgarFundamentalsFetcher.FiledHistory;
 import com.portfolio.adapter.EdgarXbrlFetcher.Status;
 import org.junit.jupiter.api.Test;
 
@@ -25,13 +25,13 @@ class EdgarFundamentalsFetcherTest {
                 getClass().getResource("/edgar-aapl-sample.json").toURI()));
     }
 
-    private Map<LocalDate, EpsFact> byEnd(List<EpsFact> facts) {
-        return facts.stream().collect(Collectors.toMap(EpsFact::periodEnd, Function.identity(),
+    private Map<LocalDate, FiledFact> byEnd(List<FiledFact> facts) {
+        return facts.stream().collect(Collectors.toMap(FiledFact::periodEnd, Function.identity(),
                 (a, b) -> a));
     }
 
     /** One fact by its whole window — two of them can end on the same day. */
-    private EpsFact window(List<EpsFact> facts, String start, String end) {
+    private FiledFact window(List<FiledFact> facts, String start, String end) {
         return facts.stream()
                 .filter(f -> f.start().equals(LocalDate.parse(start))
                         && f.periodEnd().equals(LocalDate.parse(end)))
@@ -45,7 +45,7 @@ class EdgarFundamentalsFetcherTest {
      */
     @Test
     void keepsEveryFiledWindowOnADomesticForm() throws Exception {
-        List<EpsFact> facts = fetcher.parse(sample()).facts();
+        List<FiledFact> facts = fetcher.parse(sample()).facts();
 
         // 5 quarters + the 10-K's year + two year-to-date windows = 8. The 8-K record is
         // dropped on its form.
@@ -53,11 +53,11 @@ class EdgarFundamentalsFetcherTest {
         assertTrue(facts.stream().noneMatch(f -> f.periodEnd().equals(LocalDate.of(2021, 6, 30))),
                 "a record filed on a form outside 10-K/10-Q is not part of a domestic series");
 
-        Map<LocalDate, EpsFact> q = byEnd(facts);
-        assertEquals(0, q.get(LocalDate.of(2021, 12, 31)).eps().compareTo(new BigDecimal("2.10")));
-        assertEquals(0, q.get(LocalDate.of(2022, 3, 31)).eps().compareTo(new BigDecimal("1.52")));
-        assertEquals(0, q.get(LocalDate.of(2022, 6, 30)).eps().compareTo(new BigDecimal("1.20")));
-        assertEquals(0, q.get(LocalDate.of(2022, 12, 31)).eps().compareTo(new BigDecimal("1.88")));
+        Map<LocalDate, FiledFact> q = byEnd(facts);
+        assertEquals(0, q.get(LocalDate.of(2021, 12, 31)).value().compareTo(new BigDecimal("2.10")));
+        assertEquals(0, q.get(LocalDate.of(2022, 3, 31)).value().compareTo(new BigDecimal("1.52")));
+        assertEquals(0, q.get(LocalDate.of(2022, 6, 30)).value().compareTo(new BigDecimal("1.20")));
+        assertEquals(0, q.get(LocalDate.of(2022, 12, 31)).value().compareTo(new BigDecimal("1.88")));
     }
 
     /**
@@ -67,12 +67,12 @@ class EdgarFundamentalsFetcherTest {
      */
     @Test
     void keepsTheAnnualAndTheYearToDateTheQuarterIsRecoveredFrom() throws Exception {
-        List<EpsFact> facts = fetcher.parse(sample()).facts();
+        List<FiledFact> facts = fetcher.parse(sample()).facts();
 
-        EpsFact annual = byEnd(facts).get(LocalDate.of(2022, 9, 30));
+        FiledFact annual = byEnd(facts).get(LocalDate.of(2022, 9, 30));
         assertNotNull(annual, "the 10-K's own twelve months must survive the parse");
         assertEquals(LocalDate.of(2021, 10, 1), annual.start());
-        assertEquals(0, annual.eps().compareTo(new BigDecimal("6.11")));
+        assertEquals(0, annual.value().compareTo(new BigDecimal("6.11")));
 
         assertTrue(facts.stream().anyMatch(f -> f.start().equals(LocalDate.of(2022, 10, 1))
                         && f.periodEnd().equals(LocalDate.of(2023, 4, 1))),
@@ -81,7 +81,7 @@ class EdgarFundamentalsFetcherTest {
 
     @Test
     void sortsByPeriodEndAscending() throws Exception {
-        List<EpsFact> facts = fetcher.parse(sample()).facts();
+        List<FiledFact> facts = fetcher.parse(sample()).facts();
         for (int i = 1; i < facts.size(); i++) {
             assertFalse(facts.get(i).periodEnd().isBefore(facts.get(i - 1).periodEnd()),
                     "Series must be sorted by period end ascending");
@@ -90,7 +90,7 @@ class EdgarFundamentalsFetcherTest {
 
     @Test
     void recordsCarryTheirSecFilingDateAsAvailableFrom() throws Exception {
-        EpsFact q = byEnd(fetcher.parse(sample()).facts()).get(LocalDate.of(2022, 6, 30));
+        FiledFact q = byEnd(fetcher.parse(sample()).facts()).get(LocalDate.of(2022, 6, 30));
         assertEquals(LocalDate.of(2022, 7, 29), q.availableFrom(),
                 "availableFrom must be the 10-Q's filing date — that's when it became public");
     }
@@ -103,8 +103,8 @@ class EdgarFundamentalsFetcherTest {
         // already public then, just on its pre-restatement basis. Using the restatement date
         // would drop this quarter out of the TTM at every chart point in between, and the line
         // would dip through a window where the market plainly knew the number.
-        EpsFact q = window(fetcher.parse(sample()).facts(), "2023-01-01", "2023-04-01");
-        assertEquals(0, q.eps().compareTo(new BigDecimal("1.99")), "latest-filed value wins");
+        FiledFact q = window(fetcher.parse(sample()).facts(), "2023-01-01", "2023-04-01");
+        assertEquals(0, q.value().compareTo(new BigDecimal("1.99")), "latest-filed value wins");
         assertEquals(LocalDate.of(2023, 5, 5), q.availableFrom(),
                 "availableFrom must be the EARLIEST filing, not the restatement");
         assertEquals(LocalDate.of(2023, 6, 10), q.valueFiled(),
@@ -117,7 +117,7 @@ class EdgarFundamentalsFetcherTest {
      */
     @Test
     void twoWindowsEndingTheSameDayAreBothKept() throws Exception {
-        List<EpsFact> facts = fetcher.parse(sample()).facts();
+        List<FiledFact> facts = fetcher.parse(sample()).facts();
         long endingApril2023 = facts.stream()
                 .filter(f -> f.periodEnd().equals(LocalDate.of(2023, 4, 1))).count();
         assertEquals(2, endingApril2023, "the quarter and the half-year are different windows");
@@ -142,7 +142,7 @@ class EdgarFundamentalsFetcherTest {
                   {"start":"2025-04-01","end":"2026-03-31","val":0.4,"form":"20-F","filed":"2026-05-20"},
                   {"start":"2024-04-01","end":"2025-03-31","val":0.3,"form":"20-F","filed":"2025-05-21"}
                 ]}}""";
-        EpsHistory h = fetcher.parse(json);
+        FiledHistory h = fetcher.parse(json);
         assertTrue(h.isEmpty());
         assertEquals(Status.NOT_DOMESTIC, h.status());
     }
@@ -151,7 +151,7 @@ class EdgarFundamentalsFetcherTest {
     void aSymbolWithNoCikIsUnavailableRatherThanAVerdict() {
         // No registry wired in, so nothing resolves — the fetch must not claim the filer tags
         // nothing, because it never asked.
-        EpsHistory h = fetcher.fetch("AAPL");
+        FiledHistory h = fetcher.fetch("AAPL");
         assertTrue(h.isEmpty());
         assertEquals(Status.UNAVAILABLE, h.status());
     }

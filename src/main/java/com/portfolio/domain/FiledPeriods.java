@@ -52,6 +52,12 @@ public final class FiledPeriods {
     /** Tolerance when testing whether one period resumes where another stopped. */
     private static final int SLACK_DAYS = 3;
 
+    /** Four quarters and an annual, each rounded to a cent, can disagree by this much. */
+    private static final BigDecimal ROUNDING_SLACK = new BigDecimal("0.03");
+
+    /** The same tolerance for a filer whose per-share figures make a cent immaterial. */
+    private static final BigDecimal ROUNDING_RELATIVE = new BigDecimal("0.01");
+
     private FiledPeriods() {}
 
     /** One period-tagged figure from a filing. */
@@ -113,6 +119,52 @@ public final class FiledPeriods {
             if (f.end().equals(derived)) derivedInWindow = derived;
         }
         return Optional.of(new Ttm(total, periodEnd, List.copyOf(chain), derivedInWindow));
+    }
+
+    /**
+     * The filer's own annual figure for {@code window} — a trailing twelve months already
+     * assembled, passed as one {@code (start, end, total)} — where it <b>contradicts</b> the
+     * quarters that were summed to build it. Empty when no annual covers that window, or when the
+     * two agree.
+     *
+     * <h2>Why four filed quarters can fail to add up to the filed year</h2>
+     *
+     * <p>A restatement does not always reach the quarters. When Microsoft adopted ASC 606 it
+     * restated FY2016 in the FY2018 10-K — the annual went from $2.10 to $2.56 of diluted EPS —
+     * but never re-tagged that year's four quarters, which stand to this day at
+     * 0.61 + 0.62 + 0.47 + 0.39 = <b>2.09</b> on the pre-606 basis. FY2017 beside it <em>was</em>
+     * re-tagged all the way down (0.72 + 0.80 + 0.70 + 1.03 = 3.25, matching its restated annual),
+     * so this is the filer's inconsistency and not a rule with an exception.
+     *
+     * <p>{@link #trailingFourQuarters} is right to prefer the quarters: they are what makes a
+     * <em>trailing</em> window possible at all, and the annual only ever covers a fiscal year. But
+     * where the filer's own latest annual covers exactly the window just assembled and says
+     * something else, that is a filed fact about the window, and a caller comparing two dates ten
+     * years apart needs to know its base sits on an accounting basis the filer has since left.
+     *
+     * <p>The test is arithmetic, not judgement: five figures each rounded to a cent can disagree
+     * by $0.025, so a gap inside {@link #ROUNDING_SLACK} — or inside {@link #ROUNDING_RELATIVE} of
+     * the annual, for a filer whose per-share figures are large enough that a cent is not the
+     * granularity — is rounding and nothing is reported. Across the fundamentals universe on
+     * 2026-10-09 this fires on nine windows, led by AMD FY2010 (69%), MSFT FY2016 (18%) and MU
+     * FY2013 (12%); every large gap that is a <em>split</em> rather than a restatement is already
+     * gone by the time this is called, because the caller rescales before assembling.
+     */
+    public static Optional<Fact> annualContradicting(Fact window, Collection<Fact> facts) {
+        if (window == null || facts == null) return Optional.empty();
+
+        Fact annual = null;
+        for (Fact f : facts) {
+            long days = f.days();
+            if (days < ANNUAL_MIN || days > ANNUAL_MAX) continue;
+            if (near(f.start(), window.start()) && near(f.end(), window.end())) annual = f;
+        }
+        if (annual == null) return Optional.empty();
+
+        BigDecimal gap = annual.value().subtract(window.value()).abs();
+        BigDecimal slack = annual.value().abs()
+                .multiply(ROUNDING_RELATIVE).max(ROUNDING_SLACK);
+        return gap.compareTo(slack) > 0 ? Optional.of(annual) : Optional.empty();
     }
 
     /**

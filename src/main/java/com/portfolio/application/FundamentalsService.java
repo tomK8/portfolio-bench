@@ -229,9 +229,52 @@ public class FundamentalsService {
         Step last = steps.get(steps.size() - 1);
         Summary summary = summarise(points);
         Split split = summary == null ? new Split(null, null) : operatingSplit(ticker, steps, summary);
+        Restated restated = summary == null ? null : baseRestated(facts, steps, summary);
         return new FundamentalsReport(ticker, points, summary, false, null,
                 last.periodEnd().toString(), last.derived(),
-                split.operating(), split.withheld());
+                split.operating(), split.withheld(), restated);
+    }
+
+    /**
+     * Whether the window's <b>base</b> twelve months is one the filer has since restated, and what
+     * the decomposition reads on the restated figure.
+     *
+     * <p>A decomposition is a two-point comparison, so it is only ever as good as its endpoints —
+     * and the base endpoint is the one that can have been superseded. Microsoft's FY2016 is the
+     * case that found this: the four quarters this chart sums are the pre-ASC-606 ones, which the
+     * filer never re-tagged, while its own latest annual for that identical window reads $2.56
+     * against their $2.09. Dividing a 2016 price by the smaller figure put the base multiple at
+     * 27.8× where the filer's current basis says 22.7×, and the whole difference landed in the
+     * multiple term — 7% of the ten-year move rather than a third of it.
+     *
+     * <p><b>Nothing is substituted.</b> The chart's line is look-ahead-free by construction and
+     * the restated figure was not public until 2018, so moving the line would be a different
+     * promise than the one the panel makes. The cards keep the assembled figure too, so they
+     * cannot disagree with the chart beneath them. What changes is that the panel now <em>says</em>
+     * the base sits on a basis the filer has left, and prints the decomposition both ways — which
+     * is the thing a reader cannot derive for themselves from anything on screen.
+     *
+     * <p>This is also why a "base year below trend" heuristic was not built instead. That needs a
+     * trend model and a threshold, it fires on genuine cyclical troughs where the base is exactly
+     * right, and what it would be approximating is the company's own non-GAAP adjustment — a
+     * number nothing filed can reproduce or check. The filer's own annual is a filed fact, and it
+     * disagrees or it does not.
+     */
+    private static Restated baseRestated(List<FiledFact> facts, List<Step> steps, Summary summary) {
+        Step base = stepAt(steps, LocalDate.parse(summary.start().date()));
+        if (base == null) return null;
+        List<Fact> all = new ArrayList<>(facts.size());
+        for (FiledFact f : facts) all.add(new Fact(f.start(), f.periodEnd(), f.value()));
+        Fact window = new Fact(base.windowStart(), base.periodEnd(), base.ttm());
+        Optional<Fact> annual = FiledPeriods.annualContradicting(window, all);
+        if (annual.isEmpty() || annual.get().value().signum() <= 0) return null;
+
+        BigDecimal filed = annual.get().value();
+        BigDecimal epsMult = summary.end().ttmEps().divide(filed, SCALE, RoundingMode.HALF_UP);
+        if (epsMult.signum() <= 0) return null;
+        BigDecimal peMult = summary.priceMult().divide(epsMult, SCALE, RoundingMode.HALF_UP);
+        return new Restated(base.periodEnd().toString(), base.ttm().setScale(4, RoundingMode.HALF_UP),
+                filed.setScale(4, RoundingMode.HALF_UP), epsMult, peMult);
     }
 
     /**
@@ -367,7 +410,8 @@ public class FundamentalsService {
             }
             Optional<Ttm> ttm = FiledPeriods.trailingFourQuarters(visible);
             if (ttm.isEmpty()) continue;
-            Step step = new Step(asOf, ttm.get().total(), ttm.get().periodEnd(),
+            Step step = new Step(asOf, ttm.get().total(),
+                    ttm.get().quarters().get(0).start(), ttm.get().periodEnd(),
                     ttm.get().derivedQuarterEnd() != null);
             Step previous = steps.isEmpty() ? null : steps.get(steps.size() - 1);
             if (previous == null || previous.ttm().compareTo(step.ttm()) != 0
@@ -444,7 +488,8 @@ public class FundamentalsService {
     private record CachedSeries(FiledHistory history, Instant expiresAt) {}
 
     /** One trailing-twelve-month figure of one concept, from the filing date it became readable on. */
-    private record Step(LocalDate from, BigDecimal ttm, LocalDate periodEnd, boolean derived) {}
+    private record Step(LocalDate from, BigDecimal ttm, LocalDate windowStart,
+                        LocalDate periodEnd, boolean derived) {}
 
     /** One (date, price, TTM EPS, P/E) sample. {@code pe} is null if TTM EPS ≤ 0. */
     public record Point(String date, BigDecimal price, BigDecimal ttmEps, BigDecimal pe) {}
@@ -474,6 +519,20 @@ public class FundamentalsService {
                                  BigDecimal opMultipleMult) {}
 
     /**
+     * The window's base twelve months, where the filer's own latest annual for it contradicts the
+     * quarters this chart assembled. Nothing is substituted — see {@code baseRestated}.
+     *
+     * @param periodEnd   the end of the base window both figures describe
+     * @param assembled   what the four filed quarters sum to, which is what the cards and the
+     *                    chart are drawn on
+     * @param filedAnnual the filer's latest annual for the identical window
+     * @param epsMult     the EPS term recomputed on {@code filedAnnual} as the base
+     * @param peMult      the multiple term that follows, {@code priceMult ÷ epsMult}
+     */
+    public record Restated(String periodEnd, BigDecimal assembled, BigDecimal filedAnnual,
+                           BigDecimal epsMult, BigDecimal peMult) {}
+
+    /**
      * @param epsThrough      the end of the twelve months behind the latest point — a P/E is a
      *                        price over a window, and the window is a quarter or so behind today
      * @param finalQuarterDerived whether that window's fourth quarter was recovered from the 10-K
@@ -483,6 +542,8 @@ public class FundamentalsService {
      * @param operatingSplitWithheld why there is no split, when that is worth saying — a filer
      *                        with no operating-income subtotal is a fact about the filer, so it
      *                        is reported rather than left as a blank card
+     * @param baseRestated    set where the filer has since restated the window's base twelve
+     *                        months, which a two-point decomposition cannot otherwise disclose
      */
     public record FundamentalsReport(String symbol,
                                      List<Point> points,
@@ -492,10 +553,11 @@ public class FundamentalsService {
                                      String epsThrough,
                                      boolean finalQuarterDerived,
                                      OperatingSplit operatingSplit,
-                                     String operatingSplitWithheld) {
+                                     String operatingSplitWithheld,
+                                     Restated baseRestated) {
         public static FundamentalsReport empty(String sym, boolean missingPrices, String msg) {
             return new FundamentalsReport(sym, List.of(), null, missingPrices, msg, null, false,
-                    null, null);
+                    null, null, null);
         }
     }
 }

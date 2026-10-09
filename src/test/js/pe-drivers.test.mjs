@@ -129,3 +129,29 @@ test('no split, no sentence — the caller shows the refusal instead', () => {
     assert.equal(PeDrivers.operating(null, GOOG_SPLIT), null);
     assert.equal(PeDrivers.operating(GOOG, { opEpsMult: null, mixMult: 1.4 }), null);
 });
+
+/** MSFT's FY2016 base: the quarters are pre-ASC-606 and the filer has restated the year. */
+const MSFT = { priceMult: '9.220021', epsMult: '8.593301', peMult: '1.072931' };
+const MSFT_RESTATED = {
+    periodEnd: '2016-06-30',
+    assembled: '2.0900',
+    filedAnnual: '2.5600',
+    epsMult: '7.015625',
+    peMult: '1.314243'
+};
+
+test('a restated base window is disclosed, with the decomposition both ways', () => {
+    const s = PeDrivers.restated('MSFT', MSFT, MSFT_RESTATED);
+    assert.ok(s.includes('twelve months to 2016-06-30'), s);
+    assert.ok(s.includes('$2.09'), s);
+    assert.ok(s.includes('$2.56'), s);
+    assert.ok(s.includes('EPS ×7.02 × multiple ×1.31'), s);
+    // And it names what the cards above it say, so the two are never read as one claim.
+    assert.ok(s.includes('against the ×1.07 above'), s);
+});
+
+test('nothing is claimed when the base window stands', () => {
+    assert.equal(PeDrivers.restated('MSFT', MSFT, null), null);
+    assert.equal(PeDrivers.restated('MSFT', null, MSFT_RESTATED), null);
+    assert.equal(PeDrivers.restated('MSFT', MSFT, { ...MSFT_RESTATED, epsMult: '0' }), null);
+});

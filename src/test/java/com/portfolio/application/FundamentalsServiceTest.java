@@ -295,6 +295,47 @@ class FundamentalsServiceTest {
         assertEquals(r.summary().priceMult().doubleValue(), opEpsMult * mixMult * peMult, 1e-4);
     }
 
+    /**
+     * MSFT's FY2016 shape: the base window's four quarters are the pre-ASC-606 ones the filer
+     * never re-tagged, while its latest annual for the identical window is 22% higher. The
+     * decomposition's base endpoint is the one that can be superseded like this, and a two-point
+     * comparison cannot disclose it from anything else on screen.
+     */
+    @Test
+    void disclosesABaseWindowTheFilerHasSinceRestated() {
+        PriceHistoryRepository repo = priceRepo();
+        repo.savePriceBars(List.of(bar("2022-10-28", 100.0), bar("2023-02-03", 200.0)));
+
+        List<FiledFact> withRestatement = new ArrayList<>(aaplFixture());
+        // The same year the four quarters tile, restated upward long afterwards.
+        withRestatement.add(fact("2021-10-01", "2022-09-30", "7.50", "2024-10-28"));
+
+        FundamentalsReport r = service(fakeEdgar(withRestatement), repo).report("AAPL", 10);
+        assertNotNull(r.baseRestated());
+        assertEquals("2022-09-30", r.baseRestated().periodEnd());
+        assertEquals(0, r.baseRestated().assembled().compareTo(new BigDecimal("6.11")),
+                "the cards and the chart keep what the quarters assemble to");
+        assertEquals(0, r.baseRestated().filedAnnual().compareTo(new BigDecimal("7.50")));
+
+        // The restated base is larger, so less of the move is earnings and more is the multiple.
+        assertTrue(r.baseRestated().epsMult().doubleValue() < r.summary().epsMult().doubleValue());
+        assertTrue(r.baseRestated().peMult().doubleValue() > r.summary().peMult().doubleValue());
+        // And it is still an identity.
+        assertEquals(r.summary().priceMult().doubleValue(),
+                r.baseRestated().epsMult().doubleValue() * r.baseRestated().peMult().doubleValue(),
+                1e-4);
+    }
+
+    @Test
+    void saysNothingWhereTheBaseWindowStands() {
+        PriceHistoryRepository repo = priceRepo();
+        repo.savePriceBars(List.of(bar("2022-10-28", 100.0), bar("2023-02-03", 200.0)));
+        // aaplFixture's own 10-K annual (6.11) is exactly what its four quarters assemble to.
+        FundamentalsReport r = service(fakeEdgar(aaplFixture()), repo).report("AAPL", 10);
+        assertNotNull(r.summary());
+        assertNull(r.baseRestated());
+    }
+
     @Test
     void aFilerWithNoOperatingSubtotalIsToldAboutRatherThanLeftBlank() {
         PriceHistoryRepository repo = priceRepo();

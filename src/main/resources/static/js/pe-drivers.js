@@ -162,11 +162,50 @@
         return text;
     }
 
+    /**
+     * The third sentence, where there is one: the window's base twelve months is one the filer
+     * has since restated, and the decomposition on its own latest figure.
+     *
+     * A decomposition is a two-point comparison, so it is only as good as its endpoints — and the
+     * base is the end that can have been superseded. MSFT's FY2016 quarters are pre-ASC-606 and
+     * were never re-tagged; the filer's own annual for the identical window is 22% higher, which
+     * is the difference between the multiple supplying 7% of a ten-year move and supplying a
+     * third of it.
+     *
+     * Nothing above this line changes. The chart is look-ahead-free and the restated figure was
+     * not public at the base date, so the cards keep the assembled figure and cannot disagree
+     * with the chart beneath them. This says what a reader cannot otherwise see.
+     *
+     * Returns null when the base window has not been restated.
+     */
+    function restated(symbol, summary, r) {
+        if (!summary || !r) return null;
+        var epsMult = mult(r.epsMult), peMult = mult(r.peMult);
+        if (epsMult === null || peMult === null) return null;
+        var was = mult(summary.peMult);
+
+        var text = 'Base window restated: the twelve months to ' + r.periodEnd
+            + ' assemble to ' + money(r.assembled) + ' of EPS from four filed quarters, but '
+            + symbol + '’s own latest annual for that same window is ' + money(r.filedAnnual)
+            + ' — the quarters were never re-tagged when the year was. The chart keeps what was '
+            + 'public at the time; on the restated base the window reads EPS ×' + epsMult.toFixed(2)
+            + ' × multiple ×' + peMult.toFixed(2);
+        return was === null ? text + '.'
+            : text + ', against the ×' + was.toFixed(2) + ' above.';
+    }
+
+    /** A per-share figure as filed, to the cent. */
+    function money(v) {
+        var n = typeof v === 'number' ? v : parseFloat(v);
+        return (n < 0 ? '−$' : '$') + Math.abs(n).toFixed(2);
+    }
+
     return {
         DOMINANCE: DOMINANCE,
         FLAT: FLAT,
         MIX_FLAT: MIX_FLAT,
         drivers: drivers,
-        operating: operating
+        operating: operating,
+        restated: restated
     };
 });

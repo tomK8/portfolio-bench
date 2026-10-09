@@ -157,6 +157,80 @@ Operating income is **pre-tax**, so a level built on it is not a P/E and is neve
 Only the *change* over the window is published, and only beside the GAAP figures rather than in
 place of them.
 
+### The base endpoint can be a window the filer has since left
+
+A decomposition is a two-point comparison, so it is only as good as its endpoints — and the base
+is the end that can have been **superseded**. MSFT's ten-year window found this one.
+
+The base twelve months is FY2016, and the four quarters this chart sums are the pre-ASC-606 ones
+Microsoft never re-tagged:
+
+| Window | Latest filed value | From |
+|---|---|---|
+| Q Sep'15 | 0.61 | 10-K 2017-08-02 |
+| Q Dec'15 | 0.62 | 10-K 2017-08-02 |
+| Q Mar'16 | 0.47 | 10-K 2017-08-02 |
+| Q Jun'16 | 0.39 | 10-K 2017-08-02 |
+| **Σ four quarters** | **2.09** | |
+| **Annual, identical window** | **2.56** | 10-K 2018-08-03, restated under ASC 606 |
+
+FY2017 beside it *was* re-tagged all the way down (0.72 + 0.80 + 0.70 + 1.03 = 3.25, matching its
+restated annual), so this is one filer's inconsistency in one year, not a rule with an exception.
+
+The consequence is entirely in the base multiple: 58.04 ÷ 2.09 = **27.8×** where the filer's
+current basis says 58.04 ÷ 2.56 = **22.7×**. The window then reads EPS ×7.02 × multiple ×**1.31**
+rather than EPS ×8.59 × multiple ×**1.07** — the multiple supplying about an eighth of the
+ten-year move instead of a thirtieth.
+
+**Nothing is substituted.** `trailingFourQuarters` is right to prefer the quarters: they are what
+makes a *trailing* window possible at all, where an annual only ever covers a fiscal year. And the
+chart's line is look-ahead-free by construction — the restated figure was not public until 2018,
+so a 2016 bar must not show it. The cards keep the assembled figure too, so they cannot disagree
+with the chart beneath them. What changes is that the panel **says** the base sits on a basis the
+filer has left, and prints the decomposition both ways, which is the one thing a reader cannot
+derive from anything else on screen.
+
+`FiledPeriods.annualContradicting` is the test, and it is arithmetic rather than judgement: the
+filer's own annual covers the identical window and either agrees with the quarters or does not.
+Five figures each rounded to a cent can disagree by $0.025, so a gap inside $0.03 — or inside 1%
+of the annual, for a filer whose per-share figures make a cent immaterial — is rounding.
+
+Measured over the universe on 2026-10-09, after the split rescaling has run (every *large*
+disagreement that is a split rather than a restatement is already gone by then — AAPL FY2012 at
+7:1, AMZN FY2020 at 20:1, ISRG, MA, NFLX, NVDA, ANET likewise):
+
+| Symbol | Window | Σ quarters | Filed annual | Apart |
+|---|---|---|---|---|
+| AMD | FY2010 | 1.08 | 0.64 | 69% |
+| MSFT | FY2016 | 2.09 | 2.56 | **18%** |
+| MU | FY2013 | 1.00 | 1.13 | 12% |
+| ANET | FY2018 | 3.89 | 4.06 | 4% |
+| VRTX | FY2013 | −2.04 | −1.98 | 3% |
+| AMAT | FY2017 | 3.17 | 3.25 | 2% |
+| MU | FY2017 | 4.32 | 4.41 | 2% |
+| LLY, AMAT | FY2019, FY2018 | — | — | 1% |
+
+Of these only MSFT's is reachable from the picker's 3/5/10-year windows; the rest sit further
+back than ten years. The check runs on the base endpoint of whatever window is asked for, so a
+longer window would surface them.
+
+### Why not a "base year below trend" flag
+
+The obvious alternative was to detect a depressed base statistically — fit a trend through the
+surrounding years and flag a base that sits below it. It was rejected:
+
+- it needs a **trend model and a threshold**, which is the same magic number refused for BRK.B's
+  P/B and for a P/E-basis divergence test;
+- it would fire on a **genuine cyclical trough**, where the base is exactly right — the price
+  really was that multiple of those earnings;
+- and what it would be approximating is the company's **own non-GAAP** adjustment. Microsoft's
+  FY2016 non-GAAP EPS was $2.79 against $2.10 as originally filed; nothing in XBRL reproduces or
+  checks that figure, and adopting it would be publishing someone else's definition under ours.
+
+The filer's own restated annual is none of those things. It is a filed fact about the identical
+window, it either disagrees or it does not, and it carried most of the distance anyway — $2.56 of
+the $2.79 the non-GAAP number claims.
+
 ### What the split refuses
 
 - **No operating-income subtotal.** Banks have none and several large caps present straight to

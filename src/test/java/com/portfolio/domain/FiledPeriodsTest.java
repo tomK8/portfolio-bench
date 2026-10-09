@@ -135,6 +135,86 @@ class FiledPeriodsTest {
         assertTrue(FiledPeriods.trailingFourQuarters(null).isEmpty());
     }
 
+    /**
+     * MSFT's FY2016, verbatim from EDGAR. The filer restated the year on adopting ASC 606 — the
+     * annual went 2.10 → 2.56 in the FY2018 10-K — but never re-tagged its four quarters, which
+     * still sum to 2.09. Four quarters that tile a year are still the right TTM; the disagreement
+     * is a filed fact about the window and has to be reportable.
+     */
+    @Test
+    void namesTheFilersOwnAnnualWhereItContradictsTheQuartersSummed() {
+        List<Fact> quarters = List.of(
+                f("2015-07-01", "2015-09-30", "0.61"),
+                f("2015-10-01", "2015-12-31", "0.62"),
+                f("2016-01-01", "2016-03-31", "0.47"),
+                f("2016-04-01", "2016-06-30", "0.39"));
+        Fact restatedYear = f("2015-07-01", "2016-06-30", "2.56");
+
+        Optional<Ttm> ttm = FiledPeriods.trailingFourQuarters(quarters);
+        assertTrue(ttm.isPresent());
+        assertEquals(0, ttm.get().total().compareTo(new BigDecimal("2.09")),
+                "the quarters are still what a trailing window is built from");
+
+        Fact window = new Fact(LocalDate.parse("2015-07-01"), LocalDate.parse("2016-06-30"),
+                ttm.get().total());
+        Optional<Fact> annual = FiledPeriods.annualContradicting(window,
+                concat(quarters, restatedYear));
+        assertTrue(annual.isPresent(), "the filer's own year disagrees by 22%");
+        assertEquals(0, annual.get().value().compareTo(new BigDecimal("2.56")));
+    }
+
+    /**
+     * MSFT's FY2017 beside it: here the quarters <em>were</em> re-tagged, so they add to the
+     * restated annual and there is nothing to report. The same filer, one year apart — which is
+     * why this cannot be a rule about companies.
+     */
+    @Test
+    void saysNothingWhereTheQuartersWereRestatedToo() {
+        List<Fact> quarters = List.of(
+                f("2016-07-01", "2016-09-30", "0.72"),
+                f("2016-10-01", "2016-12-31", "0.80"),
+                f("2017-01-01", "2017-03-31", "0.70"),
+                f("2017-04-01", "2017-06-30", "1.03"));
+        Fact window = new Fact(LocalDate.parse("2016-07-01"), LocalDate.parse("2017-06-30"),
+                new BigDecimal("3.25"));
+
+        assertTrue(FiledPeriods.annualContradicting(window,
+                concat(quarters, f("2016-07-01", "2017-06-30", "3.25"))).isEmpty());
+    }
+
+    /** Five figures each rounded to a cent can disagree by $0.025. That is not a restatement. */
+    @Test
+    void treatsACentOfRoundingAsAgreement() {
+        Fact window = new Fact(LocalDate.parse("2025-01-01"), LocalDate.parse("2025-12-31"),
+                new BigDecimal("4.00"));
+        assertTrue(FiledPeriods.annualContradicting(window,
+                List.of(f("2025-01-01", "2025-12-31", "4.02"))).isEmpty());
+        assertTrue(FiledPeriods.annualContradicting(window,
+                List.of(f("2025-01-01", "2025-12-31", "4.10"))).isPresent());
+        // A filer whose per-share figures are large enough that a cent is not the granularity.
+        Fact big = new Fact(LocalDate.parse("2025-01-01"), LocalDate.parse("2025-12-31"),
+                new BigDecimal("1000"));
+        assertTrue(FiledPeriods.annualContradicting(big,
+                List.of(f("2025-01-01", "2025-12-31", "1005"))).isEmpty());
+    }
+
+    @Test
+    void reportsNothingWhenNoAnnualCoversTheWindow() {
+        Fact window = new Fact(LocalDate.parse("2025-04-01"), LocalDate.parse("2026-03-31"),
+                new BigDecimal("4.00"));
+        // A trailing window that is not a fiscal year has no annual to disagree with it.
+        assertTrue(FiledPeriods.annualContradicting(window,
+                List.of(f("2025-01-01", "2025-12-31", "9.99"))).isEmpty());
+        assertTrue(FiledPeriods.annualContradicting(null, List.of()).isEmpty());
+        assertTrue(FiledPeriods.annualContradicting(window, null).isEmpty());
+    }
+
+    private static List<Fact> concat(List<Fact> facts, Fact extra) {
+        List<Fact> out = new java.util.ArrayList<>(facts);
+        out.add(extra);
+        return out;
+    }
+
     /** A loss is a figure like any other — the derivation must not guard against a negative. */
     @Test
     void carriesALossThroughTheDerivation() {

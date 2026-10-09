@@ -3807,11 +3807,13 @@
                         ' = EPS ×' + fmtMult(s.epsMult) + ' × multiple ×' + fmtMult(s.peMult) +
                         (driver ? '. Drivers: ' + driver : '.') + fundWindowNote(data);
                 fundOperatingNote(s, split, data.operatingSplitWithheld);
+                fundRestatedNote(data.symbol, s, data.baseRestated);
             } else {
                 summary.style.display = 'none';
                 explain.style.display = 'none';
                 fundSplitCards(null);
                 fundOperatingNote(null, null, null);
+                fundRestatedNote(null, null, null);
             }
 
             renderFundPeChart(data.points, data.symbol);
@@ -3835,6 +3837,20 @@
             cards.style.display = 'contents';   // its two cards become flex items of the row above, so they wrap with it
             document.getElementById('fund-opeps-mult').textContent = fmtMult(split.opEpsMult);
             document.getElementById('fund-mix-mult').textContent = fmtMult(split.mixMult);
+        }
+
+        /**
+         * Where the filer has since restated the window's base twelve months, what it now says
+         * and what the decomposition reads on it. Nothing above the line is substituted: the
+         * chart is look-ahead-free and the restated figure was not public at the base date, so
+         * the cards keep the assembled figure and this says the rest.
+         */
+        function fundRestatedNote(symbol, s, r) {
+            var el = document.getElementById('fund-restated');
+            var text = PeDrivers.restated(symbol, s, r);
+            if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+            el.style.display = '';
+            el.textContent = text;
         }
 
         /**

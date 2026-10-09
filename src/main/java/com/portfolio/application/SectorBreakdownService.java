@@ -157,6 +157,10 @@ public class SectorBreakdownService {
         BigDecimal cashGbp = point.cashGbp() == null ? BigDecimal.ZERO : point.cashGbp();
         if (cashGbp.signum() != 0) {
             total.merge(SectorBucket.CASH, cashGbp, BigDecimal::add);
+            // Cash is held outright, so it belongs in the Direct column like any other position.
+            // Leaving it out of both maps printed a hard £0.00 against a real balance — a
+            // manufactured zero in the one row where "held via a fund" cannot apply.
+            direct.merge(SectorBucket.CASH, cashGbp, BigDecimal::add);
             // Cash is one number on the row but four balances underneath; the drill-down is the
             // only place that distinction is visible, so keep the per-(account, currency) detail.
             for (Map.Entry<String, BigDecimal> e : snapshot.cashGbpByAccountCcy().entrySet()) {

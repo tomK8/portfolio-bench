@@ -291,6 +291,15 @@ invested.
   breakdown of the AI/Tech figure (`AiContributor.source` = `TECHNOLOGY_SECTOR` / `TAGGED` /
   `FUND`; a `TAGGED` row names the sector it's actually filed under, which is the whole
   explanation in one cell).
+- **Direct + via fund is the row, for every row including Cash.** The pair is a split of the
+  bucket, not two independent measures, so the two cells always add back to the Value column.
+  Cash was the one bucket outside that identity: it is merged into the bucket total after the
+  position loop (it has no `symbolGbp` entry), and merging it into `total` alone printed a hard
+  **£0.00** against a real £231k balance — a manufactured zero in the one row where "held via a
+  fund" cannot even apply. Cash is held outright, so it goes into `direct` too. An empty column
+  renders as `—` on **both** sides: a sector reached only through funds has nothing held directly,
+  and `£0.00` reads as a measured figure rather than an absence (the via-fund side already did
+  this; the direct side didn't).
 - **Sector drill-down.** Clicking a table row **or its doughnut segment** opens
   `#sector-detail-modal` (standard `.modal-backdrop` + `open` class; Close / backdrop / Escape all
   dismiss) listing every position feeding that bucket — `Row.constituents`, riding on the same

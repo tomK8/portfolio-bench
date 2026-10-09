@@ -3112,6 +3112,7 @@
             var html = '<tr><th class="lbl">Sector</th><th>Value</th><th>' + basisLabel + '</th>'
                 + '<th>Direct</th><th>Via fund</th></tr>';
             rows.forEach(function (r) {
+                var direct = parseFloat(r.directGbp || 0);
                 var viaFund = parseFloat(r.viaFundGbp || 0);
                 html += '<tr class="sector-clickable" data-bucket="' + escapeHtml(r.bucket) + '"'
                     + ' title="Click to see what makes up ' + escapeHtml(r.label) + '">'
@@ -3120,7 +3121,7 @@
                     + (SECTOR_COLORS[r.bucket] || '#999') + '"></span>' + escapeHtml(r.label) + '</td>'
                     + '<td>' + fmtMoney(parseFloat(r.gbp)) + '</td>'
                     + '<td>' + fmtPct(sectorPct(r)) + '</td>'
-                    + '<td>' + fmtMoney(parseFloat(r.directGbp || 0)) + '</td>'
+                    + '<td>' + (direct ? fmtMoney(direct) : '—') + '</td>'
                     + '<td class="sector-viafund">'
                     + (viaFund ? fmtMoney(viaFund) : '—') + '</td>'
                     + '</tr>';

@@ -3794,25 +3794,24 @@
                 document.getElementById('fund-price-mult').textContent = fmtMult(s.priceMult);
                 document.getElementById('fund-eps-mult').textContent = fmtMult(s.epsMult);
                 document.getElementById('fund-pe-mult').textContent = fmtMult(s.peMult);
+                // The second identity, epsMult ≡ opEpsMult × mixMult, is published only where the
+                // filer tags an operating-income subtotal; its two cards go with it.
+                var split = data.operatingSplit;
+                fundSplitCards(split);
                 explain.style.display = '';
-                // The identity priceMult ≡ epsMult × peMult lets the user read which side drove it.
-                var priceMult = parseFloat(s.priceMult);
-                var epsMult = parseFloat(s.epsMult);
-                var peMult = parseFloat(s.peMult);
-                var driver;
-                if (Math.abs(epsMult - 1) > Math.abs(peMult - 1) * 1.5) {
-                    driver = 'mostly <b>earnings growth</b> — multiple barely moved.';
-                } else if (Math.abs(peMult - 1) > Math.abs(epsMult - 1) * 1.5) {
-                    driver = 'mostly <b>multiple expansion</b> — earnings did little of the lifting.';
-                } else {
-                    driver = 'a roughly even mix of earnings growth and multiple expansion.';
-                }
+                // The identity priceMult ≡ epsMult × peMult lets the user read which side drove
+                // it. PeDrivers owns the wording — it is compared in logs, and the term that did
+                // not drive the move is described by what it did rather than assumed to be still.
+                var driver = PeDrivers.drivers(s);
                 explain.innerHTML = data.symbol + ': price ×' + fmtMult(s.priceMult) +
                         ' = EPS ×' + fmtMult(s.epsMult) + ' × multiple ×' + fmtMult(s.peMult) +
-                        '. Drivers: ' + driver + fundWindowNote(data);
+                        (driver ? '. Drivers: ' + driver : '.') + fundWindowNote(data);
+                fundOperatingNote(s, split, data.operatingSplitWithheld);
             } else {
                 summary.style.display = 'none';
                 explain.style.display = 'none';
+                fundSplitCards(null);
+                fundOperatingNote(null, null, null);
             }
 
             renderFundPeChart(data.points, data.symbol);
@@ -3823,6 +3822,34 @@
             if (s == null) return '—';
             var n = parseFloat(s);
             return n.toFixed(2);
+        }
+
+        /**
+         * The two cards the operating split adds. They appear together or not at all: a filer
+         * with no operating-income subtotal (a bank, or anyone presenting straight to pre-tax
+         * income) has no split to show, and a blank card would read as a figure of zero.
+         */
+        function fundSplitCards(split) {
+            var cards = document.getElementById('fund-split-cards');
+            if (!split) { cards.style.display = 'none'; return; }
+            cards.style.display = 'contents';   // its two cards become flex items of the row above, so they wrap with it
+            document.getElementById('fund-opeps-mult').textContent = fmtMult(split.opEpsMult);
+            document.getElementById('fund-mix-mult').textContent = fmtMult(split.mixMult);
+        }
+
+        /**
+         * What the EPS term is once what arrived below the operating line is taken out of it —
+         * or, where the filer tags no operating subtotal, why there is no such figure. A refusal
+         * is shown rather than swallowed: "this company does not report operating income" is a
+         * fact about the company, and an empty space would say nothing at all.
+         */
+        function fundOperatingNote(s, split, withheld) {
+            var el = document.getElementById('fund-operating');
+            var text = PeDrivers.operating(s, split);
+            if (!text && withheld) text = withheld;
+            if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+            el.style.display = '';
+            el.textContent = text;
         }
 
         /**

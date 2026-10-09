@@ -1,8 +1,8 @@
 package com.portfolio.application;
 
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
-import com.portfolio.adapter.EdgarFundamentalsFetcher.EpsFact;
-import com.portfolio.adapter.EdgarFundamentalsFetcher.EpsHistory;
+import com.portfolio.adapter.EdgarFundamentalsFetcher.FiledFact;
+import com.portfolio.adapter.EdgarFundamentalsFetcher.FiledHistory;
 import com.portfolio.adapter.EdgarXbrlFetcher.Status;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.application.FundamentalsService.FundamentalsReport;
@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,20 +31,30 @@ class FundamentalsServiceTest {
 
     /**
      * Subclass overrides both network calls: a fixed CIK for anything (so the registry gate is
-     * not what is under test here) and the EPS history verbatim. The adapter's own parsing is
-     * exercised in {@code EdgarFundamentalsFetcherTest}.
+     * not what is under test here) and one history per us-gaap concept. The adapter's own
+     * parsing is exercised in {@code EdgarFundamentalsFetcherTest}.
+     *
+     * <p>A concept with no fixture answers {@code UNTAGGED} — which is the honest stand-in for
+     * the filers that tag no operating-income subtotal, and what keeps a test about the EPS
+     * decomposition from needing an operating one.
      */
-    private static EdgarFundamentalsFetcher fakeEdgar(List<EpsFact> facts) {
-        return fakeEdgar(new EpsHistory(facts, facts.isEmpty() ? Status.UNTAGGED : Status.OK));
+    private static EdgarFundamentalsFetcher fakeEdgar(List<FiledFact> facts) {
+        return fakeEdgar(new FiledHistory(facts, facts.isEmpty() ? Status.UNTAGGED : Status.OK));
     }
 
-    private static EdgarFundamentalsFetcher fakeEdgar(EpsHistory history) {
+    private static EdgarFundamentalsFetcher fakeEdgar(FiledHistory history) {
+        return fakeEdgar(Map.of(EdgarFundamentalsFetcher.EPS_DILUTED, history));
+    }
+
+    private static EdgarFundamentalsFetcher fakeEdgar(Map<String, FiledHistory> byConcept) {
         return new EdgarFundamentalsFetcher(null) {
             @Override
             public Optional<Integer> cik(String ticker) { return Optional.of(320193); }
 
             @Override
-            public EpsHistory fetch(String ticker) { return history; }
+            public FiledHistory fetch(String ticker, String concept, String unit) {
+                return byConcept.getOrDefault(concept, FiledHistory.of(Status.UNTAGGED));
+            }
         };
     }
 
@@ -58,7 +69,7 @@ class FundamentalsServiceTest {
      * fiscal Q4 (Jul–Sep) is never tagged as a quarter. The 10-K carries the year, and the
      * quarter has to be recovered from it by subtraction.
      */
-    private List<EpsFact> aaplFixture() {
+    private static List<FiledFact> aaplFixture() {
         return List.of(
                 fact("2021-10-01", "2021-12-31", "2.10", "2022-01-28"),
                 fact("2022-01-01", "2022-03-31", "1.52", "2022-04-29"),
@@ -68,9 +79,9 @@ class FundamentalsServiceTest {
         );
     }
 
-    private static EpsFact fact(String start, String end, String eps, String filed) {
+    private static FiledFact fact(String start, String end, String eps, String filed) {
         LocalDate f = LocalDate.parse(filed);
-        return new EpsFact(LocalDate.parse(start), LocalDate.parse(end), new BigDecimal(eps), f, f);
+        return new FiledFact(LocalDate.parse(start), LocalDate.parse(end), new BigDecimal(eps), f, f);
     }
 
     private PriceHistoryRepository priceRepo() {
@@ -93,11 +104,11 @@ class FundamentalsServiceTest {
     @Test
     void eachSilenceIsReportedAsItsOwnFact() {
         PriceHistoryRepository repo = priceRepo();
-        assertTrue(service(fakeEdgar(EpsHistory.of(Status.UNTAGGED)), repo).report("CDNS", 5)
+        assertTrue(service(fakeEdgar(FiledHistory.of(Status.UNTAGGED)), repo).report("CDNS", 5)
                 .message().contains("no diluted EPS"));
-        assertTrue(service(fakeEdgar(EpsHistory.of(Status.NOT_DOMESTIC)), repo).report("ARM", 5)
+        assertTrue(service(fakeEdgar(FiledHistory.of(Status.NOT_DOMESTIC)), repo).report("ARM", 5)
                 .message().contains("foreign form"));
-        assertTrue(service(fakeEdgar(EpsHistory.of(Status.UNAVAILABLE)), repo).report("AAPL", 5)
+        assertTrue(service(fakeEdgar(FiledHistory.of(Status.UNAVAILABLE)), repo).report("AAPL", 5)
                 .message().contains("EDGAR did not answer"));
     }
 
@@ -153,7 +164,7 @@ class FundamentalsServiceTest {
     void refusesAWindowThatDoesNotTileAYear() {
         PriceHistoryRepository repo = priceRepo();
         repo.savePriceBars(List.of(bar("2023-05-01", 100.0)));
-        List<EpsFact> gappy = List.of(
+        List<FiledFact> gappy = List.of(
                 fact("2021-10-01", "2021-12-31", "2.10", "2022-01-28"),
                 fact("2022-01-01", "2022-03-31", "1.52", "2022-04-29"),
                 fact("2022-04-01", "2022-06-30", "1.20", "2022-07-29"),
@@ -175,7 +186,7 @@ class FundamentalsServiceTest {
         // market saw at the time.
         PriceHistoryRepository repo = priceRepo();
         // 4 quarters @ pre-split basis: each $5 of EPS → TTM $20 raw, ÷ 20 = $1 today-basis.
-        List<EpsFact> eps = List.of(
+        List<FiledFact> eps = List.of(
                 fact("2022-01-01", "2022-03-31", "5.00", "2022-04-29"),
                 fact("2022-04-01", "2022-06-30", "5.00", "2022-07-29"),
                 fact("2022-07-01", "2022-09-30", "5.00", "2022-10-28"),
@@ -224,5 +235,104 @@ class FundamentalsServiceTest {
                 "Decomposition identity must hold to round-off tolerance");
         assertEquals(2.0, priceMult, 1e-4);                 // 200 / 100
         assertEquals(5.89 / 6.11, epsMult, 1e-4);
+    }
+
+    /**
+     * The same aggregate fixture shaped like GOOG's distortion: operating income grows steadily
+     * while net income is lifted by something below the operating line, so GAAP EPS runs away
+     * from the operating business and the multiple absorbs the difference.
+     */
+    private static Map<String, FiledHistory> googShaped() {
+        List<FiledFact> operating = List.of(
+                fact("2021-10-01", "2021-12-31", "100", "2022-01-28"),
+                fact("2022-01-01", "2022-03-31", "100", "2022-04-29"),
+                fact("2022-04-01", "2022-06-30", "100", "2022-07-29"),
+                fact("2021-10-01", "2022-09-30", "400", "2022-10-28"),
+                fact("2022-10-01", "2022-12-31", "120", "2023-02-03")
+        );
+        // Net income matches operating income exactly in the base year (ratio 1.00) and then
+        // takes a 180 mark in the latest quarter, lifting the trailing ratio to 600/420.
+        List<FiledFact> net = List.of(
+                fact("2021-10-01", "2021-12-31", "100", "2022-01-28"),
+                fact("2022-01-01", "2022-03-31", "100", "2022-04-29"),
+                fact("2022-04-01", "2022-06-30", "100", "2022-07-29"),
+                fact("2021-10-01", "2022-09-30", "400", "2022-10-28"),
+                fact("2022-10-01", "2022-12-31", "300", "2023-02-03")
+        );
+        return Map.of(
+                EdgarFundamentalsFetcher.EPS_DILUTED, new FiledHistory(aaplFixture(), Status.OK),
+                EdgarFundamentalsFetcher.OPERATING_INCOME, new FiledHistory(operating, Status.OK),
+                EdgarFundamentalsFetcher.NET_INCOME, new FiledHistory(net, Status.OK));
+    }
+
+    @Test
+    void splitsTheEpsTermIntoOperatingAndWhatArrivedBelowTheLine() {
+        PriceHistoryRepository repo = priceRepo();
+        repo.savePriceBars(List.of(bar("2022-10-28", 100.0), bar("2023-02-03", 200.0)));
+
+        FundamentalsReport r = service(fakeEdgar(googShaped()), repo).report("AAPL", 10);
+        assertNull(r.operatingSplitWithheld());
+        assertNotNull(r.operatingSplit());
+
+        double start = r.operatingSplit().netToOperatingStart().doubleValue();
+        double end = r.operatingSplit().netToOperatingEnd().doubleValue();
+        assertEquals(1.0, start, 1e-6, "base year: net income is exactly the operating income");
+        // Trailing year at the end: both TTMs assembled the same way the EPS beside them is, so
+        // assert the ratio the two actually form rather than restating the arithmetic.
+        assertEquals(600.0 / 420.0, end, 1e-6);
+
+        double epsMult = r.summary().epsMult().doubleValue();
+        double opEpsMult = r.operatingSplit().opEpsMult().doubleValue();
+        double mixMult = r.operatingSplit().mixMult().doubleValue();
+        // The second identity closes on the epsMult the cards already print.
+        assertEquals(epsMult, opEpsMult * mixMult, 1e-4);
+        assertTrue(opEpsMult < epsMult,
+                "taking the mark out leaves less earnings growth than GAAP shows");
+        // And the multiple on the operating business is the one that did not de-rate as far.
+        double peMult = r.summary().peMult().doubleValue();
+        double opPeMult = r.operatingSplit().opMultipleMult().doubleValue();
+        assertTrue(opPeMult > peMult, "the apparent de-rating shrinks on operating earnings");
+        assertEquals(r.summary().priceMult().doubleValue(), opEpsMult * mixMult * peMult, 1e-4);
+    }
+
+    @Test
+    void aFilerWithNoOperatingSubtotalIsToldAboutRatherThanLeftBlank() {
+        PriceHistoryRepository repo = priceRepo();
+        repo.savePriceBars(List.of(bar("2022-10-28", 100.0), bar("2023-02-03", 200.0)));
+
+        // Only EPS on file — a bank, which has no operating-income line to tag.
+        FundamentalsReport r = service(fakeEdgar(aaplFixture()), repo).report("AAPL", 10);
+        assertNotNull(r.summary(), "the GAAP decomposition is unaffected");
+        assertNull(r.operatingSplit());
+        assertNotNull(r.operatingSplitWithheld());
+        assertTrue(r.operatingSplitWithheld().contains("OperatingIncomeLoss"),
+                "the reason names the concept that is missing");
+    }
+
+    @Test
+    void refusesAMixReadOffADifferentTwelveMonthsThanTheEps() {
+        PriceHistoryRepository repo = priceRepo();
+        repo.savePriceBars(List.of(bar("2022-10-28", 100.0), bar("2023-02-03", 200.0)));
+
+        // Operating income is a quarter behind: its latest window ends 2022-09-30 while the EPS
+        // window ends 2022-12-31. A ratio across the two is the mix of neither.
+        List<FiledFact> lagging = List.of(
+                fact("2021-01-01", "2021-03-31", "100", "2021-04-29"),
+                fact("2021-04-01", "2021-06-30", "100", "2021-07-29"),
+                fact("2021-07-01", "2021-09-30", "100", "2021-10-28"),
+                fact("2021-10-01", "2021-12-31", "100", "2022-01-28"),
+                fact("2022-01-01", "2022-03-31", "100", "2022-04-29"),
+                fact("2022-04-01", "2022-06-30", "100", "2022-07-29"),
+                fact("2022-07-01", "2022-09-30", "100", "2022-10-28")
+        );
+        Map<String, FiledHistory> m = Map.of(
+                EdgarFundamentalsFetcher.EPS_DILUTED, new FiledHistory(aaplFixture(), Status.OK),
+                EdgarFundamentalsFetcher.OPERATING_INCOME, new FiledHistory(lagging, Status.OK),
+                EdgarFundamentalsFetcher.NET_INCOME, new FiledHistory(lagging, Status.OK));
+
+        FundamentalsReport r = service(fakeEdgar(m), repo).report("AAPL", 10);
+        assertNull(r.operatingSplit());
+        assertNotNull(r.operatingSplitWithheld());
+        assertTrue(r.operatingSplitWithheld().contains("twelve months"));
     }
 }

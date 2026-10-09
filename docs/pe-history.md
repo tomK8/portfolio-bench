@@ -72,6 +72,107 @@ the split factor in effect **at its own `valueFiled` date** *before* the assembl
 subtraction that recovers a fourth quarter is a subtraction of two figures on one footing, and the
 P/E is the multiple the market actually saw.
 
+## The decomposition: two identities, and what the second one is not
+
+The panel's headline is `priceMult ≡ epsMult × peMult` — a price move split into earnings growth
+and multiple expansion. Two things about it were wrong, and they were wrong independently.
+
+### The sentence under the cards compared the wrong quantities
+
+The driver test was `|epsMult - 1| > |peMult - 1| × 1.5`. That is an *additive* deviation from 1
+on a *multiplicative* identity: ×2 scores 1.0 and ×0.5 scores 0.5, though they are the same move
+in opposite directions. A de-rating always read smaller than the equivalent re-rating, and the
+threshold meant something different at each end of the scale. The comparison is now in logs,
+where the identity itself lives: `ln priceMult = ln epsMult + ln peMult`.
+
+Worse, the sentence asserted a **magnitude** on the strength of a **dominance** test. GOOG's
+window to 2026-10-09 printed "mostly earnings growth — multiple barely moved" beside a card
+reading ×0.67. The dominance claim was true (ln 9.12 = 2.21 against ln 0.67 = −0.40); the
+magnitude claim was false by a third. The secondary term is now described by what it did —
+*"against a 33% de-rating of the multiple"* — and "barely moved" is said only when `|ln m|` is
+inside ±5%, which is a statement about `m` and nothing else.
+
+Every sentence under the cards comes from `static/js/pe-drivers.js` — DOM-free and network-free,
+unit-tested under plain node (`src/test/js/pe-drivers.test.mjs`), the same split as
+`ord-filter.js` and `wl-columns.js`. `dashboard.js` only places the result.
+
+### GAAP EPS is not all operating, so the EPS term is split again
+
+Diluted EPS is the right denominator for a P/E — it is what the market prices, and it means the
+same thing in every row. It is also, for some filers in some years, mostly something other than
+the operating business:
+
+| GOOGL, filed | Operating income | Net income |
+|---|---|---|
+| 2026 Q1 | $39.7bn | $62.6bn |
+| 2026 Q2 | $40.8bn | $112.2bn |
+| TTM to 2026-06-30 | $147.6bn | $244.2bn |
+
+$71bn arrived below the operating line in Q2 alone. A two-term decomposition credits that to
+*earnings growth* (×9.12 rather than ×6.15) and, since the price did not follow it, books the
+residual as a 33% *de-rating*. On operating income per share the same window reads ×0.99 — there
+is essentially no de-rating to explain. The distortion persists until those quarters roll out of
+the trailing window in mid-2027. It is the same distortion
+[`OperatingLineService`](../src/main/java/com/portfolio/application/OperatingLineService.java)
+was built for, reaching a second panel.
+
+So a second exact identity is published beside the first:
+
+```
+priceMult ≡ opEpsMult × mixMult × peMult
+```
+
+- `opEpsMult` — the move in **operating income per share**
+- `mixMult` — the move in **net income ÷ operating income**
+
+Both come from the filer's own `OperatingIncomeLoss` and `NetIncomeLoss`, assembled by the same
+`FiledPeriods` rules, as a **ratio**. The ratio is what makes it cheap and exact: the share count
+cancels — and a weighted-average share count is a *stock*, not a flow, so it would not have
+survived the quarter-tiling every other figure here goes through — and so does the split basis,
+so neither dollar series needs rescaling. `opEpsMult` is then derived from `mixMult` so the
+second identity closes on the `epsMult` the cards already print rather than on a second rounding
+of it.
+
+**The mix term is not "non-operating income".** Two things sit between the operating line and the
+bottom line — non-operating items *and tax* — and nothing in the filings separates them into a
+per-share figure without a modelled tax rate, which is the manufactured number this repo keeps
+deleting. The term is named for what it literally is and the sentence says both are in it.
+
+That is also why the ratio is published **net ÷ operating** and not the other way up. Tax usually
+outweighs non-operating income, so for most filers operating income *exceeds* net income, and
+"operating income is 132% of net income" reads as an error on AAPL, MSFT, NVDA and META alike.
+Net ÷ operating is below 1 in the ordinary case and above it for a filer carrying large
+non-operating income, and it is the quantity `mixMult` is a move in. Measured on 2026-10-09:
+
+| Symbol | price× | EPS× | multiple× | op income/sh× | net ÷ op | multiple× on operating |
+|---|---|---|---|---|---|---|
+| GOOG | 6.11 | 9.12 | 0.67 | 6.15 | 1.12 → 1.65 | **0.99** |
+| AMZN | 6.21 | 61.84 | 0.10 | 21.37 | 0.50 → 1.44 | **0.29** |
+| NVDA | 136.49 | 203.87 | 0.67 | 182.01 | 0.87 → 0.98 | 0.75 |
+| AAPL | 11.52 | 4.07 | 2.83 | 3.72 | 0.76 → 0.83 | 3.10 |
+| MSFT | 9.21 | 8.59 | 1.07 | 8.30 | 0.83 → 0.86 | 1.11 |
+| BAC | 3.31 | 3.21 | 1.03 | — | — | — |
+
+Operating income is **pre-tax**, so a level built on it is not a P/E and is never labelled one.
+Only the *change* over the window is published, and only beside the GAAP figures rather than in
+place of them.
+
+### What the split refuses
+
+- **No operating-income subtotal.** Banks have none and several large caps present straight to
+  pre-tax income, so `OperatingIncomeLoss` 404s. That is withheld **with its reason** — "BAC tags
+  no operating-income subtotal…" in place of the two cards — the same way the operating line
+  stores a refusal. The GAAP decomposition above it is unaffected.
+- **Windows that do not line up.** Both legs must assemble over the *same twelve months* as the
+  EPS beside them. A filer can be a quarter further along in one concept than another, and a
+  ratio of two differently-dated windows is the mix of neither.
+- **A loss on either side.** A ratio spanning a loss is not a mix of anything.
+
+Both legs are read on the **latest filed** value, the convention the EPS already uses — so a
+restated year is on its restated basis. GOOG's 2018 operating income is $26.321bn as originally
+filed and $27.524bn as restated in the FY2019 10-K, and the window's base ratio uses the second:
+the same footing the rest of the chart is drawn on.
+
 ## The universe is derived from the portfolio
 
 What the picker offers is: every symbol in `fundamentals_snapshot` (the held ∪ watched ∪

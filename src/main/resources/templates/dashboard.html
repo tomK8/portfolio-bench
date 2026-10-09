@@ -4146,6 +4146,18 @@
             year-to-date from the annual, which is arithmetic on two filed figures rather than an
             estimate. Where even that is unavailable the line stops rather than quietly spanning
             five quarters' calendar time with four quarters' earnings.<br/>
+            <b>GAAP EPS is not all operating, so the EPS term is split again.</b> The cards publish
+            a second exact identity, <code>price× = operating income/sh× × (net ÷ operating)× ×
+            multiple×</code>, from the filer's own <code>OperatingIncomeLoss</code> and
+            <code>NetIncomeLoss</code> assembled over the same twelve months. GOOG's latest year
+            carries $244bn of net income on $148bn of operating income, so two-term decomposition
+            credits equity marks to earnings growth and books the residual as a de-rating that
+            never happened. Read as a ratio, the share count and the split basis both cancel.
+            Two things sit between the operating line and the bottom line — non-operating items
+            <em>and tax</em> — and nothing filed separates them per share without a modelled rate,
+            so the term is named for what it is and claims neither. Operating income is pre-tax,
+            so only its <em>change</em> over the window is shown, never a level called a P/E. A
+            filer with no operating-income subtotal (every bank) says so instead.<br/>
             <b>Any US filer in your universe is offered</b> — held, watched, or added to the
             fundamentals grid — resolved through SEC's own ticker registry. A London or European
             line is not (its bare ticker at the SEC is a different company), and a name that
@@ -4180,9 +4192,16 @@
             <div class="returns-stat"><span class="label">Price ×</span><span class="value" id="fund-price-mult">—</span></div>
             <div class="returns-stat"><span class="label">EPS ×</span><span class="value" id="fund-eps-mult">—</span></div>
             <div class="returns-stat"><span class="label">Multiple ×</span><span class="value" id="fund-pe-mult">—</span></div>
+            <!-- The second identity's two terms. Shown together or not at all: a filer with no
+                 operating-income subtotal has no split, and a blank card would read as zero. -->
+            <div id="fund-split-cards" style="display: none;">
+                <div class="returns-stat"><span class="label">Operating income/sh ×</span><span class="value" id="fund-opeps-mult">—</span></div>
+                <div class="returns-stat"><span class="label">Net ÷ operating ×</span><span class="value" id="fund-mix-mult">—</span></div>
+            </div>
         </div>
 
         <div id="fund-explain" class="muted" style="margin-top: 0.5rem; font-size: 0.9rem; display: none;"></div>
+        <div id="fund-operating" class="muted" style="margin-top: 0.35rem; font-size: 0.9rem; display: none;"></div>
 
         <h3 style="margin-top: 1.25rem; font-size: 1rem;">P/E (trailing twelve months)</h3>
         <div class="zoom-hint">
@@ -4610,6 +4629,7 @@
 
 <script src="/js/wl-edit-sync.js"></script>
 <script src="/js/wl-poll.js"></script>
+<script src="/js/pe-drivers.js"></script>
 <script src="/js/wl-columns.js"></script>
 <script src="/js/ord-filter.js"></script>
 <script src="/js/dashboard.js"></script>

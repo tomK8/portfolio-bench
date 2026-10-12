@@ -34,6 +34,29 @@ public final class Instruments {
      */
     private static final Set<String> BOND_FUNDS = Set.of("VGOV", "IGLT", "GLTY");
 
+    /**
+     * Cash-equivalent wrappers: money-market and ultra-short-dated government ETFs, held as a
+     * place to park cash rather than as an investment in anything. The wrapper is the only thing
+     * standing between the holder and an overnight rate, so what it <em>is</em> — not what the
+     * feed says it holds — decides the bucket, exactly as for bullion and gilt funds.
+     *
+     * <p><b>CSH2 is why the feed cannot be trusted here.</b> It is swap-based: it holds a
+     * substitute basket of shares and swaps that basket's return away for an overnight rate, so
+     * the holder has no economic exposure to the basket at all. Yahoo publishes the basket's
+     * sector weightings regardless, and fund look-through dutifully spread £67,809 of overnight
+     * cash across twelve equity sectors — £24,310 of it into Technology, which the AI/Tech tile
+     * then counted as a theme bet (2026-10-12). IB01 (0–1yr US Treasury bills) has the opposite
+     * failure: Yahoo publishes no sector for it at all, so it sat in the red "excluded from every
+     * sector" strip looking like a feed outage. Both are cash.
+     *
+     * <p><b>Deliberately only what is held.</b> Unlike the bullion list, this one is not stocked
+     * with siblings: a ticker listed here that turns out not to be a cash equivalent is a
+     * <em>silent</em> misclassification, while one that is missing surfaces loudly by name in the
+     * amber strip — which is how IB01 was found. A loud gap beats a quiet error, so the list
+     * grows when something is bought, not in anticipation.
+     */
+    private static final Set<String> CASH_EQUIVALENTS = Set.of("CSH2", "IB01");
+
     /** The id shape {@link #giltId} produces, for re-canonicalising strings already stored. */
     private static final Pattern GILT_ID =
             Pattern.compile("GILT\\s+(\\d+(?:\\.\\d+)?)%\\s+(\\d{4})", Pattern.CASE_INSENSITIVE);
@@ -63,9 +86,13 @@ public final class Instruments {
         return BOND_FUNDS;
     }
 
+    static Set<String> cashEquivalents() {
+        return CASH_EQUIVALENTS;
+    }
+
     /**
      * The instrument's asset class, for the drift term in the open-orders touch model. Resolution
-     * order: direct bond → bond fund → bullion ETC → equity.
+     * order: direct bond → bond fund → bullion ETC → cash-equivalent wrapper → equity.
      *
      * <p>Only the classes that <em>change the number</em> are detected. Everything unrecognised is
      * {@link AssetClass#EQUITY}, which is both the common case and the same drift an equity fund
@@ -76,6 +103,7 @@ public final class Instruments {
         String s = securityId.trim().toUpperCase();
         if (isBond(s) || BOND_FUNDS.contains(s)) return AssetClass.GILT;
         if (BULLION_ETCS.contains(s)) return AssetClass.COMMODITY;
+        if (CASH_EQUIVALENTS.contains(s)) return AssetClass.CASH_EQUIVALENT;
         return AssetClass.EQUITY;
     }
 

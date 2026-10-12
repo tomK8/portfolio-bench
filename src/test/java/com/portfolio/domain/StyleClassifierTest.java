@@ -315,6 +315,30 @@ class StyleClassifierTest {
     }
 
     @Test
+    void everyCashEquivalentIsStructuralAndNotIncome() {
+        for (String symbol : Instruments.cashEquivalents()) {
+            Classification c = classifier().classify(new Position(
+                    symbol, d("67809.34"), Metrics.empty(), false));
+            assertEquals(StyleBucket.CASH_EQUIVALENTS, c.bucket(), symbol);
+            assertFalse(c.bucket().scored(), symbol + " has no axis to be scored on");
+            assertNull(c.valueScore(), symbol);
+            assertFalse(c.income(), symbol + " earns a carry, not a dividend policy");
+        }
+    }
+
+    @Test
+    void aSwapBasedCashEtfIsNotScoredOnTheBasketItSwapsAway() {
+        // Ordering guard, the same shape as the bullion one. CSH2 publishes aggregate equity
+        // multiples for the substitute basket it holds and swaps away; without the asset-class
+        // step above the fund branch, £67,809 of parked cash is placed on a growth tilt. It was
+        // in fact landing in UNKNOWN — "too few fundamentals", which reads as a gap to go and
+        // fix rather than the deliberate cash holding it is (2026-10-12).
+        Classification c = classifier().classify(new Position(
+                "CSH2", d("67809.34"), m().fund("31", "4.2", "3.1").build(), true));
+        assertEquals(StyleBucket.CASH_EQUIVALENTS, c.bucket());
+    }
+
+    @Test
     void aBullionEtcIsNotScoredAsAFund() {
         // Ordering guard: the asset-class step precedes the fund branch, so a metal ETC with an
         // aggregate P/E published against it is still bullion rather than a value fund.

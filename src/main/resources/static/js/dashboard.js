@@ -2406,6 +2406,7 @@
             VALUE: '#2ca02c', GROWTH: '#1f77b4', VALUE_GROWTH: '#9467bd', NEITHER: '#c7c7c7',
             FUND_VALUE: '#98df8a', FUND_BLEND: '#aec7e8', FUND_GROWTH: '#6baed6',
             FIXED_INCOME: '#7f7f7f', NON_EQUITY: '#c5b0d5', CASH: '#cccccc',
+            CASH_EQUIVALENTS: '#9e9e9e',
             UNKNOWN: '#d62728'
         };
 
@@ -2793,7 +2794,7 @@
             CONSUMER_STAPLES: '#98df8a', INDUSTRIALS_DEFENCE: '#8c564b',
             ENERGY: '#bcbd22', MATERIALS_MINING: '#e377c2', UTILITIES_INFRA: '#aec7e8',
             REAL_ESTATE: '#ffbb78', FIXED_INCOME: '#7f7f7f', COMMODITIES: '#c5b0d5',
-            CASH: '#cccccc', UNCLASSIFIED: '#d62728'
+            CASH: '#cccccc', CASH_EQUIVALENTS: '#9e9e9e', UNCLASSIFIED: '#d62728'
         };
 
         function loadSectors() {

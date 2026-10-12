@@ -31,7 +31,10 @@ both, and how much of it pays an income.
   migration**.
 - **`domain.StyleBucket`** — the 2×2 (`VALUE`/`GROWTH`/`VALUE_GROWTH`/`NEITHER`) plus structural
   buckets `FUND_VALUE`/`FUND_BLEND`/`FUND_GROWTH`, `FIXED_INCOME`, `NON_EQUITY` (bullion: no
-  earnings, no sales, no yield — a property of the asset, not a data gap), `CASH` and `UNKNOWN`.
+  earnings, no sales, no yield — a property of the asset, not a data gap),
+  `CASH_EQUIVALENTS` (money-market and ultra-short government ETFs — same reasoning as bullion, and
+  the branch sits **above** the fund one because CSH2 publishes aggregate multiples for the basket
+  it swaps away, which would place parked cash on a growth tilt), `CASH` and `UNKNOWN`.
   `scored()` marks which came out of the score; the UI dims the rest so the growth-vs-value
   comparison is read off comparable rows only.
 - **`domain.StyleClassifier`** (framework-free, unit-tested). Resolution order:
@@ -215,6 +218,32 @@ invested.
   on it would mean overriding the feed with a default. **The step sits after the override** (the
   escape hatch still wins) **and before look-through** — a wrapper that did publish sector weights
   must not be decomposed into equity sectors it does not hold.
+- **Cash equivalents are their own bucket, and the asset-class step is what stops the feed
+  look-through.** CSH2 (swap-based overnight rate) and IB01 (0–1yr US Treasury bills) are a place
+  to park cash, not an investment in anything, and between them they were the entire Unclassified
+  row at £135,178 — except that only IB01 was actually *in* it. **CSH2 is swap-based: it holds a
+  substitute basket of shares and swaps that basket's return away for an overnight rate, so there
+  is no economic exposure to the basket at all — and Yahoo publishes its sector weightings
+  regardless.** Look-through duly spread £67,809 of parked cash across twelve equity sectors,
+  £24,310 of it into Technology and from there into the AI/Tech tile, and it is what made the
+  Healthcare drill-down read £93,831 against a sector table that had shown £86,182 — the gap being
+  exactly CSH2's £7,648.89 slice (2026-10-12). IB01 failed the opposite way: Yahoo files no sector
+  for it, so it sat in the red "excluded from every sector" strip looking like an outage.
+  `Instruments.CASH_EQUIVALENTS` places both, the wrapper step runs **before** look-through, and
+  `SectorClassifierTest.aSwapBasedCashEtfIsNotLookedThroughIntoTheBasketItSwapsAway` pins it.
+  **Nothing in any feed says a fund is synthetically replicated** — what the instrument *is* does,
+  so this is a judgement and belongs where the other wrapper judgements live.
+- **A row of its own, not a merge into Cash.** They *are* cash for every purpose a human reads this
+  panel for, but `cashGbp` on the point is the ledger's balance and the cash-vs-invested chart
+  directly beneath this table is drawn from the same figure. Folding a held position into the Cash
+  row would make the table and the chart disagree about what cash is, and would leave £135k inside
+  `investedGbp` while being reported as uninvested — the Cash row is the one row with **no** % of
+  invested, deliberately. An adjacent `Cash equivalents` row keeps both denominators true and still
+  puts the two side by side. Same reasoning, same name, in the style block.
+- **The list is deliberately short.** Unlike the bullion set, `CASH_EQUIVALENTS` is not stocked with
+  siblings: a ticker wrongly listed there is a **silent** misclassification, while a missing one
+  surfaces loudly by name in the amber strip — which is how IB01 was found in the first place. It
+  grows when something is bought, not in anticipation.
 - **"Unclassified" is three states, not one** — and only the last is a finding. A held name has no
   sector until `fundamentals_snapshot` has a row for it, and that cache is filled by
   `FundamentalsFetchJob` on a **4-hour** `fixedDelay` over the `held_symbols` set, so anything
@@ -348,6 +377,14 @@ invested.
   exactly as before (headings appear only when there is more than one group). The row
   click-handler is **delegated from the `<table>`**, since `renderSectorTable` replaces its
   innerHTML on every basis toggle.
+
+  **The modal sizes itself to its table.** `.swing-tbl` is `width: fit-content` with `nowrap`
+  cells, so the table sets its own width rather than fitting the box — a fixed `max-width` on the
+  `.modal-box` therefore *clipped* the right-hand column (the How column lost its last character)
+  instead of making it reachable. The three Breakdown drill-downs (sector, style, income) now share
+  one rule: grow to the table, stop at 1100px or the viewport, and scroll from there, with
+  `min-width: 0` so a flex item can shrink past its min-content width and the scroll is the box's
+  own rather than the page's.
 
   The block lives in its **own `#sector-block` container**, and `loadSectors`
   passes that id to `panelLoadFailed`/`clearPanelError` — passing the sub-view id would destroy

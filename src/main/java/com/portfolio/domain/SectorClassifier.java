@@ -103,9 +103,17 @@ public class SectorClassifier {
      * wrapper sets a single list rather than two partial ones, so a symbol added there is placed
      * everywhere at once.
      *
-     * <p>Only the two classes that <em>are</em> a bucket are consulted. {@code EQUITY} is the
+     * <p>Only the three classes that <em>are</em> a bucket are consulted. {@code EQUITY} is the
      * catch-all {@code assetClassOf} returns for anything it does not recognise, so acting on it
      * would mean overriding the feed with a default — the opposite of what this step is for.
+     *
+     * <p><b>The step sitting before look-through is what makes a swap-based wrapper safe.</b>
+     * CSH2 holds a substitute basket of shares and swaps its return away for an overnight rate, so
+     * the holder owns no part of that basket — yet Yahoo publishes the basket's sector weightings
+     * like any other fund's, and look-through spread £67,809 of parked cash across twelve equity
+     * sectors, £24,310 of it into Technology and from there into the AI/Tech tile (2026-10-12).
+     * Nothing in the feed says a fund is synthetically replicated; what the instrument <em>is</em>
+     * does, and that is the judgement {@link Instruments} holds.
      */
     public Classification classify(Position p) {
         String symbol = normalise(p.symbol());
@@ -134,6 +142,7 @@ public class SectorClassifier {
         return switch (Instruments.assetClassOf(securityId)) {
             case COMMODITY -> SectorBucket.COMMODITIES;
             case GILT -> SectorBucket.FIXED_INCOME;
+            case CASH_EQUIVALENT -> SectorBucket.CASH_EQUIVALENTS;
             default -> null;
         };
     }

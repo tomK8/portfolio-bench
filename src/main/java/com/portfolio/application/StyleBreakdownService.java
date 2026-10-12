@@ -146,21 +146,29 @@ public class StyleBreakdownService {
             // *bond* fund is exempt: it reaches this loop as FIXED_INCOME via a style.properties
             // override, not through the fund branch, and is an income holding whatever Yahoo says.
             boolean bond = c.bucket() == StyleBucket.FIXED_INCOME;
+            // So is a cash-equivalent wrapper, for the same reason read the other way round: the
+            // `fund` test above answers yes for CSH2, which publishes sector weights and multiples
+            // for a substitute basket it swaps away. Letting that stand would raise the "funds are
+            // excluded from the yield" caveat on account of a cash holding. It behaves like
+            // bullion instead — whatever yield it reports is in the portfolio total, and it joins
+            // no income group.
+            boolean equityFund = fund && c.bucket() != StyleBucket.CASH_EQUIVALENTS;
             // A fund's distribution yield is now derivable from its own payment history, so a
             // distributing ETF contributes to the portfolio-wide figure instead of being assumed
             // to pay nothing. It still does not join the income *group*: that is the scored
             // equities plus fixed income, and a tracker paying 0.9% is not an income holding.
             // An accumulating fund derives a real zero and is correctly no longer a caveat.
-            BigDecimal fundYield = fund && !bond && derivedYield != null ? derivedYield.yield() : null;
-            if (fund && !bond && fundYield == null) {
+            BigDecimal fundYield =
+                    equityFund && !bond && derivedYield != null ? derivedYield.yield() : null;
+            if (equityFund && !bond && fundYield == null) {
                 fundsExcludedFromYield = true;
                 continue;
             }
-            BigDecimal effectiveYield = fund && !bond ? fundYield : c.dividendYield();
+            BigDecimal effectiveYield = equityFund && !bond ? fundYield : c.dividendYield();
             BigDecimal positionIncome = effectiveYield == null
                     ? null : gbp.multiply(effectiveYield, MC);
             if (positionIncome != null) annualIncome = annualIncome.add(positionIncome);
-            if (fund && !bond) continue;      // in the total, not in the income group
+            if (equityFund && !bond) continue;      // in the total, not in the income group
             if (!c.income()) continue;
 
             // An income holding: the yielding equities, plus all fixed income structurally.

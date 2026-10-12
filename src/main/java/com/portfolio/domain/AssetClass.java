@@ -59,6 +59,13 @@ public enum AssetClass {
     GILT(0.0, false),
     /** Physical-metal ETCs. Bullion has no earnings and no yield; it just sits there. */
     COMMODITY(0.0, false),
+    /**
+     * Money-market and ultra-short-dated government ETFs — cash in a wrapper. The price path is
+     * an overnight rate accruing, not an asset repricing, so there is no drift worth modelling and
+     * nothing for a limit order to be touched by. Zero like {@link #GILT}, and for the same
+     * reason: what it earns is a carry, not a return on anything.
+     */
+    CASH_EQUIVALENT(0.0, false),
     /** Nothing said. Zero drift, so an unclassified instrument can never have drift injected. */
     UNKNOWN(0.0, false);
 

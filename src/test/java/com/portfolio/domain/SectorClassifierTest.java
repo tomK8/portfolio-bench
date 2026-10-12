@@ -60,6 +60,38 @@ class SectorClassifierTest {
     }
 
     @Test
+    void everyCashEquivalentInInstrumentsIsItsOwnBucket() {
+        for (String symbol : Instruments.cashEquivalents()) {
+            Classification c = classifier().classify(Position.direct(symbol, gbp("1000"), null));
+            assertEquals(0, gbp("1000").compareTo(bucket(c, SectorBucket.CASH_EQUIVALENTS)),
+                    symbol + " should be a cash equivalent");
+            assertEquals(0, BigDecimal.ZERO.compareTo(bucket(c, SectorBucket.UNCLASSIFIED)),
+                    symbol + " should not be unclassified");
+        }
+    }
+
+    @Test
+    void aSwapBasedCashEtfIsNotLookedThroughIntoTheBasketItSwapsAway() {
+        // The regression this exists for. CSH2 holds a substitute basket of shares and swaps its
+        // return for an overnight rate, so the holder owns none of it — but Yahoo publishes the
+        // basket's sector weightings like any other fund's, and look-through spread £67,809 of
+        // parked cash across twelve equity sectors, £24,310 of it into Technology and from there
+        // into the AI/Tech tile (2026-10-12). Nothing in the feed says "synthetic"; what the
+        // instrument is does, and that lives in Instruments.
+        Classification c = classifier().classify(new Position(
+                "CSH2", gbp("67809.34"), null,
+                Map.of("technology", new BigDecimal("0.3585"),
+                        "healthcare", new BigDecimal("0.1128")),
+                List.of()));
+        assertEquals(0, gbp("67809.34").compareTo(bucket(c, SectorBucket.CASH_EQUIVALENTS)));
+        assertEquals(0, BigDecimal.ZERO.compareTo(bucket(c, SectorBucket.TECH_AI)));
+        assertEquals(0, BigDecimal.ZERO.compareTo(bucket(c, SectorBucket.HEALTHCARE)));
+        assertFalse(c.fund(), "a cash equivalent is one position, not a look-through");
+        assertEquals(0, BigDecimal.ZERO.compareTo(c.aiTechGbp()),
+                "parked cash is not a theme bet");
+    }
+
+    @Test
     void aBullionEtcIsNotSentThroughFundLookThrough() {
         // Ordering guard. The asset-class step has to come before look-through, or a wrapper that
         // happened to publish sector weights would be decomposed into equity sectors it does not

@@ -3,8 +3,8 @@ package com.portfolio.domain;
 /**
  * The sector buckets the Allocation → Breakdown panel reports. Coarser than Yahoo's own sector
  * list in places, but everything that is not a single-name equity gets a top-level home
- * ({@link #FIXED_INCOME}, {@link #CASH}, {@link #COMMODITIES}) so equity percentages are never
- * quietly diluted by gilts or an idle cash pile.
+ * ({@link #FIXED_INCOME}, {@link #CASH}, {@link #CASH_EQUIVALENTS}, {@link #COMMODITIES}) so
+ * equity percentages are never quietly diluted by gilts or an idle cash pile.
  *
  * <p><b>The two Consumer sectors are kept apart</b>, as GICS and Yahoo both have them. They were
  * briefly merged into one "Consumer" row, which cost real information for nothing: staples and
@@ -45,6 +45,13 @@ public enum SectorBucket {
     FIXED_INCOME("Fixed Income"),
     COMMODITIES("Commodities"),
     CASH("Cash"),
+    // Money-market and ultra-short-dated government ETFs. A row of its own rather than a merge
+    // into CASH, because the two are not the same figure: `cashGbp` on the point is what the
+    // ledger holds as a balance, and the cash-vs-invested chart directly beneath this table is
+    // drawn from it. Folding a held position into that row would make the table and the chart
+    // disagree about what cash is, and would leave the £135k sitting inside `investedGbp` while
+    // being reported as uninvested. Adjacent row, honest denominators.
+    CASH_EQUIVALENTS("Cash equivalents"),
     UNCLASSIFIED("Unclassified");
 
     private final String label;

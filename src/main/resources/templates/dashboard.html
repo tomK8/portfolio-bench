@@ -878,6 +878,21 @@
             opacity: 0.45;
         }
 
+        /* The three Allocation -> Breakdown drill-downs each hold a .swing-tbl, and that table is
+           `width: fit-content` with nowrap cells — it sets its own width rather than fitting the
+           box. A fixed max-width on the box therefore clipped the right-hand column (the sector
+           drill-down's "How" lost its last character) instead of making it reachable. Let the box
+           grow to the table, stop at the viewport, and scroll from there. `min-width: 0` is what
+           lets a flex item shrink past its min-content width so the scroll is the box's own. */
+        #sector-detail-modal .modal-box,
+        #style-detail-modal .modal-box,
+        #income-detail-modal .modal-box {
+            max-width: 1100px;
+            min-width: 0;
+            max-height: 88vh;
+            overflow: auto;
+        }
+
         /* Industry subtotals inside the sector drill-down: a heading row per industry, its members
            indented beneath. Only rendered when a bucket actually holds more than one. */
         #sector-detail-modal tr.sector-industry td {
@@ -2484,7 +2499,7 @@
              anybody reads, and the split into fixed income vs equities is what the tile now needs
              to explain. -->
         <div id="income-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
-            <div class="modal-box" style="max-width: 720px;">
+            <div class="modal-box">
                 <h3>Income holdings</h3>
                 <div id="income-detail-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;"></div>
                 <table class="swing-tbl" id="income-detail-table"></table>
@@ -2496,7 +2511,7 @@
         </div>
 
         <div id="style-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
-            <div class="modal-box" style="max-width: 720px;">
+            <div class="modal-box">
                 <h3 id="style-detail-title">—</h3>
                 <div id="style-detail-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;"></div>
                 <table class="swing-tbl" id="style-detail-table"></table>
@@ -2571,7 +2586,7 @@
         </details>
 
         <div id="sector-detail-modal" class="modal-backdrop" role="dialog" aria-modal="true">
-            <div class="modal-box" style="max-width: 640px;">
+            <div class="modal-box">
                 <h3 id="sector-detail-title">—</h3>
                 <div id="sector-detail-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;"></div>
                 <table class="swing-tbl" id="sector-detail-table"></table>

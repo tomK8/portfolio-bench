@@ -59,6 +59,18 @@ class InstrumentsTest {
     }
 
     @Test
+    void cashEquivalentWrappersCarryNoDrift() {
+        // CSH2 (swap-based overnight rate) and IB01 (0-1yr US T-bills) are a place to park cash.
+        // Neither is an asset repricing, so neither carries a drift a limit order could ride.
+        assertEquals(AssetClass.CASH_EQUIVALENT, Instruments.assetClassOf("CSH2"));
+        assertEquals(AssetClass.CASH_EQUIVALENT, Instruments.assetClassOf("ib01"), "case-insensitive");
+        assertEquals(0.0, AssetClass.CASH_EQUIVALENT.annualTotalReturn());
+        // A zero-return class must not net a yield off itself: VolForecast.probability branches on
+        // mu.signum(), so a zero that stayed zero is what keeps it on the driftless first passage.
+        assertFalse(AssetClass.CASH_EQUIVALENT.appliesYield());
+    }
+
+    @Test
     void anythingElseIsAnEquityAndNothingStatedIsUnknown() {
         assertEquals(AssetClass.EQUITY, Instruments.assetClassOf("NVDA"));
         assertEquals(AssetClass.EQUITY, Instruments.assetClassOf("LSEG"));

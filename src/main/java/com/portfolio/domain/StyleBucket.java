@@ -32,6 +32,11 @@ public enum StyleBucket {
     // UI presents as "go and fix this".
     NON_EQUITY("Non-equity (bullion etc.)", false),
     CASH("Cash", false),
+    // Money-market and ultra-short-dated government ETFs. Structural for the same reason bullion
+    // is: there are no earnings, sales or growth to score, which is a property of the instrument
+    // and not a gap in the feed. Kept apart from CASH so the "% of invested" denominator stays
+    // true — these are held positions, unlike a ledger balance.
+    CASH_EQUIVALENTS("Cash equivalents", false),
     UNKNOWN("Unclassified", false);
 
     private final String label;

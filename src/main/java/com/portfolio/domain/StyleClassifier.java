@@ -152,6 +152,13 @@ public class StyleClassifier {
             case GILT -> {
                 return fixedIncome(p.symbol(), gbp, p.quantity(), m);
             }
+            // Cash in a wrapper: nothing to score on either axis, and not an income holding
+            // either — a money-market ETF's carry is not a dividend policy. The branch also has
+            // to sit above the fund one: CSH2 publishes equity multiples for the substitute
+            // basket it swaps away, which would place parked cash on a growth tilt.
+            case CASH_EQUIVALENT -> {
+                return structural(StyleBucket.CASH_EQUIVALENTS, gbp, m);
+            }
             default -> { }
         }
         if (p.fund()) {

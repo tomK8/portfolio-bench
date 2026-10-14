@@ -207,6 +207,12 @@ class YahooQuoteSummaryFetcherTest {
      * When the statements are filed in a different currency from the quote, a ratio spanning the
      * two divides pounds by dollars. Withheld with a reason rather than published or silently
      * dropped, so a reader can tell "could not be trusted" from "the feed never sent it".
+     *
+     * <p>The two <i>amounts</i> built the same way go with them. Enterprise value is a sum
+     * rather than a quotient — Yahoo adds net debt in the filing currency to a market cap in the
+     * quote currency without converting, exactly reproducible on NVO (263.68bn = 168.54bn USD
+     * market cap + 95.14bn DKK net debt, to 0.002%) — and book value per share is the
+     * denominator of a P/B that is no longer there to be audited.
      */
     @Test
     void withholdsRatiosThatWouldDivideTwoCurrencies() throws Exception {
@@ -215,18 +221,41 @@ class YahooQuoteSummaryFetcherTest {
                   "price":{"currency":"GBp","regularMarketPrice":{"raw":12074.0}},
                   "summaryDetail":{"priceToSalesTrailing12Months":{"raw":3.05}},
                   "defaultKeyStatistics":{"bookValue":{"raw":24.28},
+                                          "enterpriseValue":{"raw":211963953152},
                                           "enterpriseToEbitda":{"raw":10.55}},
                   "financialData":{"financialCurrency":"USD","ebitda":{"raw":19904000000}}}]}}""";
         QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AZN.L", json);
 
         for (String key : new String[]{"priceToBook", "priceToSalesTrailing12Months",
-                                       "enterpriseToEbitda"}) {
+                                       "enterpriseToEbitda", "enterpriseValue", "bookValue"}) {
             assertNull(q.extra().get(key), key + " spans two currencies and must not be published");
             String why = q.labels().get("excluded:" + key);
             assertNotNull(why, key + " must say why it was withheld");
             assertTrue(why.contains("USD") && why.contains("GBp"), why);
         }
         assertEquals("USD", q.labels().get("financialCurrency"));
+    }
+
+    /**
+     * The gate is the currency mismatch and nothing else: a row whose statements are in its own
+     * quote currency keeps both amounts. Without this the previous test passes just as well for
+     * a fetcher that had simply stopped publishing enterprise value and book value.
+     */
+    @Test
+    void keepsEnterpriseValueAndBookValueWhenTheCurrenciesAgree() throws Exception {
+        String json = """
+                {"quoteSummary":{"result":[{
+                  "price":{"currency":"USD","regularMarketPrice":{"raw":183.0950}},
+                  "defaultKeyStatistics":{"bookValue":{"raw":4.858},
+                                          "enterpriseValue":{"raw":241653907456}},
+                  "financialData":{"financialCurrency":"USD"}}]}}""";
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("KLAC", json);
+
+        assertEquals(0, q.extra().get("enterpriseValue")
+                .compareTo(new BigDecimal("241653907456")));
+        assertEquals(0, q.extra().get("bookValue").compareTo(new BigDecimal("4.858")));
+        assertNull(q.labels().get("excluded:enterpriseValue"));
+        assertNull(q.labels().get("excluded:bookValue"));
     }
 
     /**

@@ -26,6 +26,46 @@ touches an order.
     keeping its manual order. The backfill is guarded on *having just created* that list, not on
     the member table being empty — otherwise a deliberately emptied list would be resurrected by
     the next restart.
+- **The note: what to do when it fires.** One free-text line per symbol, stored on `watchlist`
+  beside the thresholds — `POST /watchlist/note`, a column in the grid, a read-only line in the
+  popup, and a line in the alert email. Nothing parses it, nothing evaluates it; it is the
+  sentence you would otherwise have to remember at the moment the row goes amber.
+  - **Global to the symbol, for the same reason the triggers are.** There is one set of alerts per
+    name and one email, so a note that differed per tab could contradict the signal it is advice
+    about. Editing it on either tab edits the one row.
+  - **It is not a trigger, so it re-arms nothing.** Every other write here calls
+    `clearFiredFor` — the dedup exists so a *changed setting* can fire fresh the same day.
+    Rewording a plan changes nothing about where the price is, and re-arming would re-mail a
+    signal already sent for the same levels. It is also why the note has its own endpoint rather
+    than a fifth field on `/watchlist/threshold`.
+  - **In the email it sits under the symbol's own firings, once.** A name that clears both the
+    near-high and the move threshold in one tick is one decision, not two, so the plan is printed
+    after that symbol's lines rather than appended to each. It rides on the dedup rather than
+    beside it: a symbol whose only trigger was already mailed today contributes no lines, and
+    therefore no note either. The subject still counts **signals** — a note line is not one.
+  - **Blank is absent, not empty.** `updateNote` stores `null` for blank text and the email asks
+    whether there *is* a note, so a cleared one costs no line; the length cap (500) is refused
+    rather than truncated, because silently losing the end of a plan is worse than being told to
+    shorten it. An `add` deliberately leaves the note alone: the add box collects none, and
+    re-adding a watched name is how it joins a second list — erasing the plan is not what that
+    means.
+  - **The popup shows it; the row edits it.** One editor, because the popup also opens from Live,
+    Holdings and the three orders tables, for names with no `watchlist` row to write to — the same
+    reason an unwatched symbol's stand-in entry carries no note, as it carries no triggers. A row
+    still waiting for its first prices keeps its note: the plan does not depend on the price
+    having arrived.
+  - **A column added after the layouts were saved.** `watchlist_column` names its own keys, so a
+    new column reaches an uncustomised list for free (it is in `WlColumns.DEFAULTS`) and a
+    customised one never. The repository therefore appends `note` to every stored layout **once**,
+    guarded by a KV marker — not by "this layout doesn't list it", which would put the column back
+    on every restart for anyone who removed it. Same trap the pre-lists member backfill documents.
+  - Its cell is an `<input>`, so it joins the thresholds in carrying no `data-sort` (there is
+    nothing to compare) and in being skipped by the poll while the caret is in it. Its
+    just-saved value is defended by the same optimistic overlay, in a **separate** record
+    (`wlNotePending`, `WlEditSync.resolveNote`): a threshold save carries no note and a note save
+    carries no thresholds, so one record holding all five would have each write blank the other's
+    pending value.
+
 - **Drag to reorder, rows and columns.** A grip (⠿) in each row's Symbol cell drags the row; a
   chip in the column picker drags the column. The ↑↓ buttons stay beside both — they are the
   keyboard path and the touch path (HTML5 drag events never fire on a touch screen), and a
@@ -277,7 +317,9 @@ touches an order.
   high/low distances + P/E/beta
   + position/gain (blank when not held). Four per-symbol alert triggers with editable
   thresholds/levels: proximity to the 52-week high, |today's move|, and absolute price
-  targets (≥ above and ≤ below, in the price's native currency). Row colour = alert state
+  targets (≥ above and ≤ below, in the price's native currency) — plus the **Note** cell beside
+  them, the free-text plan for when one of them fires, which the alert email prints under that
+  symbol's signals. Row colour = alert state
   (green/red today-move by direction, blue near-high, amber ≥-target, purple ≤-target,
   pulsing when both near-high + big-move).
   - **The grid is its own scroll surface.** `#watchlist-wrap` is a centred `.full-bleed` — the

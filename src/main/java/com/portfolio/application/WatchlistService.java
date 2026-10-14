@@ -212,7 +212,8 @@ public class WatchlistService {
         for (Entry e : watchlistRepo.loadAll()) {
             if (e.symbol().equalsIgnoreCase(symbol)) return e;
         }
-        return new Entry(symbol, BigDecimal.ZERO, BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO);
+        return new Entry(symbol, BigDecimal.ZERO, BigDecimal.ZERO, null,
+                BigDecimal.ZERO, BigDecimal.ZERO, null);
     }
 
     private Row buildRow(Entry e, LocalDate today, Instant now,
@@ -225,7 +226,8 @@ public class WatchlistService {
         IntradayPrice ip = latest.get(ticker);
         Snapshot s = snapshot(e, ip, today, fundamentals);
         if (s == null) return Row.missing(symbol, e.highThresholdPct(), e.moveThresholdPct(),
-                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()), missingReason(symbol));
+                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()), e.note(),
+                missingReason(symbol));
 
         Live live = computeLive(s, e, today, now);
 
@@ -243,7 +245,7 @@ public class WatchlistService {
                 live.vol5d(), live.vol10d(), scalePct(vol30), scalePct(vol1y), trailingPe, beta,
                 pos.held(), pos.valueGbp(), pos.gainGbp(), scalePct(pos.gainPct()),
                 e.highThresholdPct(), e.moveThresholdPct(),
-                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()),
+                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()), e.note(),
                 live.nearHigh(), live.bigMove(), live.moveDirection(),
                 live.aboveLevel(), live.belowLevel(),
                 false, null);
@@ -764,17 +766,18 @@ public class WatchlistService {
                       BigDecimal trailingPe, BigDecimal beta,
                       boolean held, BigDecimal positionValueGbp, BigDecimal gainGbp, BigDecimal gainPct,
                       BigDecimal highThresholdPct, BigDecimal moveThresholdPct,
-                      BigDecimal priceAbove, BigDecimal priceBelow,
+                      BigDecimal priceAbove, BigDecimal priceBelow, String note,
                       boolean nearHigh, boolean bigMove, int moveDirection,
                       boolean aboveLevel, boolean belowLevel,
                       boolean missingData, String missingReason) {
 
         static Row missing(String symbol, BigDecimal highPct, BigDecimal movePct,
-                           BigDecimal priceAbove, BigDecimal priceBelow, String note) {
+                           BigDecimal priceAbove, BigDecimal priceBelow, String note,
+                           String reason) {
             return new Row(symbol, null, null, null, null, null, null, null, null,
                     null, null, null, null, null, null, null, null, null, null,
-                    false, null, null, null, highPct, movePct, priceAbove, priceBelow,
-                    false, false, 0, false, false, true, note);
+                    false, null, null, null, highPct, movePct, priceAbove, priceBelow, note,
+                    false, false, 0, false, false, true, reason);
         }
     }
 

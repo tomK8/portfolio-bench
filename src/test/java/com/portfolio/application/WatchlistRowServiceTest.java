@@ -182,4 +182,37 @@ class WatchlistRowServiceTest {
         assertThrows(IllegalArgumentException.class, () -> service(repo -> { }).row("  "));
         assertThrows(IllegalArgumentException.class, () -> service(repo -> { }).row(null));
     }
+
+    /**
+     * The popup opens from Live, Holdings and the orders tables as well as from the watchlist, so
+     * the note has to reach the single-symbol row too.
+     */
+    @Test
+    void theNoteTravelsOnTheRow() {
+        Row watched = service(repo -> {
+            repo.add("AAPL", null, new BigDecimal("3"), null, null);
+            repo.updateNote("AAPL", "Trim 25% in the SIPP");
+        }).row("AAPL");
+
+        assertEquals("Trim 25% in the SIPP", watched.note());
+    }
+
+    /** A symbol with no watchlist row has no note to show, rather than an empty editable-looking one. */
+    @Test
+    void anUnwatchedSymbolHasNoNote() {
+        assertNull(service(repo -> { }).row("AAPL").note(),
+                "the stand-in entry carries no note, as it carries no triggers");
+    }
+
+    /** A row still waiting for its first prices keeps the plan written against it. */
+    @Test
+    void anUnpricedRowStillCarriesItsNote() {
+        Row r = service(repo -> {
+            repo.add("BRANDNEW", null, null, null, null);
+            repo.updateNote("BRANDNEW", "Buy a starter position under 40");
+        }).row("BRANDNEW");
+
+        assertTrue(r.missingData());
+        assertEquals("Buy a starter position under 40", r.note());
+    }
 }

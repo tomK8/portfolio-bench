@@ -23,7 +23,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * screen and alert never disagree. Each firing is deduplicated <em>once per day per symbol per
  * trigger</em> using a KV set of {@code SYMBOL|TRIGGER|yyyy-MM-dd} keys — so a spike that keeps
  * qualifying all afternoon mails you once, not every tick. All of a tick's new firings are
- * batched into a single email to avoid a flurry.
+ * batched into a single email to avoid a flurry. A symbol with a note has it printed once beneath
+ * its own firings — the whole reason to write one is to be told the plan at the moment the signal
+ * arrives, rather than having to open the tab to remember it.
  *
  * <p>The fired-set is only persisted after a successful send, so a mail failure re-attempts on
  * the next tick rather than silently dropping the alert. Stale keys (prior days) are pruned each
@@ -34,6 +36,9 @@ public class WatchlistAlertJob {
     private static final Logger log = LoggerFactory.getLogger(WatchlistAlertJob.class);
 
     static final String FIRED_KEY = "watchlist_alerts_fired";
+
+    /** Indent, so a note reads as attached to the lines above it rather than as another signal. */
+    private static final String NOTE_PREFIX = "    \u21b3 ";
 
     private final WatchlistService watchlistService;
     private final AlertNotifier notifier;
@@ -95,8 +100,10 @@ public class WatchlistAlertJob {
         }
 
         List<String> newLines = new ArrayList<>();
+        int signals = 0;                                   // note lines are not signals (see subject)
         Set<String> updated = new LinkedHashSet<>(firedToday);
         for (Row r : view.rows()) {
+            int before = newLines.size();
             if (r.nearHigh()) {
                 String key = r.symbol() + "|HIGH|" + today;
                 if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeHigh(r));
@@ -113,6 +120,13 @@ public class WatchlistAlertJob {
                 String key = r.symbol() + "|BELOW|" + today;
                 if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeLevel(r, false));
             }
+            signals += newLines.size() - before;
+            // The note goes under the symbol's firings, once — it is the plan for the signal, not
+            // for one trigger of it, and a name that fires on both the near-high and the move does
+            // not want the same sentence printed twice. Keyed off nothing: the dedup above decides
+            // what is in this email, so a symbol whose only trigger was already mailed today adds
+            // no lines here and gets no note either.
+            if (newLines.size() > before && noteOf(r) != null) newLines.add(NOTE_PREFIX + noteOf(r));
         }
 
         if (newLines.isEmpty()) {
@@ -120,15 +134,20 @@ public class WatchlistAlertJob {
             return;
         }
 
-        String subject = "Watchlist alert: " + newLines.size()
-                + (newLines.size() == 1 ? " signal" : " signals");
+        String subject = "Watchlist alert: " + signals + (signals == 1 ? " signal" : " signals");
         String body = String.join("\n", newLines)
                 + "\n\n— portfolio-bench watchlist, " + today;
         if (notifier.notify(subject, body)) {
             kv.putStringSet(FIRED_KEY, updated);
         } else {
-            log.warn("Watchlist alert email not sent ({} signal(s)); will retry next tick", newLines.size());
+            log.warn("Watchlist alert email not sent ({} signal(s)); will retry next tick", signals);
         }
+    }
+
+    /** The symbol's note, or null when none is written — blank text is not a note. */
+    private static String noteOf(Row r) {
+        String n = r.note();
+        return (n == null || n.isBlank()) ? null : n.trim();
     }
 
     private static String describeHigh(Row r) {

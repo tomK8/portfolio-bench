@@ -286,6 +286,12 @@ PUBLIC_TABLES = [
     "watchlist",
 ]
 
+# Columns dropped from an otherwise-verbatim public table. A threshold is a published-looking
+# number about an instrument; the watchlist note is the owner's own intention in their own words
+# ("trim half above 480"), which no amount of randomising the figures would anonymise. Blanked
+# rather than the table omitted - the Watchlist tab still needs its rows.
+BLANKED_COLUMNS = {"watchlist": ["note"]}
+
 # Position data: rebuilt with synthetic figures. Columns listed are regenerated;
 # everything else (prices, FX rates, currencies, dates, statuses, references) is verbatim.
 SYNTH_TABLES = {
@@ -471,11 +477,17 @@ def build_database(source, out, intraday_days, log):
             if table == "price_intraday":
                 where = f" WHERE ts >= '{cutoff}'"
             rows = list(src.execute(f"SELECT {collist} FROM {table}{where}"))
+            blanked = [c for c in BLANKED_COLUMNS.get(table, []) if c in cols]
+            if blanked:
+                idx = [cols.index(c) for c in blanked]
+                rows = [[None if i in idx else v for i, v in enumerate(r)] for r in rows]
             if rows:
                 marks = ",".join("?" * len(cols))
                 dst.executemany(f"INSERT INTO {table} ({collist}) VALUES ({marks})", rows)
             dst.commit()
             note = f"  (pruned to {intraday_days}d)" if where else ""
+            if blanked:
+                note += f"  (blanked: {', '.join(blanked)})"
             log(f"  {table:24s} {len(rows):>7,} rows{note}")
 
         log("")

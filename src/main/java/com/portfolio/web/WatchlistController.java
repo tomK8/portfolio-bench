@@ -24,7 +24,8 @@ import java.util.concurrent.Executors;
 
 /**
  * The volatility-trading watchlist: a user-maintained set of symbols (owned or not) with the
- * live data needed to time a trim/rebuy, plus per-symbol alert thresholds.
+ * live data needed to time a trim/rebuy, plus per-symbol alert thresholds and the free-text note
+ * that says what to do when one of them fires.
  *
  * <p>Reads ({@code GET /watchlist}, {@code GET /watchlist/series}) are instant — they render
  * whatever prices/fundamentals are already cached. Adding a symbol kicks a background backfill
@@ -36,6 +37,9 @@ import java.util.concurrent.Executors;
 public class WatchlistController {
 
     private static final Logger log = LoggerFactory.getLogger(WatchlistController.class);
+
+    /** Longest note accepted — see {@link #parseNote}. */
+    static final int MAX_NOTE_CHARS = 500;
 
     private final WatchlistService watchlistService;
     private final WatchlistRepository watchlistRepo;
@@ -128,6 +132,26 @@ public class WatchlistController {
                 parsePct(movePct, "move threshold"),
                 parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
         watchlistAlertJob.clearFiredFor(symbol);   // a corrected target re-arms same-day
+        return watchlistService.view(listOrFirst(list));
+    }
+
+    /**
+     * The per-symbol note — what to do when this name's alert fires. Free text; nothing parses it.
+     *
+     * <p>Like the thresholds it is <b>global to the symbol</b> (one row however many lists hold
+     * it), and for the same reason: there is one set of triggers and one email, so a note that
+     * differed per tab could contradict the signal it is advice about.
+     *
+     * <p>Unlike a threshold edit this does <b>not</b> re-arm today's alerts. The dedup exists so a
+     * changed <em>setting</em> can fire fresh; rewording the plan changes nothing about where the
+     * price is, and re-arming would re-mail a signal already sent for the same levels.
+     */
+    @PostMapping("/watchlist/note")
+    @ResponseBody
+    public WatchlistView note(@RequestParam("symbol") String symbol,
+                              @RequestParam(name = "note", required = false) String note,
+                              @RequestParam(name = "list", required = false) Long list) {
+        watchlistRepo.updateNote(symbol, parseNote(note));
         return watchlistService.view(listOrFirst(list));
     }
 
@@ -306,6 +330,22 @@ public class WatchlistController {
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(name + " '" + s + "' is not a number.");
         }
+    }
+
+    /**
+     * A note is free text, so the only rule is a length cap — long enough for a sentence or two of
+     * instruction, short enough to read in an email that may carry a dozen of them. Over the cap is
+     * refused rather than truncated: silently losing the end of a plan is worse than being told to
+     * shorten it. Blank is passed straight through; the repository stores it as "no note".
+     */
+    private static String parseNote(String s) {
+        if (s == null) return null;
+        String trimmed = s.trim();
+        if (trimmed.length() > MAX_NOTE_CHARS) {
+            throw new IllegalArgumentException("Note must be " + MAX_NOTE_CHARS
+                    + " characters or fewer (was " + trimmed.length() + ").");
+        }
+        return trimmed;
     }
 
     /** Parse a price level: blank → null (disabled); rejects negatives; strips any currency prefix. */

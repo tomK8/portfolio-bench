@@ -122,13 +122,16 @@ test('isDefault recognises the shipped set and nothing else', () => {
     assert.equal(WlColumns.isDefault([]), false);
 });
 
-test('the default set is exactly the columns the watchlist shipped with', () => {
-    // Guards the promise that turning on multi-list changed nobody's existing table.
+test('the default set is the columns the watchlist shipped with, plus the note', () => {
+    // Guards the promise that turning on multi-list changed nobody's existing table. The note is
+    // the one later addition: it joins at the end, and the repository's one-shot backfill is what
+    // puts it into the layouts that were saved before it existed.
     assert.deepEqual(WlColumns.DEFAULTS, [
         'price', 'todayPct', 'pct2d', 'pct3d', 'pct5d', 'pct30d',
         'pctFromHigh', 'pctFromLow',
         'vol5d', 'vol10d', 'vol30d', 'vol1y',
         'trailingPe', 'position', 'gain',
-        'thrHigh', 'thrMove', 'thrAbove', 'thrBelow'
+        'thrHigh', 'thrMove', 'thrAbove', 'thrBelow',
+        'note'
     ]);
 });

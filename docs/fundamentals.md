@@ -199,13 +199,13 @@ any row younger than 20 hours, so restarts cost nothing, and it runs *after* the
 the same startup daemon — the reconciliation needs that row cached first, and two daemons would
 race with the loser skipping rather than waiting.
 
-## The unit gate: which ratios may be divided at all
+## The unit gate: which figures may be compared at all
 
 A ratio is trustworthy only when its two sides share a currency **and** a unit scale. Yahoo
 checks neither, and the two sides come from different halves of the payload:
 
-- **market side** — `price`, `marketCap`, `enterpriseValue`, `bookValue`: the quote currency's
-  **major** unit, except `price`, which is the quote currency as quoted (pence on a `GBp` line).
+- **market side** — `price`, `marketCap`: the quote currency's **major** unit, except `price`,
+  which is the quote currency as quoted (pence on a `GBp` line).
 - **statement side** — `totalRevenue`, `ebitda`, `totalDebt`, `totalCash`: `financialCurrency`.
 
 `financialCurrency` is now captured, and `comparable()` is the single test. `GBp` and `GBP` count
@@ -221,7 +221,89 @@ about.
 | `priceToSalesTrailing12Months` | market cap (major quote) ÷ revenue (statement) | Gated on currency |
 | `enterpriseToEbitda` | EV (major quote) ÷ EBITDA (statement) | Gated on currency **and** EBITDA > 0 |
 | `netDebtToEbitda` | both from `financialData` | **Ungated** — one currency by construction |
+| `debtToEquity` | both from `financialData` | Ungated, same reason — but it is a **percentage**, see below |
 | margins, ROE, ROA, FCF margin | both from `financialData` | Ungated, same reason |
+| `enterpriseValue` | market cap (major quote) **+** net debt (statement) | Gated on currency — an amount, see below |
+| `bookValue` | per share, off the **statements** | Gated on currency, with the P/B it is the denominator of |
+
+### Two of the gated figures are amounts, not ratios
+
+`enterpriseValue` and `bookValue` were left ungated on the argument that "a currency mismatch
+does not make an amount untrue, only the division it feeds". That argument is wrong for both of
+them, and in two different ways.
+
+**Enterprise value is itself a sum across the gate.** Yahoo builds it as market cap **plus** net
+debt and converts neither side, so on a mismatched row it adds kroner to dollars. It is exactly
+reproducible (2026-10-14 fetch):
+
+| Symbol | Yahoo's EV | market cap | + net debt | sum | gap |
+|---|---|---|---|---|---|
+| NVO | 263,676,936,192 | 168,536,670,208 USD | 95,144,992,768 **DKK** | 263,681,662,976 | 0.002% |
+| AZN | 211,963,953,152 | 189,737,811,968 GBP | 27,381,999,104 **USD** | 217,119,811,072 | 2.4% |
+| BP. | 148,145,618,944 | 94,807,523,328 GBP | 35,467,997,184 **USD** | 130,275,520,512 | 13.7% |
+
+A sum of two currencies is not an amount in either of them, so no currency symbol in front of it
+is true — and `fmtMarketCap` was putting the quote currency's there. On some rows it is worse
+than mis-denominated and no FX repairs it at all: **ASML's EV is 36.65T against its own 658bn
+market cap** (56×, the figure that prompted this), and **TSM's is +16.03T on a net cash
+position**, where the honest answer is below the market cap rather than seven times above it.
+The same mismatch already withheld the EV/EBITDA built on it; now the numerator falls with its
+ratio.
+
+**Book value per share is the P/B's denominator, and on a mismatched row the P/B is gone.** It
+is shown for one stated reason — "a recomputed ratio nobody can check is still taken on trust" —
+so where the ratio is withheld the denominator audits nothing, while still asserting a currency
+the figure is not in (`'priceMajor'` labels it in the *quote* currency's major unit). Nor can it
+be rescued by relabelling it to `financialCurrency`, because on those rows it reconciles in
+neither currency:
+
+- **ASML**: 1.1414 × 384.1m shares implies **438m** of equity. The `debtToEquity` on the same row
+  puts 1.98bn of debt at 9.09% of equity, i.e. **21.8bn** — a factor of 50 apart, from two fields
+  of the same payload.
+- **TSM**: 4.85 against a $444 ADR price. Its own Taipei line reports 248.1 TWD (≈ $7.8) per
+  *ordinary* share, and an ADR is five of them, so the figure is neither per ADR nor in the
+  quote currency.
+- It is not even stable: AAPL's 7.36 was identical across the 13 and 14 October fetches while
+  ASML's moved 1.1457 → 1.1414. A filed balance-sheet figure does not change overnight.
+
+Both are withheld with their own sentence rather than the ratio one — "Yahoo builds enterprise
+value by adding net debt in EUR to a market cap in USD without converting", not "this ratio
+divides two currencies" — because the reader is owed the actual defect. `putOrExclude` grew an
+overload taking the reason for exactly this; the *test* is unchanged and still lives in one
+place.
+
+This is the open item from the previous round ("withholding an amount on the same evidence that
+withholds a ratio would need a cross-check against market cap that does not exist yet") closed
+the other way: **no cross-check against market cap is needed, because the currency mismatch is
+already the evidence.** A threshold on EV ÷ market cap would have been the magic number this
+file rejects for BRK.B's P/B; the mismatch is a fact the row states about itself.
+
+### Debt / Equity is in percentage points, and was shown as a multiple
+
+Yahoo's `debtToEquity` is **78.445 for a company whose debt is 0.78× its equity**. The panel
+published it through the `'ratio'` type as a bare `78.44`, directly below a Net Debt / EBITDA
+that genuinely is a multiple — so ASML read `9.09` where its debt is 9.09% of equity, and LLY
+read `162.1` for 1.6×.
+
+It is a percentage, and that is measurable on the row's own figures rather than asserted:
+`totalDebt ÷ (bookValue × sharesOutstanding) × 100` reproduces it across the same-currency
+universe —
+
+| Symbol | Yahoo's `debtToEquity` | total debt ÷ (book value × shares) |
+|---|---|---|
+| AMAT | 28.666 | 28.666% |
+| MSFT | 29.118 | 29.123% |
+| AAPL | 78.445 | 78.523% |
+| KLAC | 96.880 | 97.034% |
+| MU | 3.743 | 3.741% |
+
+It is rendered as the percentage it is (`9.09%`) rather than divided into a multiple, for the
+reason the book value carries four decimals: dividing by 100 and rounding to two decimals makes
+ASML's 9.09% and a peer's 9.99% both read `0.09×`, and the low end of this column is where the
+comparison is doing work. The type is `'pctPoints'` — a sibling of `'pct'`, which carries a
+*fraction* (margins, yields) and multiplies by 100. Converting in the fetcher instead would have
+restated the feed's own figure in the stored blob and made every row written before the deploy
+render as 7844%.
 
 ### P/B was wrong by exactly 100× on every London line
 
@@ -287,9 +369,14 @@ had been labelling all of them with the quote currency:
 |---|---|---|---|
 | As quoted | `price`, `targetMeanPrice`, 52-week high/low, moving averages | quote currency, as quoted — **pence** on a GBp line | `fmtPrice`, unchanged (it was already right) |
 | Market side, bulk | `marketCap`, `enterpriseValue` | quote currency's **major** unit | `'cap'` → `fmtMarketCap`, which now normalises GBp → GBP |
+| Statement side, per share | `bookValue` | `financialCurrency`, major unit | `'priceMajor'` — and shown only where that *is* the quote currency, see the gate above |
 | Statement side | revenue, EBITDA, net income, debt, cash, OCF, levered FCF, net debt | `financialCurrency` | `'capFiled'` → `fmtMarketCap(v, filedCurrency(row))` |
 | Filing side | `operatingIncomeTtm` | the unit the **filing** states, which Yahoo does not supply | `'capEdgar'` → `fmtMarketCap(v, labels.operatingUnit)` |
 | Not an amount | `sharesOutstanding` | none — it is a **count of things** | `'shares'` → `fmtCount`, the same T/B/M scaling with no symbol |
+
+`enterpriseValue` belongs to the second class only on a row whose statements are in the quote
+currency; where they are not, Yahoo has already added two currencies into it and it is withheld
+rather than labelled — see the gate above.
 
 The last row is the one that was wrong for longest and read as an outright mistake: shares
 outstanding borrowed the `'cap'` type, so KLAC's 1,305,006,492 shares published as **`$1.31B`**.
@@ -406,6 +493,31 @@ mistake again: two figures that do not belong in one arithmetic. So the figure s
 and the panel discloses the clock — a muted `prev. close` beside the amount, the measurement in
 its tooltip, and the same note on EV/EBITDA, which is built on the same stale numerator.
 
+### …and the market cap is priced at the last fetch, not at the quote above it
+
+The same question arrives from the other direction in the watchlist popup, where a **live** quote
+sits in the header above a fundamentals block that is a stored snapshot. Dividing the one by the
+other is the natural way to read a share count out of the screen, and on 2026-10-14 it gave ASML
+**391.5m shares against the 384.1m its own Shares Outstanding row states** — which reads as the
+market cap being built on a stale share count. It is not: the cap was priced at $1,750.24 the
+previous evening, and 672.27bn ÷ 1,750.24 is 384.1m exactly.
+
+`marketCap ÷ sharesOutstanding` reproduces the row's **own stored price** to the cent on AAPL
+(345.8450), KLAC (183.0950), AMAT (454.6000), MSFT (540.0700) and ASML (1712.2900) — and to the
+cent in *pounds* on the pence-quoted BA., BATS and AZN, the familiar 100×. So the cap is that
+price × Yahoo's share count and nothing else, which is why naming the price is enough to explain
+any share count read back out of it. The popup therefore carries a muted `at $1,712.29` beside
+the amount, the same device as the EV's `prev. close`.
+
+Novo Nordisk is the one row where the two figures genuinely disagree rather than merely differing
+in clock: its market cap covers the A and B shares together (4.41bn) while `sharesOutstanding` is
+the listed B class alone (3.34bn). That is named in the tooltip, not corrected — the cap is right
+and the share count is right, and they answer different questions.
+
+What is *not* fixed is Yahoo's share count itself being a little stale against the register
+(384.1m where ASML's own buyback has taken it to roughly 382m). That needs a second source; it is
+not something the row can tell about itself.
+
 ## Still open
 
 - **BRK.B's P/B is 0.000966**, because Yahoo's `bookValue` for it is 522,225.9 — the Class **A**
@@ -422,12 +534,12 @@ its tooltip, and the same note on EV/EBITDA, which is built on the same stale nu
   numbers, which is as far as the feed allows: Yahoo divides TTM income by a trailing equity
   base it does not publish. It is applied consistently across symbols — comparable, which is
   what this screen is for — but it will not reconcile against the P/B on its own row.
-- **`enterpriseValue` is still shown for currency-mismatched rows** as a bulk amount, even where
-  the EV/EBITDA built from it is withheld. It is labelled in the quote currency's major unit,
-  which is right for the ordinary case, but ASML's is corrupt (39.68T against a 714.37B market
-  cap) and no currency makes it true. Withholding an *amount* on the same evidence that
-  withholds a *ratio* would need a cross-check against market cap that does not exist yet. The
-  separate question of *when* it is priced is answered below.
+- **Yahoo's `sharesOutstanding` is its own, and can lag the register.** ASML's 384.1m against a
+  real count nearer 382m after the latest buyback. Everything on the row is internally
+  consistent with it — the market cap is exactly that count × the fetched price — so nothing
+  here contradicts anything else, and a correction would need a second source (EDGAR's
+  `dei:EntityCommonStockSharesOutstanding` for US filers, nothing for the rest). Left as Yahoo's
+  figure, which is what the column claims to be.
 
 ## Rows outside the fetch universe keep their stale blob
 

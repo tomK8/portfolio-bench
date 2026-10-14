@@ -339,12 +339,33 @@ public class YahooQuoteSummaryFetcher {
             putOrExclude(extra, excluded, "enterpriseToEbitda", evEbitda,
                     comparable, currency, finCurrency);
         }
-        putIf(extra, "enterpriseValue", num(dks, "enterpriseValue"));
+        // Enterprise value is gated on the same evidence as the EV/EBITDA above it, because
+        // Yahoo builds it by *adding* two currencies rather than dividing them. Measured on the
+        // 2026-10-14 fetch: NVO's EV of 263,676,936,192 against a market cap of
+        // 168,536,670,208 (USD) plus a net debt of 95,144,992,768 (DKK) = 263,681,662,976 —
+        // agreement to 0.002%, with the kroner added to the dollars unconverted. AZN, BP. and
+        // SKHY reproduce the same sum within 1%. On some rows it is worse than mis-denominated:
+        // ASML's EV is 36.65T against its own 658bn market cap, and TSM's is +16.03T on a net
+        // *cash* position. No currency makes any of that true, so the amount is withheld with
+        // its reason rather than published under a currency symbol it does not belong to.
+        putOrExclude(extra, excluded, "enterpriseValue", num(dks, "enterpriseValue"), comparable,
+                "Yahoo builds enterprise value by adding net debt in " + finCurrency
+                        + " to a market cap in " + currency + " without converting either, so "
+                        + "this amount is a sum of two currencies");
         // The P/B denominator, kept so the recomputed ratio is auditable on the row itself —
-        // the same reason netIncomeToCommon is stored beside the trailing P/E. Ungated: it is
-        // an amount rather than a ratio, so a currency mismatch does not make it untrue, only
-        // the division it feeds. Market-side, in the quote currency's major unit.
-        putIf(extra, "bookValue", bookValue);
+        // the same reason netIncomeToCommon is stored beside the trailing P/E. Gated with the
+        // ratio it is the denominator of: when the statements are in another currency the P/B
+        // above is withheld, and a denominator with no ratio to reproduce audits nothing while
+        // still asserting a currency the figure is not in. It cannot be rescued by relabelling
+        // it either — on a mismatched row it reconciles in neither currency: ASML's 1.1414
+        // against 384.1m shares implies 438m of equity, while the debtToEquity on the same row
+        // puts 1.98bn of debt at 9.09% of equity, i.e. 21.8bn. And it is not even stable —
+        // AAPL's 7.36 was identical across the 13 and 14 October fetches while ASML's moved
+        // 1.1457 -> 1.1414, which a filed balance-sheet figure does not do.
+        putOrExclude(extra, excluded, "bookValue", bookValue, comparable,
+                "book value per share is filed in " + finCurrency + " while this line is quoted "
+                        + "in " + currency + ", so it is not the figure the price divides by — "
+                        + "the P/B it is the denominator of is withheld on the same evidence");
         // Cash flow (TTM)
         putIf(extra, "operatingCashflow", ocfTtm);
         putIf(extra, "freeCashflow", fcfTtm);
@@ -621,13 +642,25 @@ public class YahooQuoteSummaryFetcher {
     private static void putOrExclude(Map<String, BigDecimal> extra, Map<String, String> excluded,
                                      String key, BigDecimal value, boolean comparable,
                                      String quoteCurrency, String financialCurrency) {
+        putOrExclude(extra, excluded, key, value, comparable,
+                "statements are in " + financialCurrency + " but the line is quoted in "
+                        + quoteCurrency + ", so this ratio divides two currencies");
+    }
+
+    /**
+     * The same gate for a field whose reason is not "this ratio divides two currencies" — an
+     * <i>amount</i> Yahoo itself built by adding two currencies together, say. The test is the
+     * same one; only the sentence the panel shows differs.
+     */
+    private static void putOrExclude(Map<String, BigDecimal> extra, Map<String, String> excluded,
+                                     String key, BigDecimal value, boolean comparable,
+                                     String reason) {
         if (value == null) return;
         if (comparable) {
             extra.put(key, value);
             return;
         }
-        excluded.put(key, "statements are in " + financialCurrency + " but the line is quoted in "
-                + quoteCurrency + ", so this ratio divides two currencies");
+        excluded.put(key, reason);
     }
 
     /**

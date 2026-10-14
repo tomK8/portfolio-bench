@@ -4303,9 +4303,9 @@
                 { title: 'Valuation', fields: [
                     ['enterpriseToEbitda', 'EV/EBITDA', 'ratio', 'Enterprise Value ÷ EBITDA (TTM). Measures how expensive the business is relative to cash earnings before interest, taxes, depreciation and amortisation. Lower = cheaper; negative means EBITDA is negative. Built on the same previous-close enterprise value as the row below, so it lags today\'s price by a session — see that tooltip.', true, 'ev-ebitda'],
                     ['priceToBook', 'P/B', 'ratio', 'Price ÷ Book Value per share. Compares market cap to net assets on the balance sheet. Below 1 may indicate undervaluation; most meaningful for asset-heavy businesses and financials. Recomputed here rather than read: Yahoo divides the quoted price by the filed book value with no unit handling, which on a pence-quoted London line divides pence by pounds and inflated every UK ratio exactly 100× (REL published at 3676 against a real 36.8). The denominator is shown below so the division can be checked on this row.', false, 'pb'],
-                    ['bookValue', 'Book Value / share', 'priceMajor', 'Net assets per share, in the quote currency\'s major unit — pounds on a pence-quoted line, which is the whole reason the P/B above is recomputed instead of taken from the feed. It is the denominator of that ratio, so P/B = price ÷ this, with the price converted to the same major unit first.', false, 'pb'],
+                    ['bookValue', 'Book Value / share', 'priceMajor', 'Net assets per share, in the quote currency\'s major unit — pounds on a pence-quoted line, which is the whole reason the P/B above is recomputed instead of taken from the feed. It is the denominator of that ratio, so P/B = price ÷ this, with the price converted to the same major unit first. Shown only where the statements are filed in the quote currency: where they are not, the P/B above is withheld and this figure reconciles in neither currency — ASML\'s 1.1414 against 384.1m shares implies 438m of equity, while the Debt / Equity on the same row puts 1.98bn of debt at 9.09% of it, i.e. 21.8bn — so the denominator is withheld with the ratio it serves.', false, 'pb'],
                     ['priceToSalesTrailing12Months', 'P/S (TTM)', 'ratio', 'Price ÷ Revenue per share (trailing 12 months). Useful for loss-making companies where P/E is unavailable. Lower values mean you are paying less per unit of revenue.', false, 'ps'],
-                    ['enterpriseValue', 'Enterprise Value', 'cap', 'Market cap + total debt − cash: the theoretical takeover price of the whole business, independent of capital structure. Yahoo prices the equity half of it at the PREVIOUS CLOSE while the market cap on this row is live, so on a day the shares have moved the two do not reconcile — KLAC showed EV $258.42B against a market cap of $262.02B with $1.25B of net debt outstanding, which is the clock rather than an error. Measured: EV − net debt reproduces the previous close\'s market cap to the cent on AAPL, MSFT, AVGO, AMZN and TSLA, and the EV itself did not move at all between two fetches 2.7% apart in price. It also carries whatever else Yahoo puts in it — minority interest, preferred — so it is not exactly market cap + net debt on every row either: WMT lands 0.8% above that sum, INTC 2% below.', true, 'enterprise-value', null, { text: 'prev. close', title: 'Yahoo prices the equity half of enterprise value at the previous close, so this figure lags the market cap above it by one session.' }]
+                    ['enterpriseValue', 'Enterprise Value', 'cap', 'Market cap + total debt − cash: the theoretical takeover price of the whole business, independent of capital structure. Yahoo prices the equity half of it at the PREVIOUS CLOSE while the market cap on this row is live, so on a day the shares have moved the two do not reconcile — KLAC showed EV $258.42B against a market cap of $262.02B with $1.25B of net debt outstanding, which is the clock rather than an error. Measured: EV − net debt reproduces the previous close\'s market cap to the cent on AAPL, MSFT, AVGO, AMZN and TSLA, and the EV itself did not move at all between two fetches 2.7% apart in price. It also carries whatever else Yahoo puts in it — minority interest, preferred — so it is not exactly market cap + net debt on every row either: WMT lands 0.8% above that sum, INTC 2% below. Withheld entirely where the statements are filed in another currency, because there Yahoo adds the two halves without converting: NVO\'s 263.68bn is its 168.54bn USD market cap plus 95.14bn of DKK net debt, agreeing to 0.002%, and ASML\'s 36.65T sits against its own 658bn market cap. No currency symbol makes a sum of two currencies true.', true, 'enterprise-value', null, { text: 'prev. close', title: 'Yahoo prices the equity half of enterprise value at the previous close, so this figure lags the market cap above it by one session.' }]
                 ]},
                 { title: 'Cash Flow (TTM)', noFinancial: true, fields: [
                     ['operatingCashflow', 'Operating Cash Flow', 'capFiled', 'Cash generated by core business operations over the trailing 12 months, before investing or financing activities. A more reliable earnings proxy than net income for many businesses.', false, 'operating-cash-flow'],
@@ -4322,7 +4322,7 @@
                 { title: 'Balance Sheet / Leverage', noFinancial: true, fields: [
                     ['netDebtToEbitda', 'Net Debt / EBITDA', 'ratio', 'Net Debt ÷ EBITDA. Number of years of operating earnings needed to repay net debt. Below 2× is conservative; above 4× signals high leverage. Negative = the company holds more cash than debt.', false, 'net-debt-ebitda'],
                     ['netDebt', 'Net Debt', 'capFiled', 'Total debt minus cash and cash equivalents. Negative means the company has a net cash position.', false, 'net-debt'],
-                    ['debtToEquity', 'Debt / Equity', 'ratio', 'Total debt ÷ shareholders\' equity (as a ratio). Higher values mean the company relies more on debt financing, increasing financial risk.', false, 'debt-equity'],
+                    ['debtToEquity', 'Debt / Equity', 'pctPoints', 'Total debt ÷ shareholders\' equity, which Yahoo states in PERCENTAGE POINTS rather than as a multiple: its 78.445 for Apple is 78.4%, i.e. 0.78×, not 78×. Measured against this screen\'s own figures — AMAT\'s 28.666 is exactly its 7.35bn of total debt over a book value of 32.291 × 793.6m shares, and AAPL (78.445 against 78.52), MSFT (29.118 / 29.123) and KLAC (96.88 / 97.03) reproduce their own to within 0.2%. Above 100% means debt exceeds equity. Both sides come off the statements, so it needs no currency gate.', false, 'debt-equity'],
                     ['totalCash', 'Total Cash', 'capFiled', 'Cash plus short-term investments held on the balance sheet.'],
                     ['totalDebt', 'Total Debt', 'capFiled', 'Total short- and long-term debt obligations.']
                 ]},
@@ -4553,6 +4553,13 @@
             var n = parseFloat(v);
             if (!isFinite(n)) return '—';
             if (type === 'pct') return (n * 100).toFixed(2) + '%';
+            // Already in percentage points, where 'pct' carries a fraction. Yahoo's
+            // debtToEquity is 78.445 for a company whose debt is 0.78× its equity, which the
+            // panel published as a bare "78.44" beside a Net Debt / EBITDA that really is a
+            // multiple. It is rendered as the percentage it is rather than divided into a
+            // multiple, because dividing loses the precision exactly where the column is read
+            // hardest: ASML's 9.09% and a peer's 9.99% are both "0.09×" at two decimals.
+            if (type === 'pctPoints') return n.toFixed(2) + '%';
             if (type === 'ratio') return n.toFixed(2);
             if (type === 'count') return n.toFixed(0);
             // A count big enough to need scaling — shares outstanding. Deliberately NOT 'cap':
@@ -8421,7 +8428,7 @@
          * so they are built-ins and offering a second copy here would be two columns of one fact.
          */
         var WL_FUND_TOP = {
-            marketCap: ['Market cap', 'cap', 'Share price × shares outstanding.'],
+            marketCap: ['Market cap', 'cap', 'Share price × shares outstanding, as Yahoo computes it — measured as an exact identity against this row\'s own figures on AAPL, KLAC, AMAT, MSFT and ASML. The price in it is the one at the last fundamentals fetch, NOT the live quote, so on a day the shares have moved the cap divided by the live price implies a share count the Shares Outstanding row disagrees with. The popup names the price its own cap is built on.'],
             forwardPe: ['Fwd P/E', 'ratio', 'Price ÷ a consensus earnings per share. Two things it does not say for itself. (1) The basis: consensus EPS is whatever the company guides, which for most large caps is a non-GAAP one that excludes share-based compensation and acquisition amortisation, so this is usually NOT comparable with the trailing P/E beside it — AVGO shows 46.3 trailing against 18.7 forward, and most of that collapse is the change of basis, not earnings growth. (2) The year: it is not "next twelve months", and not the year in progress either. Yahoo builds it from the consensus for the fiscal year AFTER the current one — on a live fetch it matched that estimate exactly on 11 of 13 symbols — so KLAC\'s is priced on the year ending June 2028 against a last reported year ending June 2026, while a December filer\'s is only a year out. The popup for a symbol names the year its own figure uses.'],
             pegRatio: ['PEG', 'ratio', 'Forward P/E ÷ an expected earnings growth rate. Below 1 is often read as growth being under-priced. Both halves need care: the numerator is the forward P/E beside it, so it carries the same non-GAAP consensus basis and does not tie to the trailing P/E; and Yahoo names neither the growth window nor whose estimate it is, so the denominator cannot be reproduced from anything else on this row. A ranking aid between symbols, not a figure to check.'],
             targetMeanPrice: ['Target', 'price', 'Mean of analysts\' 12-month price targets, in the instrument\'s own currency.'],
@@ -9025,6 +9032,32 @@
                      + 'company\'s fiscal calendar and the time of year.' });
         }
 
+        /**
+         * The price this row's market cap is priced at, as a muted suffix — 'at $1,712.29'.
+         *
+         * <p>The quote at the top of this popup is live; everything in the fundamentals block
+         * below it is a snapshot taken at the last fetch, and market cap is the one figure a
+         * reader will divide by that live price. Doing so on 14 October gave ASML 391.5m shares
+         * against the 384.1m its own Shares Outstanding row states, which reads as a wrong share
+         * count and is only the two clocks: the cap was priced at $1,750.24 the evening before.
+         *
+         * <p>Measured: marketCap ÷ sharesOutstanding reproduces this row's own stored price to
+         * the cent on AAPL, KLAC, AMAT, MSFT and ASML (and to the cent in *pounds* on the pence
+         * lines BA., BATS and AZN, the same 100× the rest of this panel handles). So the cap is
+         * that price × Yahoo's share count and nothing else — which is why naming the price is
+         * enough to explain any share count read back out of it.
+         */
+        function capPriceNote(q) {
+            if (q == null || q.price == null || q.marketCap == null) return '';
+            return snapNote({ text: 'at ' + fmtPrice(q.price, q.currency),
+                title: 'Yahoo\'s market cap is the share count below × the price at the last '
+                     + 'fundamentals fetch, shown here. The quote at the top of this popup is '
+                     + 'live and has moved since, so dividing the cap by it implies a different '
+                     + 'share count — that gap is the clock, not the count. (Novo Nordisk is the '
+                     + 'one row where the two genuinely differ: the cap covers the A and B '
+                     + 'shares together, while Shares Outstanding is the listed B class alone.)' });
+        }
+
         function renderWlFundamentals(symbol) {
             var body = document.getElementById('wl-fund-body');
             function render() {
@@ -9044,7 +9077,7 @@
                         wlKv('Forward P/E', fmtNumOrDash(q.forwardPe, 1) + fwdPeriodNote(q),
                              wlTopTip('forwardPe')) +
                         wlKv('PEG', fmtNumOrDash(q.pegRatio, 2), wlTopTip('pegRatio')) +
-                        wlKv('Market cap', q.marketCap == null ? '—' : fmtMarketCap(q.marketCap, q.currency),
+                        wlKv('Market cap', q.marketCap == null ? '—' : fmtMarketCap(q.marketCap, q.currency) + capPriceNote(q),
                              wlTopTip('marketCap')) +
                         wlKv('Target (mean)', q.targetMeanPrice == null ? '—' : fmtPrice(q.targetMeanPrice, q.currency),
                              wlTopTip('targetMeanPrice')) +

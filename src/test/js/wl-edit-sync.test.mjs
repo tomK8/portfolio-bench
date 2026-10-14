@@ -107,3 +107,50 @@ test('resolve preserves all four fields, not just the one edited', () => {
     const res = WL.resolve(staleRow, pending);
     assert.deepEqual(res.values, { high: '3', move: '5', above: '250', below: '99.5' });
 });
+
+// ---- the note: the same overlay, on text rather than a number --------------------------------
+test('noteDisplay folds null, undefined and blank into one absence', () => {
+    assert.equal(WL.noteDisplay(null), '');
+    assert.equal(WL.noteDisplay(undefined), '');
+    assert.equal(WL.noteDisplay('   '), '');
+    assert.equal(WL.noteDisplay('  Trim 25% in the SIPP  '), 'Trim 25% in the SIPP');
+});
+
+test('resolveNote shows the server note when nothing is pending', () => {
+    assert.deepEqual(WL.resolveNote({ note: 'Trim 25%' }, null),
+        { value: 'Trim 25%', confirmed: false });
+    assert.deepEqual(WL.resolveNote({ note: null }, undefined),
+        { value: '', confirmed: false });
+    assert.deepEqual(WL.resolveNote(null, null), { value: '', confirmed: false });
+});
+
+test('a just-saved note survives a render that has not caught up to it', () => {
+    // The stale-reload race, in text form: the reload's server-side read predates the note commit,
+    // so its row still carries the old plan. The overlay wins until a render echoes the new one.
+    const stale = { note: 'Trim 25%' };
+    assert.deepEqual(WL.resolveNote(stale, 'Trim half'), { value: 'Trim half', confirmed: false });
+
+    const echoed = { note: 'Trim half' };
+    assert.deepEqual(WL.resolveNote(echoed, 'Trim half'), { value: 'Trim half', confirmed: true });
+});
+
+test('clearing a note is itself a pending value, not an absence of one', () => {
+    // Saving "" must not read as "no overlay" — otherwise the server's old text comes straight back.
+    assert.deepEqual(WL.resolveNote({ note: 'Trim 25%' }, ''), { value: '', confirmed: false });
+    assert.deepEqual(WL.resolveNote({ note: null }, ''), { value: '', confirmed: true });
+});
+
+test('the note overlay is independent of the threshold overlay', () => {
+    // Two separate saves to two separate endpoints (a note edit deliberately re-arms no alerts), so
+    // neither resolver may read the other's field: one record for all five would have each write
+    // blank the other's pending value.
+    const row = { note: 'Trim 25%', highThresholdPct: 5, moveThresholdPct: 3,
+                  priceAbove: 105, priceBelow: null };
+    assert.deepEqual(WL.resolve(row, null).values,
+        { high: '5', move: '3', above: '105', below: '' });
+    assert.equal(WL.resolveNote(row, null).value, 'Trim 25%');
+    // A pending threshold save says nothing about the note, and vice versa.
+    assert.equal(WL.resolveNote(row, undefined).value, 'Trim 25%');
+    assert.deepEqual(WL.resolve(row, { high: '6', move: '3', above: '105', below: '' }).values,
+        { high: '6', move: '3', above: '105', below: '' });
+});

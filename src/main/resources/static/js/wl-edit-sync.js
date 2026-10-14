@@ -1,6 +1,6 @@
 /*
- * Watchlist inline-edit sync — the pure logic that keeps a just-saved (or in-progress) threshold
- * edit from being reverted by a stale full reload.
+ * Watchlist inline-edit sync — the pure logic that keeps a just-saved (or in-progress) inline edit
+ * (the four alert thresholds, and the note beside them) from being reverted by a stale full reload.
  *
  * The bug this exists to kill: the dashboard's /watchlist view is slow (FX + ledger + fundamentals,
  * ~1s+). A background reload (add-timer, Refresh, tab re-entry) issued around the same instant as a
@@ -59,6 +59,37 @@
         return '';
     }
 
+    /**
+     * The same optimistic-overlay bargain for the per-symbol note, kept separate from the four
+     * thresholds because it is a separate save (POST /watchlist/note, which deliberately does not
+     * re-arm the alerts) and the two must not be able to blank one another: a threshold save
+     * carries no note and a note save carries no thresholds, so one overlay holding all five would
+     * have each write erase the other's pending value.
+     *
+     * <p>Text, not a number — nothing is canonicalised but the absence: null, undefined and a
+     * blank string are one state ("no plan written"), which is what the empty input shows.
+     */
+    function noteDisplay(raw) {
+        if (raw === null || raw === undefined) return '';
+        var s = String(raw).trim();
+        return s;
+    }
+
+    /**
+     * What one row's note input should show, given any pending save for that symbol.
+     * Same rule as resolve(): the overlay wins until a render carries it back.
+     *
+     * @param row      the server row from this render's payload
+     * @param pending  the note string last saved for this symbol, or null/undefined if none
+     */
+    function resolveNote(row, pending) {
+        var server = noteDisplay(row && row.note);
+        if (pending !== null && pending !== undefined && noteDisplay(pending) !== server) {
+            return { value: noteDisplay(pending), confirmed: false };
+        }
+        return { value: server, confirmed: pending !== null && pending !== undefined };
+    }
+
     /** All four canonical display strings for a server row. */
     function rowThresholds(row) {
         return {
@@ -113,6 +144,8 @@
         thrDisplay: thrDisplay,
         rowDisplay: rowDisplay,
         rowThresholds: rowThresholds,
+        noteDisplay: noteDisplay,
+        resolveNote: resolveNote,
         savedThresholds: savedThresholds,
         equal: equal,
         resolve: resolve

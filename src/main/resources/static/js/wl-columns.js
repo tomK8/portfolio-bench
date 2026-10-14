@@ -38,7 +38,8 @@
         'pctFromHigh', 'pctFromLow',
         'vol5d', 'vol10d', 'vol30d', 'vol1y',
         'trailingPe', 'position', 'gain',
-        'thrHigh', 'thrMove', 'thrAbove', 'thrBelow'
+        'thrHigh', 'thrMove', 'thrAbove', 'thrBelow',
+        'note'
     ];
 
     function isPinned(key) {

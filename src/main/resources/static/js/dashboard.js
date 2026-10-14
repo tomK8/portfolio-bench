@@ -7599,6 +7599,7 @@
             wlReturnsLoaded = false;
             wlLoadedOk = false;
             wlPending = {};             // an unsaved edit belongs to the row it was typed in
+            wlNotePending = {};
             wlSetStatus('');
         }
 
@@ -7765,6 +7766,11 @@
         // The single writer of these fields is this client, so its own last save wins until it saves
         // again (or the save fails, or the page is reloaded).
         var wlPending = {};
+
+        // The same overlay for the note, kept separate: the two are separate saves to separate
+        // endpoints (a note edit deliberately does not re-arm the alerts), so one record holding
+        // both would have each write blank the other's pending value. Keyed by symbol → string.
+        var wlNotePending = {};
 
         var wlFullLoadInFlight = false;
         function loadWatchlist() {
@@ -7991,7 +7997,15 @@
             if (tbody) {
                 var trs = tbody.querySelectorAll('tr');
                 for (var j = 0; j < trs.length; j++) {
-                    if (trs[j].dataset.sym === sym) { trs[j].className = rowAlertClass(r); break; }
+                    if (trs[j].dataset.sym === sym) {
+                        trs[j].className = rowAlertClass(r);
+                        // The popup opens from this cached copy, so a save has to land on it too:
+                        // without this, clicking the row you have just edited shows the pre-save
+                        // values until the next full load — which for the note is the whole line
+                        // appearing or vanishing, not one number being stale.
+                        trs[j]._wlRow = r;
+                        break;
+                    }
                 }
             }
             return r;
@@ -8050,6 +8064,7 @@
             var body = new URLSearchParams(); body.set('symbol', sym);
             wlAddList(body);
             delete wlPending[sym];                          // gone — no overlay to defend
+            delete wlNotePending[sym];
             // Optimistically drop the row now so × feels instant; the reconcile confirms on success,
             // and a failure re-syncs from the server so a wrongly-removed row comes straight back.
             var tbody = document.querySelector('#watchlist-table tbody');
@@ -8213,6 +8228,38 @@
                     delete wlPending[sym];
                     var detail = err && err.message ? ' — ' + err.message : '';
                     wlSetStatus('Could not update ' + sym + detail + ' — try again.');
+                    loadWatchlist();
+                });
+        }
+
+        /**
+         * Save one symbol's note. Its own endpoint rather than a fifth field on the threshold save:
+         * POST /watchlist/note writes no triggers and clears no fired flags, so rewording a plan
+         * cannot re-mail a signal already sent for the same levels.
+         *
+         * The optimistic overlay is recorded before the request goes out, exactly as the threshold
+         * save does — a /watchlist reload issued around the same instant can read pre-commit and
+         * would otherwise put the old text back (see wl-edit-sync.js).
+         */
+        function saveWatchlistNote(sym, note) {
+            var body = new URLSearchParams();
+            body.set('symbol', sym);
+            body.set('note', note == null ? '' : note);
+            wlAddList(body);
+            wlNotePending[sym] = WlEditSync.noteDisplay(note);
+            fetch('/watchlist/note', { method: 'POST', body: body })
+                .then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                    return r.json();
+                })
+                .then(function (view) {
+                    wlPatchRowState(view, sym);            // refresh the row the popup opens from
+                    wlSetStatus('');
+                })
+                .catch(function (err) {
+                    delete wlNotePending[sym];              // it didn't persist — stop showing it
+                    var detail = err && err.message ? ' — ' + err.message : '';
+                    wlSetStatus('Could not save the note for ' + sym + detail + ' — try again.');
                     loadWatchlist();
                 });
         }
@@ -8418,7 +8465,11 @@
                 ['thrHigh', 'Near-hi %', 'Alert when within this % of the 52-week high'],
                 ['thrMove', 'Move %', 'Alert when |today\'s move| exceeds this %'],
                 ['thrAbove', 'Above', 'Alert when the price rises to or above this level (price\'s own currency)'],
-                ['thrBelow', 'Below', 'Alert when the price falls to or below this level (price\'s own currency)']
+                ['thrBelow', 'Below', 'Alert when the price falls to or below this level (price\'s own currency)'],
+                ['note', 'Note', 'What you have decided to do when this name\'s alert fires — free text, '
+                    + 'nothing reads or acts on it. It is one note per symbol, like the triggers beside it, '
+                    + 'and it is printed under that symbol\'s lines in the alert email, so the plan arrives '
+                    + 'with the signal instead of having to be remembered.']
             ]}
         ];
 
@@ -8524,6 +8575,24 @@
                 fmtSnapValue(v, type, r.currency, wlFundRow(r.symbol)) + '</td>';
         }
 
+        /**
+         * The columns whose cell is an <input> the user edits rather than a value we render.
+         * They opt out of sorting (there is nothing to compare) and they are the cells the poll
+         * must never overwrite while the caret is in one.
+         */
+        var WL_INPUT_COLS = { thrHigh: 1, thrMove: 1, thrAbove: 1, thrBelow: 1, note: 1 };
+
+        /**
+         * The note cell: the plan for when this symbol's alert fires. Full text in the tooltip as
+         * well as the box, because the box is one line wide and a plan is usually longer than that.
+         */
+        function wlNoteCell(r) {
+            var v = WlEditSync.resolveNote(r, wlNotePending[r.symbol]).value;
+            return '<td data-f="note"><input class="wl-note-input" data-sym="' + r.symbol +
+                '" type="text" placeholder="plan when it fires" value="' + escapeHtml(v) + '"' +
+                (v ? ' title="' + escapeHtml(v) + '"' : '') + '/></td>';
+        }
+
         function wlThrCell(r, kind, extraCls) {
             var thr = WlEditSync.resolve(r, wlPending[r.symbol]).values;
             return '<td><input class="wl-thr-input' + (extraCls || '') + '" data-sym="' + r.symbol +
@@ -8562,6 +8631,7 @@
                 case 'thrMove': return wlThrCell(r, 'move');
                 case 'thrAbove': return wlThrCell(r, 'above', ' wl-price-input');
                 case 'thrBelow': return wlThrCell(r, 'below', ' wl-price-input');
+                case 'note': return wlNoteCell(r);
                 default: return '<td class="na">—</td>';
             }
         }
@@ -8595,9 +8665,9 @@
             var html = '<tr><th data-sort="text">Symbol</th>';
             wlCols.forEach(function (key) {
                 var m = reg[key] || { label: key };
-                // The four alert inputs are not values, so they opt out of sorting the same way
-                // they always have — by carrying no data-sort.
-                var sortable = key.indexOf('thr') !== 0;
+                // The editable cells are inputs, not values, so they opt out of sorting the same
+                // way the four thresholds always have — by carrying no data-sort.
+                var sortable = !WL_INPUT_COLS[key];
                 // The label sits in a span of its own so it can wrap inside a width the CSS
                 // caps — a <th> in an auto-layout table ignores max-width, and without the cap a
                 // label like '% Held by Institutions' sets the whole column's width.
@@ -8657,6 +8727,17 @@
                 // Enter commits: the inputs aren't in a <form>, so blur (which fires change) is the save.
                 inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') this.blur(); });
             });
+            // The note saves on its own, to its own endpoint — a threshold save carries no note and
+            // this carries no thresholds, so neither can overwrite the other with a stale value.
+            // Absent when the column isn't in this list's layout; a layout change rebuilds the rows.
+            var noteInp = tr.querySelector('.wl-note-input');
+            if (noteInp) {
+                noteInp.addEventListener('change', function () {
+                    this.title = this.value.trim();       // the box is one line; the tooltip is the rest
+                    saveWatchlistNote(this.dataset.sym, this.value.trim());
+                });
+                noteInp.addEventListener('keydown', function (e) { if (e.key === 'Enter') this.blur(); });
+            }
             return tr;
         }
 
@@ -8686,6 +8767,16 @@
             });
         }
 
+        // Same rule as the thresholds: never touch the input the caret is in, and let a just-saved
+        // value stand until a render carries it back.
+        function wlPatchNote(tr, r) {
+            var inp = tr.querySelector('.wl-note-input');
+            if (!inp || document.activeElement === inp) return;
+            var v = WlEditSync.resolveNote(r, wlNotePending[r.symbol]).value;
+            inp.value = v;
+            inp.title = v;
+        }
+
         // Patch every cell of an existing row in place: fast cells + slow columns + inputs.
         function wlPatchRow(tr, r) {
             tr._wlRow = r;
@@ -8698,6 +8789,7 @@
             wlPatchGbpCell(tr, 'position', r.held ? r.positionValueGbp : null, false);
             wlPatchGbpCell(tr, 'gain', r.held ? r.gainGbp : null, true);
             wlPatchInputs(tr, r);
+            wlPatchNote(tr, r);
         }
 
         // Keyed reconciliation — the single render path for full loads, adds, removes and reorders.
@@ -8782,6 +8874,16 @@
             var today = r.todayPct == null ? '—' : (parseFloat(r.todayPct) * 100).toFixed(1) + '%';
             document.getElementById('wl-modal-sub').textContent =
                 (r.currentPrice == null ? '' : fmtPrice(r.currentPrice, r.currency) + '  ·  today ' + today);
+
+            // The plan for when this name's alert fires, if one is written. Read-only: the
+            // watchlist row is the single editor, and this popup also opens from Live, Holdings
+            // and the orders tables, for names that have no watchlist row to write a note to.
+            var noteEl = document.getElementById('wl-modal-note');
+            var note = WlEditSync.noteDisplay(r.note);
+            noteEl.style.display = note ? '' : 'none';
+            noteEl.innerHTML = note
+                ? wlTipLabel('Note', wlTip('note')) + '<span class="v">' + escapeHtml(note) + '</span>'
+                : '';
 
             var stats = document.getElementById('wl-modal-stats');
             stats.innerHTML = '';

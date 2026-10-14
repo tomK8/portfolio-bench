@@ -1428,6 +1428,14 @@
         html[data-theme="dark"] .wl-neg { color: #f87171; }
         .wl-thr-input { width: 3.2rem; font-size: 0.8rem; padding: 1px 3px; }
         .wl-price-input { width: 4.6rem; }
+        /* Wide enough for a short instruction, capped so one long plan can't set the whole
+           table's width. The full text is in the cell's title and in the popup. */
+        .wl-note-input { width: 11rem; font-size: 0.8rem; padding: 1px 3px; }
+        /* The popup's plan line: quiet, but the one thing on the row that is prose. */
+        .wl-plan { font-size: 0.85rem; margin: -0.25rem 0 0.6rem; padding: 0.3rem 0.5rem;
+                   border-left: 3px solid #1f77b4; background: rgba(31, 119, 180, 0.07); }
+        .wl-plan .k { color: #8a8f96; margin-right: 0.35rem; }
+        html[data-theme="dark"] .wl-plan { background: rgba(31, 119, 180, 0.14); }
         .wl-remove { color: #c0392b; cursor: pointer; border: 0; background: none; font-size: 1rem; line-height: 1; }
         .wl-actions { white-space: nowrap; }
         .wl-move { border: 0; background: none; cursor: pointer; font-size: 0.95rem; line-height: 1; color: #999; padding: 0 2px; }
@@ -3198,7 +3206,10 @@
         symbol's alert triggers inline: % from 52-wk high, |today's move|, and absolute price
         targets — an <b>Above</b> level (alerts when the price rises to or above it) and a
         <b>Below</b> level (alerts when it falls to or below it), in the price's own currency.
-        Leave any of them blank to disable that trigger. Email alerts fire once per day per signal
+        Leave any of them blank to disable that trigger. The <b>Note</b> beside them is what you
+        have decided to do when this name fires — free text, nothing acts on it, one note per
+        symbol however many lists it is in, and it is printed under that symbol's lines in the
+        alert email. Email alerts fire once per day per signal
         when SMTP is configured. Click a row
         for the price chart and fundamentals.
         Prices, momentum, short-horizon vol and row colour auto-refresh every 30s while this tab
@@ -4614,6 +4625,9 @@
     <div class="modal-box">
         <h3 id="wl-modal-title" style="margin-bottom: 0.15rem;">—</h3>
         <div id="wl-modal-sub" class="muted" style="font-size: 0.85rem; margin-bottom: 0.5rem;"></div>
+        <!-- The symbol's note. Read-only here: the watchlist row is the one editor, and this popup
+             also opens from Live/Holdings/orders for names that have no watchlist row to write to. -->
+        <div id="wl-modal-note" class="wl-plan" style="display: none;"></div>
         <div style="height: 360px;">
             <canvas id="wl-chart"></canvas>
         </div>

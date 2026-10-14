@@ -10,6 +10,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -104,5 +105,77 @@ class WatchlistRepositoryTest {
         }
         List<WatchlistRepository.Entry> all = repo.loadAll();
         assertTrue(all.stream().anyMatch(e -> e.symbol().equals("MSFT")));
+    }
+
+    // ---- the per-symbol note ---------------------------------------------------
+
+    @Test
+    void aNoteRoundTripsAndBlankMeansNoNote(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        repo.add("AAPL", null, null, new BigDecimal("250"), null);
+        assertNull(entry(repo, "AAPL").note(), "a symbol starts with no note");
+
+        repo.updateNote("AAPL", "  Trim 25% in the SIPP, keep the Dealing lot  ");
+        assertEquals("Trim 25% in the SIPP, keep the Dealing lot", entry(repo, "AAPL").note(),
+                "stored trimmed, so the row and the alert email read the same");
+
+        // Blank is an absence, not an empty string: the alert job asks whether there IS a note.
+        repo.updateNote("AAPL", "   ");
+        assertNull(entry(repo, "AAPL").note());
+        repo.updateNote("AAPL", null);
+        assertNull(entry(repo, "AAPL").note());
+    }
+
+    @Test
+    void addingAWatchedSymbolAgainKeepsItsNote(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        repo.add("NVDA", new BigDecimal("3"), null, null, null);
+        repo.updateNote("NVDA", "Sell 10 shares into any 5% pop");
+
+        // How a name joins a second list: the add box re-adds it, carrying thresholds but no note.
+        // The upsert must leave the note alone — erasing a written plan is not what adding a tab does.
+        long second = repo.createList("Chips");
+        repo.add("NVDA", new BigDecimal("4"), new BigDecimal("6"), null, null, second);
+
+        assertEquals("Sell 10 shares into any 5% pop", entry(repo, "NVDA").note());
+        assertEquals(0, new BigDecimal("4").compareTo(entry(repo, "NVDA").highThresholdPct()),
+                "the thresholds, unlike the note, are what an add restates");
+    }
+
+    @Test
+    void notingARemovedSymbolIsABenignNoOp(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        repo.add("TSLA", null, null, null, new BigDecimal("200"));
+        repo.remove("TSLA");
+        // Same delete/save race as the thresholds: × lands while the note input's blur-save is in
+        // flight. A throw would drive the client's error path and flap the deleted row back on screen.
+        assertDoesNotThrow(() -> repo.updateNote("TSLA", "buy the dip"));
+        assertFalse(repo.loadAll().stream().anyMatch(e -> e.symbol().equals("TSLA")),
+                "a no-op note update must not recreate the removed row");
+    }
+
+    @Test
+    void theNoteColumnIsAddedToSavedLayoutsOnceAndStaysRemovedWhenRemoved(@TempDir Path dir) {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dir);
+        KeyValueStore kv = new KeyValueStore(dir);
+        WatchlistRepository repo = new WatchlistRepository(cf, kv);
+        long list = repo.firstListId();
+        // A layout saved before the note existed: it names its own keys, so a column added later
+        // would never reach it (an uncustomised list renders WlColumns.DEFAULTS and gets it free).
+        repo.saveColumns(list, List.of("price", "todayPct", "thrAbove"));
+        kv.putBoolean(WatchlistRepository.NOTE_COLUMN_BACKFILLED_KEY, false);
+
+        new WatchlistRepository(cf, kv);                       // restart
+
+        assertEquals(List.of("price", "todayPct", "thrAbove", "note"), repo.columnsFor(list),
+                "the note joins at the end of a layout that predates it");
+
+        // Now the user takes it out again. The marker is why this sticks: guarding on "the layout
+        // doesn't list note" would put it back on every restart.
+        repo.saveColumns(list, List.of("price", "todayPct", "thrAbove"));
+        new WatchlistRepository(cf, kv);
+
+        assertEquals(List.of("price", "todayPct", "thrAbove"), repo.columnsFor(list),
+                "a column the user removed must not be resurrected by the next start");
     }
 }

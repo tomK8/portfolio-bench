@@ -38,9 +38,14 @@ import java.util.List;
  * taken from {@code watchlist}, which is the union across lists by construction, those two
  * consumers needed no change when lists arrived.
  *
+ * <p>The per-symbol <b>note</b> sits on {@code watchlist} beside the thresholds, for the same
+ * reason they do: it says what to do when <em>the alert</em> fires, and the alert is one setting
+ * per symbol however many lists show it. A per-list note could contradict the single email that
+ * actually goes out.
+ *
  * <p>Write paths that the dashboard triggers ({@link #add}, {@link #remove},
- * {@link #updateThresholds}) throw {@link IllegalStateException} on failure so the
- * {@code @ExceptionHandler} can surface it; the {@link #loadAll} read degrades to empty.
+ * {@link #updateThresholds}, {@link #updateNote}) throw {@link IllegalStateException} on failure
+ * so the {@code @ExceptionHandler} can surface it; the {@link #loadAll} read degrades to empty.
  */
 public class WatchlistRepository {
 
@@ -65,7 +70,8 @@ public class WatchlistRepository {
                 added_at           TEXT    NOT NULL,
                 display_order      INTEGER,
                 price_above        REAL,
-                price_below        REAL
+                price_below        REAL,
+                note               TEXT
             )""";
 
     private static final String CREATE_LIST_TABLE = """
@@ -115,6 +121,9 @@ public class WatchlistRepository {
     /** The list the pre-lists watchlist becomes on first start. Renameable like any other. */
     static final String DEFAULT_LIST_NAME = "Watchlist";
 
+    /** Set once the Note column has been added to the layouts that predate it (see below). */
+    static final String NOTE_COLUMN_BACKFILLED_KEY = "watchlist_note_column_backfilled";
+
     private final JdbcConnectionFactory connections;
     private final KeyValueStore keyValueStore;
 
@@ -126,6 +135,7 @@ public class WatchlistRepository {
             addColumnIfMissing(ddl, "display_order INTEGER");
             addColumnIfMissing(ddl, "price_above REAL");
             addColumnIfMissing(ddl, "price_below REAL");
+            addColumnIfMissing(ddl, "note TEXT");
             // Backfill any rows that predate the column so ordering is stable and non-null.
             ddl.execute("UPDATE watchlist SET display_order = rowid WHERE display_order IS NULL");
 
@@ -135,6 +145,7 @@ public class WatchlistRepository {
             ddl.execute(CREATE_MEMBER_INDEX);
             ddl.execute(CREATE_COLUMN_TABLE);
             migrateToLists(conn, ddl);
+            backfillNoteColumn(conn);
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise watchlist table", e);
         }
@@ -173,6 +184,30 @@ public class WatchlistRepository {
         }
     }
 
+    /**
+     * Put the Note column into every <em>stored</em> layout, exactly once.
+     *
+     * <p>A list that has never been customised renders {@code WlColumns.DEFAULTS}, so a new column
+     * reaches it for free. A customised one holds its own ordered keys and would never show a
+     * column added after it was saved — which is every list on a database that predates the note.
+     *
+     * <p>The marker is the whole mechanism. Guarding on "this layout doesn't list {@code note}"
+     * instead would put the column back on every restart for anyone who deliberately removed it
+     * from the picker — the same trap {@link #migrateToLists} documents for emptied lists.
+     */
+    private void backfillNoteColumn(Connection conn) throws java.sql.SQLException {
+        if (keyValueStore.getBoolean(NOTE_COLUMN_BACKFILLED_KEY, false)) return;
+        try (Statement st = conn.createStatement()) {
+            int added = st.executeUpdate(
+                    "INSERT INTO watchlist_column (list_id, col_key, display_order) " +
+                            "SELECT list_id, 'note', MAX(display_order) + 1 FROM watchlist_column " +
+                            "GROUP BY list_id " +
+                            "ON CONFLICT(list_id, col_key) DO NOTHING");
+            if (added > 0) log.info("Added the Note column to {} saved watchlist layout(s)", added);
+        }
+        keyValueStore.putBoolean(NOTE_COLUMN_BACKFILLED_KEY, true);
+    }
+
     /** Idempotent ADD COLUMN — swallows the "duplicate column" error on re-run. */
     private static void addColumnIfMissing(Statement ddl, String columnDef) {
         try {
@@ -200,6 +235,10 @@ public class WatchlistRepository {
      * <p>The thresholds are <b>global to the symbol</b>, so adding a name already held by another
      * list updates the triggers both lists show. Membership is separate and additive: the same
      * name can sit in any number of lists, appended to the end of each.
+     *
+     * <p>The upsert deliberately leaves {@code note} alone. The add box collects no note, so an
+     * add that lands on a watched symbol — which is how a name joins a second list — would
+     * otherwise erase the plan written against it.
      */
     public void add(String symbol, BigDecimal highPct, BigDecimal movePct,
                     BigDecimal priceAbove, BigDecimal priceBelow, long listId) {
@@ -241,6 +280,32 @@ public class WatchlistRepository {
             ps.setString(2, sym);
             ps.setLong(3, listId);
             ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Store the symbol's note — what to do when its alert fires — or clear it.
+     *
+     * <p>Blank is {@code null}, not an empty string: "no plan written" is an absence, and the
+     * alert email asks whether there is a note at all rather than printing a blank line.
+     *
+     * <p>Like {@link #updateThresholds}, a save for a symbol that has since been removed is a
+     * no-op rather than an error: the × and an inline edit's blur-triggered save can race, and
+     * failing here would flap the just-deleted row back onto the screen.
+     */
+    public void updateNote(String symbol, String note) {
+        String sym = normalise(symbol);
+        String text = (note == null || note.isBlank()) ? null : note.trim();
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE watchlist SET note = ? WHERE symbol = ?")) {
+            ps.setString(1, text);
+            ps.setString(2, sym);
+            if (ps.executeUpdate() == 0) {
+                log.debug("Note update for {} affected no rows (not on the watchlist) — ignored.", sym);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not update the note for " + sym + ".", e);
         }
     }
 
@@ -325,7 +390,7 @@ public class WatchlistRepository {
      */
     public List<Entry> loadAll() {
         return readEntries(
-                "SELECT symbol, high_threshold_pct, move_threshold_pct, added_at, price_above, price_below " +
+                "SELECT symbol, high_threshold_pct, move_threshold_pct, added_at, price_above, price_below, note " +
                         "FROM watchlist ORDER BY display_order, symbol", null);
     }
 
@@ -333,7 +398,7 @@ public class WatchlistRepository {
     public List<Entry> loadAll(long listId) {
         return readEntries(
                 "SELECT w.symbol, w.high_threshold_pct, w.move_threshold_pct, w.added_at, " +
-                        "w.price_above, w.price_below " +
+                        "w.price_above, w.price_below, w.note " +
                         "FROM watchlist w JOIN watchlist_member m ON m.symbol = w.symbol " +
                         "WHERE m.list_id = ? ORDER BY m.display_order, w.symbol", listId);
     }
@@ -353,7 +418,8 @@ public class WatchlistRepository {
                             BigDecimal.valueOf(rs.getDouble(3)),
                             Instant.parse(rs.getString(4)),
                             BigDecimal.valueOf(rs.getDouble(5)),
-                            BigDecimal.valueOf(rs.getDouble(6))));
+                            BigDecimal.valueOf(rs.getDouble(6)),
+                            blankToNull(rs.getString(7))));
                 }
             }
         } catch (Exception e) {
@@ -646,7 +712,17 @@ public class WatchlistRepository {
         return (v == null || v.signum() < 0) ? DISABLED : v;
     }
 
+    /** Blank stored text reads back as absent — there is no "" note, only a note or none. */
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
+    }
+
+    /**
+     * One watched symbol's settings. {@code note} is what to do when its alert fires — free text,
+     * nothing parses it — and is null when none has been written.
+     */
     public record Entry(String symbol, BigDecimal highThresholdPct, BigDecimal moveThresholdPct,
-                        Instant addedAt, BigDecimal priceAbove, BigDecimal priceBelow) {
+                        Instant addedAt, BigDecimal priceAbove, BigDecimal priceBelow,
+                        String note) {
     }
 }

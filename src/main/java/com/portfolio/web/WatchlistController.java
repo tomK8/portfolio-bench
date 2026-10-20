@@ -155,6 +155,26 @@ public class WatchlistController {
         return watchlistService.view(listOrFirst(list));
     }
 
+    /**
+     * The horizon every {@code P(N)} cell is priced over — <b>one stored setting for the whole
+     * table</b>, not a box per row.
+     *
+     * <p>This is a comparison grid, so a column whose N differed by row would be as many questions
+     * as there are rows under one header. Stored rather than browser state for the same reason the
+     * ladder round trip's horizon is: the header names the N, and a figure and its label must come
+     * from the same place.
+     *
+     * <p>Out of range is clamped, not refused — a stray keystroke should move the horizon to the
+     * nearest one that can be priced, not fail the panel.
+     */
+    @PostMapping("/watchlist/horizon")
+    @ResponseBody
+    public WatchlistView horizon(@RequestParam("sessions") String sessions,
+                                 @RequestParam(name = "list", required = false) Long list) {
+        watchlistService.setTouchSessions(parseSessions(sessions));
+        return watchlistService.view(listOrFirst(list));
+    }
+
     @PostMapping("/watchlist/remove")
     @ResponseBody
     public WatchlistView remove(@RequestParam("symbol") String symbol,
@@ -319,6 +339,16 @@ public class WatchlistController {
                 log.warn("Watchlist add backfill failed for {}", symbol, e);
             }
         });
+    }
+
+    /** Blank or unparseable is refused; a number out of range is clamped by the service. */
+    private static int parseSessions(String s) {
+        if (s == null || s.isBlank()) throw new IllegalArgumentException("Horizon is required.");
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Horizon '" + s + "' is not a whole number of sessions.");
+        }
     }
 
     private static BigDecimal parsePct(String s, String name) {

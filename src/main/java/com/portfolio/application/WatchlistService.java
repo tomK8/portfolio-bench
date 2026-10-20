@@ -3,6 +3,7 @@ package com.portfolio.application;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
 import com.portfolio.domain.PriceStats;
+import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.WatchlistAlerts;
 import com.portfolio.domain.WatchlistAlerts.Flags;
 import com.portfolio.domain.model.CashTransaction;
@@ -13,6 +14,7 @@ import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.FundamentalsRepository;
 import com.portfolio.persistence.FundamentalsRepository.Cached;
 import com.portfolio.persistence.IntradayPriceRepository;
+import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.persistence.WatchlistRepository;
 import com.portfolio.persistence.WatchlistRepository.Entry;
@@ -57,6 +59,48 @@ public class WatchlistService {
 
     private static final int VOL_WINDOW = 30;          // sessions of returns for 30D realized vol
     private static final int VOL_1Y_WINDOW = 252;      // sessions of returns for 1Y realized vol
+    /**
+     * Daily history loaded per symbol. Sized for the RV250 anchor behind the price-level
+     * probabilities: 250 sessions is about 350 calendar days, and the margin absorbs holidays and
+     * feed gaps. The momentum windows and the 1Y vol need far less; the anchor is what sets it.
+     */
+    private static final int HISTORY_LOOKBACK_DAYS = 420;
+    /**
+     * Realized-daily-vol windows, in sessions — the same four {@code OpenOrdersService} feeds the
+     * open-orders touch model, and for the same reason: RV20 is current state, RV250 the long-run
+     * anchor {@link VolForecast} blends it toward, and RV10/RV30 bracket the headline with a
+     * plausibility range.
+     */
+    private static final int RV_SHORT = 10;
+    private static final int RV_NOW = 20;
+    private static final int RV_LONG = 30;
+    private static final int RV_ANCHOR = 250;
+    /**
+     * Minimum daily returns behind the RV250 anchor before it counts as a long-run estimate. Below
+     * it there is no anchor and the forecast says so — a name listed three months ago would
+     * otherwise hand back a 60-session "anchor" that is really a second current-state window.
+     */
+    private static final int MIN_ANCHOR_RETURNS = 120;
+    /**
+     * KV key for the horizon {@code P(N)} is priced over, and its shipped default.
+     *
+     * <p><b>One horizon for the whole table, stored rather than per row.</b> This is a comparison
+     * grid: twenty names read down a column, and a column whose N differed per row would be twenty
+     * different questions wearing one header. The open-orders panel prices each row over
+     * <em>its own order's</em> sessions-to-expiry because an order has a deadline; a watchlist
+     * level has none, so the horizon is the reader's choice and belongs to the screen. Stored, not
+     * browser state, on the same argument as the ladder round trip: the header names the N the
+     * cells were priced at, so the two can never drift apart.
+     */
+    static final String TOUCH_SESSIONS_KEY = "watchlist_touch_sessions";
+
+    static final int DEFAULT_TOUCH_SESSIONS = 30;
+
+    /**
+     * Upper bound on the stored horizon: about five years of sessions. A guard against a stray
+     * keystroke, not a defensible modelling window.
+     */
+    static final int MAX_TOUCH_SESSIONS = 1250;
     private static final int PRICE_SCALE = 4;
     private static final int PCT_SCALE = 6;
     private static final int GBP_SCALE = 2;
@@ -71,6 +115,7 @@ public class WatchlistService {
     private final FxRateProvider fxRateProvider;
     private final YahooTickerMap tickerMap;
     private final UnresolvedSymbols unresolved;
+    private final KeyValueStore kv;
 
     public WatchlistService(WatchlistRepository watchlistRepo,
                             PriceHistoryRepository priceRepo,
@@ -97,6 +142,24 @@ public class WatchlistService {
                             FxRateProvider fxRateProvider,
                             YahooTickerMap tickerMap,
                             UnresolvedSymbols unresolved) {
+        this(watchlistRepo, priceRepo, intradayRepo, fundamentalsRepo, cashRepo, fxRateProvider,
+                tickerMap, unresolved, null);
+    }
+
+    /**
+     * @param kv store for the {@code P(N)} horizon. Null means the shipped default and a no-op
+     *           setter — several tests construct this service without one, and a missing store
+     *           must degrade to a horizon that can be priced rather than failing a read.
+     */
+    public WatchlistService(WatchlistRepository watchlistRepo,
+                            PriceHistoryRepository priceRepo,
+                            IntradayPriceRepository intradayRepo,
+                            FundamentalsRepository fundamentalsRepo,
+                            CashTransactionRepository cashRepo,
+                            FxRateProvider fxRateProvider,
+                            YahooTickerMap tickerMap,
+                            UnresolvedSymbols unresolved,
+                            KeyValueStore kv) {
         this.watchlistRepo = watchlistRepo;
         this.priceRepo = priceRepo;
         this.intradayRepo = intradayRepo;
@@ -105,6 +168,31 @@ public class WatchlistService {
         this.fxRateProvider = fxRateProvider;
         this.tickerMap = tickerMap;
         this.unresolved = unresolved;
+        this.kv = kv;
+    }
+
+    /**
+     * The horizon the price-level probabilities are priced over, from the stored setting.
+     *
+     * <p>Clamped rather than validated at the door, so a value from an older build or a
+     * hand-edited settings file degrades to a horizon that can be priced. Reads degrade; only
+     * writes throw.
+     */
+    public int touchSessions() {
+        if (kv == null) return DEFAULT_TOUCH_SESSIONS;
+        BigDecimal stored = kv.getBigDecimal(TOUCH_SESSIONS_KEY,
+                BigDecimal.valueOf(DEFAULT_TOUCH_SESSIONS));
+        return clampSessions(stored == null ? DEFAULT_TOUCH_SESSIONS : stored.intValue());
+    }
+
+    /** Store the horizon. Takes effect on the next read of the panel. */
+    public void setTouchSessions(int sessions) {
+        if (kv != null) kv.putBigDecimal(TOUCH_SESSIONS_KEY, BigDecimal.valueOf(clampSessions(sessions)));
+    }
+
+    /** Out of range is clamped, not refused — the same contract as the ladder round-trip horizon. */
+    static int clampSessions(int sessions) {
+        return Math.max(1, Math.min(sessions, MAX_TOUCH_SESSIONS));
     }
 
     /**
@@ -122,7 +210,8 @@ public class WatchlistService {
     }
 
     private WatchlistView view(List<Entry> entries) {
-        if (entries.isEmpty()) return new WatchlistView(List.of());
+        int sessions = touchSessions();
+        if (entries.isEmpty()) return new WatchlistView(List.of(), sessions);
 
         // One-shot shared inputs.
         Map<String, Cached> fundamentals = fundamentalsRepo.loadAll();
@@ -137,9 +226,9 @@ public class WatchlistService {
         Instant now = Instant.now();
         List<Row> rows = new ArrayList<>(entries.size());
         for (Entry e : entries) {
-            rows.add(buildRow(e, today, now, fundamentals, ledgerBySymbol, rates, latest));
+            rows.add(buildRow(e, today, now, fundamentals, ledgerBySymbol, rates, latest, sessions));
         }
-        return new WatchlistView(rows);
+        return new WatchlistView(rows, sessions);
     }
 
     /**
@@ -168,8 +257,9 @@ public class WatchlistService {
 
         LocalDate today = LocalDate.now();
         Instant now = Instant.now();
+        int sessions = touchSessions();
         List<QuoteRow> rows = new ArrayList<>(entries.size());
-        for (Entry e : entries) rows.add(buildQuote(e, today, now, fundamentals, latest));
+        for (Entry e : entries) rows.add(buildQuote(e, today, now, fundamentals, latest, sessions));
         return new QuoteView(rows);
     }
 
@@ -192,7 +282,8 @@ public class WatchlistService {
         Map<String, BigDecimal> rates = fetchRatesQuietly();
         Map<String, IntradayPrice> latest = intradayRepo.loadLatestIntradayPrices(List.of(tickerFor(symbol)));
 
-        return buildRow(e, LocalDate.now(), Instant.now(), fundamentals, ledgerBySymbol, rates, latest);
+        return buildRow(e, LocalDate.now(), Instant.now(), fundamentals, ledgerBySymbol, rates,
+                latest, touchSessions());
     }
 
     /**
@@ -220,7 +311,8 @@ public class WatchlistService {
                          Map<String, Cached> fundamentals,
                          Map<String, List<CashTransaction>> ledgerBySymbol,
                          Map<String, BigDecimal> rates,
-                         Map<String, IntradayPrice> latest) {
+                         Map<String, IntradayPrice> latest,
+                         int sessions) {
         String symbol = e.symbol();
         String ticker = tickerFor(symbol);
         IntradayPrice ip = latest.get(ticker);
@@ -229,7 +321,7 @@ public class WatchlistService {
                 levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()), e.note(),
                 missingReason(symbol));
 
-        Live live = computeLive(s, e, today, now);
+        Live live = computeLive(s, e, today, now, sessions);
 
         // 30D/1Y vol from daily closes, P/E + beta from fundamentals — all slow-moving, so the
         // poll skips them (see quotes()); only the full view assembles them.
@@ -246,6 +338,7 @@ public class WatchlistService {
                 pos.held(), pos.valueGbp(), pos.gainGbp(), scalePct(pos.gainPct()),
                 e.highThresholdPct(), e.moveThresholdPct(),
                 levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()), e.note(),
+                live.aboveOutlook(), live.belowOutlook(),
                 live.nearHigh(), live.bigMove(), live.moveDirection(),
                 live.aboveLevel(), live.belowLevel(),
                 false, null);
@@ -253,16 +346,18 @@ public class WatchlistService {
 
     private QuoteRow buildQuote(Entry e, LocalDate today, Instant now,
                                 Map<String, Cached> fundamentals,
-                                Map<String, IntradayPrice> latest) {
+                                Map<String, IntradayPrice> latest,
+                                int sessions) {
         String symbol = e.symbol();
         IntradayPrice ip = latest.get(tickerFor(symbol));
         Snapshot s = snapshot(e, ip, today, fundamentals);
         if (s == null) return QuoteRow.missing(symbol);
 
-        Live live = computeLive(s, e, today, now);
+        Live live = computeLive(s, e, today, now, sessions);
         return new QuoteRow(symbol, s.currency(), s.currentPrice(),
                 live.todayPct(), live.pct2d(), live.pct3d(), live.pct5d(), live.pct10d(), live.pct30d(),
                 live.pctFromHigh(), live.pctFromLow(), live.vol5d(), live.vol10d(),
+                live.aboveOutlook(), live.belowOutlook(),
                 live.nearHigh(), live.bigMove(), live.moveDirection(),
                 live.aboveLevel(), live.belowLevel());
     }
@@ -276,7 +371,7 @@ public class WatchlistService {
     private Snapshot snapshot(Entry e, IntradayPrice ip, LocalDate today, Map<String, Cached> fundamentals) {
         String symbol = e.symbol();
         String ticker = tickerFor(symbol);
-        List<PriceBar> bars = priceRepo.getPriceHistory(ticker, today.minusDays(400), today);
+        List<PriceBar> bars = priceRepo.getPriceHistory(ticker, today.minusDays(HISTORY_LOOKBACK_DAYS), today);
         QuoteSummary q = fundamentals.containsKey(symbol) ? fundamentals.get(symbol).quote() : null;
         String currency = ip != null ? ip.currency() : (q != null ? q.currency() : null);
 
@@ -326,7 +421,7 @@ public class WatchlistService {
      * high/low, and the alert flags. Percentages come back already scaled. Kept as one method so
      * the screen and the poll can never compute these differently.
      */
-    private Live computeLive(Snapshot s, Entry e, LocalDate today, Instant now) {
+    private Live computeLive(Snapshot s, Entry e, LocalDate today, Instant now, int sessions) {
         List<PriceBar> bars = s.bars();
         Double current = s.current();
         // Session-anchored, not calendar-anchored: "today" = live vs the previous session's close,
@@ -354,11 +449,68 @@ public class WatchlistService {
         Flags flags = WatchlistAlerts.evaluate(cp, wh, todayPct, e.highThresholdPct(), e.moveThresholdPct(),
                 e.priceAbove(), e.priceBelow());
 
+        // One σ forecast per row, shared by both levels: the volatility is a property of the
+        // instrument and the horizon, not of which side of the market a level sits on.
+        VolForecast.Inputs vols = dailyVols(bars);
+        Outlook above = outlook(cp, levelOrNull(e.priceAbove()), true, vols, sessions);
+        Outlook below = outlook(cp, levelOrNull(e.priceBelow()), false, vols, sessions);
+
         return new Live(scalePct(todayPct), scalePct(pct2d), scalePct(pct3d), scalePct(pct5d),
                 scalePct(pct10d), scalePct(pct30d), scalePct(pctFromHigh), scalePct(pctFromLow),
-                scalePct(intra[0]), scalePct(intra[1]),
+                scalePct(intra[0]), scalePct(intra[1]), above, below,
                 flags.nearHigh(), flags.bigMove(), flags.moveDirection(),
                 flags.aboveLevel(), flags.belowLevel());
+    }
+
+    /**
+     * How far one alert level is from the market, and how likely the price reaches it.
+     *
+     * <p><b>The move is signed and means the same thing on both sides</b>: what the price still has
+     * to do to reach the level, as a fraction of where it is now. An Above level normally reads
+     * positive and a Below level negative, so a level the market has <em>already</em> gone through
+     * reads with the wrong sign for its side — which is the point. One definition, one column
+     * rule, and an already-true trigger is visible rather than hidden behind an absolute value.
+     *
+     * <p><b>A level already through is certainty, not an estimate.</b> {@link VolForecast#touch}
+     * is direction-blind — it prices the first passage to a barrier {@code |ln(level/price)|} away
+     * — so handing it a crossed level would answer a different question (the chance of coming
+     * <em>back</em> to it) under this column's header. The barrier has been touched; the
+     * probability is 1, and {@code through} says why so the screen can label it rather than
+     * printing a bare 100%.
+     *
+     * <p>Priced <b>driftless and diffusive</b>, always: no asset-class drift and no scheduled-event
+     * variance. Both of those are per-<em>order</em> questions on the open-orders panel — a
+     * deadline to net a yield over, a calendar to place a print in — while a watchlist level has
+     * no expiry and the whole column has one horizon. With the orders panel's two switches at
+     * their shipped defaults the two screens price an identical barrier identically; with either
+     * switched on they will differ, and the header here says which model produced this figure.
+     *
+     * <p>Null when there is no level, no price, or no usable volatility — absent, never zero.
+     */
+    private static Outlook outlook(BigDecimal price, BigDecimal level, boolean above,
+                                   VolForecast.Inputs vols, int sessions) {
+        if (level == null || price == null || price.signum() <= 0) return null;
+        BigDecimal movePct = level.subtract(price).divide(price, PCT_SCALE, RoundingMode.HALF_UP);
+        boolean through = above ? price.compareTo(level) >= 0 : price.compareTo(level) <= 0;
+        if (through) {
+            return new Outlook(movePct, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, sessions, true);
+        }
+        VolForecast.Touch t = VolForecast.touch(vols, price, level, sessions, VolForecast.Config.DEFAULT);
+        return new Outlook(movePct, t.probability(), t.probabilityLow(), t.probabilityHigh(),
+                sessions, false);
+    }
+
+    /**
+     * The four realized-daily-vol windows {@link VolForecast} blends, off the bars already loaded
+     * for this row. Below {@link #MIN_ANCHOR_RETURNS} returns there is no long-run anchor and the
+     * forecast falls back to current state alone rather than blending toward a second
+     * current-state window dressed up as an anchor.
+     */
+    private static VolForecast.Inputs dailyVols(List<PriceBar> bars) {
+        BigDecimal anchor = (bars != null && bars.size() > MIN_ANCHOR_RETURNS)
+                ? PriceStats.dailyVol(bars, RV_ANCHOR) : null;
+        return new VolForecast.Inputs(PriceStats.dailyVol(bars, RV_SHORT),
+                PriceStats.dailyVol(bars, RV_NOW), PriceStats.dailyVol(bars, RV_LONG), anchor);
     }
 
     // ---- Position / gain (reuses PositionDetailService's FIFO engine) -------
@@ -743,6 +895,7 @@ public class WatchlistService {
                         BigDecimal pct10d, BigDecimal pct30d,
                         BigDecimal pctFromHigh, BigDecimal pctFromLow,
                         BigDecimal vol5d, BigDecimal vol10d,
+                        Outlook aboveOutlook, Outlook belowOutlook,
                         boolean nearHigh, boolean bigMove, int moveDirection,
                         boolean aboveLevel, boolean belowLevel) {
     }
@@ -767,6 +920,14 @@ public class WatchlistService {
                       boolean held, BigDecimal positionValueGbp, BigDecimal gainGbp, BigDecimal gainPct,
                       BigDecimal highThresholdPct, BigDecimal moveThresholdPct,
                       BigDecimal priceAbove, BigDecimal priceBelow, String note,
+                      /**
+                       * The Above level's distance from the market and its touch probability over
+                       * the table's horizon — null when no Above level is set, or when the row has
+                       * no price or no usable volatility. See {@link WatchlistService#outlook}.
+                       */
+                      Outlook aboveOutlook,
+                      /** The same for the Below level. */
+                      Outlook belowOutlook,
                       boolean nearHigh, boolean bigMove, int moveDirection,
                       boolean aboveLevel, boolean belowLevel,
                       boolean missingData, String missingReason) {
@@ -777,30 +938,60 @@ public class WatchlistService {
             return new Row(symbol, null, null, null, null, null, null, null, null,
                     null, null, null, null, null, null, null, null, null, null,
                     false, null, null, null, highPct, movePct, priceAbove, priceBelow, note,
-                    false, false, 0, false, false, true, reason);
+                    null, null, false, false, 0, false, false, true, reason);
         }
     }
 
-    public record WatchlistView(List<Row> rows) {
+    /**
+     * One alert level's outlook: how far the market still has to move to reach it, and the chance
+     * it is touched at least once inside the horizon.
+     *
+     * @param movePct    signed fraction — what the price must do to reach the level
+     *                   ({@code 0.072} = a 7.2% rise). Negative on an Above level, or positive on
+     *                   a Below one, means the market is already through it.
+     * @param probability P(touch within {@code sessions}), driftless and diffusive. Exactly 1 when
+     *                   {@code through}, because the barrier has been reached.
+     * @param probabilityLow  the same probability priced off RV10/RV30 — the honest width around a
+     * @param probabilityHigh point estimate from one vol model. Both 1 when {@code through}.
+     * @param sessions   the horizon it was priced over, so a stored figure always names its own N.
+     * @param through    the market is already at or past the level.
+     */
+    public record Outlook(BigDecimal movePct, BigDecimal probability,
+                          BigDecimal probabilityLow, BigDecimal probabilityHigh,
+                          int sessions, boolean through) {
+    }
+
+    /**
+     * @param touchSessions the horizon every {@code P(N)} cell in {@code rows} was priced over.
+     *                      On the payload rather than fetched separately so the header can never
+     *                      name an N the cells beneath it were not priced at.
+     */
+    public record WatchlistView(List<Row> rows, int touchSessions) {
     }
 
     /**
      * Fast-moving subset of {@link Row} served by the near-real-time poll ({@code /watchlist/quotes}).
      * Carries only the fields that change intraday — live price, momentum, 5D/10D vol, distance from
-     * the 52-week high/low, and the alert-flag triple that drives the row colour. The dashboard patches
-     * the matching cells in place, leaving the position/fundamentals columns from the last full load.
+     * the 52-week high/low, the two price-level outlooks, and the alert-flag triple that drives the
+     * row colour. The dashboard patches the matching cells in place, leaving the
+     * position/fundamentals columns from the last full load.
+     *
+     * <p>The outlooks are here, not among the slow columns, because both halves of one are measured
+     * <em>from the live price</em>: a distance-to-target and a touch probability left at their last
+     * full-load values would sit beside a price that has since moved and quietly contradict it.
      */
     public record QuoteRow(String symbol, String currency, BigDecimal currentPrice,
                            BigDecimal todayPct, BigDecimal pct2d, BigDecimal pct3d, BigDecimal pct5d,
                            BigDecimal pct10d, BigDecimal pct30d,
                            BigDecimal pctFromHigh, BigDecimal pctFromLow,
                            BigDecimal vol5d, BigDecimal vol10d,
+                           Outlook aboveOutlook, Outlook belowOutlook,
                            boolean nearHigh, boolean bigMove, int moveDirection,
                            boolean aboveLevel, boolean belowLevel) {
 
         static QuoteRow missing(String symbol) {
             return new QuoteRow(symbol, null, null, null, null, null, null, null, null,
-                    null, null, null, null, false, false, 0, false, false);
+                    null, null, null, null, null, null, false, false, 0, false, false);
         }
     }
 

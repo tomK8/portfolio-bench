@@ -10,7 +10,9 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The volatility-trading watchlist: user-entered symbols (owned or not) each carrying its own
@@ -124,6 +126,20 @@ public class WatchlistRepository {
     /** Set once the Note column has been added to the layouts that predate it (see below). */
     static final String NOTE_COLUMN_BACKFILLED_KEY = "watchlist_note_column_backfilled";
 
+    /** Set once the two price-level columns have joined the layouts that predate them. */
+    static final String LEVEL_COLUMNS_BACKFILLED_KEY = "watchlist_level_columns_backfilled";
+
+    /**
+     * The distance and probability columns, and the column each one belongs beside. A level's
+     * move-to-target and touch probability are a reading <em>of that level</em>, so they are
+     * inserted straight after it rather than appended — a layout where Above's two companions sit
+     * eight columns away from Above is a layout nobody would have arranged by hand.
+     */
+    private static final String[][] LEVEL_COLUMNS = {
+            {"thrAbove", "thrAbovePct", "thrAboveProb"},
+            {"thrBelow", "thrBelowPct", "thrBelowProb"},
+    };
+
     private final JdbcConnectionFactory connections;
     private final KeyValueStore keyValueStore;
 
@@ -146,6 +162,7 @@ public class WatchlistRepository {
             ddl.execute(CREATE_COLUMN_TABLE);
             migrateToLists(conn, ddl);
             backfillNoteColumn(conn);
+            backfillLevelColumns(conn);
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise watchlist table", e);
         }
@@ -206,6 +223,73 @@ public class WatchlistRepository {
             if (added > 0) log.info("Added the Note column to {} saved watchlist layout(s)", added);
         }
         keyValueStore.putBoolean(NOTE_COLUMN_BACKFILLED_KEY, true);
+    }
+
+    /**
+     * Put the two price-level readings beside each level in every <em>stored</em> layout, once.
+     *
+     * <p>Same bargain as {@link #backfillNoteColumn}: an uncustomised list renders
+     * {@code WlColumns.DEFAULTS} and gets them for free, a customised one holds its own keys and
+     * would never show a column added after it was saved. The marker is again the whole mechanism
+     * — guarding on "this layout doesn't list them" would put them back on every restart for
+     * anyone who deliberately removed them.
+     *
+     * <p>Placement is the one difference. The note joined at the end because it belongs to the row;
+     * these belong to the level above them, so each is inserted directly after its parent, and
+     * only appended when a layout has dropped the parent itself.
+     */
+    private void backfillLevelColumns(Connection conn) throws java.sql.SQLException {
+        if (keyValueStore.getBoolean(LEVEL_COLUMNS_BACKFILLED_KEY, false)) return;
+        // On the constructor's own connection throughout: opening a second one to rewrite a layout
+        // while this one is still mid-initialisation is how a SQLite writer lock gets contended.
+        Map<Long, List<String>> layouts = new LinkedHashMap<>();
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT list_id, col_key FROM watchlist_column ORDER BY list_id, display_order")) {
+            while (rs.next()) {
+                layouts.computeIfAbsent(rs.getLong(1), k -> new ArrayList<>()).add(rs.getString(2));
+            }
+        }
+        int touched = 0;
+        for (Map.Entry<Long, List<String>> entry : layouts.entrySet()) {
+            List<String> updated = new ArrayList<>(entry.getValue());
+            boolean changed = false;
+            for (String[] family : LEVEL_COLUMNS) {
+                int at = updated.indexOf(family[0]);
+                for (int i = 1; i < family.length; i++) {
+                    if (updated.contains(family[i])) continue;
+                    if (at < 0) updated.add(family[i]);    // the level itself had been removed
+                    else updated.add(++at, family[i]);
+                    changed = true;
+                }
+            }
+            if (!changed) continue;
+            rewriteColumns(conn, entry.getKey(), updated);
+            touched++;
+        }
+        if (touched > 0) log.info("Added the price-level columns to {} saved watchlist layout(s)", touched);
+        keyValueStore.putBoolean(LEVEL_COLUMNS_BACKFILLED_KEY, true);
+    }
+
+    /** {@link #saveColumns} on a caller-supplied connection — for the constructor's migrations. */
+    private static void rewriteColumns(Connection conn, long listId, List<String> keys)
+            throws java.sql.SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("DELETE FROM watchlist_column WHERE list_id = ?")) {
+            ps.setLong(1, listId);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = conn.prepareStatement(
+                "INSERT INTO watchlist_column (list_id, col_key, display_order) VALUES (?, ?, ?)")) {
+            int order = 0;
+            for (String k : keys) {
+                if (k == null || k.isBlank()) continue;
+                ps.setLong(1, listId);
+                ps.setString(2, k.trim());
+                ps.setInt(3, order++);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
     }
 
     /** Idempotent ADD COLUMN — swallows the "duplicate column" error on re-run. */

@@ -58,13 +58,71 @@ touches an order.
     new column reaches an uncustomised list for free (it is in `WlColumns.DEFAULTS`) and a
     customised one never. The repository therefore appends `note` to every stored layout **once**,
     guarded by a KV marker — not by "this layout doesn't list it", which would put the column back
-    on every restart for anyone who removed it. Same trap the pre-lists member backfill documents.
-  - Its cell is an `<input>`, so it joins the thresholds in carrying no `data-sort` (there is
+    on every restart for anyone who removed it. Same trap the pre-lists member backfill documents,
+    and the same mechanism the price-level columns later reused.
+  - Its cell is an editable box, so it joins the thresholds in carrying no `data-sort` (there is
     nothing to compare) and in being skipped by the poll while the caret is in it. Its
     just-saved value is defended by the same optimistic overlay, in a **separate** record
     (`wlNotePending`, `WlEditSync.resolveNote`): a threshold save carries no note and a note save
     carries no thresholds, so one record holding all five would have each write blank the other's
     pending value.
+  - **Short or full, and that is a way of looking, not part of the layout.** The box is a
+    `<textarea>` rather than an `<input>` precisely so the `Notes: short / full` toggle can show
+    a whole plan; an input can only ever scroll one. Collapsed it is held to one line by CSS and
+    behaves exactly as the input did, tooltip included. Expanded, each box is measured and given
+    the height its own text needs — a textarea cannot fit itself to its content in CSS, so
+    `wlSizeNotes` runs after every render and after an edit that lengthens a plan. The preference
+    is **browser-local** (`localStorage`), not per list: the column picker owns what the table
+    *contains*, this owns how much of one column you are looking at, and the two must not be
+    settings about each other. Enter still commits — `preventDefault` first, or the textarea
+    inserts the newline before blur fires the save.
+
+- **Each level carries two readings of its own.** An `Above` or `Below` level sits beside **%**,
+  the move the price still has to make to reach it, and **P(N)**, the chance it is touched at
+  least once within N trading sessions. Three columns per side, and the readings are inserted
+  directly after the level they read rather than appended — a distance eight columns away from
+  the level it belongs to is a layout nobody would arrange by hand.
+  - **One definition of the move, both sides.** It is signed, and it always means *what the price
+    still has to do*: `(level − price) ÷ price`. An Above level normally reads positive and a
+    Below level negative, so a level the market has **already gone through reads with the wrong
+    sign for its side** — which is the point. One rule to read the column by, and an already-true
+    trigger is visible rather than hidden behind an absolute value. Neither is colour-coded: on
+    Above a rise is "further away" and on Below a fall is, so green/red would mean opposite things
+    in adjacent columns.
+  - **A level already through is certainty, not an estimate priced backwards.**
+    `VolForecast.touch` is direction-blind — it prices the first passage to a barrier
+    `|ln(level/price)|` away — so handing it a crossed level answers a *different* question (the
+    chance of coming back to it) under this column's header. The barrier has been touched: the
+    probability is 1, and `Outlook.through` carries why, so the cell can say so in its tooltip
+    instead of printing a bare 100%.
+  - **Priced driftless and diffusive, always**, off the same `VolForecast` the open-orders panel
+    uses: RV20 blended toward the RV250 anchor for *this* horizon, with RV10/RV30 bracketing the
+    point estimate on the cell's tooltip. The two stored model switches are deliberately **not**
+    read here. Drift needs a per-name forward yield to net off the class return and event variance
+    needs a dated calendar, and both of those are per-*order* questions — a deadline, a print
+    inside it — that a watchlist level, which has no expiry, does not pose. At the orders panel's
+    shipped defaults the two screens price an identical barrier identically; with either switch on
+    they differ, and the column's tooltip says which model produced the figure rather than leaving
+    the reader to discover it.
+  - **One horizon for the whole table, stored** (`watchlist_touch_sessions`, default 30, clamped
+    to 1–1250; `POST /watchlist/horizon`). This is a comparison grid: a column whose N differed by
+    row would be as many questions as there are rows under one header — the open-orders panel
+    prices each row over *its own order's* sessions-to-expiry precisely because an order has a
+    deadline and a watchlist level does not. The horizon rides on the `/watchlist` payload
+    (`WatchlistView.touchSessions`) rather than being fetched separately, so the header can never
+    name an N the cells beneath it were not priced at; the column registry substitutes it into the
+    labels and tooltips at the one place both are built, and a change drops that cache and the
+    `<thead>` with it.
+  - **Both halves are read off the live price, so the quote poll carries them.** A distance to
+    target and a touch probability left at their last full-load values would sit beside a price
+    that has since moved and quietly contradict it — which is why they are on `QuoteRow` with the
+    momentum and the vol, not among the slow position/fundamentals columns.
+  - Absent is never zero, three ways: no level, no price, and no usable volatility all give no
+    `Outlook` at all and a `—` cell, not a 0% that reads as "it will never get there".
+  - The four columns reached the layouts that predate them through the **same one-shot backfill**
+    the note used, with one difference: placement. The note joined at the end because it belongs
+    to the row; these belong to the level above them, so each is inserted after its parent and
+    only appended when a layout has dropped the level itself.
 
 - **Drag to reorder, rows and columns.** A grip (⠿) in each row's Symbol cell drags the row; a
   chip in the column picker drags the column. The ↑↓ buttons stay beside both — they are the

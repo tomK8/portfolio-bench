@@ -7188,6 +7188,16 @@
         var wlReturnsLoaded = false;
         var wlCurrentView = 'stats';    // 'stats' or 'returns'
         var wlListId = null;            // the named list on screen; every /watchlist call is scoped to it
+        var WL_NOTES_FULL_KEY = 'wlNotesFull';   // browser-local: is the Note column expanded?
+
+        /**
+         * Render a /watchlist payload. The horizon rides on it rather than being fetched
+         * separately, so the P(N) header and the cells under it always come from one answer.
+         */
+        function wlRender(view) {
+            if (view) wlSetTouchSessions(view.touchSessions);
+            renderWatchlist((view && view.rows) || []);
+        }
 
         function setupWatchlist(listId) {
             ensureWlModalInited();
@@ -7198,6 +7208,12 @@
                     if (e.key === 'Enter') addWatchlistSymbol();
                 });
                 document.getElementById('wl-refresh-btn').addEventListener('click', function () { loadWatchlist(); });
+                wlLoadNotesPref();
+                document.getElementById('wl-note-toggle').addEventListener('click', wlToggleNotes);
+                var nBox = document.getElementById('wl-touch-n');
+                nBox.value = String(wlTouchSessions);
+                nBox.addEventListener('change', saveWlHorizon);
+                nBox.addEventListener('keydown', function (e) { if (e.key === 'Enter') this.blur(); });
                 document.getElementById('wl-view-stats').addEventListener('click', function () { switchWlView('stats'); });
                 document.getElementById('wl-view-returns').addEventListener('click', function () { switchWlView('returns'); });
                 setupWatchlistLists();
@@ -7787,7 +7803,7 @@
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             }).then(function (view) {
-                renderWatchlist(view.rows || []);          // sets wlLoadedOk
+                wlRender(view);                            // sets wlLoadedOk
                 wlSetStatus('');
             });
             }).catch(function (err) {
@@ -7894,6 +7910,11 @@
             wlPatchPct(tr, 'pctFromLow', r.pctFromLow, false);
             wlPatchVol(tr, 'vol5d', r.vol5d);
             wlPatchVol(tr, 'vol10d', r.vol10d);
+            // Both halves of an outlook are measured from the live price, so they move with it.
+            wlPatchOutlookPct(tr, 'thrAbovePct', r.aboveOutlook);
+            wlPatchOutlookProb(tr, 'thrAboveProb', r.aboveOutlook);
+            wlPatchOutlookPct(tr, 'thrBelowPct', r.belowOutlook);
+            wlPatchOutlookProb(tr, 'thrBelowProb', r.belowOutlook);
             tr.className = rowAlertClass(r);               // recolour by the fresh alert flags
         }
 
@@ -8041,7 +8062,7 @@
                     document.getElementById('wl-add-move').value = '';
                     document.getElementById('wl-add-above').value = '';
                     document.getElementById('wl-add-below').value = '';
-                    renderWatchlist(view.rows || []);
+                    wlRender(view);
                     wlSetStatus(wlTargetHeadsUp(view, sym) ||
                         (sym + ' added — data fills in as the backfill completes.'));
                     // Poll a couple of times so a freshly-added row picks up its backfilled prices.
@@ -8074,7 +8095,7 @@
                     if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
                     return r.json();
                 })
-                .then(function (view) { renderWatchlist(view.rows || []); })
+                .then(function (view) { wlRender(view); })
                 .catch(function (err) {
                     var detail = err && err.message ? ' — ' + err.message : '';
                     wlSetStatus('Could not remove ' + sym + detail + ' — restoring.');
@@ -8091,7 +8112,7 @@
                     if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
                     return r.json();
                 })
-                .then(function (view) { renderWatchlist(view.rows || []); })
+                .then(function (view) { wlRender(view); })
                 .catch(function (err) {
                     var detail = err && err.message ? ' — ' + err.message : '';
                     wlSetStatus('Could not reorder ' + sym + detail + ' — try again.');
@@ -8191,12 +8212,42 @@
                     if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
                     return r.json();
                 })
-                .then(function (view) { renderWatchlist(view.rows || []); })
+                .then(function (view) { wlRender(view); })
                 .catch(function (err) {
                     var detail = err && err.message ? ' — ' + err.message : '';
                     wlSetStatus('Could not save the new order' + detail + ' — restoring.');
                     loadWatchlist();                       // the server is the truth; put the rows back
                 });
+        }
+
+        /**
+         * Store the P(N) horizon. One setting for the whole table, so the response is a full view
+         * repriced at the new N rather than a cell-by-cell patch — every probability on screen
+         * changes together or the column stops meaning one thing.
+         */
+        function saveWlHorizon() {
+            var box = document.getElementById('wl-touch-n');
+            var raw = (box.value || '').trim();
+            if (!raw) { box.value = String(wlTouchSessions); return; }   // blank is not zero sessions
+            var body = new URLSearchParams();
+            body.set('sessions', raw);
+            if (wlListId != null) body.set('list', wlListId);
+            wlSetStatus('Repricing…');
+            fetch('/watchlist/horizon', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body
+            }).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function (view) {
+                wlRender(view);
+                wlSetStatus('');
+            }).catch(function (err) {
+                box.value = String(wlTouchSessions);       // the horizon on screen is still the stored one
+                var detail = err && err.message ? ' (' + err.message + ')' : '';
+                wlSetStatus('Could not change the horizon' + detail + '.');
+            });
         }
 
         function saveWatchlistThreshold(sym, highPct, movePct, priceAbove, priceBelow) {
@@ -8434,6 +8485,34 @@
         // Every cell carries data-f, so wlPatchRow finds cells by name rather than by index and
         // the whole reconcile/poll machinery is indifferent to the column order.
 
+        /**
+         * The horizon every P(N) cell on screen was priced at — one figure for the whole table,
+         * from the payload that priced the cells, so the header can never name an N the numbers
+         * under it were not priced at. The 30 here only covers the moment before the first load
+         * lands; the server owns the stored setting.
+         */
+        var wlTouchSessions = 30;
+
+        /** Substitute the live horizon into a label or tooltip that names it. */
+        function wlWithN(text) {
+            return String(text == null ? '' : text).replace(/\{N\}/g, wlTouchSessions);
+        }
+
+        /**
+         * Adopt the horizon a payload was priced at. The registry caches labels with the old N
+         * baked in and the <thead> holds them, so both are dropped — the next render rebuilds the
+         * header rather than leaving a P(30) over cells priced at 60.
+         */
+        function wlSetTouchSessions(n) {
+            var v = parseInt(n, 10);
+            if (!isFinite(v) || v < 1 || v === wlTouchSessions) return;
+            wlTouchSessions = v;
+            wlRegistryCache = null;
+            wlRenderedCols = null;
+            var box = document.getElementById('wl-touch-n');
+            if (box && document.activeElement !== box) box.value = String(v);
+        }
+
         var WL_BUILTIN_GROUPS = [
             { title: 'Price & momentum', fields: [
                 ['price', 'Price', 'Latest price in the instrument\'s own currency'],
@@ -8465,7 +8544,23 @@
                 ['thrHigh', 'Near-hi %', 'Alert when within this % of the 52-week high'],
                 ['thrMove', 'Move %', 'Alert when |today\'s move| exceeds this %'],
                 ['thrAbove', 'Above', 'Alert when the price rises to or above this level (price\'s own currency)'],
+                ['thrAbovePct', 'Above %', 'How far the market still has to move to reach the Above level, '
+                    + 'as a % of the live price. Normally positive; negative means the price is already '
+                    + 'through it and the trigger is already true.'],
+                ['thrAboveProb', 'Above P({N})', 'Chance the price touches the Above level at least once '
+                    + 'within {N} trading sessions. First-passage probability on a volatility forecast for '
+                    + 'that horizon (RV20 blended toward RV250), priced driftless and diffusive — so it will '
+                    + 'differ from the Orders panel\'s P(N) whenever that panel\'s drift or event-variance '
+                    + 'switch is on. 100% means the level is already through. Hover a cell for the RV10/RV30 '
+                    + 'range around it. One horizon for the whole table — change it with the P(N) box above.'],
                 ['thrBelow', 'Below', 'Alert when the price falls to or below this level (price\'s own currency)'],
+                ['thrBelowPct', 'Below %', 'How far the market still has to move to reach the Below level, '
+                    + 'as a % of the live price. Normally negative (the price has to fall); positive means '
+                    + 'the price is already through it and the trigger is already true.'],
+                ['thrBelowProb', 'Below P({N})', 'Chance the price touches the Below level at least once '
+                    + 'within {N} trading sessions. Same model as Above P(N): a first-passage probability on '
+                    + 'a horizon-matched volatility forecast, driftless and diffusive. 100% means the level '
+                    + 'is already through. Hover a cell for the RV10/RV30 range around it.'],
                 ['note', 'Note', 'What you have decided to do when this name\'s alert fires — free text, '
                     + 'nothing reads or acts on it. It is one note per symbol, like the triggers beside it, '
                     + 'and it is printed under that symbol\'s lines in the alert email, so the plan arrives '
@@ -8502,7 +8597,10 @@
             WL_BUILTIN_GROUPS.forEach(function (g) {
                 var keys = [];
                 g.fields.forEach(function (f) {
-                    reg[f[0]] = { label: f[1], title: f[2], group: g.title, builtin: true };
+                    // {N} is the live P(N) horizon. Substituted here, at the one place labels and
+                    // tooltips are built, so the header, the picker and the popup can't name
+                    // different horizons; wlSetTouchSessions drops this cache when it changes.
+                    reg[f[0]] = { label: wlWithN(f[1]), title: wlWithN(f[2]), group: g.title, builtin: true };
                     keys.push(f[0]);
                 });
                 groups.push({ title: g.title, keys: keys });
@@ -8583,14 +8681,124 @@
         var WL_INPUT_COLS = { thrHigh: 1, thrMove: 1, thrAbove: 1, thrBelow: 1, note: 1 };
 
         /**
-         * The note cell: the plan for when this symbol's alert fires. Full text in the tooltip as
-         * well as the box, because the box is one line wide and a plan is usually longer than that.
+         * The note cell: the plan for when this symbol's alert fires.
+         *
+         * <p>A <textarea>, not an <input>, because the Notes toggle has to be able to show the
+         * whole plan and a one-line input can only ever scroll. Collapsed it is held to one line
+         * by CSS and behaves exactly as the input did; expanded, wlSizeNotes gives each box the
+         * height its own text needs. The tooltip carries the full text either way, so hovering
+         * still works without the toggle.
+         *
+         * <p>Everything downstream keys off `.wl-note-input`, which a textarea answers to as
+         * readily as an input did — the change/keydown bindings, the pending-edit overlay and the
+         * poll's never-touch-a-focused-box rule are all unchanged.
          */
         function wlNoteCell(r) {
             var v = WlEditSync.resolveNote(r, wlNotePending[r.symbol]).value;
-            return '<td data-f="note"><input class="wl-note-input" data-sym="' + r.symbol +
-                '" type="text" placeholder="plan when it fires" value="' + escapeHtml(v) + '"' +
-                (v ? ' title="' + escapeHtml(v) + '"' : '') + '/></td>';
+            return '<td data-f="note"><textarea class="wl-note-input" rows="1" data-sym="' + r.symbol +
+                '" placeholder="plan when it fires"' +
+                (v ? ' title="' + escapeHtml(v) + '"' : '') + '>' + escapeHtml(v) + '</textarea></td>';
+        }
+
+        /**
+         * Whether the Note column shows the whole plan or just its first line. Per browser, not
+         * per list: it is a way of looking at the table, not part of the table's layout — the
+         * column picker owns what the table *contains*.
+         */
+        var wlNotesFull = false;
+
+        function wlLoadNotesPref() {
+            try { wlNotesFull = localStorage.getItem(WL_NOTES_FULL_KEY) === '1'; } catch (e) {}
+        }
+
+        /**
+         * A textarea cannot size itself to its content in CSS, so each visible box is measured.
+         * Collapsed, the height is cleared and the CSS one-liner takes back over.
+         */
+        function wlSizeNotes() {
+            var table = document.getElementById('watchlist-table');
+            if (!table) return;
+            table.classList.toggle('wl-notes-full', wlNotesFull);
+            table.querySelectorAll('.wl-note-input').forEach(function (el) {
+                if (!wlNotesFull) { el.style.height = ''; return; }
+                el.style.height = 'auto';
+                el.style.height = (el.scrollHeight + 2) + 'px';
+            });
+            var btn = document.getElementById('wl-note-toggle');
+            if (btn) {
+                btn.classList.toggle('active', wlNotesFull);
+                btn.setAttribute('aria-pressed', wlNotesFull ? 'true' : 'false');
+                btn.textContent = wlNotesFull ? 'Notes: full' : 'Notes: short';
+            }
+        }
+
+        function wlToggleNotes() {
+            wlNotesFull = !wlNotesFull;
+            try { localStorage.setItem(WL_NOTES_FULL_KEY, wlNotesFull ? '1' : '0'); } catch (e) {}
+            wlSizeNotes();
+        }
+
+        /**
+         * One price level's distance from the market: the move the price still has to make to
+         * reach it, signed. Deliberately not colour-coded — on Above a rise is "further away" and
+         * on Below a fall is, so green/red would mean opposite things in adjacent columns. The
+         * sign carries the only reading that matters: wrong-signed for its side = already through.
+         */
+        function wlOutlookPctCell(o, field) {
+            var fa = ' data-f="' + field + '"';
+            if (!o || o.movePct == null) return '<td class="na"' + fa + '>—</td>';
+            var n = parseFloat(o.movePct) * 100;
+            return '<td' + fa + (o.through ? ' title="Already through this level."' : '') + '>' +
+                (n >= 0 ? '+' : '') + n.toFixed(1) + '%</td>';
+        }
+
+        /** The RV10/RV30 bracket (and the "already there" case) as the cell's tooltip. */
+        function wlOutlookTitle(o) {
+            if (!o) return '';
+            if (o.through) return 'Already at or through this level — the barrier has been touched.';
+            var parts = ['Priced over ' + o.sessions + ' trading sessions, driftless.'];
+            if (o.probabilityLow != null && o.probabilityHigh != null) {
+                parts.push('Range on RV10/RV30: ' + (o.probabilityLow * 100).toFixed(1) + '% – ' +
+                    (o.probabilityHigh * 100).toFixed(1) + '%');
+            }
+            return parts.join(' ');
+        }
+
+        function wlOutlookProbCell(o, field) {
+            var fa = ' data-f="' + field + '"';
+            if (!o || o.probability == null) return '<td class="na"' + fa + '>—</td>';
+            var t = wlOutlookTitle(o);
+            return '<td' + fa + ' data-sort-value="' + o.probability + '"' +
+                (t ? ' title="' + escapeHtml(t) + '"' : '') + '>' +
+                (parseFloat(o.probability) * 100).toFixed(1) + '%</td>';
+        }
+
+        function wlPatchOutlookPct(tr, field, o) {
+            var td = tr.querySelector('td[data-f="' + field + '"]');
+            if (!td) return;
+            if (!o || o.movePct == null) {
+                td.className = 'na'; td.textContent = '—'; td.removeAttribute('title');
+                return;
+            }
+            var n = parseFloat(o.movePct) * 100;
+            td.className = '';
+            td.textContent = (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+            if (o.through) td.title = 'Already through this level.'; else td.removeAttribute('title');
+        }
+
+        function wlPatchOutlookProb(tr, field, o) {
+            var td = tr.querySelector('td[data-f="' + field + '"]');
+            if (!td) return;
+            if (!o || o.probability == null) {
+                td.className = 'na'; td.textContent = '—';
+                td.removeAttribute('title'); td.removeAttribute('data-sort-value');
+                return;
+            }
+            td.className = '';
+            td.textContent = (parseFloat(o.probability) * 100).toFixed(1) + '%';
+            td.dataset.sortValue = o.probability;
+            var t = wlOutlookTitle(o);
+            if (t) td.title = t; else td.removeAttribute('title');
         }
 
         function wlThrCell(r, kind, extraCls) {
@@ -8630,7 +8838,11 @@
                 case 'thrHigh': return wlThrCell(r, 'high');
                 case 'thrMove': return wlThrCell(r, 'move');
                 case 'thrAbove': return wlThrCell(r, 'above', ' wl-price-input');
+                case 'thrAbovePct': return wlOutlookPctCell(r.aboveOutlook, 'thrAbovePct');
+                case 'thrAboveProb': return wlOutlookProbCell(r.aboveOutlook, 'thrAboveProb');
                 case 'thrBelow': return wlThrCell(r, 'below', ' wl-price-input');
+                case 'thrBelowPct': return wlOutlookPctCell(r.belowOutlook, 'thrBelowPct');
+                case 'thrBelowProb': return wlOutlookProbCell(r.belowOutlook, 'thrBelowProb');
                 case 'note': return wlNoteCell(r);
                 default: return '<td class="na">—</td>';
             }
@@ -8733,10 +8945,15 @@
             var noteInp = tr.querySelector('.wl-note-input');
             if (noteInp) {
                 noteInp.addEventListener('change', function () {
-                    this.title = this.value.trim();       // the box is one line; the tooltip is the rest
+                    this.title = this.value.trim();       // the box may be one line; the tooltip is the rest
                     saveWatchlistNote(this.dataset.sym, this.value.trim());
+                    if (wlNotesFull) wlSizeNotes();       // a longer plan needs a taller box
                 });
-                noteInp.addEventListener('keydown', function (e) { if (e.key === 'Enter') this.blur(); });
+                // Enter commits, as it did when this was an <input>. preventDefault first: a
+                // textarea would otherwise insert the newline before blur fires the save.
+                noteInp.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') { e.preventDefault(); this.blur(); }
+                });
             }
             return tr;
         }
@@ -8853,6 +9070,7 @@
             // add, a remove or a threshold save would otherwise drop the table back into manual
             // order while the header still showed the ▲ it was sorted by.
             wlReapplySort();
+            wlSizeNotes();            // new/rebuilt boxes need their height if the column is expanded
         }
 
         function rowAlertClass(r) {
@@ -8904,8 +9122,14 @@
             stats.appendChild(wlRangeStat('high'));
             stats.appendChild(wlRangeStat('low'));
             stats.appendChild(wlStat('% vs high', wlPctText(r.pctFromHigh), wlTip('pctFromHigh')));
-            if (r.priceAbove != null) stats.appendChild(wlStat('Above', fmtPrice(r.priceAbove, r.currency), wlTip('thrAbove')));
-            if (r.priceBelow != null) stats.appendChild(wlStat('Below', fmtPrice(r.priceBelow, r.currency), wlTip('thrBelow')));
+            if (r.priceAbove != null) {
+                stats.appendChild(wlStat('Above', fmtPrice(r.priceAbove, r.currency), wlTip('thrAbove')));
+                wlOutlookStats(stats, r.aboveOutlook, 'thrAbovePct', 'thrAboveProb');
+            }
+            if (r.priceBelow != null) {
+                stats.appendChild(wlStat('Below', fmtPrice(r.priceBelow, r.currency), wlTip('thrBelow')));
+                wlOutlookStats(stats, r.belowOutlook, 'thrBelowPct', 'thrBelowProb');
+            }
             stats.appendChild(wlStat('P/E', r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1),
                     wlTip('trailingPe')));
             stats.appendChild(wlStat('Beta', r.beta == null ? '—' : parseFloat(r.beta).toFixed(2), wlTip('beta')));
@@ -8950,6 +9174,28 @@
             d.className = 'snap-kv';
             d.innerHTML = wlTipLabel(label, tip) + '<span class="v">' + value + '</span>';
             return d;
+        }
+
+        /**
+         * The two readings that follow a price level in the strip, exactly as they follow it in
+         * the table. Labels and tooltips come from the column registry — the same single home the
+         * header and the picker read, so the popup can't name the horizon differently from the
+         * grid behind it. Skipped entirely when there is no outlook: a level on a row with no
+         * price or no usable volatility has nothing to say, and a '—' pair would only take up
+         * room the strip needs.
+         */
+        function wlOutlookStats(stats, o, pctKey, probKey) {
+            if (!o) return;
+            var reg = wlColumnRegistry().byKey;
+            if (o.movePct != null) {
+                var n = parseFloat(o.movePct) * 100;
+                stats.appendChild(wlStat((reg[pctKey] || {}).label || '%',
+                        (n >= 0 ? '+' : '') + n.toFixed(1) + '%', wlTip(pctKey)));
+            }
+            if (o.probability != null) {
+                stats.appendChild(wlStat((reg[probKey] || {}).label || 'P(N)',
+                        (parseFloat(o.probability) * 100).toFixed(1) + '%', wlTip(probKey)));
+            }
         }
 
         /**

@@ -122,16 +122,27 @@ test('isDefault recognises the shipped set and nothing else', () => {
     assert.equal(WlColumns.isDefault([]), false);
 });
 
-test('the default set is the columns the watchlist shipped with, plus the note', () => {
-    // Guards the promise that turning on multi-list changed nobody's existing table. The note is
-    // the one later addition: it joins at the end, and the repository's one-shot backfill is what
-    // puts it into the layouts that were saved before it existed.
+test('the default set is the columns the watchlist shipped with, plus the later additions', () => {
+    // Guards the promise that turning on multi-list changed nobody's existing table. Two later
+    // additions: the note, which joins at the end because it belongs to the row, and each price
+    // level's distance + probability, which sit immediately after the level they read. Both
+    // reached the layouts saved before them through a one-shot backfill in the repository.
     assert.deepEqual(WlColumns.DEFAULTS, [
         'price', 'todayPct', 'pct2d', 'pct3d', 'pct5d', 'pct30d',
         'pctFromHigh', 'pctFromLow',
         'vol5d', 'vol10d', 'vol30d', 'vol1y',
         'trailingPe', 'position', 'gain',
-        'thrHigh', 'thrMove', 'thrAbove', 'thrBelow',
+        'thrHigh', 'thrMove',
+        'thrAbove', 'thrAbovePct', 'thrAboveProb',
+        'thrBelow', 'thrBelowPct', 'thrBelowProb',
         'note'
     ]);
+});
+
+test("a level's readings sit directly after it, so the three read as one block", () => {
+    const i = (k) => WlColumns.DEFAULTS.indexOf(k);
+    assert.equal(i('thrAbovePct'), i('thrAbove') + 1);
+    assert.equal(i('thrAboveProb'), i('thrAbove') + 2);
+    assert.equal(i('thrBelowPct'), i('thrBelow') + 1);
+    assert.equal(i('thrBelowProb'), i('thrBelow') + 2);
 });

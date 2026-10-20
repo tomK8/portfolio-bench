@@ -1439,7 +1439,21 @@
         .wl-price-input { width: 4.6rem; }
         /* Wide enough for a short instruction, capped so one long plan can't set the whole
            table's width. The full text is in the cell's title and in the popup. */
-        .wl-note-input { width: 11rem; font-size: 0.8rem; padding: 1px 3px; }
+        /* A <textarea>, so the Notes toggle can show a whole plan; collapsed it is held to one
+           line and reads exactly as the old one-line <input> did. Sizing when expanded is JS
+           (wlSizeNotes) — a textarea cannot fit itself to its content in CSS. */
+        .wl-note-input {
+            width: 11rem; font-size: 0.8rem; padding: 1px 3px; font-family: inherit;
+            line-height: 1.35; height: 1.5rem; resize: none; overflow: hidden;
+            white-space: nowrap; vertical-align: middle; box-sizing: content-box;
+        }
+        .wl-notes-full .wl-note-input {
+            width: 20rem; white-space: pre-wrap; overflow-wrap: anywhere;
+        }
+        .wl-notes-full td[data-f="note"] { vertical-align: top; }
+        html[data-theme="dark"] .wl-note-input {
+            background: #1c1f24; color: #e8e8ea; border: 1px solid #2e3137;
+        }
         /* The popup's plan line: quiet, but the one thing on the row that is prose. */
         .wl-plan { font-size: 0.85rem; margin: -0.25rem 0 0.6rem; padding: 0.3rem 0.5rem;
                    border-left: 3px solid #1f77b4; background: rgba(31, 119, 180, 0.07); }
@@ -1570,6 +1584,8 @@
         html[data-theme="dark"] table.corr-matrix th.corr-axis { background: #23262b; }
         html[data-theme="dark"] .wl-stats .snap-kv { border-bottom-color: #23262b; }
         .wl-window-toggle { display: inline-flex; gap: 0; margin: 0.5rem 0; }
+        .wl-toggle-btn.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
+        html[data-theme="dark"] .wl-toggle-btn.active { background: #1f77b4; color: #fff; border-color: #1f77b4; }
         .wl-view-toggle { display: inline-flex; gap: 0; margin-left: 0.5rem; }
         .wl-view-toggle button { padding: 2px 10px; font-size: 0.82rem; border: 1px solid #ccc; background: none; cursor: pointer; }
         .wl-view-toggle button:first-child { border-radius: 4px 0 0 4px; }
@@ -3215,7 +3231,13 @@
         symbol's alert triggers inline: % from 52-wk high, |today's move|, and absolute price
         targets — an <b>Above</b> level (alerts when the price rises to or above it) and a
         <b>Below</b> level (alerts when it falls to or below it), in the price's own currency.
-        Leave any of them blank to disable that trigger. The <b>Note</b> beside them is what you
+        Leave any of them blank to disable that trigger. Each level carries two readings of its
+        own: <b>%</b>, the move the price still has to make to reach it (wrong-signed for its
+        side = already through), and <b>P(N)</b>, the chance it is touched at least once within
+        N trading sessions — a first-passage probability on a volatility forecast for that
+        horizon, priced driftless, with the RV10/RV30 range on the cell's tooltip. N is one
+        setting for the whole table, so every probability in a column answers the same question.
+        The <b>Note</b> beside them is what you
         have decided to do when this name fires — free text, nothing acts on it, one note per
         symbol however many lists it is in, and it is printed under that symbol's lines in the
         alert email. Email alerts fire once per day per signal
@@ -3234,6 +3256,9 @@
         <label title="Alert when the price falls to or below this level (price's own currency)">Below: <input id="wl-add-below" type="text" size="6" placeholder="—"/></label>
         <button id="wl-add-btn" type="button">Add</button>
         <button id="wl-refresh-btn" type="button">Refresh</button>
+        <label title="Horizon for the Above P(N) / Below P(N) columns, in trading sessions — one horizon for the whole table, stored, so the header always names the N the cells were priced at. 1–1250; out of range is clamped.">P(N) sessions: <input id="wl-touch-n" type="text" size="4"/></label>
+        <button id="wl-note-toggle" type="button" class="wl-toggle-btn" aria-pressed="false"
+                title="Show each Note in full instead of its first line. Remembered in this browser.">Notes: short</button>
         <button id="wl-cols-btn" type="button" title="Choose and order this watchlist's columns">Columns…</button>
         <button id="wl-list-rename" type="button" title="Rename this watchlist">Rename</button>
         <button id="wl-list-delete" type="button" title="Delete this watchlist">Delete list</button>
@@ -3272,7 +3297,11 @@
             <th title="Alert when within this % of the 52-week high">Near-hi %</th>
             <th title="Alert when |today's move| exceeds this %">Move %</th>
             <th title="Alert when the price rises to or above this level (price's own currency)">Above</th>
+            <th data-sort="num" title="How far the market still has to move to reach the Above level">Above %</th>
+            <th data-sort="num" title="Chance the price touches the Above level within the horizon">Above P(N)</th>
             <th title="Alert when the price falls to or below this level (price's own currency)">Below</th>
+            <th data-sort="num" title="How far the market still has to move to reach the Below level">Below %</th>
+            <th data-sort="num" title="Chance the price touches the Below level within the horizon">Below P(N)</th>
             <th></th>
         </tr></thead>
         <tbody></tbody>

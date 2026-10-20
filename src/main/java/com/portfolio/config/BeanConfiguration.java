@@ -923,10 +923,11 @@ public class BeanConfiguration {
                                              CashTransactionRepository cashTransactionRepository,
                                              FxRateProvider fxRateProvider,
                                              YahooTickerMap yahooTickerMap,
-                                             UnresolvedSymbols unresolvedSymbols) {
+                                             UnresolvedSymbols unresolvedSymbols,
+                                             KeyValueStore keyValueStore) {
         return new WatchlistService(watchlistRepository, priceHistoryRepository, intradayPriceRepository,
                 fundamentalsRepository, cashTransactionRepository, fxRateProvider, yahooTickerMap,
-                unresolvedSymbols);
+                unresolvedSymbols, keyValueStore);
     }
 
     /**

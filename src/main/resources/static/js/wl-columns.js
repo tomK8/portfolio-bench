@@ -38,7 +38,11 @@
         'pctFromHigh', 'pctFromLow',
         'vol5d', 'vol10d', 'vol30d', 'vol1y',
         'trailingPe', 'position', 'gain',
-        'thrHigh', 'thrMove', 'thrAbove', 'thrBelow',
+        'thrHigh', 'thrMove',
+        // Each price level is followed by its two readings — how far the market still has to move
+        // to reach it, and the chance it gets there inside the table's horizon.
+        'thrAbove', 'thrAbovePct', 'thrAboveProb',
+        'thrBelow', 'thrBelowPct', 'thrBelowProb',
         'note'
     ];
 

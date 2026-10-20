@@ -178,4 +178,50 @@ class WatchlistRepositoryTest {
         assertEquals(List.of("price", "todayPct", "thrAbove"), repo.columnsFor(list),
                 "a column the user removed must not be resurrected by the next start");
     }
+
+    /**
+     * The price-level readings join a saved layout <em>beside the level they read</em>, not at the
+     * end: a distance and a probability eight columns away from the level they belong to is a
+     * layout nobody would have arranged by hand. Same one-shot marker as the note, for the same
+     * reason — a "doesn't list it" guard would put back a column the user removed.
+     */
+    @Test
+    void theLevelColumnsJoinSavedLayoutsBesideTheirOwnLevel(@TempDir Path dir) {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dir);
+        KeyValueStore kv = new KeyValueStore(dir);
+        WatchlistRepository repo = new WatchlistRepository(cf, kv);
+        long list = repo.firstListId();
+        repo.saveColumns(list, List.of("price", "thrAbove", "thrBelow", "note"));
+        kv.putBoolean(WatchlistRepository.LEVEL_COLUMNS_BACKFILLED_KEY, false);
+
+        new WatchlistRepository(cf, kv);                       // restart
+
+        assertEquals(List.of("price",
+                        "thrAbove", "thrAbovePct", "thrAboveProb",
+                        "thrBelow", "thrBelowPct", "thrBelowProb",
+                        "note"),
+                repo.columnsFor(list));
+
+        repo.saveColumns(list, List.of("price", "thrAbove", "note"));
+        new WatchlistRepository(cf, kv);
+        assertEquals(List.of("price", "thrAbove", "note"), repo.columnsFor(list),
+                "columns the user removed must not be resurrected by the next start");
+    }
+
+    /** A layout that has dropped the level itself still gets the readings — appended, not lost. */
+    @Test
+    void theLevelColumnsAppendWhenTheLevelItselfWasRemoved(@TempDir Path dir) {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dir);
+        KeyValueStore kv = new KeyValueStore(dir);
+        WatchlistRepository repo = new WatchlistRepository(cf, kv);
+        long list = repo.firstListId();
+        repo.saveColumns(list, List.of("price", "note"));
+        kv.putBoolean(WatchlistRepository.LEVEL_COLUMNS_BACKFILLED_KEY, false);
+
+        new WatchlistRepository(cf, kv);
+
+        assertEquals(List.of("price", "note",
+                        "thrAbovePct", "thrAboveProb", "thrBelowPct", "thrBelowProb"),
+                repo.columnsFor(list));
+    }
 }

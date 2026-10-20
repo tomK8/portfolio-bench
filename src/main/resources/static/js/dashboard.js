@@ -8724,11 +8724,14 @@
                 el.style.height = 'auto';
                 el.style.height = (el.scrollHeight + 2) + 'px';
             });
+            // The label names the thing you get, and the pressed state says whether you have it
+            // — the same switch the Stats/Returns pair beside it uses. A label that renamed
+            // itself to the *current* state ('Notes: short') read as a description of the table
+            // rather than as something to click, and went unfound.
             var btn = document.getElementById('wl-note-toggle');
             if (btn) {
                 btn.classList.toggle('active', wlNotesFull);
                 btn.setAttribute('aria-pressed', wlNotesFull ? 'true' : 'false');
-                btn.textContent = wlNotesFull ? 'Notes: full' : 'Notes: short';
             }
         }
 

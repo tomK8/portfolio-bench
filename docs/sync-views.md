@@ -22,6 +22,18 @@
   fragment; the `CASH` rows deliberately carry none and stay inert, and a Cash-ledger **group
   header** carries none either, so it keeps its expand/collapse click. Gilts open like anything
   else. Details, and why `data-symbol` is the only test: [watchlist.md](watchlist.md).
+- **Cash carries its share of the portfolio** (both tabs): the totals strip prints the £
+  balance and, quietly beside it, `totalCashGbp ÷ totalGbp` — the level is the thing being
+  watched (how defensive the book is right now), and the amount alone does not say whether it
+  is high or low. It is computed in `PortfolioMetrics` rather than in the fragment, so the two
+  tabs read from one figure, and over the **same denominator as the Portfolio % column**, so
+  it is that column's `CASH` rows added up — on the exact values, so it can sit a hundredth
+  away from their rounded sum. `cashPct` is **null, never `0`, when there is no total**: zero
+  would read as "fully invested", which is the opposite of what an empty portfolio means, and
+  the tile shows `—`. Deliberately **`totalGbp` and not `rtTotalGbp`** on the Files tab, where
+  both exist — the Portfolio % column uses `totalGbp`, and a tile that disagreed with the
+  column below it by a few hundredths would read as a bug. The Excel sheets are unchanged:
+  their summary rows still carry no %.
 - **Portfolio % column** (both tables above + the Excel `Portfolio` sheet): each row's
   `marketValueGbp ÷ totals.totalGbp`. On-screen it's computed in the Thymeleaf fragment as
   double division (guarded against null/zero total — no BigDecimal divide that could throw on

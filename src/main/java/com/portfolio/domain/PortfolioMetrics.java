@@ -34,6 +34,13 @@ public class PortfolioMetrics {
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .add(iiSippCash);
 
+        // Cash as a share of the whole portfolio — the same ratio the Portfolio % column
+        // carries on each CASH row, so the tile and those rows cannot disagree. Null rather
+        // than zero when there is no total: a share of nothing is unknown, not 0% cash.
+        BigDecimal cashPct = totalGbp.compareTo(BigDecimal.ZERO) != 0
+                ? totalCashGbp.divide(totalGbp, 10, RoundingMode.HALF_UP)
+                : null;
+
         BigDecimal invested = totalGbp.subtract(totalCashGbp);
         BigDecimal returnPct = invested.compareTo(BigDecimal.ZERO) != 0
                 ? totalGainGbp.divide(invested, 10, RoundingMode.HALF_UP)
@@ -42,7 +49,7 @@ public class PortfolioMetrics {
                 ? totalGainGbp.divide(totalGbp, 10, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
 
-        return new Totals(totalGbp, rtTotalGbp, totalGainGbp, totalCashGbp, returnPct, totalReturn);
+        return new Totals(totalGbp, rtTotalGbp, totalGainGbp, totalCashGbp, cashPct, returnPct, totalReturn);
     }
 
     public record Totals(
@@ -50,6 +57,7 @@ public class PortfolioMetrics {
             BigDecimal rtTotalGbp,    // same as totalGbp, but uses RT market value when available
             BigDecimal totalGainGbp,
             BigDecimal totalCashGbp,
+            BigDecimal cashPct,       // totalCashGbp / totalGbp; null when there is no total
             BigDecimal returnPct,
             BigDecimal totalReturn) {
     }

@@ -8,6 +8,7 @@ import java.util.Currency;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class PortfolioMetricsTest {
 
@@ -51,6 +52,7 @@ class PortfolioMetricsTest {
         assertBigDecimalEquals("1800", t.rtTotalGbp());      // no RT data → falls back to marketValueGbp
         assertBigDecimalEquals("200", t.totalGainGbp());     // null gain filtered out
         assertBigDecimalEquals("800", t.totalCashGbp());     // CASH 500 + ii cash 300
+        assertBigDecimalEquals("0.4444444444", t.cashPct()); // 800 / 1800, 10dp
         assertBigDecimalEquals("0.2", t.returnPct());        // 200 / (1800 - 800)
         assertBigDecimalEquals("0.1111111111", t.totalReturn()); // 200 / 1800, 10dp
     }
@@ -63,6 +65,9 @@ class PortfolioMetricsTest {
         assertBigDecimalEquals("0", t.rtTotalGbp());
         assertBigDecimalEquals("0", t.totalGainGbp());
         assertBigDecimalEquals("0", t.totalCashGbp());
+        // Null, not 0%: with no portfolio there is no share to be in cash. A zero here would
+        // read as "fully invested", which is the opposite of what an empty result means.
+        assertNull(t.cashPct());
         assertBigDecimalEquals("0", t.returnPct());
         assertBigDecimalEquals("0", t.totalReturn());
     }

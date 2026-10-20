@@ -20,8 +20,20 @@
                     th:text="'£' + ${#numbers.formatDecimal(result.totals.rtTotalGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
             <span>Total gain<br/><b
                     th:text="'£' + ${#numbers.formatDecimal(result.totals.totalGainGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
+            <!-- The share of the portfolio sitting in cash, beside the amount: the level is
+                 the thing being watched, and £ alone does not say whether it is high or low.
+                 Computed in PortfolioMetrics over the same denominator as the Portfolio %
+                 column, so it is that column's CASH rows added up — on the exact figures,
+                 so it can sit a hundredth off their rounded sum. -->
             <span>Cash<br/><b
-                    th:text="'£' + ${#numbers.formatDecimal(result.totals.totalCashGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b></span>
+                    th:text="'£' + ${#numbers.formatDecimal(result.totals.totalCashGbp, 1, 'COMMA', 2, 'POINT')}">£0.00</b><span
+                    class="muted totals-pct"
+                    th:title="${result.totals.cashPct != null
+                            ? 'Cash ÷ total value of £' + #numbers.formatDecimal(result.totals.totalGbp, 1, 'COMMA', 2, 'POINT')
+                              + ' — the same share the Portfolio % column carries on the cash rows.'
+                            : 'No portfolio total to divide by.'}"
+                    th:text="${result.totals.cashPct != null
+                            ? #numbers.formatPercent(result.totals.cashPct, 1, 2) : '—'}">0%</span></span>
             <span>Return on invested<br/><b
                     th:text="${#numbers.formatPercent(result.totals.returnPct, 1, 2)}">0%</b></span>
             <span>Return on total<br/><b

@@ -3240,7 +3240,8 @@
         The <b>Note</b> beside them is what you
         have decided to do when this name fires — free text, nothing acts on it, one note per
         symbol however many lists it is in, and it is printed under that symbol's lines in the
-        alert email. Email alerts fire once per day per signal
+        alert email — <b>Full notes</b> above expands that column so every plan shows in full
+        rather than just its first line. Email alerts fire once per day per signal
         when SMTP is configured. Click a row
         for the price chart and fundamentals.
         Prices, momentum, short-horizon vol and row colour auto-refresh every 30s while this tab
@@ -3258,7 +3259,7 @@
         <button id="wl-refresh-btn" type="button">Refresh</button>
         <label title="Horizon for the Above P(N) / Below P(N) columns, in trading sessions — one horizon for the whole table, stored, so the header always names the N the cells were priced at. 1–1250; out of range is clamped.">P(N) sessions: <input id="wl-touch-n" type="text" size="4"/></label>
         <button id="wl-note-toggle" type="button" class="wl-toggle-btn" aria-pressed="false"
-                title="Show each Note in full instead of its first line. Remembered in this browser.">Notes: short</button>
+                title="Show every Note in full, wrapped over as many lines as it needs, instead of its first line only. Still editable either way. Remembered in this browser.">Full notes</button>
         <button id="wl-cols-btn" type="button" title="Choose and order this watchlist's columns">Columns…</button>
         <button id="wl-list-rename" type="button" title="Rename this watchlist">Rename</button>
         <button id="wl-list-delete" type="button" title="Delete this watchlist">Delete list</button>

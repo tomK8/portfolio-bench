@@ -67,8 +67,11 @@ touches an order.
     carries no thresholds, so one record holding all five would have each write blank the other's
     pending value.
   - **Short or full, and that is a way of looking, not part of the layout.** The box is a
-    `<textarea>` rather than an `<input>` precisely so the `Notes: short / full` toggle can show
-    a whole plan; an input can only ever scroll one. Collapsed it is held to one line by CSS and
+    `<textarea>` rather than an `<input>` precisely so the **Full notes** toggle can show a whole
+    plan; an input can only ever scroll one. The button's label names *what you get* and its
+    pressed state says whether you have it — the same switch as the `Stats`/`Returns` pair beside
+    it. A label that renamed itself to the current state instead (`Notes: short`) read as a
+    description of the table rather than as something to click, and went unfound. Collapsed it is held to one line by CSS and
     behaves exactly as the input did, tooltip included. Expanded, each box is measured and given
     the height its own text needs — a textarea cannot fit itself to its content in CSS, so
     `wlSizeNotes` runs after every render and after an edit that lengthens a plan. The preference

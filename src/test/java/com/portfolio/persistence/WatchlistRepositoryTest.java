@@ -59,6 +59,60 @@ class WatchlistRepositoryTest {
                 "clearing a level disables it (stored as 0)");
     }
 
+    /**
+     * The order targets are their own write, and the two writes must not reach through each
+     * other. A threshold save carries no target and a target save carries no threshold, which is
+     * exactly what lets the client re-arm the alerts on one and not on the other.
+     */
+    @Test
+    void theOrderTargetsAreTheirOwnWriteAndNeitherSaveDisturbsTheOther(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        repo.add("AAPL", new BigDecimal("3"), new BigDecimal("5"),
+                new BigDecimal("250"), new BigDecimal("200"));
+        repo.updateTargets("AAPL", new BigDecimal("275"), new BigDecimal("180"));
+
+        WatchlistRepository.Entry e = entry(repo, "AAPL");
+        assertEquals(0, new BigDecimal("275").compareTo(e.targetAbove()));
+        assertEquals(0, new BigDecimal("180").compareTo(e.targetBelow()));
+
+        // A threshold edit leaves the targets where they are…
+        repo.updateThresholds("AAPL", new BigDecimal("3"), new BigDecimal("5"),
+                new BigDecimal("245"), new BigDecimal("205"));
+        e = entry(repo, "AAPL");
+        assertEquals(0, new BigDecimal("275").compareTo(e.targetAbove()));
+        assertEquals(0, new BigDecimal("180").compareTo(e.targetBelow()));
+
+        // …and a target edit leaves the triggers where they are.
+        repo.updateTargets("AAPL", new BigDecimal("300"), null);
+        e = entry(repo, "AAPL");
+        assertEquals(0, new BigDecimal("245").compareTo(e.priceAbove()));
+        assertEquals(0, new BigDecimal("205").compareTo(e.priceBelow()));
+        assertEquals(0, new BigDecimal("300").compareTo(e.targetAbove()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(e.targetBelow()),
+                "a cleared target is the disabled sentinel, which the service reads as absent");
+    }
+
+    /**
+     * Re-adding a watched name is how it joins a second list, and the add box collects no target.
+     * It must therefore leave the order levels alone, exactly as it leaves the note alone — the
+     * same trap, one row down.
+     */
+    @Test
+    void reAddingASymbolDoesNotEraseItsOrderTargets(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        repo.add("MSFT", new BigDecimal("3"), new BigDecimal("5"),
+                new BigDecimal("500"), null);
+        repo.updateTargets("MSFT", new BigDecimal("540"), null);
+        repo.updateNote("MSFT", "trim a third");
+
+        repo.add("MSFT", new BigDecimal("4"), new BigDecimal("6"), new BigDecimal("510"), null);
+
+        WatchlistRepository.Entry e = entry(repo, "MSFT");
+        assertEquals(0, new BigDecimal("510").compareTo(e.priceAbove()), "the add does update the trigger");
+        assertEquals(0, new BigDecimal("540").compareTo(e.targetAbove()), "but not the target");
+        assertEquals("trim a third", e.note());
+    }
+
     @Test
     void updatingOneLevelLeavesTheOtherThreeIntact(@TempDir Path dir) {
         WatchlistRepository repo = repo(dir);

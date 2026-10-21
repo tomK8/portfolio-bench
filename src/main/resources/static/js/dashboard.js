@@ -7616,6 +7616,7 @@
             wlLoadedOk = false;
             wlPending = {};             // an unsaved edit belongs to the row it was typed in
             wlNotePending = {};
+            wlTargetPending = {};
             wlSetStatus('');
         }
 
@@ -7788,6 +7789,11 @@
         // both would have each write blank the other's pending value. Keyed by symbol → string.
         var wlNotePending = {};
 
+        // And a third for the two order targets, separate for the same reason: POST
+        // /watchlist/target is its own write that re-arms nothing (nothing fires on a target), so
+        // a threshold save carries no target and a target save carries no thresholds.
+        var wlTargetPending = {};
+
         var wlFullLoadInFlight = false;
         function loadWatchlist() {
             if (wlFullLoadInFlight) return;                 // don't stack concurrent full loads
@@ -7911,10 +7917,10 @@
             wlPatchVol(tr, 'vol5d', r.vol5d);
             wlPatchVol(tr, 'vol10d', r.vol10d);
             // Both halves of an outlook are measured from the live price, so they move with it.
-            wlPatchOutlookPct(tr, 'thrAbovePct', r.aboveOutlook);
-            wlPatchOutlookProb(tr, 'thrAboveProb', r.aboveOutlook);
-            wlPatchOutlookPct(tr, 'thrBelowPct', r.belowOutlook);
-            wlPatchOutlookProb(tr, 'thrBelowProb', r.belowOutlook);
+            wlPatchOutlookPct(tr, 'thrAbovePct', r.aboveOutlook, r.currency);
+            wlPatchOutlookProb(tr, 'thrAboveProb', r.aboveOutlook, r.currency);
+            wlPatchOutlookPct(tr, 'thrBelowPct', r.belowOutlook, r.currency);
+            wlPatchOutlookProb(tr, 'thrBelowProb', r.belowOutlook, r.currency);
             tr.className = rowAlertClass(r);               // recolour by the fresh alert flags
         }
 
@@ -8086,6 +8092,7 @@
             wlAddList(body);
             delete wlPending[sym];                          // gone — no overlay to defend
             delete wlNotePending[sym];
+            delete wlTargetPending[sym];
             // Optimistically drop the row now so × feels instant; the reconcile confirms on success,
             // and a failure re-syncs from the server so a wrongly-removed row comes straight back.
             var tbody = document.querySelector('#watchlist-table tbody');
@@ -8281,6 +8288,57 @@
                     wlSetStatus('Could not update ' + sym + detail + ' — try again.');
                     loadWatchlist();
                 });
+        }
+
+        /**
+         * Save one symbol's two order targets. Its own endpoint, like the note and for the same
+         * reason: POST /watchlist/target writes no triggers and clears no fired flags, so moving
+         * the level you intend to deal at cannot re-mail a signal already sent for the same
+         * trigger. Both boxes go together because one write covers the row's pair.
+         *
+         * The overlay is recorded before the request goes out, exactly as the other two saves do.
+         */
+        function saveWatchlistTarget(sym, above, below) {
+            var body = new URLSearchParams();
+            body.set('symbol', sym);
+            body.set('targetAbove', above == null ? '' : above);
+            body.set('targetBelow', below == null ? '' : below);
+            wlAddList(body);
+            wlTargetPending[sym] = WlEditSync.savedTargets(above, below);
+            fetch('/watchlist/target', { method: 'POST', body: body })
+                .then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                    return r.json();
+                })
+                .then(function (view) {
+                    // The readings are priced to the target, so a target edit moves the % and P(N)
+                    // cells beside it — patch them in place rather than rebuilding the row the
+                    // user may already have clicked into.
+                    wlPatchRowOutlooks(view, sym);
+                    wlSetStatus('');
+                })
+                .catch(function (err) {
+                    delete wlTargetPending[sym];
+                    var detail = err && err.message ? ' — ' + err.message : '';
+                    wlSetStatus('Could not update ' + sym + '\u2019s order target' + detail + ' — try again.');
+                    loadWatchlist();
+                });
+        }
+
+        /** Re-read one symbol's two outlook pairs from a freshly-returned view, in place. */
+        function wlPatchRowOutlooks(view, sym) {
+            var rows = (view && view.rows) || [];
+            var r = null;
+            for (var i = 0; i < rows.length; i++) { if (rows[i].symbol === sym) { r = rows[i]; break; } }
+            if (!r) return;
+            var tbody = document.querySelector('#watchlist-table tbody');
+            if (!tbody) return;
+            var tr = wlRowMap(tbody)[sym];
+            if (!tr) return;
+            wlPatchOutlookPct(tr, 'thrAbovePct', r.aboveOutlook, r.currency);
+            wlPatchOutlookProb(tr, 'thrAboveProb', r.aboveOutlook, r.currency);
+            wlPatchOutlookPct(tr, 'thrBelowPct', r.belowOutlook, r.currency);
+            wlPatchOutlookProb(tr, 'thrBelowProb', r.belowOutlook, r.currency);
         }
 
         /**
@@ -8540,27 +8598,45 @@
                 ['gain', 'Gain', 'Unrealized gain on the holding, GBP'],
                 ['gainPct', 'Gain %', 'Unrealized gain on the holding, per cent']
             ]},
-            { title: 'Alert triggers', fields: [
+            { title: 'Alert triggers & order targets', fields: [
                 ['thrHigh', 'Near-hi %', 'Alert when within this % of the 52-week high'],
                 ['thrMove', 'Move %', 'Alert when |today\'s move| exceeds this %'],
-                ['thrAbove', 'Above', 'Alert when the price rises to or above this level (price\'s own currency)'],
-                ['thrAbovePct', 'Above %', 'How far the market still has to move to reach the Above level, '
-                    + 'as a % of the live price. Normally positive; negative means the price is already '
-                    + 'through it and the trigger is already true.'],
-                ['thrAboveProb', 'Above P({N})', 'Chance the price touches the Above level at least once '
-                    + 'within {N} trading sessions. First-passage probability on a volatility forecast for '
+                ['thrAbove', 'Above trigger', 'Email when the price rises to or above this level '
+                    + '(price\'s own currency). It is the heads-up, not where the order goes — that is the '
+                    + 'Above target beside it.'],
+                ['tgtAbove', 'Above target', 'Where you would actually place the order once the Above '
+                    + 'trigger fires — normally further up than the trigger, in the price\'s own currency. '
+                    + 'Nothing alerts on it: it is the level the Above % and Above P({N}) beside it are '
+                    + 'priced to. Leave it blank and the trigger stands in for those two.'],
+                ['thrAbovePct', 'Above %', 'How far the market still has to move to reach the Above '
+                    + 'target, as a % of the live price — or the Above trigger when no target is set. '
+                    + 'Normally positive; negative means the price is already through the level and the '
+                    + 'cell says which level that was.'],
+                ['thrAboveProb', 'Above P({N})', 'Chance the price touches the Above target at least once '
+                    + 'within {N} trading sessions — or the Above trigger when no target is set. '
+                    + 'First-passage probability on a volatility forecast for '
                     + 'that horizon (RV20 blended toward RV250), priced driftless and diffusive — so it will '
                     + 'differ from the Orders panel\'s P(N) whenever that panel\'s drift or event-variance '
-                    + 'switch is on. 100% means the level is already through. Hover a cell for the RV10/RV30 '
+                    + 'switch is on. 100% means the level is already through. Hover a cell for the level it '
+                    + 'was priced to and the RV10/RV30 '
                     + 'range around it. One horizon for the whole table — change it with the P(N) box above.'],
-                ['thrBelow', 'Below', 'Alert when the price falls to or below this level (price\'s own currency)'],
-                ['thrBelowPct', 'Below %', 'How far the market still has to move to reach the Below level, '
-                    + 'as a % of the live price. Normally negative (the price has to fall); positive means '
-                    + 'the price is already through it and the trigger is already true.'],
-                ['thrBelowProb', 'Below P({N})', 'Chance the price touches the Below level at least once '
-                    + 'within {N} trading sessions. Same model as Above P(N): a first-passage probability on '
+                ['thrBelow', 'Below trigger', 'Email when the price falls to or below this level '
+                    + '(price\'s own currency). It is the heads-up, not where the order goes — that is the '
+                    + 'Below target beside it.'],
+                ['tgtBelow', 'Below target', 'Where you would actually place the order once the Below '
+                    + 'trigger fires — normally further down than the trigger, in the price\'s own '
+                    + 'currency. Nothing alerts on it: it is the level the Below % and Below P({N}) beside '
+                    + 'it are priced to. Leave it blank and the trigger stands in for those two.'],
+                ['thrBelowPct', 'Below %', 'How far the market still has to move to reach the Below '
+                    + 'target, as a % of the live price — or the Below trigger when no target is set. '
+                    + 'Normally negative (the price has to fall); positive means the price is already '
+                    + 'through the level and the cell says which level that was.'],
+                ['thrBelowProb', 'Below P({N})', 'Chance the price touches the Below target at least once '
+                    + 'within {N} trading sessions — or the Below trigger when no target is set. Same model '
+                    + 'as Above P({N}): a first-passage probability on '
                     + 'a horizon-matched volatility forecast, driftless and diffusive. 100% means the level '
-                    + 'is already through. Hover a cell for the RV10/RV30 range around it.'],
+                    + 'is already through. Hover a cell for the level it was priced to and the RV10/RV30 '
+                    + 'range around it.'],
                 ['note', 'Note', 'What you have decided to do when this name\'s alert fires — free text, '
                     + 'nothing reads or acts on it. It is one note per symbol, like the triggers beside it, '
                     + 'and it is printed under that symbol\'s lines in the alert email, so the plan arrives '
@@ -8678,7 +8754,8 @@
          * They opt out of sorting (there is nothing to compare) and they are the cells the poll
          * must never overwrite while the caret is in one.
          */
-        var WL_INPUT_COLS = { thrHigh: 1, thrMove: 1, thrAbove: 1, thrBelow: 1, note: 1 };
+        var WL_INPUT_COLS = { thrHigh: 1, thrMove: 1, thrAbove: 1, thrBelow: 1,
+            tgtAbove: 1, tgtBelow: 1, note: 1 };
 
         /**
          * The note cell: the plan for when this symbol's alert fires.
@@ -8747,36 +8824,52 @@
          * on Below a fall is, so green/red would mean opposite things in adjacent columns. The
          * sign carries the only reading that matters: wrong-signed for its side = already through.
          */
-        function wlOutlookPctCell(o, field) {
+        function wlOutlookPctCell(o, field, ccy) {
             var fa = ' data-f="' + field + '"';
             if (!o || o.movePct == null) return '<td class="na"' + fa + '>—</td>';
             var n = parseFloat(o.movePct) * 100;
-            return '<td' + fa + (o.through ? ' title="Already through this level."' : '') + '>' +
+            var t = wlOutlookSubject(o, ccy) + (o.through ? ' Already through it.' : '');
+            return '<td' + fa + (t ? ' title="' + escapeHtml(t) + '"' : '') + '>' +
                 (n >= 0 ? '+' : '') + n.toFixed(1) + '%</td>';
         }
 
-        /** The RV10/RV30 bracket (and the "already there" case) as the cell's tooltip. */
-        function wlOutlookTitle(o) {
+        /**
+         * Which of the side's two levels this reading was priced to. Printed on both cells
+         * because the column header cannot say it: the answer is per row — a side with a target
+         * reads to the target, one without hands the question back to its trigger — and a figure
+         * whose subject the reader has to infer is the thing this whole pair exists to avoid.
+         */
+        function wlOutlookSubject(o, ccy) {
+            if (!o || o.level == null) return '';
+            return 'To the ' + (o.fromTarget ? 'order target' : 'trigger (no target set)') + ' ' +
+                fmtPrice(o.level, ccy) + '.';
+        }
+
+        /** The level, the RV10/RV30 bracket and the "already there" case, as the cell's tooltip. */
+        function wlOutlookTitle(o, ccy) {
             if (!o) return '';
-            if (o.through) return 'Already at or through this level — the barrier has been touched.';
-            var parts = ['Priced over ' + o.sessions + ' trading sessions, driftless.'];
+            var subject = wlOutlookSubject(o, ccy);
+            if (o.through) {
+                return (subject + ' Already at or through it — the barrier has been touched.').trim();
+            }
+            var parts = [subject, 'Priced over ' + o.sessions + ' trading sessions, driftless.'];
             if (o.probabilityLow != null && o.probabilityHigh != null) {
                 parts.push('Range on RV10/RV30: ' + (o.probabilityLow * 100).toFixed(1) + '% – ' +
                     (o.probabilityHigh * 100).toFixed(1) + '%');
             }
-            return parts.join(' ');
+            return parts.filter(Boolean).join(' ');
         }
 
-        function wlOutlookProbCell(o, field) {
+        function wlOutlookProbCell(o, field, ccy) {
             var fa = ' data-f="' + field + '"';
             if (!o || o.probability == null) return '<td class="na"' + fa + '>—</td>';
-            var t = wlOutlookTitle(o);
+            var t = wlOutlookTitle(o, ccy);
             return '<td' + fa + ' data-sort-value="' + o.probability + '"' +
                 (t ? ' title="' + escapeHtml(t) + '"' : '') + '>' +
                 (parseFloat(o.probability) * 100).toFixed(1) + '%</td>';
         }
 
-        function wlPatchOutlookPct(tr, field, o) {
+        function wlPatchOutlookPct(tr, field, o, ccy) {
             var td = tr.querySelector('td[data-f="' + field + '"]');
             if (!td) return;
             if (!o || o.movePct == null) {
@@ -8786,10 +8879,11 @@
             var n = parseFloat(o.movePct) * 100;
             td.className = '';
             td.textContent = (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
-            if (o.through) td.title = 'Already through this level.'; else td.removeAttribute('title');
+            var t = wlOutlookSubject(o, ccy) + (o.through ? ' Already through it.' : '');
+            if (t.trim()) td.title = t.trim(); else td.removeAttribute('title');
         }
 
-        function wlPatchOutlookProb(tr, field, o) {
+        function wlPatchOutlookProb(tr, field, o, ccy) {
             var td = tr.querySelector('td[data-f="' + field + '"]');
             if (!td) return;
             if (!o || o.probability == null) {
@@ -8800,7 +8894,7 @@
             td.className = '';
             td.textContent = (parseFloat(o.probability) * 100).toFixed(1) + '%';
             td.dataset.sortValue = o.probability;
-            var t = wlOutlookTitle(o);
+            var t = wlOutlookTitle(o, ccy);
             if (t) td.title = t; else td.removeAttribute('title');
         }
 
@@ -8808,6 +8902,22 @@
             var thr = WlEditSync.resolve(r, wlPending[r.symbol]).values;
             return '<td><input class="wl-thr-input' + (extraCls || '') + '" data-sym="' + r.symbol +
                 '" data-kind="' + kind + '" type="text" value="' + thr[kind] + '"/></td>';
+        }
+
+        /**
+         * One side's order target: where the order goes once that side's trigger fires.
+         *
+         * <p>Blank is not nothing — it means the trigger stands in for the two readings beside it
+         * — so the empty box shows the trigger it would fall back to rather than sitting silent.
+         * An input with a value shows no placeholder, so the hint can never be mistaken for one.
+         */
+        function wlTgtCell(r, kind) {
+            var tgt = WlEditSync.resolveTargets(r, wlTargetPending[r.symbol]).values;
+            var trigger = WlEditSync.rowDisplay(kind === 'tgtAbove' ? 'above' : 'below', r);
+            var hint = trigger ? '= ' + trigger : 'order level';
+            return '<td><input class="wl-tgt-input wl-price-input" data-sym="' + r.symbol +
+                '" data-kind="' + kind + '" type="text" placeholder="' + escapeHtml(hint) +
+                '" value="' + tgt[kind] + '"/></td>';
         }
 
         /** Render one column's <td> for one row. */
@@ -8841,11 +8951,13 @@
                 case 'thrHigh': return wlThrCell(r, 'high');
                 case 'thrMove': return wlThrCell(r, 'move');
                 case 'thrAbove': return wlThrCell(r, 'above', ' wl-price-input');
-                case 'thrAbovePct': return wlOutlookPctCell(r.aboveOutlook, 'thrAbovePct');
-                case 'thrAboveProb': return wlOutlookProbCell(r.aboveOutlook, 'thrAboveProb');
+                case 'tgtAbove': return wlTgtCell(r, 'tgtAbove');
+                case 'thrAbovePct': return wlOutlookPctCell(r.aboveOutlook, 'thrAbovePct', r.currency);
+                case 'thrAboveProb': return wlOutlookProbCell(r.aboveOutlook, 'thrAboveProb', r.currency);
                 case 'thrBelow': return wlThrCell(r, 'below', ' wl-price-input');
-                case 'thrBelowPct': return wlOutlookPctCell(r.belowOutlook, 'thrBelowPct');
-                case 'thrBelowProb': return wlOutlookProbCell(r.belowOutlook, 'thrBelowProb');
+                case 'tgtBelow': return wlTgtCell(r, 'tgtBelow');
+                case 'thrBelowPct': return wlOutlookPctCell(r.belowOutlook, 'thrBelowPct', r.currency);
+                case 'thrBelowProb': return wlOutlookProbCell(r.belowOutlook, 'thrBelowProb', r.currency);
                 case 'note': return wlNoteCell(r);
                 default: return '<td class="na">—</td>';
             }
@@ -8942,6 +9054,23 @@
                 // Enter commits: the inputs aren't in a <form>, so blur (which fires change) is the save.
                 inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') this.blur(); });
             });
+            // The order targets save on their own, to their own endpoint — nothing fires on them,
+            // so unlike a threshold edit this must not re-arm today's alerts. Either box posts the
+            // pair, because one write covers the row.
+            tr.querySelectorAll('.wl-tgt-input').forEach(function (inp) {
+                inp.addEventListener('change', function () {
+                    var row = this.closest('tr');
+                    var above = row.querySelector('.wl-tgt-input[data-kind="tgtAbove"]');
+                    var below = row.querySelector('.wl-tgt-input[data-kind="tgtBelow"]');
+                    // A layout can show one side without the other; a box that isn't on screen
+                    // keeps whatever is stored rather than being posted as a blank that clears it.
+                    var r = row._wlRow || {};
+                    saveWatchlistTarget(this.dataset.sym,
+                        above ? above.value.trim() : WlEditSync.thrDisplay('above', r.targetAbove),
+                        below ? below.value.trim() : WlEditSync.thrDisplay('below', r.targetBelow));
+                });
+                inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') this.blur(); });
+            });
             // The note saves on its own, to its own endpoint — a threshold save carries no note and
             // this carries no thresholds, so neither can overwrite the other with a stale value.
             // Absent when the column isn't in this list's layout; a layout change rebuilds the rows.
@@ -8987,6 +9116,19 @@
             });
         }
 
+        // Same rule as the thresholds, with the placeholder kept in step: an empty target box
+        // names the trigger it falls back to, and that trigger can have just been edited.
+        function wlPatchTargets(tr, r) {
+            var tgt = WlEditSync.resolveTargets(r, wlTargetPending[r.symbol]).values;
+            WlEditSync.TARGET_KINDS.forEach(function (kind) {
+                var inp = tr.querySelector('.wl-tgt-input[data-kind="' + kind + '"]');
+                if (!inp || document.activeElement === inp) return;
+                inp.value = tgt[kind];
+                var trigger = WlEditSync.rowDisplay(kind === 'tgtAbove' ? 'above' : 'below', r);
+                inp.placeholder = trigger ? '= ' + trigger : 'order level';
+            });
+        }
+
         // Same rule as the thresholds: never touch the input the caret is in, and let a just-saved
         // value stand until a render carries it back.
         function wlPatchNote(tr, r) {
@@ -9009,6 +9151,7 @@
             wlPatchGbpCell(tr, 'position', r.held ? r.positionValueGbp : null, false);
             wlPatchGbpCell(tr, 'gain', r.held ? r.gainGbp : null, true);
             wlPatchInputs(tr, r);
+            wlPatchTargets(tr, r);
             wlPatchNote(tr, r);
         }
 
@@ -9125,14 +9268,23 @@
             stats.appendChild(wlRangeStat('high'));
             stats.appendChild(wlRangeStat('low'));
             stats.appendChild(wlStat('% vs high', wlPctText(r.pctFromHigh), wlTip('pctFromHigh')));
+            // Trigger, then target, then the two readings — the same left-to-right sentence the
+            // grid's columns make. A side with no target shows none: the readings beside it name
+            // the trigger they fell back to, so nothing here is left unaccounted for.
             if (r.priceAbove != null) {
-                stats.appendChild(wlStat('Above', fmtPrice(r.priceAbove, r.currency), wlTip('thrAbove')));
-                wlOutlookStats(stats, r.aboveOutlook, 'thrAbovePct', 'thrAboveProb');
+                stats.appendChild(wlStat('Above trigger', fmtPrice(r.priceAbove, r.currency), wlTip('thrAbove')));
             }
+            if (r.targetAbove != null) {
+                stats.appendChild(wlStat('Above target', fmtPrice(r.targetAbove, r.currency), wlTip('tgtAbove')));
+            }
+            wlOutlookStats(stats, r.aboveOutlook, 'thrAbovePct', 'thrAboveProb', r.currency);
             if (r.priceBelow != null) {
-                stats.appendChild(wlStat('Below', fmtPrice(r.priceBelow, r.currency), wlTip('thrBelow')));
-                wlOutlookStats(stats, r.belowOutlook, 'thrBelowPct', 'thrBelowProb');
+                stats.appendChild(wlStat('Below trigger', fmtPrice(r.priceBelow, r.currency), wlTip('thrBelow')));
             }
+            if (r.targetBelow != null) {
+                stats.appendChild(wlStat('Below target', fmtPrice(r.targetBelow, r.currency), wlTip('tgtBelow')));
+            }
+            wlOutlookStats(stats, r.belowOutlook, 'thrBelowPct', 'thrBelowProb', r.currency);
             stats.appendChild(wlStat('P/E', r.trailingPe == null ? '—' : parseFloat(r.trailingPe).toFixed(1),
                     wlTip('trailingPe')));
             stats.appendChild(wlStat('Beta', r.beta == null ? '—' : parseFloat(r.beta).toFixed(2), wlTip('beta')));
@@ -9187,17 +9339,24 @@
          * price or no usable volatility has nothing to say, and a '—' pair would only take up
          * room the strip needs.
          */
-        function wlOutlookStats(stats, o, pctKey, probKey) {
+        function wlOutlookStats(stats, o, pctKey, probKey, ccy) {
             if (!o) return;
             var reg = wlColumnRegistry().byKey;
+            // Which level these two were priced to, prepended to the explanation the registry
+            // already holds — the strip has no cell to hover, so it says it here or nowhere.
+            var subject = wlOutlookSubject(o, ccy);
+            function tip(key) {
+                var base = wlTip(key);
+                return subject ? (base ? subject + ' ' + base : subject) : base;
+            }
             if (o.movePct != null) {
                 var n = parseFloat(o.movePct) * 100;
                 stats.appendChild(wlStat((reg[pctKey] || {}).label || '%',
-                        (n >= 0 ? '+' : '') + n.toFixed(1) + '%', wlTip(pctKey)));
+                        (n >= 0 ? '+' : '') + n.toFixed(1) + '%', tip(pctKey)));
             }
             if (o.probability != null) {
                 stats.appendChild(wlStat((reg[probKey] || {}).label || 'P(N)',
-                        (parseFloat(o.probability) * 100).toFixed(1) + '%', wlTip(probKey)));
+                        (parseFloat(o.probability) * 100).toFixed(1) + '%', tip(probKey)));
             }
         }
 

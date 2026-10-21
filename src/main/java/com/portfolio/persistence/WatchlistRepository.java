@@ -73,6 +73,8 @@ public class WatchlistRepository {
                 display_order      INTEGER,
                 price_above        REAL,
                 price_below        REAL,
+                target_above       REAL,
+                target_below       REAL,
                 note               TEXT
             )""";
 
@@ -129,6 +131,9 @@ public class WatchlistRepository {
     /** Set once the two price-level columns have joined the layouts that predate them. */
     static final String LEVEL_COLUMNS_BACKFILLED_KEY = "watchlist_level_columns_backfilled";
 
+    /** Set once the two order-target columns have joined the layouts that predate them. */
+    static final String TARGET_COLUMNS_BACKFILLED_KEY = "watchlist_target_columns_backfilled";
+
     /**
      * The distance and probability columns, and the column each one belongs beside. A level's
      * move-to-target and touch probability are a reading <em>of that level</em>, so they are
@@ -138,6 +143,17 @@ public class WatchlistRepository {
     private static final String[][] LEVEL_COLUMNS = {
             {"thrAbove", "thrAbovePct", "thrAboveProb"},
             {"thrBelow", "thrBelowPct", "thrBelowProb"},
+    };
+
+    /**
+     * The order target each side gained later, and the trigger it belongs beside. It goes
+     * <em>between</em> the trigger and that side's two readings, because the readings are priced
+     * to the target once one is set — so the three columns after a trigger read left to right as
+     * "where I would act, how far that is, how likely it is".
+     */
+    private static final String[][] TARGET_COLUMNS = {
+            {"thrAbove", "tgtAbove"},
+            {"thrBelow", "tgtBelow"},
     };
 
     private final JdbcConnectionFactory connections;
@@ -151,6 +167,8 @@ public class WatchlistRepository {
             addColumnIfMissing(ddl, "display_order INTEGER");
             addColumnIfMissing(ddl, "price_above REAL");
             addColumnIfMissing(ddl, "price_below REAL");
+            addColumnIfMissing(ddl, "target_above REAL");
+            addColumnIfMissing(ddl, "target_below REAL");
             addColumnIfMissing(ddl, "note TEXT");
             // Backfill any rows that predate the column so ordering is stable and non-null.
             ddl.execute("UPDATE watchlist SET display_order = rowid WHERE display_order IS NULL");
@@ -163,6 +181,7 @@ public class WatchlistRepository {
             migrateToLists(conn, ddl);
             backfillNoteColumn(conn);
             backfillLevelColumns(conn);
+            backfillTargetColumns(conn);
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise watchlist table", e);
         }
@@ -239,7 +258,41 @@ public class WatchlistRepository {
      * only appended when a layout has dropped the parent itself.
      */
     private void backfillLevelColumns(Connection conn) throws java.sql.SQLException {
-        if (keyValueStore.getBoolean(LEVEL_COLUMNS_BACKFILLED_KEY, false)) return;
+        backfillColumnFamilies(conn, LEVEL_COLUMNS_BACKFILLED_KEY, LEVEL_COLUMNS, "price-level", true);
+    }
+
+    /**
+     * Put each side's order target directly after its trigger in every <em>stored</em> layout, once.
+     *
+     * <p>Same one-shot marker as the two backfills above, and for the same reason. Placement is
+     * what matters here: the target lands <em>between</em> the trigger and that side's % and P(N),
+     * because those two are priced to the target once one is set. It runs after
+     * {@link #backfillLevelColumns} so that on a database old enough to need both, the readings
+     * are already beside their trigger and the target slides in ahead of them.
+     *
+     * <p><b>A layout that has taken its trigger off gets no target either</b> — the one place this
+     * differs from the backfill above. The % and P(N) are <em>readings</em> and stand on their own,
+     * so they are appended when their level has been hidden; a target is an <em>editor</em> for a
+     * side, and a side the user has taken off this list does not want one — least of all stranded
+     * at the far right, past the note, with its empty box naming a trigger that is not on screen.
+     * The picker is two clicks away if they change their mind.
+     */
+    private void backfillTargetColumns(Connection conn) throws java.sql.SQLException {
+        backfillColumnFamilies(conn, TARGET_COLUMNS_BACKFILLED_KEY, TARGET_COLUMNS, "order-target", false);
+    }
+
+    /**
+     * Insert each family's later columns straight after the column they read, in every stored
+     * layout, exactly once — guarded by {@code markerKey}.
+     *
+     * @param families each row is {@code {parent, child…}}; a child already present is left where
+     *                 it is
+     * @param orphans  what to do with a family whose parent the user has removed: {@code true}
+     *                 appends the children at the end, {@code false} skips the family entirely
+     */
+    private void backfillColumnFamilies(Connection conn, String markerKey, String[][] families,
+                                        String what, boolean orphans) throws java.sql.SQLException {
+        if (keyValueStore.getBoolean(markerKey, false)) return;
         // On the constructor's own connection throughout: opening a second one to rewrite a layout
         // while this one is still mid-initialisation is how a SQLite writer lock gets contended.
         Map<Long, List<String>> layouts = new LinkedHashMap<>();
@@ -254,8 +307,9 @@ public class WatchlistRepository {
         for (Map.Entry<Long, List<String>> entry : layouts.entrySet()) {
             List<String> updated = new ArrayList<>(entry.getValue());
             boolean changed = false;
-            for (String[] family : LEVEL_COLUMNS) {
+            for (String[] family : families) {
                 int at = updated.indexOf(family[0]);
+                if (at < 0 && !orphans) continue;          // the level is off this list by choice
                 for (int i = 1; i < family.length; i++) {
                     if (updated.contains(family[i])) continue;
                     if (at < 0) updated.add(family[i]);    // the level itself had been removed
@@ -267,8 +321,8 @@ public class WatchlistRepository {
             rewriteColumns(conn, entry.getKey(), updated);
             touched++;
         }
-        if (touched > 0) log.info("Added the price-level columns to {} saved watchlist layout(s)", touched);
-        keyValueStore.putBoolean(LEVEL_COLUMNS_BACKFILLED_KEY, true);
+        if (touched > 0) log.info("Added the {} columns to {} saved watchlist layout(s)", what, touched);
+        keyValueStore.putBoolean(markerKey, true);
     }
 
     /** {@link #saveColumns} on a caller-supplied connection — for the constructor's migrations. */
@@ -320,9 +374,9 @@ public class WatchlistRepository {
      * list updates the triggers both lists show. Membership is separate and additive: the same
      * name can sit in any number of lists, appended to the end of each.
      *
-     * <p>The upsert deliberately leaves {@code note} alone. The add box collects no note, so an
-     * add that lands on a watched symbol — which is how a name joins a second list — would
-     * otherwise erase the plan written against it.
+     * <p>The upsert deliberately leaves {@code note} and the two order targets alone. The add box
+     * collects neither, so an add that lands on a watched symbol — which is how a name joins a
+     * second list — would otherwise erase the plan, and the order levels, written against it.
      */
     public void add(String symbol, BigDecimal highPct, BigDecimal movePct,
                     BigDecimal priceAbove, BigDecimal priceBelow, long listId) {
@@ -390,6 +444,39 @@ public class WatchlistRepository {
             }
         } catch (Exception e) {
             throw new IllegalStateException("Could not update the note for " + sym + ".", e);
+        }
+    }
+
+    /**
+     * Store the symbol's two <b>order targets</b> — where the order goes once a trigger fires —
+     * or clear either of them.
+     *
+     * <p><b>Its own write, deliberately not part of {@link #updateThresholds}.</b> A target is not
+     * a trigger: nothing fires on it, and moving it changes nothing about where the price has to
+     * get for the email to go out. The controller therefore clears no fired flags here, exactly as
+     * it does not for {@link #updateNote} — re-arming would re-mail a signal already sent for the
+     * same trigger levels. Keeping the two writes apart is also what lets the client hold a
+     * separate optimistic overlay for each, so neither save can blank the other's pending value.
+     *
+     * <p>Blank or negative stores the {@link #DISABLED} sentinel, which reads back as "no target
+     * declared" — and <em>that</em> is what makes the trigger stand in for the readings beside it.
+     *
+     * <p>A save for a symbol that has since been removed is a no-op rather than an error, for the
+     * reason {@link #updateThresholds} gives.
+     */
+    public void updateTargets(String symbol, BigDecimal targetAbove, BigDecimal targetBelow) {
+        String sym = normalise(symbol);
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE watchlist SET target_above = ?, target_below = ? WHERE symbol = ?")) {
+            ps.setDouble(1, orDisabled(targetAbove).doubleValue());
+            ps.setDouble(2, orDisabled(targetBelow).doubleValue());
+            ps.setString(3, sym);
+            if (ps.executeUpdate() == 0) {
+                log.debug("Target update for {} affected no rows (not on the watchlist) — ignored.", sym);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not update the order targets for " + sym + ".", e);
         }
     }
 
@@ -474,7 +561,8 @@ public class WatchlistRepository {
      */
     public List<Entry> loadAll() {
         return readEntries(
-                "SELECT symbol, high_threshold_pct, move_threshold_pct, added_at, price_above, price_below, note " +
+                "SELECT symbol, high_threshold_pct, move_threshold_pct, added_at, price_above, price_below, " +
+                        "target_above, target_below, note " +
                         "FROM watchlist ORDER BY display_order, symbol", null);
     }
 
@@ -482,7 +570,7 @@ public class WatchlistRepository {
     public List<Entry> loadAll(long listId) {
         return readEntries(
                 "SELECT w.symbol, w.high_threshold_pct, w.move_threshold_pct, w.added_at, " +
-                        "w.price_above, w.price_below, w.note " +
+                        "w.price_above, w.price_below, w.target_above, w.target_below, w.note " +
                         "FROM watchlist w JOIN watchlist_member m ON m.symbol = w.symbol " +
                         "WHERE m.list_id = ? ORDER BY m.display_order, w.symbol", listId);
     }
@@ -503,7 +591,9 @@ public class WatchlistRepository {
                             Instant.parse(rs.getString(4)),
                             BigDecimal.valueOf(rs.getDouble(5)),
                             BigDecimal.valueOf(rs.getDouble(6)),
-                            blankToNull(rs.getString(7))));
+                            BigDecimal.valueOf(rs.getDouble(7)),
+                            BigDecimal.valueOf(rs.getDouble(8)),
+                            blankToNull(rs.getString(9))));
                 }
             }
         } catch (Exception e) {
@@ -802,11 +892,22 @@ public class WatchlistRepository {
     }
 
     /**
-     * One watched symbol's settings. {@code note} is what to do when its alert fires — free text,
-     * nothing parses it — and is null when none has been written.
+     * One watched symbol's settings.
+     *
+     * <p>Each price side carries <b>two</b> levels and they answer different questions.
+     * {@code priceAbove}/{@code priceBelow} are the <em>triggers</em>: where the price has to get
+     * for the email to go out. {@code targetAbove}/{@code targetBelow} are the <em>order
+     * targets</em>: where the order is actually placed once that email arrives, normally further
+     * out. Nothing evaluates a target — it is read only by the distance and touch-probability
+     * columns, which price to it in preference to the trigger — and a non-positive one means none
+     * has been declared, which is what hands those readings back to the trigger.
+     *
+     * <p>{@code note} is what to do when the alert fires — free text, nothing parses it — and is
+     * null when none has been written.
      */
     public record Entry(String symbol, BigDecimal highThresholdPct, BigDecimal moveThresholdPct,
                         Instant addedAt, BigDecimal priceAbove, BigDecimal priceBelow,
+                        BigDecimal targetAbove, BigDecimal targetBelow,
                         String note) {
     }
 }

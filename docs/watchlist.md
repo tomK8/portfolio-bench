@@ -80,11 +80,56 @@ touches an order.
     settings about each other. Enter still commits — `preventDefault` first, or the textarea
     inserts the newline before blur fires the save.
 
-- **Each level carries two readings of its own.** An `Above` or `Below` level sits beside **%**,
-  the move the price still has to make to reach it, and **P(N)**, the chance it is touched at
-  least once within N trading sessions. Three columns per side, and the readings are inserted
-  directly after the level they read rather than appended — a distance eight columns away from
-  the level it belongs to is a layout nobody would arrange by hand.
+- **Two levels a side: the trigger tells you, the target is where you deal.** An `Above`/`Below`
+  level is the *trigger* — the price that sends the email. Beside it sits that side's **order
+  target**: where the order actually goes once the email arrives, normally further out
+  (`target_above`/`target_below` on `watchlist`, `POST /watchlist/target`). The note column was
+  already carrying this by hand — *"Order for 30 at $480 already in"* against a Below trigger of
+  490 — which is the shape of the gap: the thing you act on was prose, and nothing could price it.
+  - **Nothing evaluates a target.** `WatchlistAlerts` never sees one; the flags, the row colour
+    and the email all still key off the trigger. A target that fired would arrive at the moment
+    it was already too late to place the order, which is the opposite of what the trigger is for.
+  - **It is therefore its own write, and it re-arms nothing.** `POST /watchlist/target` sits
+    beside `/watchlist/note` rather than on `/watchlist/threshold`, and like the note it calls no
+    `clearFiredFor`: moving the level you intend to deal at changes nothing about where the price
+    has to get for the mail to go out, so re-arming would re-send a signal already sent for the
+    same triggers. Three separate writes means three separate optimistic overlays
+    (`wlPending`, `wlTargetPending`, `wlNotePending`, `WlEditSync.resolveTargets`) — one record
+    holding all of them would have each save blank the others' pending values.
+  - **An `add` leaves the targets alone**, as it leaves the note alone and for the same reason:
+    the add box collects neither, and re-adding a watched name is how it joins a second list.
+  - **In the email the two are never one number.** The line reads
+    `AAPL hit Above trigger 105 — now 110; order target 125`. It previously called the trigger
+    "the target", which is the word the feature took back; the order level is printed only when
+    one is declared, never a trigger restated as somewhere to deal.
+
+- **Each side's two readings are priced to the target, and say so.** An `Above` or `Below` side
+  carries **%**, the move the price still has to make to reach it, and **P(N)**, the chance it is
+  touched at least once within N trading sessions. Four columns per side — trigger, target, %,
+  P(N) — and the readings are inserted directly after the level they read rather than appended; a
+  distance eight columns away from the level it belongs to is a layout nobody would arrange by
+  hand.
+  - **The target is what has to fill, so the target is what is measured.** The trigger's own
+    distance is the less interesting of the two: it is a heads-up, and the question worth a
+    probability is whether the order gets hit. `WatchlistService.outlook` takes both and prices
+    the target.
+  - **No target means the trigger stands in** — blank is "I would act at the level I asked to be
+    told about", the honest default, and the only thing that keeps the column from going dark on
+    every row that predates targets. The alternative, `—` until a target is typed, was the
+    stricter reading of *absent is never zero* but would have withheld a figure the row can
+    answer.
+  - **Which of the two was used is never left to be inferred.** `Outlook` carries `level` and
+    `fromTarget`, and both cells print them: *"To the order target $470.00"* against *"To the
+    trigger (no target set) $490.00"*. That is what keeps one header over a column whose subject
+    varies by row from being the comparability problem it would otherwise be — the subject is on
+    the cell. The empty target box carries the other half of it, showing `= 490` as its
+    placeholder, so the fallback is visible before you hover anything.
+  - **A side the list has taken off gets no target column.** The backfill that puts a new column
+    into saved layouts appends the %/P(N) when their level has been hidden — a reading stands on
+    its own — but *skips* the target, because a target is an **editor** for a side, and one
+    stranded past the Note with no trigger beside it and a placeholder naming a column that is
+    not on screen is a column nobody asked for. (Observed: the first run appended `tgtAbove` to a
+    list that had deliberately dropped `thrAbove`.)
   - **One definition of the move, both sides.** It is signed, and it always means *what the price
     still has to do*: `(level − price) ÷ price`. An Above level normally reads positive and a
     Below level negative, so a level the market has **already gone through reads with the wrong
@@ -122,10 +167,13 @@ touches an order.
     momentum and the vol, not among the slow position/fundamentals columns.
   - Absent is never zero, three ways: no level, no price, and no usable volatility all give no
     `Outlook` at all and a `—` cell, not a 0% that reads as "it will never get there".
-  - The four columns reached the layouts that predate them through the **same one-shot backfill**
-    the note used, with one difference: placement. The note joined at the end because it belongs
-    to the row; these belong to the level above them, so each is inserted after its parent and
-    only appended when a layout has dropped the level itself.
+  - The four readings, and the two targets after them, reached the layouts that predate them
+    through the **same one-shot backfill** the note used (`watchlist_level_columns_backfilled`,
+    then `watchlist_target_columns_backfilled`), with one difference: placement. The note joined
+    at the end because it belongs to the row; these belong beside the level they read, so each is
+    inserted after its parent — the readings appended when a layout has dropped the level itself,
+    the target skipped (above). The two run in that order, so a database old enough to need both
+    has its readings beside the trigger before the target slides in ahead of them.
 
 - **Drag to reorder, rows and columns.** A grip (⠿) in each row's Symbol cell drags the row; a
   chip in the column picker drags the column. The ↑↓ buttons stay beside both — they are the
@@ -212,7 +260,8 @@ touches an order.
     delete, and the same pass dropped `operatingMargins` for stating a period the panel does not
     (see [fundamentals.md](fundamentals.md)). The mark still earns its place for the metrics that
     are empty per asset class rather than outright.
-- `WatchlistRepository` — `watchlist` table (symbol PK + two thresholds + added_at). The
+- `WatchlistRepository` — `watchlist` table (symbol PK + two thresholds + two price triggers +
+  two order targets + the note + added_at). The
   symbol set is **mirrored** to `KeyValueStore` under `watchlist_symbols` on every mutation,
   so `PriceFetchSupport.tickersToFetch` and `PortfolioFundamentalsService` union watchlist
   names into their fetch universes with no constructor churn — a freshly added symbol gets
@@ -240,7 +289,8 @@ touches an order.
   threshold/level disables that trigger** (`WatchlistRepository` stores 0; the columns are
   `price_above`/`price_below`, NULL on rows predating them → read as 0 = disabled), so a symbol can
   be watched with no alerts at all. `both()` (the pulse) stays near-high + big-move only; the alert
-  job dedups the price levels under `SYMBOL|ABOVE|date` / `SYMBOL|BELOW|date`.
+  job dedups the price levels under `SYMBOL|ABOVE|date` / `SYMBOL|BELOW|date`. The two **order
+  targets are not triggers** and `WatchlistAlerts` is never handed them — see above.
 - **A row with no prices says which kind of nothing it is.** `Row.missingData` marks the absence;
   `Row.missingReason` (from `UnresolvedSymbols`, see
   [price-history.md](price-history.md)) is non-null only once Yahoo has actually refused the
@@ -377,10 +427,11 @@ touches an order.
   momentum (5d/30d) + a realized-vol term structure (5D/10D/30D/1Y annualised) + 52-wk
   high/low distances + P/E/beta
   + position/gain (blank when not held). Four per-symbol alert triggers with editable
-  thresholds/levels: proximity to the 52-week high, |today's move|, and absolute price
-  targets (≥ above and ≤ below, in the price's native currency) — plus the **Note** cell beside
-  them, the free-text plan for when one of them fires, which the alert email prints under that
-  symbol's signals. Row colour = alert state
+  thresholds/levels: proximity to the 52-week high, |today's move|, and two absolute price
+  levels (≥ above and ≤ below, in the price's native currency) — each with an editable **order
+  target** beside it, the level the order actually goes at, which nothing alerts on and the
+  side's % and P(N) are priced to — plus the **Note** cell, the free-text plan for when one of
+  them fires, which the alert email prints under that symbol's signals. Row colour = alert state
   (green/red today-move by direction, blue near-high, amber ≥-target, purple ≤-target,
   pulsing when both near-high + big-move).
   - **The grid is its own scroll surface.** `#watchlist-wrap` is a centred `.full-bleed` — the

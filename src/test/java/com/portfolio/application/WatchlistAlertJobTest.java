@@ -138,11 +138,49 @@ class WatchlistAlertJobTest {
         assertEquals(1, body.split("Trim 25% in the SIPP", -1).length - 1,
                 "the note is the plan for the signal, not for each trigger of it: printed once");
         // It belongs under the firings it explains, not as a line that reads like another signal.
-        int firstSignal = Math.min(body.indexOf("up 10.0% today"), body.indexOf("hit Above target"));
+        int firstSignal = Math.min(body.indexOf("up 10.0% today"), body.indexOf("hit Above trigger"));
         assertTrue(firstSignal >= 0 && body.indexOf("Trim 25%") > firstSignal,
                 "the note follows the symbol's own lines: " + body);
         assertEquals("Watchlist alert: 2 signals", mail.subjects.get(0),
                 "two triggers fired; the note is not a third signal");
+    }
+
+    /**
+     * Two numbers, and the email must not blur them: the <b>trigger</b> is what fired, the
+     * <b>order target</b> is where the deal goes. Printing only the trigger — which is what the
+     * line used to call "the target" — leaves the one figure the mail exists to act on out of it.
+     */
+    @Test
+    void thePriceLineNamesTheTriggerThatFiredAndTheTargetToDealAt(@TempDir Path dir) {
+        KeyValueStore kv = new KeyValueStore(dir);
+        WatchlistService svc = service(dir, kv, repo -> {
+            repo.add("AAPL", null, null, new BigDecimal("105"), null);   // price 110 → fires
+            repo.updateTargets("AAPL", new BigDecimal("125"), null);
+        });
+        CapturingNotifier mail = new CapturingNotifier();
+
+        new WatchlistAlertJob(svc, mail, kv).run();
+
+        String body = mail.bodies.get(0);
+        assertTrue(body.contains("hit Above trigger 105 — now 110"), body);
+        assertTrue(body.contains("order target 125"), body);
+        assertFalse(body.contains("hit Above target"),
+                "the level that fired is the trigger — the target is a different number");
+    }
+
+    /** No target declared, nothing extra said. A trigger is not restated as an order level. */
+    @Test
+    void aSideWithNoTargetPrintsNoOrderLine(@TempDir Path dir) {
+        KeyValueStore kv = new KeyValueStore(dir);
+        WatchlistService svc = service(dir, kv,
+                repo -> repo.add("AAPL", null, null, new BigDecimal("105"), null));
+        CapturingNotifier mail = new CapturingNotifier();
+
+        new WatchlistAlertJob(svc, mail, kv).run();
+
+        String body = mail.bodies.get(0);
+        assertTrue(body.contains("hit Above trigger 105 — now 110"), body);
+        assertFalse(body.contains("order target"), body);
     }
 
     @Test

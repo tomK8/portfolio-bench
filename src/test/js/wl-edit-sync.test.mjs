@@ -154,3 +154,49 @@ test('the note overlay is independent of the threshold overlay', () => {
     assert.deepEqual(WL.resolve(row, { high: '6', move: '3', above: '105', below: '' }).values,
         { high: '6', move: '3', above: '105', below: '' });
 });
+
+test('rowTargets canonicalises the two order targets the way a level is canonicalised', () => {
+    assert.deepEqual(WL.rowTargets({ targetAbove: 275, targetBelow: 180 }),
+        { tgtAbove: '275', tgtBelow: '180' });
+    // Disabled is stored as 0 and absent is null; both render as an empty box, which is what
+    // hands that side's readings back to its trigger.
+    assert.deepEqual(WL.rowTargets({ targetAbove: 0, targetBelow: null }),
+        { tgtAbove: '', tgtBelow: '' });
+    assert.deepEqual(WL.rowTargets(null), { tgtAbove: '', tgtBelow: '' });
+});
+
+test('a just-saved order target survives a render that has not caught up to it', () => {
+    const stale = { targetAbove: 275, targetBelow: null };
+    assert.deepEqual(WL.resolveTargets(stale, { tgtAbove: '300', tgtBelow: '' }),
+        { values: { tgtAbove: '300', tgtBelow: '' }, confirmed: false });
+
+    const echoed = { targetAbove: 300, targetBelow: null };
+    assert.deepEqual(WL.resolveTargets(echoed, { tgtAbove: '300', tgtBelow: '' }),
+        { values: { tgtAbove: '300', tgtBelow: '' }, confirmed: true });
+});
+
+test('the target overlay is independent of the threshold and note overlays', () => {
+    // Three separate saves to three separate endpoints — only the threshold one re-arms the
+    // alerts — so no resolver may read another's field. One record for all of them would have
+    // each write erase the others' pending values.
+    const row = { highThresholdPct: 5, moveThresholdPct: 3, priceAbove: 105, priceBelow: null,
+                  targetAbove: 120, targetBelow: null, note: 'Trim 25%' };
+
+    assert.deepEqual(WL.resolve(row, null).values,
+        { high: '5', move: '3', above: '105', below: '' });
+    assert.deepEqual(WL.resolveTargets(row, null).values, { tgtAbove: '120', tgtBelow: '' });
+    assert.equal(WL.resolveNote(row, null).value, 'Trim 25%');
+
+    // A pending target save leaves the triggers and the note reading off the server row.
+    const pendingTarget = { tgtAbove: '130', tgtBelow: '' };
+    assert.deepEqual(WL.resolveTargets(row, pendingTarget).values, pendingTarget);
+    assert.deepEqual(WL.resolve(row, null).values,
+        { high: '5', move: '3', above: '105', below: '' });
+    assert.equal(WL.resolveNote(row, null).value, 'Trim 25%');
+});
+
+test('clearing a target is itself a pending value, not an absence of one', () => {
+    assert.deepEqual(WL.resolveTargets({ targetAbove: 275, targetBelow: null },
+            { tgtAbove: '', tgtBelow: '' }),
+        { values: { tgtAbove: '', tgtBelow: '' }, confirmed: false });
+});

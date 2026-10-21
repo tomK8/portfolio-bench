@@ -131,7 +131,35 @@ public class WatchlistController {
         watchlistRepo.updateThresholds(symbol, parsePct(highPct, "high threshold"),
                 parsePct(movePct, "move threshold"),
                 parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"));
-        watchlistAlertJob.clearFiredFor(symbol);   // a corrected target re-arms same-day
+        watchlistAlertJob.clearFiredFor(symbol);   // a corrected trigger re-arms same-day
+        return watchlistService.view(listOrFirst(list));
+    }
+
+    /**
+     * The two <b>order targets</b> — where the order actually goes once a trigger fires, normally
+     * further out than the trigger itself.
+     *
+     * <p><b>Its own endpoint, and it clears no fired flags.</b> Nothing alerts on a target: it is
+     * read only by the distance and P(N) columns, which price to it in preference to the trigger.
+     * Moving it changes nothing about where the price has to get for the email to go out, so
+     * re-arming here would re-mail a signal already sent for the same trigger levels — exactly
+     * the trap {@code /watchlist/note} documents. Keeping it off {@code /watchlist/threshold} is
+     * also what lets the client defend each save with an overlay of its own.
+     *
+     * <p>Global to the symbol like the triggers and the note, for the same reason: there is one
+     * email per name, and a target that differed per tab could contradict it.
+     *
+     * <p>Blank clears, and a cleared target is absent, never zero — which is what hands that
+     * side's readings back to its trigger.
+     */
+    @PostMapping("/watchlist/target")
+    @ResponseBody
+    public WatchlistView target(@RequestParam("symbol") String symbol,
+                                @RequestParam(name = "targetAbove", required = false) String targetAbove,
+                                @RequestParam(name = "targetBelow", required = false) String targetBelow,
+                                @RequestParam(name = "list", required = false) Long list) {
+        watchlistRepo.updateTargets(symbol, parsePrice(targetAbove, "above target"),
+                parsePrice(targetBelow, "below target"));
         return watchlistService.view(listOrFirst(list));
     }
 

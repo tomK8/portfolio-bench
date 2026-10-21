@@ -304,7 +304,7 @@ public class WatchlistService {
             if (e.symbol().equalsIgnoreCase(symbol)) return e;
         }
         return new Entry(symbol, BigDecimal.ZERO, BigDecimal.ZERO, null,
-                BigDecimal.ZERO, BigDecimal.ZERO, null);
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null);
     }
 
     private Row buildRow(Entry e, LocalDate today, Instant now,
@@ -318,7 +318,8 @@ public class WatchlistService {
         IntradayPrice ip = latest.get(ticker);
         Snapshot s = snapshot(e, ip, today, fundamentals);
         if (s == null) return Row.missing(symbol, e.highThresholdPct(), e.moveThresholdPct(),
-                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()), e.note(),
+                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()),
+                levelOrNull(e.targetAbove()), levelOrNull(e.targetBelow()), e.note(),
                 missingReason(symbol));
 
         Live live = computeLive(s, e, today, now, sessions);
@@ -337,7 +338,8 @@ public class WatchlistService {
                 live.vol5d(), live.vol10d(), scalePct(vol30), scalePct(vol1y), trailingPe, beta,
                 pos.held(), pos.valueGbp(), pos.gainGbp(), scalePct(pos.gainPct()),
                 e.highThresholdPct(), e.moveThresholdPct(),
-                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()), e.note(),
+                levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()),
+                levelOrNull(e.targetAbove()), levelOrNull(e.targetBelow()), e.note(),
                 live.aboveOutlook(), live.belowOutlook(),
                 live.nearHigh(), live.bigMove(), live.moveDirection(),
                 live.aboveLevel(), live.belowLevel(),
@@ -452,8 +454,10 @@ public class WatchlistService {
         // One σ forecast per row, shared by both levels: the volatility is a property of the
         // instrument and the horizon, not of which side of the market a level sits on.
         VolForecast.Inputs vols = dailyVols(bars);
-        Outlook above = outlook(cp, levelOrNull(e.priceAbove()), true, vols, sessions);
-        Outlook below = outlook(cp, levelOrNull(e.priceBelow()), false, vols, sessions);
+        Outlook above = outlook(cp, levelOrNull(e.priceAbove()), levelOrNull(e.targetAbove()),
+                true, vols, sessions);
+        Outlook below = outlook(cp, levelOrNull(e.priceBelow()), levelOrNull(e.targetBelow()),
+                false, vols, sessions);
 
         return new Live(scalePct(todayPct), scalePct(pct2d), scalePct(pct3d), scalePct(pct5d),
                 scalePct(pct10d), scalePct(pct30d), scalePct(pctFromHigh), scalePct(pctFromLow),
@@ -463,13 +467,22 @@ public class WatchlistService {
     }
 
     /**
-     * How far one alert level is from the market, and how likely the price reaches it.
+     * How far one side's level is from the market, and how likely the price reaches it.
+     *
+     * <p><b>It reads the order target, not the trigger.</b> The two answer different questions:
+     * the trigger is where the email goes out, the target is where the order is actually placed,
+     * and the only one worth a distance and a touch probability is the one that has to fill. A
+     * side with <em>no</em> target declared hands the readings back to its trigger — blank means
+     * "I would act at the level I asked to be told about", which is the honest default and is the
+     * only thing that keeps the column from going dark on every row that predates targets. Which
+     * of the two was priced is not left to be guessed: the {@link Outlook} carries the level it
+     * used and whether it came from the target, and the cell says so.
      *
      * <p><b>The move is signed and means the same thing on both sides</b>: what the price still has
      * to do to reach the level, as a fraction of where it is now. An Above level normally reads
      * positive and a Below level negative, so a level the market has <em>already</em> gone through
      * reads with the wrong sign for its side — which is the point. One definition, one column
-     * rule, and an already-true trigger is visible rather than hidden behind an absolute value.
+     * rule, and an already-reached level is visible rather than hidden behind an absolute value.
      *
      * <p><b>A level already through is certainty, not an estimate.</b> {@link VolForecast#touch}
      * is direction-blind — it prices the first passage to a barrier {@code |ln(level/price)|} away
@@ -485,19 +498,23 @@ public class WatchlistService {
      * their shipped defaults the two screens price an identical barrier identically; with either
      * switched on they will differ, and the header here says which model produced this figure.
      *
-     * <p>Null when there is no level, no price, or no usable volatility — absent, never zero.
+     * <p>Null when neither level is set, or there is no price or no usable volatility — absent,
+     * never zero.
      */
-    private static Outlook outlook(BigDecimal price, BigDecimal level, boolean above,
-                                   VolForecast.Inputs vols, int sessions) {
+    private static Outlook outlook(BigDecimal price, BigDecimal trigger, BigDecimal target,
+                                   boolean above, VolForecast.Inputs vols, int sessions) {
+        BigDecimal level = target != null ? target : trigger;
         if (level == null || price == null || price.signum() <= 0) return null;
+        boolean fromTarget = target != null;
         BigDecimal movePct = level.subtract(price).divide(price, PCT_SCALE, RoundingMode.HALF_UP);
         boolean through = above ? price.compareTo(level) >= 0 : price.compareTo(level) <= 0;
         if (through) {
-            return new Outlook(movePct, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, sessions, true);
+            return new Outlook(level, fromTarget, movePct,
+                    BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, sessions, true);
         }
         VolForecast.Touch t = VolForecast.touch(vols, price, level, sessions, VolForecast.Config.DEFAULT);
-        return new Outlook(movePct, t.probability(), t.probabilityLow(), t.probabilityHigh(),
-                sessions, false);
+        return new Outlook(level, fromTarget, movePct,
+                t.probability(), t.probabilityLow(), t.probabilityHigh(), sessions, false);
     }
 
     /**
@@ -919,34 +936,54 @@ public class WatchlistService {
                       BigDecimal trailingPe, BigDecimal beta,
                       boolean held, BigDecimal positionValueGbp, BigDecimal gainGbp, BigDecimal gainPct,
                       BigDecimal highThresholdPct, BigDecimal moveThresholdPct,
-                      BigDecimal priceAbove, BigDecimal priceBelow, String note,
+                      BigDecimal priceAbove, BigDecimal priceBelow,
                       /**
-                       * The Above level's distance from the market and its touch probability over
-                       * the table's horizon — null when no Above level is set, or when the row has
-                       * no price or no usable volatility. See {@link WatchlistService#outlook}.
+                       * The order targets: where the order goes once the matching trigger fires,
+                       * normally further out than it. Nothing alerts on them — they exist to be
+                       * what {@code aboveOutlook}/{@code belowOutlook} are priced to. Null when
+                       * none is declared, which hands that side's readings back to its trigger.
+                       */
+                      BigDecimal targetAbove, BigDecimal targetBelow, String note,
+                      /**
+                       * The Above side's distance from the market and its touch probability over
+                       * the table's horizon, priced to {@code targetAbove} when there is one and
+                       * to {@code priceAbove} otherwise — null when neither is set, or when the
+                       * row has no price or no usable volatility. See
+                       * {@link WatchlistService#outlook}.
                        */
                       Outlook aboveOutlook,
-                      /** The same for the Below level. */
+                      /** The same for the Below side. */
                       Outlook belowOutlook,
                       boolean nearHigh, boolean bigMove, int moveDirection,
                       boolean aboveLevel, boolean belowLevel,
                       boolean missingData, String missingReason) {
 
         static Row missing(String symbol, BigDecimal highPct, BigDecimal movePct,
-                           BigDecimal priceAbove, BigDecimal priceBelow, String note,
+                           BigDecimal priceAbove, BigDecimal priceBelow,
+                           BigDecimal targetAbove, BigDecimal targetBelow, String note,
                            String reason) {
             return new Row(symbol, null, null, null, null, null, null, null, null,
                     null, null, null, null, null, null, null, null, null, null,
-                    false, null, null, null, highPct, movePct, priceAbove, priceBelow, note,
+                    false, null, null, null, highPct, movePct, priceAbove, priceBelow,
+                    targetAbove, targetBelow, note,
                     null, null, false, false, 0, false, false, true, reason);
         }
     }
 
     /**
-     * One alert level's outlook: how far the market still has to move to reach it, and the chance
-     * it is touched at least once inside the horizon.
+     * One side's outlook: how far the market still has to move to reach the level that side would
+     * be acted on at, and the chance it is touched at least once inside the horizon.
      *
-     * @param movePct    signed fraction — what the price must do to reach the level
+     * <p>It names the level it was priced to rather than leaving the reader to work out which of
+     * the side's two numbers that was — the same bargain every other figure here strikes with its
+     * own horizon.
+     *
+     * @param level      the price this was measured to: the side's order target when one is
+     *                   declared, else its trigger standing in.
+     * @param fromTarget true when {@code level} is the declared target, false when no target is
+     *                   set and the trigger stood in. Carried so the cell can say which, instead
+     *                   of printing a figure whose subject the reader has to infer.
+     * @param movePct    signed fraction — what the price must do to reach {@code level}
      *                   ({@code 0.072} = a 7.2% rise). Negative on an Above level, or positive on
      *                   a Below one, means the market is already through it.
      * @param probability P(touch within {@code sessions}), driftless and diffusive. Exactly 1 when
@@ -954,9 +991,10 @@ public class WatchlistService {
      * @param probabilityLow  the same probability priced off RV10/RV30 — the honest width around a
      * @param probabilityHigh point estimate from one vol model. Both 1 when {@code through}.
      * @param sessions   the horizon it was priced over, so a stored figure always names its own N.
-     * @param through    the market is already at or past the level.
+     * @param through    the market is already at or past {@code level}.
      */
-    public record Outlook(BigDecimal movePct, BigDecimal probability,
+    public record Outlook(BigDecimal level, boolean fromTarget,
+                          BigDecimal movePct, BigDecimal probability,
                           BigDecimal probabilityLow, BigDecimal probabilityHigh,
                           int sessions, boolean through) {
     }

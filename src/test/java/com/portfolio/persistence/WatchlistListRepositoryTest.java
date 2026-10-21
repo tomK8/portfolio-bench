@@ -317,6 +317,71 @@ class WatchlistListRepositoryTest {
                 "a later list reusing the id must not inherit a dead layout");
     }
 
+    /**
+     * The order target joins a saved layout <em>between</em> its trigger and that side's two
+     * readings — because the readings are priced to it once it is set, and a layout where the
+     * level you deal at sits two columns past the figures describing it is one nobody would have
+     * arranged by hand.
+     */
+    @Test
+    void theOrderTargetColumnLandsBetweenItsTriggerAndThatSidesReadings(@TempDir Path dir) {
+        var cf = new JdbcConnectionFactory(dir);
+        var kv = new KeyValueStore(dir);
+        WatchlistRepository repo = new WatchlistRepository(cf, kv);
+        long first = repo.firstListId();
+        repo.saveColumns(first, List.of("price", "thrAbove", "thrAbovePct", "thrAboveProb",
+                "thrBelow", "thrBelowPct", "thrBelowProb", "note"));
+
+        // A restart with the marker cleared is the migration this guards.
+        kv.putBoolean(WatchlistRepository.TARGET_COLUMNS_BACKFILLED_KEY, false);
+        WatchlistRepository restarted = new WatchlistRepository(cf, kv);
+
+        assertEquals(List.of("price", "thrAbove", "tgtAbove", "thrAbovePct", "thrAboveProb",
+                        "thrBelow", "tgtBelow", "thrBelowPct", "thrBelowProb", "note"),
+                restarted.columnsFor(first));
+    }
+
+    /**
+     * Once is once. Guarding on "this layout doesn't list it" instead of on the marker would put
+     * the column back on every restart for anyone who deliberately removed it — the same trap the
+     * note column and the emptied-list backfill both document.
+     */
+    @Test
+    void aDeliberatelyRemovedTargetColumnStaysRemoved(@TempDir Path dir) {
+        var cf = new JdbcConnectionFactory(dir);
+        var kv = new KeyValueStore(dir);
+        WatchlistRepository repo = new WatchlistRepository(cf, kv);
+        long first = repo.firstListId();
+        repo.saveColumns(first, List.of("price", "thrAbove", "thrAbovePct"));
+
+        WatchlistRepository restarted = new WatchlistRepository(cf, kv);
+
+        assertEquals(List.of("price", "thrAbove", "thrAbovePct"), restarted.columnsFor(first),
+                "the marker was already set by the first construction");
+    }
+
+    /**
+     * A side the list has taken off gets no target either — the one place this differs from the
+     * readings' backfill, which appends. A % or a P(N) stands on its own; a target is an editor
+     * for a side, and one stranded past the Note with no trigger beside it is a column nobody
+     * asked for.
+     */
+    @Test
+    void aLayoutWithoutTheTriggerGetsNoTargetForThatSide(@TempDir Path dir) {
+        var cf = new JdbcConnectionFactory(dir);
+        var kv = new KeyValueStore(dir);
+        WatchlistRepository repo = new WatchlistRepository(cf, kv);
+        long first = repo.firstListId();
+        // Below is on this list, Above has been removed from it.
+        repo.saveColumns(first, List.of("price", "thrBelow", "thrBelowPct", "note"));
+        kv.putBoolean(WatchlistRepository.TARGET_COLUMNS_BACKFILLED_KEY, false);
+
+        WatchlistRepository restarted = new WatchlistRepository(cf, kv);
+
+        assertEquals(List.of("price", "thrBelow", "tgtBelow", "thrBelowPct", "note"),
+                restarted.columnsFor(first));
+    }
+
     @Test
     void anUnknownListReadsAsEmptyRatherThanThrowing(@TempDir Path dir) {
         WatchlistRepository repo = repo(dir);

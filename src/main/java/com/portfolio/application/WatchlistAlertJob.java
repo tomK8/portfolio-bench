@@ -172,14 +172,27 @@ public class WatchlistAlertJob {
                 + " (threshold " + plain(r.moveThresholdPct()) + "%)";
     }
 
+    /**
+     * One price-level firing. Two numbers can be in play and they are not the same thing: the
+     * <b>trigger</b> that fired, and the <b>order target</b> the user has decided to act at, which
+     * is normally further out. The target is printed when one is declared, because the whole
+     * reason this email exists is to get an order placed — and it is never printed as though it
+     * were the level that fired.
+     */
     private static String describeLevel(Row r, boolean above) {
         BigDecimal level = above ? r.priceAbove() : r.priceBelow();
+        BigDecimal target = above ? r.targetAbove() : r.targetBelow();
         // Name the column that fired ("Above"/"Below") so the email can't be read as the opposite
         // direction — the whole point of the rename.
-        String dir = above ? "hit Above target" : "hit Below target";
-        String ccy = r.currency() == null ? "" : " " + r.currency();
-        String target = level == null ? "?" : level.stripTrailingZeros().toPlainString() + ccy;
-        return r.symbol() + " " + dir + " " + target + " — now " + price(r);
+        String dir = above ? "hit Above trigger" : "hit Below trigger";
+        String line = r.symbol() + " " + dir + " " + amount(level, r) + " — now " + price(r);
+        return target == null ? line : line + "; order target " + amount(target, r);
+    }
+
+    /** A native-currency level, with its currency when we know it. */
+    private static String amount(BigDecimal level, Row r) {
+        if (level == null) return "?";
+        return level.stripTrailingZeros().toPlainString() + (r.currency() == null ? "" : " " + r.currency());
     }
 
     private static String price(Row r) {

@@ -1,6 +1,7 @@
 /*
  * Watchlist inline-edit sync — the pure logic that keeps a just-saved (or in-progress) inline edit
- * (the four alert thresholds, and the note beside them) from being reverted by a stale full reload.
+ * (the four alert thresholds, the two order targets, and the note beside them) from being reverted
+ * by a stale full reload.
  *
  * The bug this exists to kill: the dashboard's /watchlist view is slow (FX + ledger + fundamentals,
  * ~1s+). A background reload (add-timer, Refresh, tab re-entry) issued around the same instant as a
@@ -59,6 +60,40 @@
         return '';
     }
 
+    /** The two order-target inputs. Price semantics, so they canonicalise exactly as a level does. */
+    var TARGET_KINDS = ['tgtAbove', 'tgtBelow'];
+
+    /** The canonical display strings for a server row's two order targets (null/≤0 → ''). */
+    function rowTargets(row) {
+        return {
+            tgtAbove: row && row.targetAbove != null ? thrDisplay('above', row.targetAbove) : '',
+            tgtBelow: row && row.targetBelow != null ? thrDisplay('below', row.targetBelow) : ''
+        };
+    }
+
+    /** Canonicalise the two raw strings the user just saved into a comparable shape. */
+    function savedTargets(above, below) {
+        return { tgtAbove: thrDisplay('above', above), tgtBelow: thrDisplay('below', below) };
+    }
+
+    /**
+     * What one row's two target inputs should show, given any pending save for that symbol. Same
+     * rule as resolve(): the overlay wins until a render carries it back.
+     *
+     * <p>A third record rather than two more slots in the threshold one, for the same reason the
+     * note is separate: the targets are their own save to their own endpoint (POST
+     * /watchlist/target, which deliberately re-arms nothing, because nothing fires on a target).
+     * A threshold save carries no target and a target save carries no thresholds, so one record
+     * holding both would have each write erase the other's pending value.
+     */
+    function resolveTargets(row, pending) {
+        var server = rowTargets(row);
+        if (pending && !equalKeys(TARGET_KINDS, server, pending)) {
+            return { values: pending, confirmed: false };
+        }
+        return { values: server, confirmed: !!pending };
+    }
+
     /**
      * The same optimistic-overlay bargain for the per-symbol note, kept separate from the four
      * thresholds because it is a separate save (POST /watchlist/note, which deliberately does not
@@ -110,12 +145,16 @@
         };
     }
 
-    function equal(a, b) {
+    function equalKeys(keys, a, b) {
         if (!a || !b) return false;
-        for (var i = 0; i < KINDS.length; i++) {
-            if ((a[KINDS[i]] || '') !== (b[KINDS[i]] || '')) return false;
+        for (var i = 0; i < keys.length; i++) {
+            if ((a[keys[i]] || '') !== (b[keys[i]] || '')) return false;
         }
         return true;
+    }
+
+    function equal(a, b) {
+        return equalKeys(KINDS, a, b);
     }
 
     /**
@@ -141,9 +180,13 @@
 
     return {
         KINDS: KINDS,
+        TARGET_KINDS: TARGET_KINDS,
         thrDisplay: thrDisplay,
         rowDisplay: rowDisplay,
         rowThresholds: rowThresholds,
+        rowTargets: rowTargets,
+        savedTargets: savedTargets,
+        resolveTargets: resolveTargets,
         noteDisplay: noteDisplay,
         resolveNote: resolveNote,
         savedThresholds: savedThresholds,

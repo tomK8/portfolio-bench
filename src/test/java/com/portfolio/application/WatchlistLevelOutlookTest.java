@@ -30,10 +30,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * and the chance it is touched inside the table's horizon.
  *
  * <p>What is worth pinning here is not the exact probability — that is {@code VolForecastTest}'s
- * job — but the three decisions this service makes around it: the move is signed the same way on
- * both sides, a level the market is already through is certainty rather than an estimate priced
- * backwards, and the horizon is one stored figure the payload carries so the header cannot name an
- * N the cells were not priced at.
+ * job — but the decisions this service makes around it: the readings are priced to the side's
+ * <em>order target</em> and fall back to its trigger only when no target is declared, the move is
+ * signed the same way on both sides, a level the market is already through is certainty rather
+ * than an estimate priced backwards, and the horizon is one stored figure the payload carries so
+ * the header cannot name an N the cells were not priced at.
  */
 class WatchlistLevelOutlookTest {
 
@@ -84,6 +85,15 @@ class WatchlistLevelOutlookTest {
                 .row("AAPL");
     }
 
+    /** Triggers and order targets together, which is the row the feature actually ships for. */
+    private Row watched(BigDecimal above, BigDecimal below,
+                        BigDecimal targetAbove, BigDecimal targetBelow) {
+        return service(repo -> {
+            repo.add("AAPL", BigDecimal.ZERO, BigDecimal.ZERO, above, below);
+            repo.updateTargets("AAPL", targetAbove, targetBelow);
+        }).row("AAPL");
+    }
+
     /**
      * One definition of the move for both sides: what the price still has to do. An Above level
      * reads positive and a Below level negative, which is what lets the column be sorted and read
@@ -124,6 +134,65 @@ class WatchlistLevelOutlookTest {
         assertEquals(0, BigDecimal.ONE.compareTo(below.probability()));
     }
 
+    /**
+     * The whole point of the target: the trigger says when to look, the target says where the
+     * order goes, and only the second one has a distance and a fill probability worth printing.
+     * Both readings are measured to it, and the {@code Outlook} names the level it used so the
+     * cell never has to be read as "one of these two numbers".
+     */
+    @Test
+    void theReadingsArePricedToTheOrderTargetNotTheTrigger() {
+        // Tell me at 110, but I deal at 120; tell me at 90, but I deal at 80.
+        Row r = watched(new BigDecimal("110"), new BigDecimal("90"),
+                new BigDecimal("120"), new BigDecimal("80"));
+
+        Outlook above = r.aboveOutlook();
+        assertTrue(above.fromTarget());
+        assertEquals(0, new BigDecimal("120").compareTo(above.level()));
+        assertEquals(0, new BigDecimal("0.200000").compareTo(above.movePct()),
+                "120 from 100 is +20% — the trigger's +10% is not what has to fill");
+
+        Outlook below = r.belowOutlook();
+        assertTrue(below.fromTarget());
+        assertEquals(0, new BigDecimal("80").compareTo(below.level()));
+        assertEquals(0, new BigDecimal("-0.200000").compareTo(below.movePct()));
+
+        // A target further out is harder to reach than the trigger that warns about it.
+        Row triggerOnly = watched(new BigDecimal("110"), new BigDecimal("90"), null, null);
+        assertTrue(above.probability().compareTo(triggerOnly.aboveOutlook().probability()) < 0,
+                "120 must be less likely than 110");
+    }
+
+    /**
+     * No target declared means "I would act where I asked to be told", so the trigger stands in
+     * rather than the column going dark — and the reading says that is what happened.
+     */
+    @Test
+    void aSideWithNoTargetHandsItsReadingsBackToTheTrigger() {
+        Row r = watched(new BigDecimal("110"), new BigDecimal("90"),
+                new BigDecimal("120"), null);
+
+        assertTrue(r.aboveOutlook().fromTarget());
+        assertFalse(r.belowOutlook().fromTarget(), "no Below target — the trigger stood in");
+        assertEquals(0, new BigDecimal("90").compareTo(r.belowOutlook().level()));
+        assertEquals(0, new BigDecimal("-0.100000").compareTo(r.belowOutlook().movePct()));
+        assertNull(r.targetBelow(), "a target that was never set is absent, never zero");
+        assertEquals(0, new BigDecimal("120").compareTo(r.targetAbove()));
+    }
+
+    /**
+     * Nothing fires on a target. The alert flags are the trigger's answer however far out the
+     * order sits — otherwise the email would arrive at the moment it is too late to place it.
+     */
+    @Test
+    void anOrderTargetFiresNothing() {
+        // Price 100. Above trigger at 95 is already true; its target at 130 is nowhere near.
+        Row r = watched(new BigDecimal("95"), null, new BigDecimal("130"), null);
+
+        assertTrue(r.aboveLevel(), "the trigger fired, as it must");
+        assertFalse(r.aboveOutlook().through(), "and the target it is priced to has not");
+    }
+
     /** No level is not a zero distance and not a zero probability — it is no reading at all. */
     @Test
     void aLevelThatIsNotSetHasNoOutlook() {
@@ -131,6 +200,19 @@ class WatchlistLevelOutlookTest {
 
         assertNotNull(r.aboveOutlook());
         assertNull(r.belowOutlook(), "absent is never zero");
+
+        // Neither does a side that has only a target taken away again.
+        assertNull(watched(null, null, null, null).aboveOutlook());
+    }
+
+    /** A target with no trigger beside it is still a level to price — nothing requires the pair. */
+    @Test
+    void aTargetAloneIsStillRead() {
+        Row r = watched(null, null, new BigDecimal("115"), null);
+
+        assertNotNull(r.aboveOutlook());
+        assertTrue(r.aboveOutlook().fromTarget());
+        assertFalse(r.aboveLevel(), "but with no trigger there is nothing to email about");
     }
 
     /** A row with no prices at all carries no outlook either, rather than a manufactured one. */

@@ -1435,8 +1435,11 @@
         .wl-pos { color: #2ca02c; } .wl-neg { color: #c0392b; }
         html[data-theme="dark"] .wl-pos { color: #4ade80; }
         html[data-theme="dark"] .wl-neg { color: #f87171; }
-        .wl-thr-input { width: 3.2rem; font-size: 0.8rem; padding: 1px 3px; }
+        .wl-thr-input, .wl-tgt-input { width: 3.2rem; font-size: 0.8rem; padding: 1px 3px; }
         .wl-price-input { width: 4.6rem; }
+        /* The order target's empty box shows the trigger it falls back to, so the hint has to
+           read as a hint and not as a value someone typed. */
+        .wl-tgt-input::placeholder { color: #a6abb3; font-style: italic; }
         /* Wide enough for a short instruction, capped so one long plan can't set the whole
            table's width. The full text is in the cell's title and in the popup. */
         /* A <textarea>, so the Notes toggle can show a whole plan; collapsed it is held to one
@@ -3228,15 +3231,19 @@
         Volatility-trading watchlist. Enter any symbol — owned or not. Rows colour when an alert
         fires: <b class="wl-pos">green</b>/<b class="wl-neg">red</b> = a big move today (up/down),
         <b style="color:#1f77b4">blue</b> = near the 52-week high, pulsing = both. Set each
-        symbol's alert triggers inline: % from 52-wk high, |today's move|, and absolute price
-        targets — an <b>Above</b> level (alerts when the price rises to or above it) and a
-        <b>Below</b> level (alerts when it falls to or below it), in the price's own currency.
-        Leave any of them blank to disable that trigger. Each level carries two readings of its
-        own: <b>%</b>, the move the price still has to make to reach it (wrong-signed for its
+        symbol's alert triggers inline: % from 52-wk high, |today's move|, and two absolute price
+        levels — an <b>Above trigger</b> (emails when the price rises to or above it) and a
+        <b>Below trigger</b> (emails when it falls to or below it), in the price's own currency.
+        Leave any of them blank to disable that trigger. Beside each trigger sits its
+        <b>target</b>: where you would actually place the order once that email arrives, normally
+        further out. Nothing alerts on a target — it is the level the two readings after it are
+        priced to, and an empty box shows the trigger it falls back to. Those readings are
+        <b>%</b>, the move the price still has to make to reach that level (wrong-signed for its
         side = already through), and <b>P(N)</b>, the chance it is touched at least once within
         N trading sessions — a first-passage probability on a volatility forecast for that
-        horizon, priced driftless, with the RV10/RV30 range on the cell's tooltip. N is one
-        setting for the whole table, so every probability in a column answers the same question.
+        horizon, priced driftless, with the level it used and the RV10/RV30 range on the cell's
+        tooltip. N is one setting for the whole table, so every probability in a column answers
+        the same question.
         The <b>Note</b> beside them is what you
         have decided to do when this name fires — free text, nothing acts on it, one note per
         symbol however many lists it is in, and it is printed under that symbol's lines in the
@@ -3253,8 +3260,8 @@
         <datalist id="wl-gilt-hints"></datalist>
         <label>Near-high %: <input id="wl-add-high" type="text" size="4" placeholder="3"/></label>
         <label>Move %: <input id="wl-add-move" type="text" size="4" placeholder="10"/></label>
-        <label title="Alert when the price rises to or above this level (price's own currency)">Above: <input id="wl-add-above" type="text" size="6" placeholder="—"/></label>
-        <label title="Alert when the price falls to or below this level (price's own currency)">Below: <input id="wl-add-below" type="text" size="6" placeholder="—"/></label>
+        <label title="Email when the price rises to or above this level (price's own currency). The order target beside it on the row is set there, not here.">Above: <input id="wl-add-above" type="text" size="6" placeholder="—"/></label>
+        <label title="Email when the price falls to or below this level (price's own currency). The order target beside it on the row is set there, not here.">Below: <input id="wl-add-below" type="text" size="6" placeholder="—"/></label>
         <button id="wl-add-btn" type="button">Add</button>
         <button id="wl-refresh-btn" type="button">Refresh</button>
         <label title="Horizon for the Above P(N) / Below P(N) columns, in trading sessions — one horizon for the whole table, stored, so the header always names the N the cells were priced at. 1–1250; out of range is clamped.">P(N) sessions: <input id="wl-touch-n" type="text" size="4"/></label>

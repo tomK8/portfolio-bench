@@ -123,9 +123,10 @@ test('isDefault recognises the shipped set and nothing else', () => {
 });
 
 test('the default set is the columns the watchlist shipped with, plus the later additions', () => {
-    // Guards the promise that turning on multi-list changed nobody's existing table. Two later
-    // additions: the note, which joins at the end because it belongs to the row, and each price
-    // level's distance + probability, which sit immediately after the level they read. Both
+    // Guards the promise that turning on multi-list changed nobody's existing table. Three later
+    // additions: the note, which joins at the end because it belongs to the row; each side's
+    // distance + probability, which sit immediately after the level they read; and the order
+    // target, which slots between the trigger and those two because they are priced to it. All
     // reached the layouts saved before them through a one-shot backfill in the repository.
     assert.deepEqual(WlColumns.DEFAULTS, [
         'price', 'todayPct', 'pct2d', 'pct3d', 'pct5d', 'pct30d',
@@ -133,16 +134,18 @@ test('the default set is the columns the watchlist shipped with, plus the later 
         'vol5d', 'vol10d', 'vol30d', 'vol1y',
         'trailingPe', 'position', 'gain',
         'thrHigh', 'thrMove',
-        'thrAbove', 'thrAbovePct', 'thrAboveProb',
-        'thrBelow', 'thrBelowPct', 'thrBelowProb',
+        'thrAbove', 'tgtAbove', 'thrAbovePct', 'thrAboveProb',
+        'thrBelow', 'tgtBelow', 'thrBelowPct', 'thrBelowProb',
         'note'
     ]);
 });
 
-test("a level's readings sit directly after it, so the three read as one block", () => {
+test('each side reads trigger, target, then the two readings priced to it', () => {
     const i = (k) => WlColumns.DEFAULTS.indexOf(k);
-    assert.equal(i('thrAbovePct'), i('thrAbove') + 1);
-    assert.equal(i('thrAboveProb'), i('thrAbove') + 2);
-    assert.equal(i('thrBelowPct'), i('thrBelow') + 1);
-    assert.equal(i('thrBelowProb'), i('thrBelow') + 2);
+    assert.equal(i('tgtAbove'), i('thrAbove') + 1);
+    assert.equal(i('thrAbovePct'), i('thrAbove') + 2);
+    assert.equal(i('thrAboveProb'), i('thrAbove') + 3);
+    assert.equal(i('tgtBelow'), i('thrBelow') + 1);
+    assert.equal(i('thrBelowPct'), i('thrBelow') + 2);
+    assert.equal(i('thrBelowProb'), i('thrBelow') + 3);
 });

@@ -39,10 +39,12 @@
         'vol5d', 'vol10d', 'vol30d', 'vol1y',
         'trailingPe', 'position', 'gain',
         'thrHigh', 'thrMove',
-        // Each price level is followed by its two readings — how far the market still has to move
-        // to reach it, and the chance it gets there inside the table's horizon.
-        'thrAbove', 'thrAbovePct', 'thrAboveProb',
-        'thrBelow', 'thrBelowPct', 'thrBelowProb',
+        // Each side reads left to right as one sentence: the trigger that mails you, the target
+        // you would actually place the order at, then the two readings — how far the market still
+        // has to move and the chance it gets there inside the table's horizon. The readings are
+        // priced to the target when there is one, which is why they sit after it.
+        'thrAbove', 'tgtAbove', 'thrAbovePct', 'thrAboveProb',
+        'thrBelow', 'tgtBelow', 'thrBelowPct', 'thrBelowProb',
         'note'
     ];
 

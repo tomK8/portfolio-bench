@@ -130,6 +130,24 @@ touches an order.
     stranded past the Note with no trigger beside it and a placeholder naming a column that is
     not on screen is a column nobody asked for. (Observed: the first run appended `tgtAbove` to a
     list that had deliberately dropped `thrAbove`.)
+  - **A save restates its whole group, and a column the layout hides is not a blank.** One write
+    carries all four levels (`/watchlist/threshold`) and one carries both targets
+    (`/watchlist/target`), but the picker decides which of the six are on screen — so the box a
+    kind would be read from may not exist. It is then taken from the **stored row** the table was
+    rendered from, which is the value the box would have shown had the column been on. The two
+    wrong answers are both worse than they look: posting `''` for it clears a trigger the user
+    cannot see and never touched, and reading `.value` off the `null` the lookup returns throws
+    *before the request goes out*, so nothing persists and nothing re-arms. The rule is one
+    function for both groups (`WlEditSync.postedThresholds` / `postedTargets`), because the
+    targets had it from the start and the levels did not.
+    - **Observed (2026-10-23):** the default list shows `Below trigger` alone — no High %, Move %
+      or Above. Every edit to a below level threw on the first of the three missing lookups, so
+      the level never changed and `clearFiredFor` was never reached either: the row stayed
+      coloured at a trigger the user had just moved out of the price's reach, and a refresh
+      brought the old number back. Nothing reached the screen — a handler that throws before the
+      `fetch` has no failure path to report through, which is why the guard is on the lookup and
+      not on the save. `wl-input-wiring.test.mjs` fails on any watchlist input lookup that is
+      dereferenced where it stands.
   - **One definition of the move, both sides.** It is signed, and it always means *what the price
     still has to do*: `(level − price) ÷ price`. An Above level normally reads positive and a
     Below level negative, so a level the market has **already gone through reads with the wrong

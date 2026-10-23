@@ -200,3 +200,59 @@ test('clearing a target is itself a pending value, not an absence of one', () =>
             { tgtAbove: '', tgtBelow: '' }),
         { values: { tgtAbove: '', tgtBelow: '' }, confirmed: false });
 });
+
+// ---- postedThresholds / postedTargets: what a save carries when the layout hides a box ---------
+//
+// The bug (2026-10-23): the "Watchlist" list's saved layout shows `Below trigger` and nothing of
+// High %, Move % or Above. The change handler read `.value` off all four lookups, three of which
+// returned null, so every below-trigger edit threw before saveWatchlistThreshold was called:
+// nothing persisted, nothing re-armed, and a refresh brought the old level back. The naive repair —
+// post '' for a box that isn't there — would have been worse: it clears triggers off screen.
+
+test('REGRESSION: a layout showing only Below still posts the other three, from the stored row', () => {
+    const row = { highThresholdPct: 5, moveThresholdPct: 3, priceAbove: 240, priceBelow: 225 };
+    // Only the below box exists; the user typed 222 into it.
+    const post = WL.postedThresholds({ below: '222' }, row);
+    assert.deepEqual(post, { high: '5', move: '3', above: '240', below: '222' });
+});
+
+test('a hidden level is carried through, never blanked', () => {
+    const row = { highThresholdPct: 5, moveThresholdPct: 3, priceAbove: 240, priceBelow: 225 };
+    // Nothing on screen at all (no level columns): the save is a no-op restatement, not a wipe.
+    assert.deepEqual(WL.postedThresholds({}, row),
+        { high: '5', move: '3', above: '240', below: '225' });
+    assert.deepEqual(WL.postedThresholds(null, row),
+        { high: '5', move: '3', above: '240', below: '225' });
+});
+
+test('a box that IS on screen may be cleared — blank from a visible box is a real clear', () => {
+    const row = { highThresholdPct: 5, moveThresholdPct: 3, priceAbove: 240, priceBelow: 225 };
+    // Below is visible and emptied; the three hidden ones are untouched. "Absent" is the box not
+    // existing, not the box being empty — the two must not collapse into one state.
+    assert.deepEqual(WL.postedThresholds({ below: '' }, row),
+        { high: '5', move: '3', above: '240', below: '' });
+});
+
+test('postedThresholds trims and leaves parsing to the server', () => {
+    const row = { highThresholdPct: null, moveThresholdPct: null, priceAbove: null, priceBelow: null };
+    assert.deepEqual(WL.postedThresholds({ high: ' 4 ', move: '', above: '', below: ' 99.50 ' }, row),
+        { high: '4', move: '', above: '', below: '99.50' });
+});
+
+test('a row with nothing stored posts blanks for the hidden kinds, not undefined', () => {
+    assert.deepEqual(WL.postedThresholds({ below: '10' }, { priceBelow: 9 }),
+        { high: '', move: '', above: '', below: '10' });
+    assert.deepEqual(WL.postedThresholds({ below: '10' }, null),
+        { high: '', move: '', above: '', below: '10' });
+});
+
+test('REGRESSION: the same rule covers the two order targets', () => {
+    const row = { targetAbove: 300, targetBelow: 220.11, priceAbove: 240, priceBelow: 225 };
+    // The Above side's target column is off (the backfill skips a target whose level is hidden),
+    // so editing the Below target must not clear the Above one.
+    assert.deepEqual(WL.postedTargets({ tgtBelow: '218' }, row),
+        { tgtAbove: '300', tgtBelow: '218' });
+    assert.deepEqual(WL.postedTargets({ tgtBelow: '' }, row),
+        { tgtAbove: '300', tgtBelow: '' });
+    assert.deepEqual(WL.postedTargets({}, row), { tgtAbove: '300', tgtBelow: '220.11' });
+});

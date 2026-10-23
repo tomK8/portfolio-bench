@@ -145,6 +145,49 @@
         };
     }
 
+    /**
+     * The values one save must post for a set of fields, given only the boxes this list's layout
+     * actually puts on screen.
+     *
+     * <p>Each of these writes restates its whole group — POST /watchlist/threshold carries all four
+     * levels, POST /watchlist/target both targets — but the column picker can take any of them off,
+     * and then there is no input to read. **A box that is not on screen is not a blank.** Posting
+     * '' for it would clear a trigger the user cannot see and never touched; reading `.value` off
+     * the null the lookup returns is worse still, because it throws before the save is issued at
+     * all, so nothing persists, nothing re-arms, and the only evidence is the console. (Observed:
+     * a list showing `Below trigger` alone — no High %, Move % or Above — where every edit to a
+     * below level silently did nothing, and the row stayed coloured because `clearFiredFor` was
+     * never reached either.)
+     *
+     * <p>So a hidden field is carried through from the stored row. The server row is what the
+     * table was rendered from, which makes it the same value the box would have shown had the
+     * column been on — the write is still a restatement of the whole group, just one assembled
+     * from two places.
+     *
+     * @param keys    the group's field names ({@link #KINDS} or {@link #TARGET_KINDS})
+     * @param boxes   raw strings keyed by field for the ones on screen; a hidden field is absent
+     * @param stored  the same fields read off the server row (see rowThresholds / rowTargets)
+     */
+    function posted(keys, boxes, stored) {
+        var out = {};
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            var v = boxes ? boxes[k] : null;
+            out[k] = (v === null || v === undefined) ? ((stored && stored[k]) || '') : String(v).trim();
+        }
+        return out;
+    }
+
+    /** The four level strings to post, with any kind this layout hides taken from the row. */
+    function postedThresholds(boxes, row) {
+        return posted(KINDS, boxes, rowThresholds(row));
+    }
+
+    /** The two target strings to post, with either side this layout hides taken from the row. */
+    function postedTargets(boxes, row) {
+        return posted(TARGET_KINDS, boxes, rowTargets(row));
+    }
+
     function equalKeys(keys, a, b) {
         if (!a || !b) return false;
         for (var i = 0; i < keys.length; i++) {
@@ -187,6 +230,8 @@
         rowTargets: rowTargets,
         savedTargets: savedTargets,
         resolveTargets: resolveTargets,
+        postedThresholds: postedThresholds,
+        postedTargets: postedTargets,
         noteDisplay: noteDisplay,
         resolveNote: resolveNote,
         savedThresholds: savedThresholds,

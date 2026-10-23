@@ -93,7 +93,7 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `YahooQuoteSummaryFetcher`, `YahooTickerMap`, `GiltPriceFetcher` (HL),
   `TradewebGiltPriceParser`, `NasdaqEarningsFetcher`, `EdgarEarningsFetcher` + `CikRegistry`,
   `EdgarXbrlFetcher` (one us-gaap concept's filed history, 10-K/10-Q only — an empty answer
-  carries *which* silence it was), `SmtpAlertNotifier`.
+  carries *which* silence it was), `SmtpAlertNotifier`, `BoundedHttp` (the only way this app sends — the deadline is the caller's, because the request's own is a timer a dead connection takes with it).
 - `parser` — `AccountParser` / `CashTransactionParser` / `OrderParser` interfaces + impls.
 - `persistence` — `JdbcConnectionFactory` + its repositories + `KeyValueStore`.
 - `application` — use-case orchestration; ~40 services. `PortfolioGatherer`,
@@ -110,14 +110,15 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   `WatchlistService`, `ReminderService` + `ReminderJob` (calendar reminders — hand-entered ones
   stored, earnings ones derived from the held/watched/ordered union),
   the five `*AnalysisService` backtests, `PriceFetchJob` +
-  `IntradayPriceFetchJob` (share `PriceFetchSupport`).
+  `IntradayPriceFetchJob` (share `PriceFetchSupport`), `CatchUpService` (the dormancy gate — what repairs the data
+  when you reopen the app after the laptop has been shut, with no poller behind it).
 - `web` — ~19 thin controllers (`RootController`, `ChartsController`, `AnalysisController`,
   `OperationsController`, `OrdersController`, `LaddersController`, `SwitchesController`,
   `LiveDashboardController`, `WatchlistController`, `RemindersController`,
   the five strategy controllers, …), plus `GlobalExceptionAdvice`
   (`@ExceptionHandler(IllegalStateException)` renders `fragments/error` instead of HTTP 500),
   `PriceFetchScheduler` and `WebSupport`.
-- `config` — `BeanConfiguration`, `JacksonConfig` (serializes non-finite doubles as JSON `null`
+- `config` — `BeanConfiguration`, `WebConfig` (the one MVC hook: the dormancy interceptor), `JacksonConfig` (serializes non-finite doubles as JSON `null`
   app-wide — empty distributions would otherwise emit bare `NaN` and corrupt the payload).
 - Root — `ExcelReportWriter`, `PortfolioBenchApplication`.
 
@@ -239,7 +240,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [open-orders.md](docs/open-orders.md) | change the orders panel, a parser or the probe | Parsers build via `OpenOrder.parsed(...)`; open/closed filter is a denylist and `OrderStatus` is its only vocabulary; **open and resting are two questions** — a `Pending Cancel` order is open (never closed by absence, still asked of the ledger) but not resting, so it leaves the table for its own block instead of standing beside the replacement that arrived in the same export; quote age is judged against same-market peers, not the clock; **a verdict on a vanished order lives in its own columns and the broker's own word always outranks it** — the cash-ledger match writes only `FILLED` (no trade is not evidence of a cancellation), reads the side off the sign of the *cash*, and each trade is claimed once so a modified Roth order's ghost cannot claim its twin's fill; **ladder membership is never inferred and an intended rung is never auto-promoted**; a rung is never pruned; **the closed-orders filter derives every choice it offers from the rows themselves** — hidden rather than removed, so it and the sort never meet; a selection no row carries any more is kept rather than reset to All, and `—` is offered by nobody; **only an intended rung's price and quantity are editable** — an order from a broker export is never restated here — and blank is never zero; a ladder's round trip is the **next** one, matched by quantity and never by rung pairs, and it is a sequential first passage — never a product of the two rungs' own probabilities — priced from **today's** price over its own selectable horizon |
 | [share-class-switches.md](docs/share-class-switches.md) | change the switches block, or any exposure view | A switch is **declared, never detected**, and declaring it is also what folds the two listings into one holding in Allocation/Concentration/Currency; the legs are **one table in two sections** so the two sides share one column geometry, and the sections are the two **directions**, not the two lines — a side is chosen by side and *either* side may sit on *either* listing, which is what the listing column and the GBP sort are for; both legs go on one GBP yardstick before anything is compared and a side spanning both lines has **no** native average; the index/FX split is an exact identity over each side's own blended market, and the basis *block* stays the two lines, unmoved by an edited limit — evidence you can edit is not evidence; "complete" means the units arrived, not that nothing is resting |
 | [vol-forecast.md](docs/vol-forecast.md) | change P(N), σ_eff, drift or the calibration log | σ is *forecast* for the horizon, never a trailing window of that length; drift is a **price** drift (class total return − that name's yield); the probe writes no calibration line; one σ_eff serves a whole barrier sequence, because how the window splits between its legs is not a window to forecast for |
-| [live-tab.md](docs/live-tab.md) | change the Live tab or intraday session handling | Day Δ is anchored on the quote's **trading day**, not the calendar day; `loadLatestIntradayPrices` is regular-session only |
+| [live-tab.md](docs/live-tab.md) | change the Live tab, intraday session handling, or anything that sends HTTP from a job | Day Δ is anchored on the quote's **trading day**, not the calendar day; `loadLatestIntradayPrices` is regular-session only; **every send goes through `BoundedHttp`** — a request timeout is a timer the client services, not a deadline the caller holds, and one `send` parked by a suspend froze the Live tab for 35 hours and starved the 22:00 cron, because a `fixedDelay` re-arms only when the run *returns*; the dormancy catch-up fires on the **jobs' own silence**, never the age of the prices (a shut market is not a fault), heartbeats at **both ends** of a pass so *slow* and *stuck* are told apart, measures it on the **wall clock** because the monotonic one sleeps with the laptop, is a one-field read on the request path rather than a poller, and repairs **daily bars before the quotes judged against them** |
 | [attribution.md](docs/attribution.md) | change the Attribution window or its totals | A boundary that can't be valued is excluded from rows *and* totals; annualising under 30 days is blank |
 | [period-diff.md](docs/period-diff.md) | change Period diff or the TWR | Contributions and brought-forward are two figures, never one; flows count over `(from, to]` |
 | [charts.md](docs/charts.md) | change Contributions or Value over time | Roth's USD seed converts at the FX rate on its earliest ledger date, not today's |

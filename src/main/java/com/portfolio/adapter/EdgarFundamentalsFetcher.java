@@ -157,7 +157,7 @@ public class EdgarFundamentalsFetcher {
                     .header("User-Agent", USER_AGENT)
                     .header("Accept", "application/json")
                     .timeout(REQUEST_TIMEOUT).GET().build();
-            HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> resp = BoundedHttp.send(client, req);
             if (resp.statusCode() == 200) return new Response(200, resp.body());
             if (resp.statusCode() == 404) log.debug("EDGAR 404 (untagged) for {}", url);
             else log.warn("EDGAR HTTP {} for {}", resp.statusCode(), url);

@@ -68,7 +68,7 @@ public class NasdaqEarningsFetcher implements EarningsCalendarFeed {
                         .header("User-Agent", USER_AGENT)
                         .header("Accept", "application/json")
                         .timeout(TIMEOUT).GET().build();
-                HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> resp = BoundedHttp.send(client, req);
                 if (resp.statusCode() == 200) return resp.body();
                 log.warn("Nasdaq earnings HTTP {} for {} (attempt {})", resp.statusCode(), date, attempt);
             } catch (Exception e) {

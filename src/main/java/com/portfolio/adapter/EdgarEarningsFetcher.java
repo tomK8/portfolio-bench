@@ -160,7 +160,7 @@ public class EdgarEarningsFetcher implements EarningsCalendarProvider {
                     .header("User-Agent", USER_AGENT)
                     .header("Accept", "application/json")
                     .timeout(REQUEST_TIMEOUT).GET().build();
-            HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> resp = BoundedHttp.send(client, req);
             if (resp.statusCode() == 200) return resp.body();
             log.warn("EDGAR submissions HTTP {} for {}", resp.statusCode(), url);
         } catch (Exception e) {

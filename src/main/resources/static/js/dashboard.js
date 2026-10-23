@@ -6515,6 +6515,16 @@
             }
             var empty = document.getElementById('live-empty');
             if (empty) empty.style.display = (snap.rows && snap.rows.length) ? 'none' : '';
+            // Cleared by the same path that sets it: every snapshot carries the flag, including
+            // the 15s SSE tick, so the strip goes away on its own when the refetch finishes.
+            var catchup = document.getElementById('live-catchup');
+            if (catchup) {
+                catchup.innerHTML = snap.catchingUp
+                    ? '<div class="mo-banner">Catching up after a long gap \u2014 refetching the ' +
+                      'closes the machine slept through, then today\u2019s quotes. Figures below ' +
+                      'fill in as they land.</div>'
+                    : '';
+            }
             return changed;
         }
 

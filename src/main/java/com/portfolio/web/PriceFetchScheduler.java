@@ -1,6 +1,7 @@
 package com.portfolio.web;
 
 import com.portfolio.application.CachedHistoricalFxRateProvider;
+import com.portfolio.application.CatchUpService;
 import com.portfolio.application.FundamentalsFetchJob;
 import com.portfolio.application.OperatingLineFetchJob;
 import com.portfolio.application.GiltPriceFetchJob;
@@ -44,6 +45,7 @@ public class PriceFetchScheduler {
     private final ReminderJob reminderJob;
     private final CachedHistoricalFxRateProvider historicalFx;
     private final BackupService backupService;
+    private final CatchUpService catchUp;
 
     public PriceFetchScheduler(PriceFetchJob job, IntradayPriceFetchJob intradayJob,
                                GiltPriceFetchJob giltJob,
@@ -53,7 +55,8 @@ public class PriceFetchScheduler {
                                WatchlistAlertJob watchlistAlertJob,
                                ReminderJob reminderJob,
                                CachedHistoricalFxRateProvider historicalFx,
-                               BackupService backupService) {
+                               BackupService backupService,
+                               CatchUpService catchUp) {
         this.job = job;
         this.intradayJob = intradayJob;
         this.giltJob = giltJob;
@@ -64,6 +67,7 @@ public class PriceFetchScheduler {
         this.reminderJob = reminderJob;
         this.historicalFx = historicalFx;
         this.backupService = backupService;
+        this.catchUp = catchUp;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -196,10 +200,21 @@ public class PriceFetchScheduler {
     }
 
     private void intradayQuietly() {
+        // At both ends, which is what lets CatchUpService tell a pass crawling through a Yahoo
+        // outage from one parked in a dead socket: the slow pass keeps marking its starts, the
+        // stuck pass marks one and is never heard from again.
+        catchUp.heartbeat();
         try {
             intradayJob.run();
         } catch (RuntimeException e) {
             log.warn("Intraday price fetch run failed", e);
+        } finally {
+            // In the finally, not after a clean run: the question is whether this process is
+            // still running its passes, not whether the last one found anything. A pass that
+            // threw still came back, and the catch-up runs these same jobs — it has nothing
+            // to offer a feed that is simply down. A pass that never returns is the one that
+            // means something, and that is exactly the silence this leaves behind.
+            catchUp.heartbeat();
         }
     }
 

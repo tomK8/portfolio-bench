@@ -75,7 +75,7 @@ public class FrankfurterFxClient implements FxRateProvider, HistoricalFxRateProv
                 .timeout(timeout)
                 .GET()
                 .build();
-        HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> resp = BoundedHttp.send(client, req);
         if (resp.statusCode() != 200) {
             log.warn("Frankfurter HTTP {} for {}", resp.statusCode(), url);
             throw new IllegalStateException("Frankfurter HTTP " + resp.statusCode() + " for " + url);

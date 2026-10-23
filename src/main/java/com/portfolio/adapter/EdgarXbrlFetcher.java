@@ -174,7 +174,7 @@ public class EdgarXbrlFetcher {
                     .header("User-Agent", USER_AGENT)
                     .header("Accept", "application/json")
                     .timeout(REQUEST_TIMEOUT).GET().build();
-            HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> resp = BoundedHttp.send(client, req);
             if (resp.statusCode() == 200) return new Response(200, resp.body());
             // 404 = this filer never tagged this concept. Ordinary, not a fault.
             if (resp.statusCode() == 404) log.debug("EDGAR XBRL 404 (untagged) for {}", url);

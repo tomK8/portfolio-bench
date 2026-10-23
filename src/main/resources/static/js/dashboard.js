@@ -9052,14 +9052,21 @@
                 e.dataTransfer.setData('text/plain', tr.dataset.sym);   // Firefox drags nothing without it
                 if (e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(tr, 12, 10);
             });
+            // One save restates all four levels, but a layout can show any subset of them: this
+            // list may carry Below alone. A kind with no box on screen is read off the stored row,
+            // never posted blank (which would clear a trigger the user can't see) and never read
+            // off the null the lookup returns (which threw here, before the save went out — so the
+            // edit never persisted and clearFiredFor never ran, leaving the row still coloured).
             tr.querySelectorAll('.wl-thr-input').forEach(function (inp) {
                 inp.addEventListener('change', function () {
                     var row = this.closest('tr');
-                    var high = row.querySelector('.wl-thr-input[data-kind="high"]').value.trim();
-                    var move = row.querySelector('.wl-thr-input[data-kind="move"]').value.trim();
-                    var above = row.querySelector('.wl-thr-input[data-kind="above"]').value.trim();
-                    var below = row.querySelector('.wl-thr-input[data-kind="below"]').value.trim();
-                    saveWatchlistThreshold(this.dataset.sym, high, move, above, below);
+                    var boxes = {};
+                    WlEditSync.KINDS.forEach(function (kind) {
+                        var el = row.querySelector('.wl-thr-input[data-kind="' + kind + '"]');
+                        if (el) boxes[kind] = el.value.trim();
+                    });
+                    var post = WlEditSync.postedThresholds(boxes, row._wlRow);
+                    saveWatchlistThreshold(this.dataset.sym, post.high, post.move, post.above, post.below);
                 });
                 // Enter commits: the inputs aren't in a <form>, so blur (which fires change) is the save.
                 inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') this.blur(); });
@@ -9070,14 +9077,17 @@
             tr.querySelectorAll('.wl-tgt-input').forEach(function (inp) {
                 inp.addEventListener('change', function () {
                     var row = this.closest('tr');
-                    var above = row.querySelector('.wl-tgt-input[data-kind="tgtAbove"]');
-                    var below = row.querySelector('.wl-tgt-input[data-kind="tgtBelow"]');
                     // A layout can show one side without the other; a box that isn't on screen
                     // keeps whatever is stored rather than being posted as a blank that clears it.
-                    var r = row._wlRow || {};
-                    saveWatchlistTarget(this.dataset.sym,
-                        above ? above.value.trim() : WlEditSync.thrDisplay('above', r.targetAbove),
-                        below ? below.value.trim() : WlEditSync.thrDisplay('below', r.targetBelow));
+                    // Same rule as the levels above, and the same one function, so the two can't
+                    // drift apart again.
+                    var boxes = {};
+                    WlEditSync.TARGET_KINDS.forEach(function (kind) {
+                        var el = row.querySelector('.wl-tgt-input[data-kind="' + kind + '"]');
+                        if (el) boxes[kind] = el.value.trim();
+                    });
+                    var post = WlEditSync.postedTargets(boxes, row._wlRow);
+                    saveWatchlistTarget(this.dataset.sym, post.tgtAbove, post.tgtBelow);
                 });
                 inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') this.blur(); });
             });

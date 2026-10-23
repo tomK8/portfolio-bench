@@ -125,7 +125,7 @@ public class CikRegistry {
                     .header("User-Agent", USER_AGENT)
                     .header("Accept", "application/json")
                     .timeout(REQUEST_TIMEOUT).GET().build();
-            HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> resp = BoundedHttp.send(client, req);
             if (resp.statusCode() == 200) return resp.body();
             log.warn("SEC company_tickers HTTP {}", resp.statusCode());
         } catch (Exception e) {

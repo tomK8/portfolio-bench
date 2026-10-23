@@ -137,7 +137,7 @@ public class YahooPriceFetcher {
                 HttpRequest req = HttpRequest.newBuilder(URI.create(url))
                         .header("User-Agent", USER_AGENT)
                         .timeout(Duration.ofSeconds(20)).GET().build();
-                HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> resp = BoundedHttp.send(client, req);
                 if (resp.statusCode() == 200) return new Response(200, resp.body());
                 log.warn("Yahoo HTTP {} for {} (attempt {})", resp.statusCode(), url, attempt);
                 last = new Response(resp.statusCode(), resp.body());

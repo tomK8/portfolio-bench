@@ -69,3 +69,58 @@ needed because the Last cell now carries a badge as well as a number. `setPriceC
 number and badge into their own spans (a `textContent` swap would wipe the badge every frame and
 break change detection by comparing `"174.38PRE"` against `"174.38"`), and sets `data-sort-value`.
 
+
+## Coming back after the laptop has been shut
+
+Two separate things keep a reopened app from showing Wednesday's prices on Friday. One stops a
+fetch outliving the machine; the other repairs what the sleep went through.
+
+**A send is bounded by the caller, not by the request.** On 2026-10-22 the laptop slept at 00:27
+with a Yahoo intraday fetch in flight. The connection died silently during the suspend and
+`HttpClient.send` never came back: its thread was still parked there 35 hours later, its own
+20-second request timeout long past. That timeout is enforced by a timer the client's selector
+thread services, so it is not a deadline the caller holds — and the intraday job runs on a
+`fixedDelay`, which re-arms only when the previous run *returns*. One parked call therefore stopped
+every quote the Live tab had, took the thread the 22:00 cron needed with it, and nothing short of a
+restart brought either back. `adapter/BoundedHttp` is now the only way this app sends: it runs the
+exchange through `sendAsync` and waits on the calling thread for the request's own timeout plus
+`GRACE`. That wait is driven by the monotonic clock, which stops with the machine and resumes with
+it, so a call caught by a suspend returns within its own budget of *waking* time and the job
+re-arms on its own. The grace is what keeps this a backstop — a healthy timeout still wins its
+race and still reports itself as the `HttpTimeoutException` it always was, which is also what this
+bound throws, because a connection that outlived its deadline is exactly "the source is
+unreachable".
+
+**The catch-up is demand-driven: no poller, no watchdog, no timer.** `CatchUpService.noteActivity()`
+hangs off a `HandlerInterceptor` on every request and, in the ordinary case, reads one volatile
+field and returns. Opening whichever tab you open first after a two-day sleep is what starts the
+repair — the page still renders at once and fills in as the fetches land, and the Live tab draws a
+strip meanwhile (`catchingUp` rides on every snapshot, the 15s SSE tick included, so it clears
+itself).
+
+- **The signal is the jobs' own liveness, not the age of the prices.** Asking it that way is what
+  stops a closed market looking like a fault — out of hours the quotes are legitimately hours old
+  while the pass ticks along fine — and it catches the hang above just as well as a sleep, because
+  a pass that never returns is the same silence. The scheduler heartbeats at **both ends** of each
+  intraday pass, which is what separates *slow* from *stuck*: a pass crawling through a Yahoo
+  outage at a bounded 30s a ticker keeps marking its starts and keeps the gate shut, while one
+  parked in a dead socket marks its start once and is never heard from again. Twenty minutes
+  without either end is the threshold — headroom for the crawling case, instant for the two-day
+  one. The closing heartbeat is in a `finally`: the question is whether the passes are still
+  running, not whether the last one found anything, and a catch-up runs these same jobs, so it has
+  nothing to offer a feed that is simply down.
+- **The elapsed time is wall-clock on purpose.** `System.nanoTime` is the usual right answer for
+  measuring an interval and is precisely the wrong one here — it stops while the machine is
+  suspended, which is the interval being measured. A monotonic clock would report that no time had
+  passed at all.
+- **Daily bars first, then quotes, then gilts.** Day Δ is a quote over the close before that
+  quote's *trading day*, so while `price_history` still ends on Wednesday every row would read a
+  three-day move as today's — the MRNA +12.13% shape above. Repairing the anchor before the prices
+  that are judged against it is the whole of the ordering; gilts come last because they are scraped
+  hourly anyway and nothing waits on them.
+- **No lock is shared with the scheduled pass.** The two can overlap after a hang and the bar
+  writes are upserts, so the cost is a duplicated fetch. A lock would instead let a pass that is
+  *stuck* keep every catch-up out, which is the failure the gate exists for.
+- **A catch-up re-arms the clock even when every step failed**, so an unreachable feed means one
+  refetch rather than a fresh full pass on every page load — and it says which it was, because a
+  catch-up that reached none of its sources otherwise looks exactly like one that worked.

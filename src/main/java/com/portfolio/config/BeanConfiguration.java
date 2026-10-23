@@ -3,6 +3,7 @@ package com.portfolio.config;
 import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.CachingFxRateProvider;
 import com.portfolio.application.CachedHistoricalFxRateProvider;
+import com.portfolio.application.CatchUpService;
 import com.portfolio.adapter.CikRegistry;
 import com.portfolio.adapter.EdgarEarningsFetcher;
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
@@ -798,6 +799,19 @@ public class BeanConfiguration {
                                                        MarketHoursCache marketHoursCache) {
         return new IntradayPriceFetchJob(cashTransactionRepository, intradayPriceRepository,
                 yahooPriceFetcher, yahooTickerMap, keyValueStore, marketHoursCache);
+    }
+
+
+    /**
+     * The dormancy gate. Depends on the three fetch jobs rather than the scheduler, because what
+     * it needs is the work itself: after a long sleep the scheduled triggers come back on their
+     * own but neither backfills the ticks it was suspended through.
+     */
+    @Bean
+    public CatchUpService catchUpService(PriceFetchJob priceFetchJob,
+                                         IntradayPriceFetchJob intradayPriceFetchJob,
+                                         GiltPriceFetchJob giltPriceFetchJob) {
+        return new CatchUpService(priceFetchJob, intradayPriceFetchJob, giltPriceFetchJob);
     }
 
     @Bean

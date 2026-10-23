@@ -102,7 +102,7 @@ public class GiltPriceFetcher {
                 HttpRequest req = HttpRequest.newBuilder(URI.create(URL))
                         .header("User-Agent", USER_AGENT)
                         .timeout(Duration.ofSeconds(20)).GET().build();
-                HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> resp = BoundedHttp.send(client, req);
                 if (resp.statusCode() == 200) return resp.body();
                 log.warn("Gilt HTTP {} (attempt {})", resp.statusCode(), attempt);
             } catch (Exception e) {

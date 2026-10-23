@@ -352,7 +352,13 @@ public class LivePricesService {
              * Sector groups over {@code rows}, always populated (see {@code sectorGroups}). The
              * client renders them only when its own Group-by dropdown asks for them.
              */
-            List<LiveGroup> groups) {
+            List<LiveGroup> groups,
+            /**
+             * True while {@code CatchUpService} is refetching after a dormant spell, so the tab can
+             * say the figures are still arriving. Set by the controller on the way out rather than
+             * computed here: it is a fact about the process, not about the prices in this snapshot.
+             */
+            boolean catchingUp) {
 
         /**
          * Back-compatible form for callers with no grouping to supply — the Excel export builds
@@ -361,6 +367,17 @@ public class LivePricesService {
          */
         public Snapshot(List<Row> rows, Totals totals, Instant generatedAt, Instant latestPriceAt) {
             this(rows, totals, generatedAt, latestPriceAt, List.of());
+        }
+
+        /** The snapshot as the service builds it; the catch-up flag is stamped on afterwards. */
+        public Snapshot(List<Row> rows, Totals totals, Instant generatedAt, Instant latestPriceAt,
+                        List<LiveGroup> groups) {
+            this(rows, totals, generatedAt, latestPriceAt, groups, false);
+        }
+
+        /** This snapshot, saying whether a catch-up is in flight behind it. */
+        public Snapshot withCatchUp(boolean inFlight) {
+            return new Snapshot(rows, totals, generatedAt, latestPriceAt, groups, inFlight);
         }
     }
 

@@ -159,7 +159,7 @@ public class YahooQuoteSummaryFetcher {
         HttpRequest crumbReq = HttpRequest.newBuilder(URI.create(CRUMB_URL))
                 .header("User-Agent", USER_AGENT)
                 .timeout(REQUEST_TIMEOUT).GET().build();
-        HttpResponse<String> crumbResp = client.send(crumbReq, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> crumbResp = BoundedHttp.send(client, crumbReq);
         if (crumbResp.statusCode() != 200) {
             throw new IllegalStateException("crumb HTTP " + crumbResp.statusCode() +
                     ": " + crumbResp.body());
@@ -232,7 +232,7 @@ public class YahooQuoteSummaryFetcher {
             HttpRequest req = HttpRequest.newBuilder(URI.create(url))
                     .header("User-Agent", USER_AGENT)
                     .timeout(REQUEST_TIMEOUT).GET().build();
-            HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> resp = BoundedHttp.send(client, req);
             if (resp.statusCode() == 200) return resp.body();
             log.warn("quoteSummary HTTP {} for {}", resp.statusCode(), url);
         } catch (Exception e) {

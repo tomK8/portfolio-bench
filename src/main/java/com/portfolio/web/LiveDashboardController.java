@@ -1,5 +1,6 @@
 package com.portfolio.web;
 
+import com.portfolio.application.CatchUpService;
 import com.portfolio.application.ExportExcelService;
 import com.portfolio.application.LivePricesService;
 import com.portfolio.application.LivePricesService.Snapshot;
@@ -39,11 +40,14 @@ public class LiveDashboardController {
 
     private final LivePricesService service;
     private final ExportExcelService exportService;
+    private final CatchUpService catchUp;
     private final List<SseEmitter> emitters = new CopyOnWriteArrayList<>();
 
-    public LiveDashboardController(LivePricesService service, ExportExcelService exportService) {
+    public LiveDashboardController(LivePricesService service, ExportExcelService exportService,
+                                   CatchUpService catchUp) {
         this.service = service;
         this.exportService = exportService;
+        this.catchUp = catchUp;
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "live-prices-sse");
             t.setDaemon(true);
@@ -55,7 +59,16 @@ public class LiveDashboardController {
     @GetMapping("/live")
     @ResponseBody
     public Snapshot live() {
-        return service.snapshot();
+        return current();
+    }
+
+    /**
+     * The snapshot plus whether a catch-up is running behind it. Every path that reaches a browser
+     * goes through here, the SSE tick included, so the strip the tab draws clears by itself when
+     * the refetch finishes rather than waiting for the next thing the user does.
+     */
+    private Snapshot current() {
+        return service.snapshot().withCatchUp(catchUp.catchingUp());
     }
 
     /**
@@ -81,7 +94,7 @@ public class LiveDashboardController {
         em.onError(e -> emitters.remove(em));
         emitters.add(em);
         try {
-            em.send(SseEmitter.event().name("snapshot").data(service.snapshot()));
+            em.send(SseEmitter.event().name("snapshot").data(current()));
         } catch (Exception e) {
             emitters.remove(em);
             log.debug("Live SSE: initial send failed, dropping emitter", e);
@@ -93,7 +106,7 @@ public class LiveDashboardController {
         if (emitters.isEmpty()) return;
         Snapshot snap;
         try {
-            snap = service.snapshot();
+            snap = current();
         } catch (Exception e) {
             log.warn("Live snapshot failed", e);
             return;

@@ -1969,6 +1969,16 @@
         #live-table tbody tr { cursor: pointer; }   /* row opens the price popup */
         .live-flash-up { animation: live-flash-up 1.2s ease-out; }
         .live-flash-down { animation: live-flash-down 1.2s ease-out; }
+        /* Position tab: the row a clicked chart marker scrolled to. Loud for a moment, then
+           gone — a permanent highlight would compete with the next click's. */
+        @keyframes pos-row-flash {
+            0% { background-color: rgba(31, 119, 180, 0.42); }
+            100% { background-color: transparent; }
+        }
+        #position-trades-table tbody tr.flash td { animation: pos-row-flash 1.8s ease-out; }
+        #position-trades-table td.side-buy { color: #2ca02c; font-weight: 600; }
+        #position-trades-table td.side-sell { color: #c0392b; font-weight: 600; }
+
         .live-pos { color: #2ca02c; font-weight: 600; }
         .live-neg { color: #c0392b; font-weight: 600; }
         /* Session badge beside an extended-hours price. Deliberately loud enough to notice and
@@ -3063,10 +3073,12 @@
 
 <section class="tab-panel" id="panel-position">
     <p class="muted" style="margin-top: 0">
-        Per-symbol drill-down. FIFO lots, dividends, total return = realized + unrealized +
-        dividends. Price chart is in the symbol's <b>listing currency</b> (raw close, undoing
-        Yahoo's split adjustment) so markers sit at the price you actually paid / sold at on
-        that day; the GBP cost / proceeds appears in the marker tooltip and tables.
+        Per-symbol drill-down. Every transaction, then the FIFO lots they build up to, then
+        dividends; total return = realized + unrealized + dividends. The price chart is the
+        <b>raw close in the symbol's listing currency</b> (undoing Yahoo's split adjustment),
+        so a marker sits on the line at that day's close — the price you actually dealt at is
+        in its tooltip and in the transactions table, in the currency the ledger books in. On a
+        London line those are one price in two units: the axis quotes pence, the ledger pounds.
     </p>
     <div class="benchmark-controls">
         <label>Symbol:
@@ -3094,12 +3106,42 @@
 
         <h3 style="margin-top: 1.5rem; font-size: 1rem;">Price chart with buys / sells / dividends</h3>
         <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
-            Green ▲ = buy, red ▼ = sell, blue ● = dividend payment. Hover for shares / GBP.
+            Green ▲ = buy, red ▼ = sell, blue ● = dividend payment. A marker under the cursor
+            wins the tooltip over the price line, and a cluster of them shows every trade in it
+            at once — click one to jump to its row in the table below. Drag to zoom: markers
+            that sit on top of each other across ten years pull apart across ten weeks.
         </p>
         <div id="position-missing-prices" class="value-warnings" style="display: none;"></div>
         <div style="height: 380px; margin-top: 0.25rem;">
             <canvas id="position-chart"></canvas>
         </div>
+        <div class="zoom-hint">
+            <span class="muted" style="font-size: 0.8rem;">Drag across the chart to zoom into a window.</span>
+            <button id="position-zoom-reset" type="button" class="link-btn">Reset zoom</button>
+        </div>
+
+        <h3 style="margin-top: 1.5rem; font-size: 1rem;">All transactions</h3>
+        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+            Every ledger row that moved shares, newest first — the sequence as you dealt it,
+            not the FIFO lots below (one sell is one row here, however many lots it closed).
+            <b>Price / share</b> is derived from the cash movement, so it carries whatever
+            dealing costs the broker folded into it. Splits and in-specie transfers are listed
+            too, with no price — they move shares without a trade, and leaving them out would
+            make <b>Held after</b> jump with nothing on screen to explain it.
+        </p>
+        <table id="position-trades-table" class="annual-table" style="margin-top: 0.5rem;">
+            <thead><tr>
+                <th class="txt" data-sort="text">Date</th>
+                <th class="txt" data-sort="text">Type</th>
+                <th data-sort="num">Shares</th>
+                <th data-sort="num" title="Cash moved ÷ shares, in the listing currency — includes commission and any stamp duty">Price / share</th>
+                <th data-sort="num" class="pos-native-col">Value</th>
+                <th data-sort="num">Value (£)</th>
+                <th data-sort="num" title="Shares held across every account immediately after this row">Held after</th>
+                <th class="txt" data-sort="text">Account</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
 
         <h3 style="margin-top: 1.5rem; font-size: 1rem;">Open lots (still owned)</h3>
         <table id="position-open-table" class="annual-table" style="margin-top: 0.5rem;">

@@ -3,6 +3,7 @@ package com.portfolio.application;
 import com.portfolio.application.PositionDetailService.ClosedLot;
 import com.portfolio.application.PositionDetailService.Lots;
 import com.portfolio.application.PositionDetailService.OpenLot;
+import com.portfolio.application.PositionDetailService.Trade;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.TransactionType;
@@ -12,6 +13,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PositionDetailServiceTest {
@@ -336,6 +338,97 @@ class PositionDetailServiceTest {
                 1.0, proceeds, null, null, "sell");
     }
 
+
+    // ---- the transactions list ---------------------------------------------
+
+    @Test
+    void tradesListOneRowPerDealWithTheDealtPrice() {
+        List<CashTransaction> rows = List.of(
+                buy("2024-01-15", "X", 50, 5000.00, Account.AJBELL),
+                buy("2024-02-15", "X", 50, 6000.00, Account.AJBELL),
+                sell("2024-06-15", "X", 70, 9100.00, Account.AJBELL)
+        );
+        List<Trade> trades = PositionDetailService.buildTrades(rows);
+
+        // Three deals, not the four FIFO slices the sell consumes two lots into.
+        assertEquals(3, trades.size());
+        assertEquals("BUY", trades.get(0).side());
+        assertEquals(0, trades.get(0).pricePerShareNative().compareTo(new BigDecimal("100")));
+        assertEquals(0, trades.get(0).valueGbp().compareTo(new BigDecimal("5000.00")));
+        assertEquals("SELL", trades.get(2).side());
+        assertEquals(0, trades.get(2).pricePerShareNative().compareTo(new BigDecimal("130")));
+        assertEquals(0, trades.get(2).shares().compareTo(new BigDecimal("70")));
+    }
+
+    @Test
+    void tradesCarryTheRunningPositionAfterEachRow() {
+        List<CashTransaction> rows = List.of(
+                buy("2024-01-15", "X", 50, 5000.00, Account.AJBELL),
+                buy("2024-02-15", "X", 50, 6000.00, Account.AJBELL),
+                sell("2024-06-15", "X", 70, 9100.00, Account.AJBELL)
+        );
+        List<Trade> trades = PositionDetailService.buildTrades(rows);
+        assertEquals(0, trades.get(0).sharesAfter().compareTo(new BigDecimal("50")));
+        assertEquals(0, trades.get(1).sharesAfter().compareTo(new BigDecimal("100")));
+        assertEquals(0, trades.get(2).sharesAfter().compareTo(new BigDecimal("30")));
+        // The column has to land where the FIFO engine above it does, or the table and the
+        // "Shares held" tile would disagree on the same ledger.
+        assertEquals(0, trades.get(trades.size() - 1).sharesAfter()
+                .compareTo(PositionDetailService.reconstruct(rows).totalOpenShares()));
+    }
+
+    @Test
+    void splitAndTransferAreListedWithNoPriceAndNoValue() {
+        List<CashTransaction> rows = List.of(
+                buy("2024-01-15", "X", 10, 1000.00, Account.AJBELL),
+                split("2024-03-01", "X", 90, Account.AJBELL),
+                transferOut("2024-05-01", "X", 40, 400.00, Account.AJBELL),
+                transferIn("2024-05-01", "X", 40, 400.00, Account.II)
+        );
+        List<Trade> trades = PositionDetailService.buildTrades(rows);
+        assertEquals(4, trades.size());
+
+        Trade sp = trades.get(1);
+        assertEquals("SPLIT", sp.side());
+        assertEquals(0, sp.shares().compareTo(new BigDecimal("90")));   // signed delta
+        assertNull(sp.pricePerShareNative());
+        assertNull(sp.valueGbp());
+        assertNull(sp.valueNative());
+        assertEquals(0, sp.sharesAfter().compareTo(new BigDecimal("100")));
+
+        // A transfer's amount is the FIFO cost that travelled, not cash paid at a price —
+        // printing it under the same Value header as a fill would state a trade that never
+        // happened. Both legs net to no change in the position.
+        assertEquals("TRANSFER_OUT", trades.get(2).side());
+        assertNull(trades.get(2).valueGbp());
+        assertEquals(0, trades.get(2).sharesAfter().compareTo(new BigDecimal("60")));
+        assertEquals("TRANSFER_IN", trades.get(3).side());
+        assertNull(trades.get(3).pricePerShareNative());
+        assertEquals(0, trades.get(3).sharesAfter().compareTo(new BigDecimal("100")));
+    }
+
+    @Test
+    void dividendsAreNotTransactionsInTheSharesSense() {
+        List<CashTransaction> rows = List.of(
+                buy("2024-01-15", "X", 50, 5000.00, Account.AJBELL),
+                dividend("2024-04-15", "X", 123.45, Account.AJBELL)
+        );
+        List<Trade> trades = PositionDetailService.buildTrades(rows);
+        assertEquals(1, trades.size());
+        assertEquals("BUY", trades.get(0).side());
+    }
+
+    @Test
+    void tradesKeepTheNativeCurrencyOfTheirAccount() {
+        List<CashTransaction> rows = List.of(
+                buyNative("2024-01-15", "AAPL", 10, -2000.00, Account.ROTH_IRA)
+        );
+        List<Trade> trades = PositionDetailService.buildTrades(rows);
+        assertEquals("USD", trades.get(0).currency());
+        assertEquals(0, trades.get(0).pricePerShareNative().compareTo(new BigDecimal("200")));
+        assertEquals(0, trades.get(0).valueNative().compareTo(new BigDecimal("2000.00")));
+    }
+
     /** Shares leaving an account in-specie: positive amount, magnitude = the FIFO cost moving. */
     private static CashTransaction transferOut(String date, String sym, double qty,
                                                double costGbp, Account account) {
@@ -348,6 +441,13 @@ class PositionDetailServiceTest {
                                               double costGbp, Account account) {
         return new CashTransaction(date, account, TransactionType.TRANSFER,
                 sym, qty, -costGbp, "GBP", 1.0, -costGbp, null, null, "transfer in");
+    }
+
+    private static CashTransaction dividend(String date, String sym, double amount,
+                                            Account account) {
+        return new CashTransaction(date, account, TransactionType.DIVIDEND,
+                sym, 0, amount, account == Account.AJBELL ? "GBP" : "USD",
+                1.0, amount, null, null, "dividend");
     }
 
     private static CashTransaction split(String date, String sym, double qtyDelta,

@@ -154,27 +154,26 @@ public class PositionDetailService {
                     BigDecimal.valueOf(b.close() * b.splitFactor()));
         }
 
+        // Buy / sell markers are built *from* the trade list rather than from the ledger a
+        // second time, and carry the row index they came from. Two passes over the same rows
+        // could drift apart — differ by one skipped row and a marker's tooltip would describe
+        // the trade next to the one it sits on, and clicking it would scroll to that one too.
+        List<Trade> trades = buildTrades(rows);
         List<Marker> markers = new ArrayList<>();
+        for (int i = 0; i < trades.size(); i++) {
+            Trade tr = trades.get(i);
+            String kind = "BUY".equals(tr.side()) ? "buy" : "SELL".equals(tr.side()) ? "sell" : null;
+            if (kind == null) continue;   // a split or a transfer leg moved shares, not money
+            markers.add(new Marker(tr.date(), kind, nearestClose(closeByDate, tr.date()),
+                    tr.shares(), tr.valueGbp(), tr.account(), i));
+        }
         for (CashTransaction t : rows) {
-            BigDecimal yPrice = nearestClose(closeByDate, t.transactionDate());
-            if (t.type() == TransactionType.TRANSACTION) {
-                BigDecimal qty = BigDecimal.valueOf(Math.abs(t.quantity()));
-                if (qty.signum() == 0) continue;
-                BigDecimal gbp = BigDecimal.valueOf(Math.abs(t.amountGbp()))
-                        .setScale(GBP_SCALE, RoundingMode.HALF_UP);
-                if (t.amount() < 0) {
-                    markers.add(new Marker(t.transactionDate(), "buy", yPrice,
-                            qty, gbp, t.account().dbValue()));
-                } else if (t.amount() > 0) {
-                    markers.add(new Marker(t.transactionDate(), "sell", yPrice,
-                            qty, gbp, t.account().dbValue()));
-                }
-            } else if (t.type() == TransactionType.DIVIDEND) {
-                BigDecimal gbp = BigDecimal.valueOf(t.amountGbp())
-                        .setScale(GBP_SCALE, RoundingMode.HALF_UP);
-                markers.add(new Marker(t.transactionDate(), "div", yPrice,
-                        BigDecimal.ZERO, gbp, t.account().dbValue()));
-            }
+            if (t.type() != TransactionType.DIVIDEND) continue;
+            markers.add(new Marker(t.transactionDate(), "div",
+                    nearestClose(closeByDate, t.transactionDate()),
+                    BigDecimal.ZERO,
+                    BigDecimal.valueOf(t.amountGbp()).setScale(GBP_SCALE, RoundingMode.HALF_UP),
+                    t.account().dbValue(), null));
         }
 
         Summary summary = new Summary(
@@ -189,7 +188,84 @@ public class PositionDetailService {
                 priceCcy);
         return new PositionDetail(symbol, summary,
                 lots.openForDisplay(), lots.closedForDisplay(),
-                dividends, priceSeries, markers, bars.isEmpty());
+                dividends, trades, priceSeries, markers, bars.isEmpty());
+    }
+
+    /**
+     * Every ledger row that moved shares, oldest first, each carrying the position held
+     * across all accounts immediately after it.
+     *
+     * <p>This is the ledger as entered, not the FIFO view above it: a sell is one row here
+     * and however many {@link ClosedLot}s it consumed over there. It is the sequence the
+     * broker's own trade history shows, which is what makes it checkable against one.
+     *
+     * <p>Splits and in-specie transfer legs are listed alongside buys and sells because the
+     * running balance is the column's whole value: leave them out and the position jumps
+     * between two adjacent rows with nothing on screen to explain it. They carry no price
+     * and no value — a transfer's {@code amount} is the FIFO cost that travelled with the
+     * shares (docs/transfers.md), not cash paid at a market price, and printing it under a
+     * "Value" header shared with real fills would be stating a trade that never happened.
+     *
+     * <p>{@code pricePerShareNative} is derived, since the ledger stores no price column:
+     * {@code |amount| ÷ |quantity|}, so it carries whatever costs the broker folded into the
+     * cash movement. Same figure, same caveat as the trade journal's — see
+     * {@link TradeNotesService#pricePerShare}.
+     *
+     * <p>Visible for testing.
+     */
+    static List<Trade> buildTrades(List<CashTransaction> rows) {
+        List<Trade> out = new ArrayList<>();
+        BigDecimal held = BigDecimal.ZERO;
+        for (CashTransaction t : rows) {
+            BigDecimal qty = BigDecimal.valueOf(Math.abs(t.quantity()));
+            String side;
+            BigDecimal shares;
+            BigDecimal delta;
+            boolean priced;
+            if (t.type() == TransactionType.TRANSFER) {
+                if (qty.signum() == 0) continue;
+                boolean leaving = t.amount() > 0;
+                side = leaving ? "TRANSFER_OUT" : "TRANSFER_IN";
+                shares = qty;
+                delta = leaving ? qty.negate() : qty;
+                priced = false;
+            } else if (t.type() == TransactionType.TRANSACTION) {
+                if (qty.signum() == 0) continue;
+                if (t.amount() == 0) {
+                    // Shares arriving for no cash: a split, booked as a signed delta.
+                    side = "SPLIT";
+                    shares = BigDecimal.valueOf(t.quantity());
+                    delta = shares;
+                    priced = false;
+                } else {
+                    boolean buy = t.amount() < 0;
+                    side = buy ? "BUY" : "SELL";
+                    shares = qty;
+                    delta = buy ? qty : qty.negate();
+                    priced = true;
+                }
+            } else {
+                continue;
+            }
+            held = held.add(delta);
+            BigDecimal valueNative = priced
+                    ? BigDecimal.valueOf(Math.abs(t.amount())).setScale(GBP_SCALE, RoundingMode.HALF_UP)
+                    : null;
+            BigDecimal valueGbp = priced
+                    ? BigDecimal.valueOf(Math.abs(t.amountGbp())).setScale(GBP_SCALE, RoundingMode.HALF_UP)
+                    : null;
+            BigDecimal price = priced
+                    ? BigDecimal.valueOf(Math.abs(t.amount()))
+                            .divide(qty, 6, RoundingMode.HALF_UP)
+                    : null;
+            out.add(new Trade(t.transactionDate(), side,
+                    shares.setScale(6, RoundingMode.HALF_UP),
+                    price, priced ? t.currency() : null,
+                    valueNative, valueGbp,
+                    held.setScale(6, RoundingMode.HALF_UP),
+                    t.account().dbValue()));
+        }
+        return out;
     }
 
     private BigDecimal positionValueGbp(String symbol, BigDecimal shares, IntradayPrice ip,
@@ -499,6 +575,19 @@ public class PositionDetailService {
     public record DividendPayment(String date, BigDecimal amountGbp, String account) {
     }
 
+    /**
+     * One share-moving ledger row. {@code side} is {@code BUY}, {@code SELL}, {@code SPLIT},
+     * {@code TRANSFER_IN} or {@code TRANSFER_OUT}; {@code shares} is signed only for a split
+     * (where the sign is the whole fact) and absolute otherwise, the side saying which way it
+     * went. Price and both values are {@code null} — never zero — on the rows that moved no
+     * cash. {@code sharesAfter} is the position across every account once this row is applied.
+     */
+    public record Trade(String date, String side, BigDecimal shares,
+                        BigDecimal pricePerShareNative, String currency,
+                        BigDecimal valueNative, BigDecimal valueGbp,
+                        BigDecimal sharesAfter, String account) {
+    }
+
     public record PricePoint(String date, BigDecimal price) {
     }
 
@@ -507,10 +596,13 @@ public class PositionDetailService {
      * {@code "div"}. {@code priceAtMarker} is the chart-line y-coordinate where the icon
      * should sit (close on that date, native ccy). {@code shares} is zero for dividend
      * markers. {@code gbpAmount} is the GBP cost (buy), GBP proceeds (sell), or GBP
-     * dividend (div).
+     * dividend (div). {@code tradeIndex} is the row in {@code trades} this marker was built
+     * from — the tooltip reads the dealt price off it and a click scrolls to it — and is
+     * {@code null} on a dividend, which is a payment and not a row in that table.
      */
     public record Marker(String date, String kind, BigDecimal priceAtMarker,
-                         BigDecimal shares, BigDecimal gbpAmount, String account) {
+                         BigDecimal shares, BigDecimal gbpAmount, String account,
+                         Integer tradeIndex) {
     }
 
     public record Summary(BigDecimal shares,
@@ -533,13 +625,14 @@ public class PositionDetailService {
                                  List<OpenLot> openLots,
                                  List<ClosedLot> closedLots,
                                  List<DividendPayment> dividends,
+                                 List<Trade> trades,
                                  List<PricePoint> priceHistory,
                                  List<Marker> markers,
                                  boolean missingPriceHistory) {
 
         public static PositionDetail empty(String symbol) {
             return new PositionDetail(symbol, Summary.empty(),
-                    List.of(), List.of(), List.of(), List.of(), List.of(), false);
+                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), false);
         }
     }
 }

@@ -5033,6 +5033,58 @@
         var positionInitialized = false;
         var positionChart = null;
 
+        // How far from a marker's centre still counts as being on it, on top of its own radius.
+        // Eight-pixel triangles at ten years of history land within a couple of pixels of each
+        // other, and 'nearest' on the x axis handed every one of those hovers to the price line,
+        // which has a point on every single day — so the trade you were pointing at was the one
+        // thing you could not get a tooltip for.
+        var POSITION_GRAB_PX = 10;
+
+        /**
+         * Hover resolution for the position chart: a marker under the cursor beats the price
+         * line outright, and *every* marker under the cursor comes back, not just the closest
+         * one. A cluster of same-week fills is the normal case, not the edge case — returning
+         * one of them would mean the others can only be reached by zooming, which is exactly
+         * the problem. The price line is only consulted when no marker is in range, and then
+         * by date alone, so running the cursor along the line still reads prices off it.
+         */
+        if (window.Chart && Chart.Interaction && !Chart.Interaction.modes.markerFirst) {
+            Chart.Interaction.modes.markerFirst = function (chart, e, options, useFinalPosition) {
+                var px = e.x, py = e.y;
+                if (px == null || py == null) return [];
+                var hits = [];
+                chart.data.datasets.forEach(function (ds, i) {
+                    if (ds.type !== 'scatter' || !chart.isDatasetVisible(i)) return;
+                    var meta = chart.getDatasetMeta(i);
+                    (meta.data || []).forEach(function (el, j) {
+                        var pt = el.getProps(['x', 'y'], useFinalPosition);
+                        var dx = pt.x - px, dy = pt.y - py;
+                        var d = Math.sqrt(dx * dx + dy * dy);
+                        var r = ((el.options && el.options.radius) || 6) + POSITION_GRAB_PX;
+                        if (d <= r) hits.push({ d: d, item: { element: el, datasetIndex: i, index: j } });
+                    });
+                });
+                if (hits.length) {
+                    hits.sort(function (a, b) { return a.d - b.d; });
+                    return hits.map(function (h) { return h.item; });
+                }
+                var best = null, bestDx = Infinity;
+                chart.data.datasets.forEach(function (ds, i) {
+                    if (ds.type === 'scatter' || !chart.isDatasetVisible(i)) return;
+                    var meta = chart.getDatasetMeta(i);
+                    (meta.data || []).forEach(function (el, j) {
+                        var pt = el.getProps(['x'], useFinalPosition);
+                        var dx = Math.abs(pt.x - px);
+                        if (dx < bestDx) {
+                            bestDx = dx;
+                            best = { element: el, datasetIndex: i, index: j };
+                        }
+                    });
+                });
+                return best ? [best] : [];
+            };
+        }
+
         function setupPosition() {
             if (positionInitialized) return;
             positionInitialized = true;
@@ -5056,6 +5108,10 @@
                             return;
                         }
                         loadPosition(sym);
+                    });
+            document.getElementById('position-zoom-reset')
+                    .addEventListener('click', function () {
+                        if (positionChart) positionChart.resetZoom();
                     });
         }
 
@@ -5110,18 +5166,28 @@
         function renderPositionChart(d) {
             if (positionChart) positionChart.destroy();
             var priceSeries = (d.priceHistory || []).map(function (p) {
-                return { x: p.date, y: parseFloat(p.price) };
+                return { x: p.date, date: p.date, y: parseFloat(p.price) };
             });
             // Split markers into 3 datasets so each gets its own colour + shape.
+            var trades = d.trades || [];
             var byKind = { buy: [], sell: [], div: [] };
             (d.markers || []).forEach(function (m) {
+                var t = m.tradeIndex != null ? trades[m.tradeIndex] : null;
                 byKind[m.kind] = byKind[m.kind] || [];
                 byKind[m.kind].push({
                     x: m.date,
+                    date: m.date,
                     y: parseFloat(m.priceAtMarker),
                     shares: parseFloat(m.shares || 0),
                     gbp: parseFloat(m.gbpAmount || 0),
-                    account: m.account
+                    account: m.account,
+                    tradeIndex: m.tradeIndex,
+                    // The price dealt at, off the trade row, not the day's close the marker
+                    // is drawn at — those are two different numbers and the tooltip is
+                    // answering "what did I pay", not "where does the icon sit".
+                    price: t && t.pricePerShareNative != null
+                            ? parseFloat(t.pricePerShareNative) : null,
+                    ccy: t ? t.currency : null
                 });
             });
             var datasets = [
@@ -5148,32 +5214,69 @@
                     data: { datasets: datasets },
                     options: {
                         responsive: true, maintainAspectRatio: false,
-                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        interaction: { mode: 'markerFirst', intersect: false },
+                        // No fixed time unit: pinning it to 'year' left a zoomed-in window
+                        // showing a single tick, which is the one state zooming exists for.
                         scales: {
-                            x: { type: 'time', time: { unit: 'year' } },
+                            x: {
+                                type: 'time',
+                                // Horizontal labels only, thinned to fit: the unit then follows
+                                // the window — years across a decade, days inside a month.
+                                ticks: { maxRotation: 0, autoSkipPadding: 24 }
+                            },
                             y: {
                                 title: { display: true, text: 'Price (' + (d.summary.currentPriceCurrency || 'native') + ')' }
                             }
                         },
+                        onClick: function (evt, elements) {
+                            for (var i = 0; i < (elements || []).length; i++) {
+                                var el = elements[i];
+                                var set = positionChart.data.datasets[el.datasetIndex];
+                                var raw = (set.data || [])[el.index];
+                                if (raw && raw.tradeIndex != null) {
+                                    flashTradeRow(raw.tradeIndex);
+                                    return;
+                                }
+                            }
+                        },
                         plugins: {
                             legend: { position: 'bottom' },
+                            zoom: {
+                                pan: { enabled: true, mode: 'x' },
+                                zoom: {
+                                    mode: 'x',
+                                    drag: { enabled: true, backgroundColor: 'rgba(31, 119, 180, 0.12)' },
+                                    pinch: { enabled: true }
+                                }
+                            },
                             tooltip: {
                                 callbacks: {
+                                    // A marker hover can carry several trades from several
+                                    // dates, so each line names its own date and the title
+                                    // stays out of the way. The price line keeps a date title.
+                                    title: function (items) {
+                                        if (!items.length) return '';
+                                        if (items[0].dataset.label !== 'Price') return '';
+                                        return items[0].raw.date;
+                                    },
                                     label: function (ctx) {
                                         var ds = ctx.dataset.label;
                                         var raw = ctx.raw;
                                         if (ds === 'Price') {
                                             return 'Price: ' + ctx.parsed.y.toFixed(4);
                                         }
-                                        // Marker datasets carry shares/gbp/account.
                                         var gbpStr = '£' + raw.gbp.toLocaleString('en-GB',
                                                 { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                                         if (ds === 'Dividend') {
-                                            return ds + ': ' + gbpStr + ' (' + raw.account + ')';
+                                            return raw.date + ' · Dividend ' + gbpStr +
+                                                    ' (' + raw.account + ')';
                                         }
-                                        return ds + ': ' + raw.shares.toLocaleString('en-GB',
-                                                { maximumFractionDigits: 4 }) + ' shares for ' +
-                                                gbpStr + ' (' + raw.account + ')';
+                                        var at = raw.price != null
+                                                ? ' @ ' + fmtNativePrice(raw.price, raw.ccy) : '';
+                                        return raw.date + ' · ' + ds + ' ' +
+                                                raw.shares.toLocaleString('en-GB',
+                                                        { maximumFractionDigits: 4 }) + at +
+                                                ' — ' + gbpStr + ' (' + raw.account + ')';
                                     }
                                 }
                             }
@@ -5200,7 +5303,98 @@
             };
         }
 
+        var POSITION_SIDE_LABEL = {
+            BUY: 'Buy', SELL: 'Sell', SPLIT: 'Split',
+            TRANSFER_IN: 'Transfer in', TRANSFER_OUT: 'Transfer out'
+        };
+        var POSITION_SIDE_CLASS = { BUY: 'side-buy', SELL: 'side-sell' };
+        var POSITION_SIDE_TIP = {
+            SPLIT: 'Shares arriving (or leaving) for no cash — a corporate action, not a trade',
+            TRANSFER_IN: 'Shares moved in from another account in specie — no money changed hands',
+            TRANSFER_OUT: 'Shares moved out to another account in specie — no money changed hands'
+        };
+
+        /**
+         * The ledger as dealt, newest first. The order is reversed for display only: every row
+         * carries its own after-balance, so it stays right read either way, and newest-first is
+         * how a broker's own trade history reads.
+         */
+        function renderPositionTrades(d) {
+            var body = document.querySelector('#position-trades-table tbody');
+            body.innerHTML = '';
+            var trades = d.trades || [];
+            var anyNative = false;
+            for (var k = 0; k < trades.length; k++) {
+                if (trades[k].currency && trades[k].currency !== 'GBP') { anyNative = true; break; }
+            }
+            for (var i = trades.length - 1; i >= 0; i--) {
+                var t = trades[i];
+                var tr = document.createElement('tr');
+                tr.dataset.tradeIndex = String(i);
+                var label = POSITION_SIDE_LABEL[t.side] || t.side;
+                var cls = POSITION_SIDE_CLASS[t.side];
+                var tip = POSITION_SIDE_TIP[t.side];
+                // A split's share count is a signed delta — the sign is the whole fact, so it
+                // is shown. Every other row says which way it went in the Type column.
+                var sharesTxt = t.side === 'SPLIT'
+                        ? (parseFloat(t.shares) > 0 ? '+' : '') + fmtNumber(t.shares, 4)
+                        : fmtNumber(t.shares, 4);
+                tr.innerHTML =
+                    '<td class="txt">' + t.date + '</td>' +
+                    '<td class="txt' + (cls ? ' ' + cls : ' muted') + '"' +
+                        (tip ? ' title="' + tip + '"' : '') + '>' + label + '</td>' +
+                    '<td>' + sharesTxt + '</td>' +
+                    '<td>' + fmtNativePrice(t.pricePerShareNative, t.currency) + '</td>' +
+                    '<td class="pos-native-col">' +
+                        fmtNativePrice(t.valueNative, t.currency) + '</td>' +
+                    '<td>' + fmtMoney2(t.valueGbp) + '</td>' +
+                    '<td>' + fmtNumber(t.sharesAfter, 4) + '</td>' +
+                    '<td class="txt muted">' + t.account + '</td>';
+                body.appendChild(tr);
+            }
+            // "Value" in the listing currency restates "Value (£)" on a sterling line — one
+            // fact under two headers. The native column shows only where the two can differ.
+            showColumn('position-trades-table', 4, anyNative);
+            attachSortOnce('position-trades-table');
+            reapplySort('position-trades-table');
+        }
+
+        /** Hides or shows one column, header and cells, without disturbing any cellIndex. */
+        function showColumn(tableId, idx, shown) {
+            var t = document.getElementById(tableId);
+            var disp = shown ? '' : 'none';
+            var th = t.querySelectorAll('thead th')[idx];
+            if (th) th.style.display = disp;
+            Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr) {
+                if (tr.cells[idx]) tr.cells[idx].style.display = disp;
+            });
+        }
+
+        /**
+         * Re-applies whatever sort the header is still showing. A re-render drops the rows the
+         * sort had put in order while leaving the ▲ on the header, which would otherwise claim
+         * an ordering the table no longer has.
+         */
+        function reapplySort(tableId) {
+            var t = document.getElementById(tableId);
+            var th = t.querySelector('thead th[data-sort-dir]');
+            if (!th) return;
+            sortBody(t, th.cellIndex, th.dataset.sort, th.dataset.sortDir === 'asc');
+        }
+
+        /** Scrolls the row a clicked chart marker belongs to into view and flashes it. */
+        function flashTradeRow(index) {
+            var tr = document.querySelector(
+                    '#position-trades-table tbody tr[data-trade-index="' + index + '"]');
+            if (!tr) return;
+            tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            tr.classList.remove('flash');
+            void tr.offsetWidth;        // restart the animation on a repeat click
+            tr.classList.add('flash');
+        }
+
         function renderPositionTables(d) {
+            renderPositionTrades(d);
             var openBody = document.querySelector('#position-open-table tbody');
             openBody.innerHTML = '';
             (d.openLots || []).forEach(function (l) {

@@ -344,6 +344,23 @@ touches an order.
   and the HL scrape has priced it. A held symbol Yahoo has never answered to still opens — and
   says so, in the same amber `(no Yahoo data)` sentence the watchlist row uses, with the mapping
   editor sitting a few inches above it in the same panel.
+- **A click into a cell is not a click on the row.** Four of those tables have cells you click
+  *into* — the open-orders sessions box, the watchlist's four levels, its two order targets and
+  its note — so each row click has to answer the same question before it opens anything, and
+  `clickedControl(target)` is the one place that question is written down (`input, textarea,
+  select, button, a, label`). It used to be spelled out at each handler, and the watchlist's copy
+  read `input, button` — true until the note arrived as a `<textarea>`, which an `<input>` could
+  not be because the **Full notes** toggle has to show a whole plan. Clicking into a note then
+  raised the popup over the box being aimed at, and the popup shows that same note **read-only**,
+  so the only way to reach the editor was to dismiss what the click had just opened.
+  - **And an editable cell is excluded whole, not just its box.** Every editor here is a fixed
+    width (`3.2rem`, `4.6rem`, `11rem`) inside a cell the table sizes, and an expanded note sits
+    at the *top* of a row as tall as the longest plan on screen — so there is always a gap inside
+    the cell that is not the control. Missing by a few pixels is the same failure as before, so
+    the handler asks `WL_INPUT_COLS` (already the single declaration of which columns are editors,
+    and the same list that keeps them out of the sort) rather than naming the columns a second
+    time. `row-click-guard.test.mjs` holds both halves: the vocabulary must list `textarea`, and
+    no handler may spell a control list out for itself again.
 - **Popup extras:** `GET /watchlist/vol` returns a realized-vol **term structure** (5D/10D from
   intraday 1-min returns via `PriceStats.annualizedVolIntraday`, 30D/1Y from daily closes) shown
   in the popup stats. `GET /watchlist/series` for `1D` returns only the latest session's bars

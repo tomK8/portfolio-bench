@@ -561,6 +561,18 @@
             syncLedgerExpandAll();
         });
 
+        /**
+         * Whether a click landed on something interactive inside the row — a control to use, not a
+         * row to open. Every table whose rows open the price popup asks it here rather than
+         * spelling the list out again: the Watchlist's Note cell is a <textarea> (an <input> can
+         * only ever scroll one line of a plan), and the one guard that still listed
+         * `input, button` alone put the popup over the box the user was clicking into.
+         */
+        function clickedControl(target) {
+            return !!(target && target.closest &&
+                target.closest('input, textarea, select, button, a, label'));
+        }
+
         // ── Holdings / Cash-ledger row click → the shared price popup ───────────
         // The same modal the Live, Watchlist and Open-orders tables open, so a holding can be
         // charted from the table it is read in rather than by retyping its symbol elsewhere.
@@ -576,7 +588,7 @@
         document.body.addEventListener('click', function (e) {
             if (!e.target || !e.target.closest) return;
             if (!e.target.closest('#portfolio-result table, #portfolio-cash-result table')) return;
-            if (e.target.closest('input, button, a, select, label')) return;
+            if (clickedControl(e.target)) return;
             var tr = e.target.closest('tr[data-symbol]');
             if (tr) openSymbolModal(tr.dataset.symbol);
         });
@@ -616,7 +628,7 @@
                 // rungs and legs carry data-symbol only when the listing resolved to a ticker, so an
                 // unmapped one stays inert here for the same reason it does in the table.
                 if (!e.target.closest('#orders-table, #orders-cancelling-table, #ladders-result, #switches-result')) return;
-                if (e.target.closest('input, button, a, select, label')) return;  // the days box lives in a cell
+                if (clickedControl(e.target)) return;  // the days box lives in a cell
                 var el = e.target.closest('tr[data-symbol], .ladder-symbol[data-symbol]');
                 if (el) openSymbolModal(el.dataset.symbol);
             });
@@ -9222,9 +9234,18 @@
             tr._wlRow = r;
             tr.className = rowAlertClass(r);
             tr.innerHTML = wlRowCellsHtml(r);
-            // Row click opens the popup, except when interacting with inputs/buttons.
+            // Row click opens the popup, except where the click was on a control in the row —
+            // the thresholds, the targets, the Note box, the grip and the three action buttons.
+            //
+            // An editable cell is excluded whole, not just its box: WL_INPUT_COLS already names
+            // which columns are editors, and the box does not fill its cell (every one of them is
+            // a fixed width, and an expanded Note sits at the top of a row as tall as the longest
+            // plan on screen). Missing by a few pixels opened a modal over the field being aimed
+            // at — the worst place for it, since the popup shows the note read-only.
             tr.addEventListener('click', function (e) {
-                if (e.target.closest('input, button')) return;
+                if (clickedControl(e.target)) return;
+                var cell = e.target.closest ? e.target.closest('td[data-f]') : null;
+                if (cell && WL_INPUT_COLS[cell.dataset.f]) return;
                 openWlModal(tr._wlRow);
             });
             tr.querySelector('.wl-remove').addEventListener('click', function () {

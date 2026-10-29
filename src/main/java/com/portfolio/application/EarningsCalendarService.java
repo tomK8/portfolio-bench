@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.TextStyle;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -68,6 +69,14 @@ public class EarningsCalendarService {
     static final int MAX_WARM_DAYS = 400;
     /** Politeness gap between calendar fetches on the warm path. */
     private static final long WARM_THROTTLE_MS = 200;
+
+    /**
+     * The feed's own clock. Whether a reporting date has finished is a question about the US market
+     * day, not about ours, so {@link #settled} judges "did we ask after it passed" here rather than
+     * in local time — otherwise a fetch in the London small hours would permanently mark a date
+     * asked-after-settlement while New York was still in the previous evening.
+     */
+    private static final java.time.ZoneId FEED_ZONE = java.time.ZoneId.of("America/New_York");
 
     /** Default look-ahead for the holdings section, independent of the daily tables' window. */
     static final int DEFAULT_HOLDINGS_FORWARD = 21;
@@ -400,6 +409,79 @@ public class EarningsCalendarService {
     }
 
     /**
+     * Which of {@code symbols} reported in the last {@code lookbackDays}, and how it went — the
+     * backward counterpart to {@link #nextEarnings}, for the reminders screen's review section.
+     *
+     * <p><b>A separate method, not a fourth outcome of the forward one.</b> "When does this next
+     * report" and "did this just report" are two questions, and the forward lookup's contract is
+     * already a careful three-way split between a date, a gap and a silence that is an answer.
+     * Folding a past report into it would mean a row that is neither dated nor undated, and every
+     * existing caller would have to learn to ignore it. The same reason the orders panel keeps
+     * <i>open</i> and <i>resting</i> as two questions rather than one flag.
+     *
+     * <p><b>Cache only, like the forward lookup, and for the same reason</b> — this is read by a
+     * half-hourly job, and a hundred symbols behind a live feed would be a hundred requests for a
+     * fact that changes once a quarter. {@link #warmBack} is what keeps the window current.
+     *
+     * <p><b>Only the market calendar answers here.</b> The fundamentals snapshot is no use for this
+     * question: it holds one date per symbol and leaves the last one it knows in place until it
+     * learns the next, so it cannot distinguish "reported on Tuesday" from "last reported in July",
+     * and it carries no figures to judge either way. A name this US-only feed does not cover simply
+     * has no reported row, which is the honest answer rather than a guessed one.
+     *
+     * <p><b>A row with no figures is still a row.</b> Inside a window of dates that have all passed,
+     * a cached roster with no actual is a report that has happened whose figures have not reached us
+     * yet — the ordinary state in the hours after a print, before {@link #warmBack} next runs. That
+     * is a different thing from not having reported, so the row is returned with a null actual and
+     * the screen says which it is, rather than being dropped and looking like a company that never
+     * reported.
+     */
+    public List<Reported> recentlyReported(Collection<String> symbols, int lookbackDays) {
+        List<Reported> out = new ArrayList<>();
+        if (symbols == null || symbols.isEmpty()) return out;
+
+        LocalDate today = LocalDate.now();
+        int days = clamp(lookbackDays, 0, MAX_BACK);
+        if (days == 0) return out;
+        // Strictly before today: a date still in progress has no settled figures, and the point of
+        // the section is the report you could not read on the day it happened.
+        Map<String, EarningsEvent> recent = repo.latestPerSymbol(today.minusDays(days), today.minusDays(1));
+        if (recent.isEmpty()) return out;
+
+        Set<String> wanted = new LinkedHashSet<>();
+        for (String raw : symbols) {
+            if (raw != null && !raw.isBlank()) wanted.add(raw.trim().toUpperCase());
+        }
+        for (String symbol : wanted) {
+            if (Instruments.isBond(symbol)) continue;
+            EarningsEvent e = recent.get(symbol);
+            if (e == null) continue;
+            out.add(new Reported(symbol, e.companyName(), e.date(), e.time(),
+                    e.epsForecast(), e.numEstimates(), e.actualEps(), e.lastYearEps(),
+                    surprisePct(e.actualEps(), e.epsForecast()),
+                    ChronoUnit.DAYS.between(e.date(), today)));
+        }
+        // Most recent first: the print you have not reviewed yet is the one just gone.
+        out.sort(Comparator.comparing(Reported::date).reversed()
+                .thenComparing(Reported::symbol));
+        return out;
+    }
+
+    /**
+     * One report that has already happened, with what was expected of it beside what it delivered.
+     *
+     * <p>{@code surprisePct} is computed by {@link #surprisePct} rather than taken from the feed,
+     * and is null wherever there was no consensus to measure against — a company no analyst covers
+     * reported a figure, and that is all that can be said about it. {@code actualEps} is null while
+     * the figures have not reached the cache yet, which the screen distinguishes from a company that
+     * reported nothing measurable. Both nulls mean "we do not know", never zero.
+     */
+    public record Reported(String symbol, String companyName, LocalDate date, String time,
+                           Double epsForecast, Integer numEstimates, Double actualEps,
+                           Double lastYearEps, Double surprisePct, long daysAgo) {
+    }
+
+    /**
      * What the lookup could and could not answer, kept as two lists rather than one map with holes.
      *
      * <p>The split is the point. {@code undated} is a company the two sources have no forward date
@@ -421,6 +503,57 @@ public class EarningsCalendarService {
      */
     public record NextEarnings(String symbol, String companyName, LocalDate date, String time,
                                String source, Boolean estimate) {
+    }
+
+    /**
+     * Ask the feed once more for each recently passed date whose cached roster has not settled —
+     * what puts the reported figures in front of a reader who never opens the Earnings tab.
+     *
+     * <p>This exists because of the order the cache is normally filled in. A date is almost always
+     * first fetched while it is still ahead, so what lands is the scheduled shape: a consensus and a
+     * session, no actual. The figures only appear in the roster after the date has passed, which
+     * means somebody has to ask again, once, afterwards. The Earnings tab does that for the two days
+     * its own back window covers, but the reminders screen has no fetch of its own — it is read by a
+     * half-hourly job — so without this the figures would arrive only for someone who happened to
+     * browse the calendar.
+     *
+     * <p><b>Self-limiting rather than scheduled carefully.</b> {@link #settled} is content-based, so
+     * a date that has given up its actuals is never asked again and neither is a weekend; the whole
+     * pass costs at most {@code days} requests once and nothing on every run after that. That is why
+     * it is safe to call on a plain repeating timer rather than needing to know when earnings season
+     * is. Failures are logged and skipped — a date that could not be re-read stays unsettled and is
+     * simply retried next time, which is the behaviour wanted.
+     *
+     * @return how many dates were actually re-fetched
+     */
+    public int warmBack(int calendarDays) {
+        int days = clamp(calendarDays, 0, MAX_BACK);
+        LocalDate today = LocalDate.now();
+        int fetched = 0;
+        for (int i = 1; i <= days; i++) {
+            LocalDate date = today.minusDays(i);
+            if (date.getDayOfWeek() == DayOfWeek.SATURDAY || date.getDayOfWeek() == DayOfWeek.SUNDAY) {
+                continue;   // no roster is ever published, and an unfetched weekend is not a gap
+            }
+            Instant fetchedAt = repo.lastFetched(date);
+            List<EarningsEvent> cachedRows = fetchedAt == null ? List.of() : repo.load(date);
+            if (fetchedAt != null && settled(cachedRows, date, fetchedAt)) continue;
+            List<EarningsEvent> live = feed.forDate(date);
+            if (live == null) {
+                log.debug("Earnings calendar back-warm: fetch failed for {}", date);
+                continue;
+            }
+            repo.save(date, mergeSettled(live, cachedRows));
+            fetched++;
+            try {
+                Thread.sleep(WARM_THROTTLE_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        if (fetched > 0) log.info("Earnings calendar back-warm: re-fetched {} settled date(s)", fetched);
+        return fetched;
     }
 
     /**
@@ -458,7 +591,9 @@ public class EarningsCalendarService {
                 log.debug("Earnings calendar warm: fetch failed for {}", date);
                 continue;
             }
-            repo.save(date, live);
+            // Merged, not swapped in, for the same reason eventsFor merges: a save that replaced
+            // the date wholesale would drop any field the new roster happens not to carry.
+            repo.save(date, mergeSettled(live, repo.load(date)));
             fetched++;
             try {
                 Thread.sleep(WARM_THROTTLE_MS);
@@ -479,22 +614,144 @@ public class EarningsCalendarService {
                                           List<String> warnings) {
         Instant fetchedAt = repo.lastFetched(date);
         boolean cached = fetchedAt != null;
+        List<EarningsEvent> cachedRows = cached ? repo.load(date) : List.of();
         boolean fresh = cached && !forceRefresh
                 && (date.isBefore(today)
-                    || Duration.between(fetchedAt, Instant.now()).compareTo(REFRESH_TTL) < 0);
-        if (fresh) return repo.load(date);
+                    ? settled(cachedRows, date, fetchedAt)
+                    : Duration.between(fetchedAt, Instant.now()).compareTo(REFRESH_TTL) < 0);
+        if (fresh) return cachedRows;
 
         List<EarningsEvent> live = feed.forDate(date);
         if (live != null) {
-            repo.save(date, live);
-            return live;
+            List<EarningsEvent> merged = mergeSettled(live, cachedRows);
+            repo.save(date, merged);
+            return merged;
         }
         // Live fetch failed — fall back to cache if we have it, else nothing for this day.
-        List<EarningsEvent> fallback = cached ? repo.load(date) : List.of();
         warnings.add(cached
-                ? date + ": live fetch failed — showing cached data (" + fallback.size() + ")"
+                ? date + ": live fetch failed — showing cached data (" + cachedRows.size() + ")"
                 : date + ": live fetch failed and nothing cached");
-        return fallback;
+        return cachedRows;
+    }
+
+    /**
+     * Whether a <b>past</b> date's cached roster is finished — the test that replaced an
+     * unconditional "any cached past date is fresh forever".
+     *
+     * <p>That rule was right about the roster and wrong about the figures. The feed publishes a date
+     * in two shapes and flips the whole roster at once once the date has passed: a scheduled row
+     * carries a consensus and a session, a settled one carries what was actually reported. Dates are
+     * normally first fetched while they are still ahead — that is what {@link #warmForward} and the
+     * tab's forward window do — so caching the first answer forever meant the actual figures could
+     * never arrive for precisely the dates whose reports have happened.
+     *
+     * <p>Three ways a past date is done with, and the third is the one that bounds the retry:
+     * <ol>
+     *   <li><b>Its rows carry actuals.</b> The settled shape arrived; there is nothing further to
+     *       learn. Any row is enough — the feed flips the whole date together, and on settled dates
+     *       sampled here every row carried an actual.
+     *   <li><b>It has no rows.</b> A weekend or a holiday publishes no roster, now and forever, so
+     *       asking again could only ever cost a request. Without this clause every past weekend in
+     *       the back window would be re-fetched on every load.
+     *   <li><b>We already asked it after it passed.</b> Whatever came back is the feed's answer,
+     *       including "still no actuals", and asking a second time would be asking the same question
+     *       of the same data. This is what keeps a date the feed never settles from being re-fetched
+     *       on every single page load — the one failure mode a freshness rule based on content
+     *       rather than bookkeeping can have.
+     * </ol>
+     *
+     * <p><b>"After it passed" is judged on the feed's own clock, not ours.</b> The flip happens on
+     * the US market's day, so a fetch at 00:30 in London is still the previous evening in New York
+     * and has <i>not</i> asked a settled date. Comparing in {@link #FEED_ZONE} is what stops a
+     * late-night fetch from recording a permanent "already asked" against a date that had not
+     * finished, which would lose that day's actuals for good.
+     */
+    static boolean settled(List<EarningsEvent> cachedRows, LocalDate date, Instant fetchedAt) {
+        if (cachedRows == null || cachedRows.isEmpty()) return true;
+        for (EarningsEvent e : cachedRows) {
+            if (e.reported()) return true;
+        }
+        if (fetchedAt == null) return false;
+        return fetchedAt.atZone(FEED_ZONE).toLocalDate().isAfter(date);
+    }
+
+    /**
+     * Fold a freshly fetched roster over the one already cached for the same date, keeping the
+     * fields each shape alone carries.
+     *
+     * <p>Needed because the two shapes are not nested: the settled row brings the actual figure but
+     * drops the session to {@code time-not-supplied} and drops last year's EPS entirely. The cache
+     * writes replace-per-date, deliberately, so that a company dropped from a roster disappears —
+     * which means a straight save of a settled roster would also erase the {@code BMO}/{@code AMC}
+     * marker for every row of a date we had already fetched. Losing the session is not a cosmetic
+     * loss: it is the difference between "reported before this morning's open" and "reports after
+     * tonight's close", which is the whole reason to look at a settled day at all.
+     *
+     * <p><b>The live roster stays authoritative about everything it actually says.</b> Membership is
+     * live (so a dropped company still disappears), and so are the actual and the consensus — the
+     * consensus on a settled row is the final one, which is the one a beat should be judged against.
+     * Only a field the live row leaves empty is taken from the cached row, and only when the cached
+     * row has it. Nothing is invented and nothing stronger is overwritten by something weaker.
+     */
+    static List<EarningsEvent> mergeSettled(List<EarningsEvent> live, List<EarningsEvent> cached) {
+        if (live == null) return List.of();
+        if (cached == null || cached.isEmpty()) return live;
+        Map<String, EarningsEvent> before = new LinkedHashMap<>();
+        for (EarningsEvent e : cached) {
+            if (e.symbol() != null) before.putIfAbsent(e.symbol().toUpperCase(), e);
+        }
+        List<EarningsEvent> out = new ArrayList<>(live.size());
+        for (EarningsEvent e : live) {
+            EarningsEvent old = e.symbol() == null ? null : before.get(e.symbol().toUpperCase());
+            if (old == null) {
+                out.add(e);
+                continue;
+            }
+            String time = isSession(e.time()) ? e.time() : (isSession(old.time()) ? old.time() : e.time());
+            out.add(new EarningsEvent(
+                    e.date(),
+                    e.symbol(),
+                    e.companyName() != null ? e.companyName() : old.companyName(),
+                    time,
+                    e.marketCap() != null ? e.marketCap() : old.marketCap(),
+                    e.epsForecast() != null ? e.epsForecast() : old.epsForecast(),
+                    e.numEstimates() != null ? e.numEstimates() : old.numEstimates(),
+                    e.lastYearEps() != null ? e.lastYearEps() : old.lastYearEps(),
+                    e.actualEps() != null ? e.actualEps() : old.actualEps()));
+        }
+        return out;
+    }
+
+    /** Whether a session marker says something — {@code "TBD"} is the feed declining to. */
+    private static boolean isSession(String time) {
+        return time != null && !time.isBlank() && !"TBD".equals(time);
+    }
+
+    /**
+     * How far the reported figure came in against consensus, in percent — <b>computed here, never
+     * read from the feed</b>.
+     *
+     * <p>The feed publishes its own surprise column and it cannot be used. Across 481 settled rows
+     * sampled it contradicted the two numbers printed beside it twice — MAA reported 2.10 against a
+     * 2.10 consensus and was labelled −65.71%, VKTX −1.55 against 1.00 was labelled −55% where the
+     * arithmetic gives −255% — and on 31 more it was simply blank because the company had met
+     * consensus to the cent, publishing a real zero as an absence. Both failures are ones this
+     * codebase already has a rule for: a vendor ratio that disagrees with its own inputs is the
+     * {@code P/B} case, and a measured zero rendered as "unknown" is the inverse of "absent is never
+     * zero". So the division is done here, from the two figures the row shows, and is reproducible
+     * from them.
+     *
+     * <p><b>Divided by the magnitude of the consensus, not its signed value.</b> A company expected
+     * to lose 0.21 that loses 0.34 has done worse, and dividing by a negative forecast would call
+     * that a 62% beat. Verified against the feed wherever its own figure is present and consistent.
+     *
+     * <p>Null when there is nothing to divide: no actual, no consensus, or a consensus of exactly
+     * zero, where the difference is real but no percentage of it exists. A caller shows the two
+     * figures regardless — the percentage is the convenience, not the evidence.
+     */
+    public static Double surprisePct(Double actual, Double forecast) {
+        if (actual == null || forecast == null || forecast == 0.0) return null;
+        return (actual - forecast) / Math.abs(forecast) * 100.0;
     }
 
     private Set<String> heldSymbols() {

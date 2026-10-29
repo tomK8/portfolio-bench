@@ -64,7 +64,8 @@ class ReminderJobTest {
     }
 
     private static ReminderReport canned(List<ManualRow> manual, List<EarningsRow> earnings) {
-        return new ReminderReport(TODAY, 7, 45, true, manual, earnings, List.of(), List.of());
+        return new ReminderReport(TODAY, 7, 45, 4, true, manual, earnings,
+                List.of(), List.of(), List.of());
     }
 
     private static ManualRow manual(long id, boolean due) {

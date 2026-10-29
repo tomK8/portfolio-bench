@@ -25,6 +25,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -65,7 +66,15 @@ class ReminderServiceTest {
     private void cacheCalendarEvent(String symbol, LocalDate date, String session) {
         new EarningsCalendarRepository(new JdbcConnectionFactory(dbDir))
                 .save(date, List.of(new EarningsEvent(date, symbol, symbol + " Inc", session,
-                        1_000_000_000L, 1.5, 12, 1.2)));
+                        1_000_000_000L, 1.5, 12, 1.2, null)));
+    }
+
+    /** A date already past, in the shape the feed sends once it has settled. */
+    private void cacheReported(String symbol, LocalDate date, String session,
+                               Double forecast, Double actual) {
+        new EarningsCalendarRepository(new JdbcConnectionFactory(dbDir))
+                .save(date, List.of(new EarningsEvent(date, symbol, symbol + " Inc", session,
+                        1_000_000_000L, forecast, 9, null, actual)));
     }
 
     private void cacheSnapshotDate(String symbol, LocalDate date, boolean estimated) {
@@ -336,5 +345,128 @@ class ReminderServiceTest {
 
     private static List<String> symbols(List<EarningsRow> rows) {
         return rows.stream().map(EarningsRow::symbol).collect(Collectors.toList());
+    }
+
+    // ---- just reported --------------------------------------------------------
+
+    @Test
+    void aReportFromYesterdayIsKeptWithWhatItDelivered() {
+        // The whole request: a company that reported after last night's close is one you can only
+        // read about this morning, and a calendar that only looks forward has already dropped it.
+        universe("MSFT", "", "");
+        cacheReported("MSFT", TODAY.minusDays(1), "AMC", 4.71, 4.89);
+
+        var reported = service(true).report().reported();
+        assertEquals(1, reported.size());
+        var r = reported.get(0);
+        assertEquals("MSFT", r.symbol());
+        assertEquals(TODAY.minusDays(1), r.date());
+        assertEquals("AMC", r.time(), "the session is what makes 'read it this morning' meaningful");
+        assertEquals(4.89, r.actualEps(), 1e-9);
+        assertEquals(4.71, r.epsForecast(), 1e-9);
+        assertEquals(3.82, r.surprisePct(), 0.005);
+        assertEquals(1L, r.daysAgo());
+    }
+
+    @Test
+    void aReportIsNotAReminderAndNeverBecomesDue() {
+        // A reported row carries no due flag, no mute and no key, and the mail job walks only the
+        // manual and earnings lists — so a past print cannot mail anything by construction. This
+        // is the guard on that: if a reported symbol ever starts appearing as an earnings row, it
+        // acquires a dedup key and starts mailing a warning about something already over.
+        universe("MSFT", "", "");
+        cacheReported("MSFT", TODAY.minusDays(1), "AMC", 4.71, 4.89);
+
+        ReminderReport report = service(true).report();
+        assertEquals(1, report.reported().size());
+        assertTrue(report.earnings().isEmpty(),
+                "a date behind us is not an upcoming earnings row");
+        assertTrue(report.manual().isEmpty());
+    }
+
+    @Test
+    void aReportStillAwaitingItsFiguresIsListedRatherThanDropped() {
+        // The ordinary state in the hours after a print, before the feed publishes the figures to
+        // us. "It reported and we don't have the numbers" is not "it never reported", and dropping
+        // the row would make the two look identical.
+        universe("AMZN", "", "");
+        cacheReported("AMZN", TODAY.minusDays(1), "AMC", 2.01, null);
+
+        var r = service(true).report().reported().get(0);
+        assertEquals("AMZN", r.symbol());
+        assertNull(r.actualEps(), "absent, not zero");
+        assertNull(r.surprisePct(), "and no surprise invented from a missing actual");
+        assertEquals(2.01, r.epsForecast(), 1e-9, "what was expected of it is still known");
+    }
+
+    @Test
+    void aReportedFigureWithNoConsensusHasNoVerdict() {
+        universe("WSOB", "", "");
+        cacheReported("WSOB", TODAY.minusDays(1), "BMO", null, 3.77);
+
+        var r = service(true).report().reported().get(0);
+        assertEquals(3.77, r.actualEps(), 1e-9);
+        assertNull(r.surprisePct(), "nothing to have beaten is not a nil result");
+    }
+
+    @Test
+    void todaysReportIsStillUpcomingNotYetReported() {
+        // A date in progress has no settled figures, and the point of the section is the print you
+        // could not read on the day. Today belongs to the earnings table, which is still counting
+        // down to it.
+        universe("LLY", "", "");
+        cacheCalendarEvent("LLY", TODAY, "BMO");
+
+        ReminderReport report = service(true).report();
+        assertTrue(report.reported().isEmpty(), "today has not finished");
+        assertEquals(1, report.earnings().size());
+        assertTrue(report.earnings().get(0).due());
+    }
+
+    @Test
+    void aReportOlderThanTheWindowDropsOffByItself() {
+        universe("MSFT", "", "");
+        cacheReported("MSFT", TODAY.minusDays(ReminderService.LOOKBACK_DAYS + 1), "AMC", 4.71, 4.89);
+        assertTrue(service(true).report().reported().isEmpty(),
+                "the window closes on its own — there is nothing to switch off");
+    }
+
+    @Test
+    void mostRecentReportFirst() {
+        universe("AAA,BBB,CCC", "", "");
+        cacheReported("AAA", TODAY.minusDays(3), "AMC", 1.0, 1.1);
+        cacheReported("BBB", TODAY.minusDays(1), "AMC", 2.0, 2.2);
+        cacheReported("CCC", TODAY.minusDays(2), "BMO", 3.0, 3.3);
+
+        assertEquals(List.of("BBB", "CCC", "AAA"),
+                service(true).report().reported().stream()
+                        .map(EarningsCalendarService.Reported::symbol).toList());
+    }
+
+    @Test
+    void onlySymbolsInTheUniverseAreReported() {
+        // Same rule as the forward rows: a name reaches this screen because it is already held,
+        // watched or under an order. The cached roster is market-wide and most of it is nothing
+        // to do with this portfolio.
+        universe("MSFT", "", "");
+        new EarningsCalendarRepository(new JdbcConnectionFactory(dbDir)).save(
+                TODAY.minusDays(1),
+                List.of(new EarningsEvent(TODAY.minusDays(1), "MSFT", "Microsoft", "AMC",
+                                1_000_000_000L, 4.71, 9, null, 4.89),
+                        new EarningsEvent(TODAY.minusDays(1), "NOTMINE", "Not Mine Inc", "BMO",
+                                1_000_000_000L, 1.00, 4, null, 1.10)));
+
+        assertEquals(List.of("MSFT"), service(true).report().reported().stream()
+                .map(EarningsCalendarService.Reported::symbol).toList());
+    }
+
+    @Test
+    void aBondNeverAppearsAsHavingReported() {
+        // The same line the forward lookup draws: a gilt reports no earnings, so its silence is an
+        // answer rather than a gap — and a roster row that happened to collide with its id must
+        // not turn it into a company that just reported.
+        universe("GILT 4.25 2027", "", "");
+        cacheReported("GILT 4.25 2027", TODAY.minusDays(1), "AMC", 1.0, 1.1);
+        assertTrue(service(true).report().reported().isEmpty());
     }
 }

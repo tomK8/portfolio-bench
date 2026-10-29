@@ -33,6 +33,15 @@ import java.util.Set;
  * hand-kept list: a name reaches this screen because it is already somewhere that matters, and
  * leaves when it stops being there.
  *
+ * <p><b>A report that has happened is on the screen but is not a reminder.</b> {@code reported} is
+ * the few days just gone, kept so an after-the-close print can be reviewed the morning after — the
+ * one time a scheduled date is least useful, because by the time you look at it the thing has
+ * already happened. It is a third list rather than a state on the earnings rows because nothing
+ * about it fires: it has no due flag, no mute and no dedup key, and {@link ReminderJob} walks
+ * {@code manual} and {@code earnings} only, so a past report cannot mail anything by construction
+ * rather than by a check someone has to remember. Muting is not offered on these rows either — a
+ * mute is a standing instruction about future prints, and this window closes on its own in four days.
+ *
  * <p><b>Symbols with no date are named, not dropped.</b> A company the two earnings sources cannot
  * date will never produce a reminder, and a screen that simply omitted it would look identical to one
  * where everything is covered. They come back in {@code undated} and the tab prints them, the same
@@ -53,6 +62,22 @@ public class ReminderService {
      * three weeks from mailing anything.
      */
     static final int LOOKAHEAD_DAYS = 45;
+
+    /**
+     * How far <em>back</em> the screen keeps a report after it has happened, so the print you could
+     * not read on the day is still in front of you the morning after.
+     *
+     * <p>Four days rather than one. "The previous trading session" is the thing being asked for, but
+     * counting sessions needs a market calendar this app does not have, and four calendar days
+     * reaches Friday's reports from Monday and survives a holiday Monday too. Each row prints its own
+     * date and how long ago it was, so a window that is sometimes wider than one session says so
+     * rather than implying everything in it happened yesterday.
+     *
+     * <p>Short on purpose. This section is a list of prints still worth reviewing, not a log of the
+     * quarter — at a week it would still be accumulating names during earnings season long after
+     * they had been read.
+     */
+    static final int LOOKBACK_DAYS = 4;
 
     private final ReminderRepository repo;
     private final EarningsCalendarService earnings;
@@ -83,8 +108,9 @@ public class ReminderService {
 
         EarningsSection section = earningsSection(today, warnings);
 
-        return new ReminderReport(today, Reminders.EARNINGS_LEAD_DAYS, LOOKAHEAD_DAYS,
-                notifier.isEnabled(), manual, section.rows(), section.undated(), warnings);
+        return new ReminderReport(today, Reminders.EARNINGS_LEAD_DAYS, LOOKAHEAD_DAYS, LOOKBACK_DAYS,
+                notifier.isEnabled(), manual, section.rows(), section.reported(), section.undated(),
+                warnings);
     }
 
     /**
@@ -96,6 +122,8 @@ public class ReminderService {
         if (universe.isEmpty()) return EarningsSection.empty();
         try {
             EarningsCalendarService.Lookup lookup = earnings.nextEarnings(universe, LOOKAHEAD_DAYS);
+            List<EarningsCalendarService.Reported> reported =
+                    earnings.recentlyReported(universe, LOOKBACK_DAYS);
             Set<String> muted = repo.mutedSymbols();
 
             List<EarningsRow> rows = new ArrayList<>();
@@ -117,7 +145,7 @@ public class ReminderService {
             // than from "everything the map didn't answer", because funds and bonds are in neither
             // — they report no earnings, so calling them undated would bury the real gaps under
             // every gilt in the ledger.
-            return new EarningsSection(rows, lookup.undated());
+            return new EarningsSection(rows, reported, lookup.undated());
         } catch (RuntimeException e) {
             log.warn("Could not build the earnings reminders", e);
             warnings.add("Earnings dates unavailable — the earnings reminders are not shown. "
@@ -208,9 +236,11 @@ public class ReminderService {
     public record ReminderReport(LocalDate today,
                                  int leadDays,
                                  int lookaheadDays,
+                                 int lookbackDays,
                                  boolean deliveryEnabled,
                                  List<ManualRow> manual,
                                  List<EarningsRow> earnings,
+                                 List<EarningsCalendarService.Reported> reported,
                                  List<String> undated,
                                  List<String> warnings) {
     }
@@ -234,9 +264,11 @@ public class ReminderService {
                               Long daysUntil) {
     }
 
-    private record EarningsSection(List<EarningsRow> rows, List<String> undated) {
+    private record EarningsSection(List<EarningsRow> rows,
+                                   List<EarningsCalendarService.Reported> reported,
+                                   List<String> undated) {
         static EarningsSection empty() {
-            return new EarningsSection(List.of(), List.of());
+            return new EarningsSection(List.of(), List.of(), List.of());
         }
     }
 }

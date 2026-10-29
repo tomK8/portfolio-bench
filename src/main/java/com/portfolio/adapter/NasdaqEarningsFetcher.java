@@ -23,6 +23,24 @@ import java.util.List;
  * market cap. Forward-looking (unlike the EDGAR filing-date proxy), which is what the Earnings tab's
  * "+N days" half needs.
  *
+ * <p><b>The feed answers in two shapes and flips per date, not per row.</b> While a date is still
+ * ahead (today included — a company that reported before this morning's open still shows no actual
+ * until tomorrow) each row carries {@code epsForecast}, a {@code time} session marker and
+ * {@code lastYearEPS}. Once the date has passed the same rows carry {@code eps} — what was actually
+ * reported — and {@code surprise}, while {@code time} degrades to {@code time-not-supplied} and
+ * {@code lastYearEPS} disappears. Both shapes are read here into one record; which fields are
+ * present is what tells the two apart, and {@code EarningsCalendarService} is where the
+ * consequence lives (a date fetched before it settled has to be asked once more afterwards, and
+ * the answer merged rather than swapped in, or the session would be lost).
+ *
+ * <p><b>{@code surprise} is read past, not parsed.</b> It is a pure function of the two numbers
+ * beside it, and across 481 settled rows it disagreed with them twice (MAA reported 2.10 against a
+ * 2.10 consensus and was labelled −65.71%; VKTX −1.55 against 1.00 was labelled −55% where the
+ * arithmetic gives −255%) and was simply absent on 31 more where the company had met consensus to
+ * the cent — a true zero published as a blank. Recomputing from {@code eps} and
+ * {@code epsForecast} is the same call {@code P/B} makes against Yahoo's own ratio, for the same
+ * reason: a vendor ratio that contradicts the figures printed next to it cannot be the one shown.
+ *
  * <p>Like {@link GiltPriceFetcher} against its source page, the default Java {@code User-Agent} is
  * refused (403), so a browser UA is sent. All fields arrive as display strings ({@code "$7.98"},
  * {@code "$665,246,306,497"}, {@code "($0.11)"}) and are parsed into real numbers here so the report
@@ -82,6 +100,10 @@ public class NasdaqEarningsFetcher implements EarningsCalendarFeed {
      * Maps {@code data.rows[]} to events. A missing/null {@code data} node (Nasdaq's shape for a day
      * with no scheduled reports) yields an empty list — a valid, cacheable "no reports" result, not a
      * failure. Rows without a symbol are skipped.
+     *
+     * <p>Handles both row shapes without being told which it is looking at: every field is read
+     * where it appears and left null where it does not, so a settled row yields an
+     * {@code actualEps} and no session, and a scheduled row the reverse.
      */
     static List<EarningsEvent> parse(JsonNode root, LocalDate date) {
         List<EarningsEvent> out = new ArrayList<>();
@@ -98,7 +120,8 @@ public class NasdaqEarningsFetcher implements EarningsCalendarFeed {
                     parseMoney(text(row, "marketCap")),
                     parseNumber(text(row, "epsForecast")),
                     parseInt(text(row, "noOfEsts")),
-                    parseNumber(text(row, "lastYearEPS"))));
+                    parseNumber(text(row, "lastYearEPS")),
+                    parseNumber(text(row, "eps"))));
         }
         return out;
     }

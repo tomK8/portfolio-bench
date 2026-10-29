@@ -43,6 +43,7 @@ public class EarningsCalendarRepository {
                 eps_forecast  REAL,
                 num_estimates INTEGER,
                 last_year_eps REAL,
+                actual_eps    REAL,
                 PRIMARY KEY (date, symbol)
             )""";
 
@@ -60,6 +61,10 @@ public class EarningsCalendarRepository {
         try (Connection conn = connections.open(); Statement ddl = conn.createStatement()) {
             ddl.execute(CREATE_ROWS);
             ddl.execute(CREATE_FETCH);
+            // Added when the calendar learned to keep settled reports. Every existing cached row
+            // predates it and is null, which reads correctly as "scheduled, no actual known" —
+            // and the service's settled test then asks each past date once more for its actuals.
+            addColumnIfMissing(ddl, "actual_eps REAL");
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise earnings_calendar tables", e);
         }
@@ -83,7 +88,8 @@ public class EarningsCalendarRepository {
                 }
                 try (PreparedStatement ins = conn.prepareStatement(
                         "INSERT INTO earnings_calendar (date, symbol, company, time, market_cap, "
-                                + "eps_forecast, num_estimates, last_year_eps) VALUES (?,?,?,?,?,?,?,?)")) {
+                                + "eps_forecast, num_estimates, last_year_eps, actual_eps) "
+                                + "VALUES (?,?,?,?,?,?,?,?,?)")) {
                     for (EarningsEvent e : events) {
                         ins.setString(1, d);
                         ins.setString(2, e.symbol());
@@ -93,6 +99,7 @@ public class EarningsCalendarRepository {
                         setNullableDouble(ins, 6, e.epsForecast());
                         setNullableInt(ins, 7, e.numEstimates());
                         setNullableDouble(ins, 8, e.lastYearEps());
+                        setNullableDouble(ins, 9, e.actualEps());
                         ins.addBatch();
                     }
                     ins.executeBatch();
@@ -112,6 +119,14 @@ public class EarningsCalendarRepository {
             }
         } catch (Exception e) {
             log.warn("Could not cache earnings calendar for {}", date, e);
+        }
+    }
+
+    private static void addColumnIfMissing(Statement ddl, String columnDef) {
+        try {
+            ddl.execute("ALTER TABLE earnings_calendar ADD COLUMN " + columnDef);
+        } catch (java.sql.SQLException alreadyMigrated) {
+            // column already present — fine
         }
     }
 
@@ -178,7 +193,7 @@ public class EarningsCalendarRepository {
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
                      "SELECT date, symbol, company, time, market_cap, eps_forecast, num_estimates, "
-                             + "last_year_eps FROM earnings_calendar "
+                             + "last_year_eps, actual_eps FROM earnings_calendar "
                              + "WHERE date >= ? AND date <= ? ORDER BY date")) {
             ps.setString(1, from.toString());
             ps.setString(2, to.toString());
@@ -195,7 +210,51 @@ public class EarningsCalendarRepository {
                             nullableLong(rs, "market_cap"),
                             nullableDouble(rs, "eps_forecast"),
                             nullableInt(rs, "num_estimates"),
-                            nullableDouble(rs, "last_year_eps")));
+                            nullableDouble(rs, "last_year_eps"),
+                            nullableDouble(rs, "actual_eps")));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not read the earnings calendar for {}..{}", from, to, e);
+        }
+        return out;
+    }
+
+    /**
+     * The <b>most recent</b> cached row per symbol in {@code [from, to]} — the mirror of
+     * {@link #earliestPerSymbol}, for the backward question "when did each of these last report".
+     *
+     * <p>Latest rather than earliest because a company that reported twice inside the window (a
+     * delayed filing landing beside a scheduled one) is being asked about the report just gone, not
+     * the older one. Rows with no actual figure are returned too: inside a past window they are
+     * reports that have happened whose figures have not reached the cache yet, which is a different
+     * thing from not having reported, and only the caller can say so.
+     */
+    public Map<String, EarningsEvent> latestPerSymbol(LocalDate from, LocalDate to) {
+        Map<String, EarningsEvent> out = new LinkedHashMap<>();
+        if (from == null || to == null || to.isBefore(from) || !connections.dbExists()) return out;
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT date, symbol, company, time, market_cap, eps_forecast, num_estimates, "
+                             + "last_year_eps, actual_eps FROM earnings_calendar "
+                             + "WHERE date >= ? AND date <= ? ORDER BY date DESC")) {
+            ps.setString(1, from.toString());
+            ps.setString(2, to.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String symbol = rs.getString("symbol");
+                    if (symbol == null || symbol.isBlank()) continue;
+                    // Ordered by date descending, so the first row seen for a symbol is its latest.
+                    out.putIfAbsent(symbol.toUpperCase(), new EarningsEvent(
+                            LocalDate.parse(rs.getString("date")),
+                            symbol,
+                            rs.getString("company"),
+                            rs.getString("time"),
+                            nullableLong(rs, "market_cap"),
+                            nullableDouble(rs, "eps_forecast"),
+                            nullableInt(rs, "num_estimates"),
+                            nullableDouble(rs, "last_year_eps"),
+                            nullableDouble(rs, "actual_eps")));
                 }
             }
         } catch (Exception e) {
@@ -234,7 +293,8 @@ public class EarningsCalendarRepository {
         if (!connections.dbExists()) return out;
         try (Connection conn = connections.open();
              PreparedStatement ps = conn.prepareStatement(
-                     "SELECT symbol, company, time, market_cap, eps_forecast, num_estimates, last_year_eps "
+                     "SELECT symbol, company, time, market_cap, eps_forecast, num_estimates, "
+                             + "last_year_eps, actual_eps "
                              + "FROM earnings_calendar WHERE date = ? "
                              + "ORDER BY market_cap IS NULL, market_cap DESC, symbol")) {
             ps.setString(1, date.toString());
@@ -248,7 +308,8 @@ public class EarningsCalendarRepository {
                             nullableLong(rs, "market_cap"),
                             nullableDouble(rs, "eps_forecast"),
                             nullableInt(rs, "num_estimates"),
-                            nullableDouble(rs, "last_year_eps")));
+                            nullableDouble(rs, "last_year_eps"),
+                            nullableDouble(rs, "actual_eps")));
                 }
             }
         } catch (Exception e) {

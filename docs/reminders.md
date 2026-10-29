@@ -1,6 +1,7 @@
 # Calendar reminders
 
-The Reminders tab (Tools). Two kinds of reminder on one screen, one delivery path, one email a day.
+The Reminders tab (Tools). Two kinds of reminder on one screen, one delivery path, one email a day —
+plus a third section that is not a reminder at all (*Just reported*, below).
 `GET /reminders` → JSON, rendered client-side; the edits are one `POST` each.
 
 Unlike the [watchlist](watchlist.md), **nothing here is evaluated**. A watchlist trigger is a
@@ -67,10 +68,49 @@ BARC earnings" survives the print it was given before — keying it to an occurr
 every ninety days behind the user's back. Muted symbols stay **listed**, struck through, so a
 standing instruction is visible and one click to lift, rather than a row that silently vanished.
 
+## Just reported: on the screen, but not a reminder
+
+The few days just gone, for anything held, watched or under an order. It exists because of when a
+forward-looking calendar is least useful: a company reporting **after the close** is one you can only
+read about the next morning, and by then a countdown has stopped mentioning it. `reported` on the
+payload, from `EarningsCalendarService.recentlyReported` (see [earnings.md](earnings.md) for how the
+figures get there and why the surprise is computed rather than read).
+
+**Nothing here fires.** It is a third list rather than a state on the earnings rows, and that is the
+safety property: a reported row has no due flag, no mute and no dedup key, and `ReminderJob` walks
+`manual` and `earnings` only — so a past print cannot mail anything **by construction** rather than
+by a check someone has to remember. `ReminderServiceTest.aReportIsNotAReminderAndNeverBecomesDue`
+pins it from the other side. There is no mute either: a mute is a standing instruction about future
+prints, and this window closes on its own.
+
+**Four days, not one session.** "The previous trading session" is the thing being asked for, but
+counting sessions needs a market calendar this app does not have, while four calendar days reaches
+Friday's reports from Monday and survives a holiday Monday too. Each row prints its own date and how
+long ago it was, so a window that is sometimes wider than one session says so rather than implying
+everything in it happened yesterday. Short on purpose: this is a list of prints still worth
+reviewing, not a log of the quarter.
+
+**Today is not in it.** A date in progress has no settled figures, and the point of the section is
+the print you could not read on the day — today still belongs to the earnings table, counting down.
+
+**A separate table from the upcoming one, not struck-through rows inside it.** The two row kinds do
+not share a question, and consensus/actual/surprise would be permanently blank on a scheduled row —
+the one thing a comparison column must never be ([fundamentals.md](fundamentals.md): a column earns
+its place only if it means the same thing in every row). The symbol is greyed rather than struck
+through: a line through the figures would read as "disregard this", and the figures are the whole
+reason the row is kept.
+
+**Three states, not two, and they read differently.** The figures are in; or the print has happened
+and the feed has not published them to us yet (**awaiting figures** — the ordinary state in the hours
+after a print, and *not* the same as never having reported, which is why the row is listed rather
+than dropped); or they are in and no analyst covered the name, so there is nothing to have beaten
+(**no consensus** — a real figure, not a nil result). One blank cell would say all three at once.
+
 ## Delivery: daily by dedup, not by schedule
 
 `ReminderJob` reads the very same `ReminderReport` the tab renders, so screen and email can never
-disagree about what is due — the same reason `WatchlistAlertJob` reads `WatchlistService`.
+disagree about what is due — and walks `manual` and `earnings` only, which is what keeps the
+*Just reported* rows off the mail path without a guard — the same reason `WatchlistAlertJob` reads `WatchlistService`.
 
 **The cadence is latency, not volume.** The job is called every 30 minutes and each item is keyed
 `R|<id>|yyyy-MM-dd` / `E|<SYMBOL>|yyyy-MM-dd` in the `reminders_sent` KV set, so a tick with nothing

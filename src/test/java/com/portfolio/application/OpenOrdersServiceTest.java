@@ -953,7 +953,7 @@ class OpenOrdersServiceTest {
             }
             repo.save(d, d.equals(print)
                     ? List.of(new com.portfolio.domain.model.EarningsEvent(
-                            d, symbol, "Walmart Inc", "AMC", 500_000_000_000L, 1.2, 30, 1.1))
+                            d, symbol, "Walmart Inc", "AMC", 500_000_000_000L, 1.2, 30, 1.1, null))
                     : List.of());
         }
     }

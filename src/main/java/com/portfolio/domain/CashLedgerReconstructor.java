@@ -78,7 +78,12 @@ public class CashLedgerReconstructor {
      */
     public List<AccountPosition> reconstructByAccount(List<CashTransaction> rows) {
         List<AccountPosition> out = new ArrayList<>();
-        for (Timeline tl : timelines(rows).values()) {
+        // A broker's cancel-and-rebook pair is not a sale, and replaying the reversal as one makes
+        // FIFO retire the oldest lot instead of the one being cancelled — which overstates the
+        // surviving cost by the difference between them. Applied here rather than per caller
+        // because both public entry points funnel through this one, and every reader of a
+        // reconstructed position needs the same answer. See LedgerCorrections.
+        for (Timeline tl : timelines(LedgerCorrections.prune(rows)).values()) {
             BigDecimal qty = tl.totalQuantity();
             if (qty.signum() <= 0) continue;
             out.add(new AccountPosition(tl.symbol, tl.account, qty, tl.totalCostGbp(),

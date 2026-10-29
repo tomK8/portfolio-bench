@@ -2,6 +2,7 @@ package com.portfolio.application;
 
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.LedgerCorrections;
 import com.portfolio.domain.PriceStats;
 import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.WatchlistAlerts;
@@ -535,7 +536,7 @@ public class WatchlistService {
     private Position position(String symbol, String ticker, List<CashTransaction> rows,
                               IntradayPrice ip, Map<String, BigDecimal> rates) {
         if (rows == null || rows.isEmpty()) return Position.none();
-        List<CashTransaction> pruned = PositionDetailService.pruneCorrections(rows);
+        List<CashTransaction> pruned = LedgerCorrections.prune(rows);
         PositionDetailService.Lots lots = PositionDetailService.reconstruct(pruned);
         BigDecimal shares = lots.totalOpenShares();
         if (shares.signum() == 0) return Position.none();

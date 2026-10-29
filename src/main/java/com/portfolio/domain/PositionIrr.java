@@ -184,6 +184,13 @@ public final class PositionIrr {
             return Result.unavailable(symbol);
         }
 
+        // Before anything else, for two reasons. A cancelled buy is not capital that was deployed
+        // and returned, so its two legs would otherwise contribute a flow pair whose only content
+        // is the FX drift between the booking and the reversal. And a reversal large enough to
+        // take the quantity to zero would read as an exit to findEpisodes, restarting the episode
+        // on a sale that never happened and reporting a rate over the wrong window.
+        rows = LedgerCorrections.prune(rows);
+
         Episodes episodes = findEpisodes(rows);
         if (episodes.startIndex < 0) return Result.unavailable(symbol);
 

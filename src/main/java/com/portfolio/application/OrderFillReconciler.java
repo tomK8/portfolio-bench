@@ -1,5 +1,6 @@
 package com.portfolio.application;
 
+import com.portfolio.domain.LedgerCorrections;
 import com.portfolio.domain.OrderFills;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
@@ -178,7 +179,7 @@ public class OrderFillReconciler {
      * <p>A reversal and its re-entry are not two trades — the reversal books as cash <em>in</em> on
      * a purchase, so left in it reads as a sale of exactly the size that was bought, which is the
      * shape most likely to be mistaken for a resting sell order's fill. The pair is identified by
-     * {@link PositionDetailService#pruneCorrections}, deliberately rather than by a second rule
+     * {@link LedgerCorrections#prune}, deliberately rather than by a second rule
      * here: two definitions of what a correction is would eventually disagree, and this view of the
      * ledger must be the same one the position engine uses.
      */
@@ -190,7 +191,7 @@ public class OrderFillReconciler {
             log.warn("Could not read the cash ledger for fill matching", e);
             return List.of();
         }
-        // Oldest first: pruneCorrections pairs a reversal with the row it reverses by scanning
+        // Oldest first: LedgerCorrections.prune pairs a reversal with the row it reverses by scanning
         // forward, and the reversal always comes after what it reverses.
         List<CashTransactionRepository.TradeRow> ordered = rows.stream()
                 .sorted(Comparator.comparing(CashTransactionRepository.TradeRow::transactionDate)
@@ -207,7 +208,7 @@ public class OrderFillReconciler {
             rowIds.put(t, r.rowid());
         }
         List<OrderFills.Trade> out = new ArrayList<>();
-        for (CashTransaction t : PositionDetailService.pruneCorrections(asTransactions)) {
+        for (CashTransaction t : LedgerCorrections.prune(asTransactions)) {
             out.add(new OrderFills.Trade(rowIds.get(t), date(t.transactionDate()),
                     t.account().dbValue(), t.symbol(),
                     BigDecimal.valueOf(t.quantity()), BigDecimal.valueOf(t.amount()),

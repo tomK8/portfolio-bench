@@ -76,6 +76,9 @@ Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` a
   (`isBond`, `giltId`, `couponOf`, `assetClassOf` — single home of all four), `DividendYield`,
   `Reminders` (when a reminder is due, and the once-a-day key),
   `OrderFills` (the rule that reads a vanished order's fill out of the cash ledger),
+  `LedgerCorrections` (a broker's cancel-and-rebook pair is not a trade — the one home for that,
+  reached by every lot engine, and it refuses to drop a pair whose removal would leave the
+  timeline selling shares it has not bought),
   `AjBellPortfolios` (which AJ Bell account an export that does not name one belongs to),
   `VolForecast` + `AssetClass` (the open-orders touch model), `Ladders` (rung layout + per-account
   cash), `RoundTrips` (the path a ladder's next round trip has to walk), `Switches` (share-class switch: one yardstick, the index/FX split, progress in units),
@@ -264,7 +267,7 @@ filter is an **allowlist**, so a new type reaches nothing until you add it delib
 | [ui-conventions.md](docs/ui-conventions.md) | add a tab, chart loader, sortable table or vendored library | Loaders need `.catch` + `panelLoadFailed`; tab groups are derived from the DOM; vendored libs are pinned by URL and load in a fixed order; a sort lives in the header's `data-sort-dir`, indexes by `cellIndex`, and is re-applied after anything that re-renders or patches rows |
 | [demo-mode.md](docs/demo-mode.md) | run the app on demo data, or change the generator | The generator profile lives **outside the repo** and its method is documented nowhere — never add a fallback or explain it; the ledger is built in the **database** and holdings in the **files**, because holdings have no table and files cannot reproduce the ledger; `order_key` must be rebuilt or every ladder rung orphans |
 | [backup.md](docs/backup.md) | change what is backed up, or the schedule | Only the ~1000 rows that cannot be re-fetched, plus the `KeyValueStore` files a SQL dump would miss; the dump is plain SQL so a restore needs none of our code; due-by-elapsed-time, not a calendar cron, because the laptop is usually shut |
-| [postmortems.md](docs/postmortems.md) | investigate a reconciliation gap between views | Resolved incidents kept for the invariants they justify |
+| [postmortems.md](docs/postmortems.md) | investigate a reconciliation gap between views | Resolved incidents kept for the invariants they justify; a rule about what the **ledger means** lives in `domain` and not in whichever view first needed it — `pruneCorrections` sat in one service while eleven readers of `CashLedgerReconstructor` replayed a broker's cancellation as a real sale, which retired the wrong FIFO lot and flipped AMZN's gain to a £505 loss on a position that was up £538; and a correction pair is dropped **only when the ledger still makes sense without it**, because `Timeline.sell` swallows an oversell in silence and a replacement booked after a genuine sale would otherwise open a phantom position |
 
 ## Not documented yet
 

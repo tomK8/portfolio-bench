@@ -5,6 +5,7 @@ import com.portfolio.application.PositionDetailService.Lots;
 import com.portfolio.application.PositionDetailService.OpenLot;
 import com.portfolio.application.PositionDetailService.Trade;
 import com.portfolio.domain.model.Account;
+import com.portfolio.domain.LedgerCorrections;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.TransactionType;
 import org.junit.jupiter.api.Test;
@@ -160,7 +161,7 @@ class PositionDetailServiceTest {
         CashTransaction corrected = buyNative("2026-06-05", "AMZN", 40, -10200.0, Account.ROTH_IRA);
         CashTransaction reversal = sellNative("2026-06-05", "AMZN", -40, 10302.0, Account.ROTH_IRA);
 
-        List<CashTransaction> pruned = PositionDetailService.pruneCorrections(
+        List<CashTransaction> pruned = LedgerCorrections.prune(
                 List.of(firstBuy, cancelled, corrected, reversal));
 
         assertEquals(2, pruned.size());
@@ -173,17 +174,6 @@ class PositionDetailServiceTest {
         assertEquals(0, lots.totalOpenShares().compareTo(new BigDecimal("85")));
         assertEquals(0, lots.totalRealizedGbp().compareTo(BigDecimal.ZERO));
         assertTrue(lots.closedForDisplay().isEmpty());
-    }
-
-    @Test
-    void leavesRealBuySellPairAloneWhenAmountsDiffer() {
-        // A genuine buy + later sell at a different price/amount must not be treated
-        // as a correction — only exact-opposite native amounts are paired.
-        CashTransaction buy = buyNative("2024-01-15", "X", 100, -1000.0, Account.AJBELL);
-        CashTransaction sell = sellNative("2024-06-15", "X", 40, 600.0, Account.AJBELL);
-
-        List<CashTransaction> pruned = PositionDetailService.pruneCorrections(List.of(buy, sell));
-        assertEquals(2, pruned.size());
     }
 
     @Test

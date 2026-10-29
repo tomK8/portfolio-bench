@@ -2,6 +2,7 @@ package com.portfolio.application;
 
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.LedgerCorrections;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.PriceBar;
@@ -89,7 +90,7 @@ public class PositionDetailService {
             if (t.symbol() != null && symbol.equals(t.symbol().toUpperCase())) rows.add(t);
         }
         if (rows.isEmpty()) return PositionDetail.empty(symbol);
-        rows = pruneCorrections(rows);
+        rows = LedgerCorrections.prune(rows);
 
         Lots lots = reconstruct(rows);
 
@@ -293,40 +294,6 @@ public class PositionDetailService {
         BigDecimal v = closeByDate.get(date);
         return v == null ? BigDecimal.ZERO
                 : v.setScale(6, RoundingMode.HALF_UP);
-    }
-
-    /**
-     * Drops broker price-correction pairs: a buy followed by a later sell at the same
-     * account/symbol with exactly opposite native {@code amount} and matching {@code |quantity|}.
-     * Brokers occasionally reverse a misbooked fill and re-enter it at the corrected price;
-     * the reversal is not a real sale, so both legs should be hidden from chart markers
-     * and excluded from FIFO. Matching uses native {@code amount} (not {@code amountGbp})
-     * because the cancellation books at the same native cash even if FX has moved.
-     * Visible for testing.
-     */
-    static List<CashTransaction> pruneCorrections(List<CashTransaction> rows) {
-        int n = rows.size();
-        boolean[] drop = new boolean[n];
-        for (int i = 0; i < n; i++) {
-            if (drop[i]) continue;
-            CashTransaction a = rows.get(i);
-            if (a.type() != TransactionType.TRANSACTION || a.amount() >= 0) continue;
-            for (int j = i + 1; j < n; j++) {
-                if (drop[j]) continue;
-                CashTransaction b = rows.get(j);
-                if (b.type() != TransactionType.TRANSACTION || b.amount() <= 0) continue;
-                if (!a.account().equals(b.account())) continue;
-                if (a.symbol() == null || !a.symbol().equals(b.symbol())) continue;
-                if (Math.abs(a.amount() + b.amount()) > 0.01) continue;
-                if (Math.abs(Math.abs(a.quantity()) - Math.abs(b.quantity())) > 1e-6) continue;
-                drop[i] = true;
-                drop[j] = true;
-                break;
-            }
-        }
-        List<CashTransaction> kept = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) if (!drop[i]) kept.add(rows.get(i));
-        return kept;
     }
 
     /**

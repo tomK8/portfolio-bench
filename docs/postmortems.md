@@ -69,3 +69,66 @@ Clearing the box therefore no longer zeroes anything — **type `0` to mean zero
 says so on hover. The asymmetry is deliberate: stating zero is one keystroke, while silently losing
 a four-figure balance is invisible until the totals stop reconciling.
 
+---
+
+## AMZN showed a loss on a position that was up — one view's rule, ten views' bug (2026-10-29)
+
+**Symptom.** On Holdings → From cash ledger, AMZN read **−£505.06 (−2.04%)** next to an
+**Annualised return of +4.32%**. Within the current episode AMZN had four buys, no sales and no
+dividends, and with only buys plus a terminal market value a negative gain cannot produce a
+positive IRR — so the two columns could not both be right.
+
+**Cause.** The Roth IRA books a mispriced fill as a cancellation plus a re-entry, and the
+cancellation arrives as an ordinary opposite-signed row:
+
+| 2026-06-02 | BUY 40 @ 257.55 | −$10,302 |
+| 2026-06-05 | "Cancel Buy" 40 | +$10,302 |
+| 2026-06-05 | "Correct Buy" 40 @ 255.00 | −$10,200 |
+
+`PositionDetailService` dropped both legs of such a pair before running FIFO. **It was the only
+caller that did.** `CashLedgerReconstructor` — read by eleven services, both sync views among them
+— replayed the cancellation as a genuine sale, and FIFO retired the **oldest** lot (45 shares at
+£165.09, bought 2025-10-03) instead of the 2026-06-02 lot at £191.16 that was actually being
+cancelled. The expensive lot stayed in the basis and overstated it by exactly £1,042.70, which was
+enough to flip the sign of the position.
+
+The IRR was right throughout, because it reads the ledger's own dated flows and the cancellation's
+cash nets out there. `cash-ledger-irr.md` already said to believe that column where the two
+disagree; this is why.
+
+**Spread.** Twelve correction pairs across seven symbols, all Roth IRA. On the open rows:
+
+| | Cost overstated | Was | Now |
+|---|---|---|---|
+| AMZN | £1,042.70 | −£505.06 | **+£537.64** |
+| NVDA | £2,779.78 | −£3,543.32 | −£763.54 |
+| AVGO | £402.18 | −£646.96 | −£244.77 |
+
+£4,224.66 of phantom cost. TSM carried three pairs and lost nothing — its cancellations happened to
+line up with the oldest surviving lot anyway, which is exactly why this stayed invisible.
+
+**Fix.** The rule moved to `domain/LedgerCorrections`, where every lot engine reaches it, and is
+applied inside `CashLedgerReconstructor.reconstructByAccount` and `PositionIrr.compute` so all
+eleven readers get one answer. A reversal that is invisible to one reader and a sale to the next is
+not a presentation choice — the two readers disagree about what happened.
+
+**The second bug, found while fixing the first.** Applying the rule everywhere made a **closed**
+SPCX position appear as 50 live shares worth £5,402.87. SPCX was bought and sold the same day, and
+only then was the buy cancelled and re-entered — so removing the pair left a 06-12 sale standing
+before the 06-15 buy that replaced it. `Timeline.sell` drains its lots and stops, so the oversell
+was **swallowed in silence** and the replacement buy opened a position on an empty timeline. The
+broker's own export does not list SPCX, and the Position tab had already been showing those phantom
+50 shares, alone, for the same reason.
+
+So a pair is now taken **only when the ledger still makes sense without it**: tentatively remove it,
+replay that `(account, symbol)` running quantity, and keep the removal only if the quantity never
+goes negative. Where it would, the pair stays and the position reports what the broker's own
+quantities sum to — zero for SPCX, correctly, and the Position tab's phantom went with it. The
+alternative was re-dating the replacement onto the cancelled row's day, which needs both an
+inference about which row replaces which and an invented order for two bookings on one date; the
+guard needs neither and refuses the edit instead of guessing.
+
+**The invariant.** A rule about what the ledger *means* belongs in `domain`, not in whichever view
+first needed it. The giveaway was `OrderFillReconciler` and `WatchlistService` both reaching across
+into `PositionDetailService` for a static — three callers for a rule that lived in none of their
+layers, while the two engines that most needed it could not import it at all.

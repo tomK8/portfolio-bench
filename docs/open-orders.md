@@ -263,7 +263,7 @@ The rule, every clause of which earns its place against the live data:
   the broker *did* account for go first, and only then do the unexplained ones look at what is left.
   Without that pass the ghost and its twin both read as fills and a ladder shows two sells where one
   was placed. Claims already written (`resolved_trade`) are honoured the same way across runs.
-- **Correction pairs are removed first**, through `PositionDetailService.pruneCorrections` rather
+- **Correction pairs are removed first**, through `LedgerCorrections.prune` rather
   than a second rule here. A reversal books as cash *in* on a purchase, so left in it reads as a sale
   of exactly the size that was bought — the shape most likely to be mistaken for a resting sell
   order's fill.

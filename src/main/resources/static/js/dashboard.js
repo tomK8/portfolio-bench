@@ -12619,6 +12619,7 @@
             renderReminderDelivery(report);
             renderReminderWarnings(report.warnings);
             renderReminderList(report);
+            renderReminderReported(report);
             renderReminderEarnings(report);
             renderReminderUndated(report);
         }
@@ -12700,6 +12701,85 @@
             if (days === 0) return 'today';
             if (days === 1) return 'tomorrow';
             return 'in ' + days + ' days';
+        }
+
+        // Reports that have already happened, kept for a few days so an after-the-close print can
+        // be read the morning after. A separate table from the upcoming one rather than struck-out
+        // rows inside it: the two row kinds do not share a question, and every column here --
+        // consensus, actual, surprise -- would be permanently blank on a scheduled row, which is
+        // the one thing a comparison column must never be. Nothing here fires, so there is no
+        // status cell and no on/off button; the window closes by itself.
+        function renderReminderReported(report) {
+            var box = document.getElementById('rm-reported');
+            if (!box) return;
+            var list = report.reported || [];
+            if (!list.length) {
+                box.innerHTML = '<p class="muted">Nothing held, watched or under an order has '
+                    + 'reported in the last ' + (report.lookbackDays || 4) + ' days.</p>';
+                return;
+            }
+            var rows = list.map(function (r) {
+                // Three states, not two. The figures are in; or the print has happened and the
+                // feed has not published them to us yet; or it has, and no analyst covered the
+                // name so there is nothing to have beaten. Each reads differently and a single
+                // blank cell would say all three at once.
+                var surprise = '<span class="muted">—</span>';
+                var verdict = '<span class="muted">—</span>';
+                // val-pos/val-neg are the app-wide td-level sign colours, already defined for
+                // both themes -- so the class goes on the cell rather than on a span inside it.
+                var cls = '';
+                if (r.actualEps == null) {
+                    verdict = '<span class="muted" title="the report has happened; the figures '
+                        + 'have not reached the cached calendar yet">awaiting figures</span>';
+                } else if (r.surprisePct == null) {
+                    verdict = '<span class="muted" title="reported, but no consensus to measure '
+                        + 'it against">no consensus</span>';
+                } else {
+                    // "In line" is judged at the precision the cell is printed to, not finer.
+                    // At a tighter threshold a surprise of +0.03% would print as +0.0% and read
+                    // "beat" beside it -- the word and the number disagreeing on the same row.
+                    var met = Math.abs(r.surprisePct) < 0.05;
+                    var beat = r.surprisePct > 0;
+                    cls = met ? '' : (beat ? 'val-pos' : 'val-neg');
+                    surprise = (met || !beat ? '' : '+') + mpNum(met ? 0 : r.surprisePct, 1) + '%';
+                    verdict = met ? 'in line' : (beat ? 'beat' : 'missed');
+                }
+                var session = (r.time && r.time !== 'TBD') ? escapeHtml(r.time) : '—';
+                return '<tr class="rm-reported">'
+                    + '<td class="lbl">' + escapeHtml(r.symbol) + '</td>'
+                    + '<td class="lbl muted">' + escapeHtml(r.companyName || '—') + '</td>'
+                    + '<td class="lbl" data-sort-value="' + escapeHtml(r.date) + '">'
+                        + escapeHtml(r.date) + ' <span class="muted">'
+                        + rmAgo(r.daysAgo) + '</span></td>'
+                    + '<td class="lbl">' + session + '</td>'
+                    + '<td>' + mpNum(r.epsForecast, 2) + '</td>'
+                    + '<td>' + mpNum(r.actualEps, 2) + '</td>'
+                    + '<td class="' + cls + '">' + surprise + '</td>'
+                    + '<td class="lbl ' + cls + '">' + verdict + '</td>'
+                    + '</tr>';
+            }).join('');
+            box.innerHTML = '<table class="swing-tbl"><thead><tr>'
+                + '<th class="lbl" data-sort="str">Symbol</th>'
+                + '<th class="lbl" data-sort="str">Company</th>'
+                + '<th class="lbl" data-sort="str">Reported</th>'
+                + '<th class="lbl" title="BMO before the open, AMC after the close — '
+                    + 'carried over from before the date settled, since the feed drops it '
+                    + 'afterwards">Session</th>'
+                + '<th data-sort="num" title="consensus EPS, in US dollars">Consensus</th>'
+                + '<th data-sort="num" title="what the company actually reported, '
+                    + 'in US dollars">Actual</th>'
+                + '<th data-sort="num" title="(actual − consensus) ÷ |consensus| — '
+                    + 'computed from the two columns beside it, not taken from the feed">'
+                    + 'Surprise</th>'
+                + '<th class="lbl">Against consensus</th>'
+                + '</tr></thead><tbody>' + rows + '</tbody></table>';
+            attachSort(box.querySelector('table'));
+        }
+
+        function rmAgo(days) {
+            if (days == null) return '';
+            if (days === 1) return '(yesterday)';
+            return '(' + days + ' days ago)';
         }
 
         function renderReminderEarnings(report) {

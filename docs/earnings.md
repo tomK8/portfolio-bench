@@ -16,17 +16,27 @@ deliberately a **separate port** (`port/EarningsCalendarFeed`, `forDate(LocalDat
   (`"$665,246,306,497"`, `"$7.98"`, `"($0.11)"`) → parsed to real numbers (`parseNumber` treats
   `(x)` as −x, strips `$ , %`; `"$0"` is a real zero, blank/`N/A` → null). `time` normalises
   `time-pre-market`→`BMO` / `time-after-hours`→`AMC` / else `TBD`. Rows without a symbol are dropped.
+  Reads **both row shapes** without being told which (see below): every field is taken where it
+  appears and left null where it is not, so a settled row yields an `actualEps` and no session and a
+  scheduled row the reverse. `surprise` is deliberately **not** parsed.
 - `domain.model.EarningsEvent` — pure record (date, symbol, companyName, time, marketCap [whole USD],
-  epsForecast, numEstimates, lastYearEps). `marketCap`/EPS are native USD (US-market calendar, no FX).
-  "Held" is **not** a field — the report ships the held-symbol set and the client tags rows, keeping
-  the record a pure feed row.
+  epsForecast, numEstimates, lastYearEps, actualEps). `marketCap`/EPS are native USD (US-market
+  calendar, no FX). `actualEps` is what the company reported and exists **only once the date has
+  passed**, so `reported()` is the test for "a report that has happened" rather than one booked.
+  The **surprise is not a field** — it is a function of two others, and the feed's own figure was
+  rejected (below). "Held" is **not** a field either — the report ships the held-symbol set and the
+  client tags rows, keeping the record a pure feed row.
 - `persistence/EarningsCalendarRepository` — cache. Two tables: `earnings_calendar` (row per
   `(date,symbol)`) + `earnings_calendar_fetch` (per-date `fetched_at` + count — the bookkeeping that
   lets a **zero-report day** be cached distinctly from "never fetched"). `save` replaces-per-date in
-  one transaction (a company dropped from the roster disappears). Reads degrade (log + empty).
-- `application/EarningsCalendarService` — window walk with cache policy: **past** dates cache forever
-  (settled roster); **today/future** re-fetch once cache ages past `REFRESH_TTL` (3h — estimates/roster
-  still move). `refresh=true` (the Refresh button) bypasses freshness. Live-fetch failure degrades to
+  one transaction (a company dropped from the roster disappears) — which is exactly why a settled
+  re-fetch has to be merged before it is handed over. `actual_eps` was added by `ALTER TABLE`; every
+  pre-existing row is null, which reads correctly as "scheduled, no actual known". `latestPerSymbol`
+  is the backward mirror of `earliestPerSymbol`. Reads degrade (log + empty).
+- `application/EarningsCalendarService` — window walk with cache policy: a **past** date caches
+  forever once `settled` (its rows carry actuals, it has no rows, or it has already been asked after
+  it passed — see below); **today/future** re-fetch once cache ages past `REFRESH_TTL` (3h —
+  estimates/roster still move). `refresh=true` (the Refresh button) bypasses freshness. Live-fetch failure degrades to
   cached rows + a warning, never throws. Window clamped to `MAX_BACK/MAX_FORWARD` (14) so a stray param
   can't fan out. Market-cap floor filters the per-day tables (the "major" filter) but **never**
   `myHoldings`. Held set = `held_symbols` KV (the /sync-persisted holdings); US internal symbols equal
@@ -35,6 +45,65 @@ deliberately a **separate port** (`port/EarningsCalendarFeed`, `forDate(LocalDat
   `minCapB` is `$` **billions** (UI select), converted to whole dollars. No backfill/mutation
   endpoints — a pure feed read, independent of the price/cash pipelines (like Open orders). Not
   wired into `PriceFetchSupport` (no Yahoo prices involved).
+
+## The feed answers in two shapes, and flips per date
+
+The same `?date=` GET returns a different row shape depending on whether that date has passed, and
+it flips **the whole roster at once, not row by row** — a company that reported before this
+morning's open still shows no actual until tomorrow.
+
+| | A date still ahead (today included) | A date that has passed |
+|---|---|---|
+| `epsForecast`, `noOfEsts` | yes | yes |
+| `time` | `time-pre-market` / `time-after-hours` | always `time-not-supplied` |
+| `lastYearEPS`, `lastYearRptDt` | yes | **gone** |
+| `eps` (what was reported), `surprise` | — | yes |
+
+Three consequences, each of which is a rule somewhere in the code:
+
+- **A past date is no longer cached forever unconditionally.** It used to be ("a settled roster
+  cannot change"), and that was right about the roster and wrong about the figures: dates are
+  normally first fetched *while still ahead* — that is what `warmForward` and the forward window do
+  — so caching the first answer for good meant the actual figures could never arrive for exactly
+  the dates whose reports had happened. `EarningsCalendarService.settled` replaces it: a past date
+  is finished with when its rows **carry actuals**, or it has **no rows** (a weekend publishes none,
+  now and forever — without this clause every past weekend in the back window re-fetches on every
+  load), or **we already asked it after it passed**. That third clause is what bounds the retry: the
+  feed's answer stands, including "still nothing", so a date it never settles is not re-fetched on
+  every page load. "After it passed" is judged in **US Eastern**, the feed's own clock — 00:30 in
+  London is still the previous evening in New York, and judging it locally would permanently mark a
+  date asked-after-settlement and lose that day's figures for good.
+- **A settled re-fetch is merged, never swapped in.** The cache replaces per date on purpose, so a
+  company dropped from a roster disappears — which means a straight save of a settled roster would
+  also erase the `BMO`/`AMC` marker from every row of a date already fetched. That is not cosmetic:
+  the session is the difference between "reported before this morning's open" and "reports after
+  tonight's close", which is the whole reason to look at a settled day. `mergeSettled` keeps the
+  live roster authoritative about membership, the actual and the final consensus, and takes from the
+  cached row only a field the live one leaves empty. It is keyed on **symbol, not position** —
+  both rosters are ordered by market cap and a settled one can reorder.
+- **The surprise is recomputed, never read.** The feed publishes its own `surprise` column and it
+  cannot be used. Across 481 settled rows sampled it contradicted the two numbers printed beside it
+  twice — **MAA** reported 2.10 against a 2.10 consensus and was labelled −65.71%, **VKTX** −1.55
+  against 1.00 was labelled −55% where the arithmetic gives −255% — and on **31** more it was simply
+  absent because the company had met consensus to the cent, publishing a real zero as a blank. Both
+  are failures this codebase already has a rule for: a vendor ratio that disagrees with its own
+  inputs is the [P/B case](fundamentals.md), and a measured zero rendered as "unknown" is the
+  inverse of "absent is never zero". `EarningsCalendarService.surprisePct` divides, from the two
+  figures the row shows, so the division is reproducible on the row.
+  - **Divided by the magnitude of the consensus, not its signed value.** BA was expected to lose
+    0.21 and lost 0.34 — worse, so negative. Dividing by −0.21 would report +61.9% and file a red
+    quarter under "beat".
+  - **Null when there is nothing to divide**: no actual, no consensus (a figure no analyst covers
+    is not a beat of the whole amount), or a consensus of exactly zero, where the difference is
+    real but no percentage of it exists.
+
+`warmBack` is what asks the question nobody else would. The Earnings tab's own back window covers
+the two days it shows, but the [reminders](reminders.md) screen has no fetch of its own — it is read
+by a half-hourly job — so without it the figures would reach only someone who happened to browse the
+calendar. It is **self-limiting rather than carefully scheduled**: `settled` is content-based, so the
+whole pass costs at most a handful of requests once and nothing on every run after that, which is
+what makes a plain six-hourly timer (`PriceFetchScheduler.earningsBackWarm`) the right shape instead
+of something that has to know when earnings season is.
 
 **Your-holdings section (ranked by position size).** Above the per-day tables, the tab renders
 every held position ordered by GBP value, with its portfolio weight beside the date/session/EPS
@@ -176,6 +245,20 @@ lists**, `dated` and `undated`, instead of a map with holes — funds and bonds 
 only this method can tell the silence that is an answer from the silence that is a gap, and handing
 the caller both lists is what stops every gilt in the ledger being reported as an undated company.
 `EarningsCalendarRepository.earliestPerSymbol` is the one-query window read behind it.
+
+`recentlyReported(symbols, lookbackDays)` is its **backward** counterpart, behind the reminders tab's
+*Just reported* section, and deliberately a second method rather than a fourth outcome of the
+forward one: "when does this next report" and "did this just report" are two questions, the forward
+lookup's contract is already a careful three-way split, and folding a past report into it would mean
+a row that is neither `dated` nor `undated` for every existing caller to learn to ignore — the same
+reason the orders panel keeps *open* and *resting* apart. It reads the cache only, for the same
+reason. **Only the market calendar answers here**: the snapshot holds one date per symbol and leaves
+the last one it knows in place, so it cannot tell "reported on Tuesday" from "last reported in July"
+and carries no figures to judge either way. `latestPerSymbol` is its one-query read — latest, not
+earliest, because a company that reported twice inside the window is being asked about the print just
+gone. **A row with no actual is still returned**: inside a window of dates that have all passed, that
+is a report that has happened whose figures have not reached us yet, which is a different thing from
+not having reported, and only the screen can say which.
 
 `fundamentalsFieldGroups()` in `dashboard.js` stays the single home: the field tuple grew a
 seventh slot, `source`, naming which bag on the row holds the value (`'labels'` here, the numeric

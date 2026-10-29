@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "The feed's OTHER row shape: a date that has already passed. Note what changes against",
+    "nasdaq-earnings-sample.json (the same feed for a date still ahead) — 'eps' and 'surprise'",
+    "appear, 'time' degrades to time-not-supplied for every row, and lastYearRptDt/lastYearEPS",
+    "are gone entirely. That is why a settled re-fetch has to be merged over the scheduled",
+    "roster rather than replacing it, or the BMO/AMC marker is lost.",
+    "",
+    "These are real rows from real reporting dates, kept verbatim because each one is the",
+    "evidence for a rule: MSFT a clean beat, GOOG a clean miss, BA/CZR a loss-maker that lost",
+    "MORE than expected (a miss only if the surprise divides by the magnitude of the forecast),",
+    "ECL a company that met consensus to the cent and had its true zero published as N/A, MAA",
+    "the feed contradicting its own two columns, and WSO.B a reported figure no analyst covered.",
+    "Public market facts about public companies — no account data, as src/test/resources requires."
+  ],
+  "data": {
+    "asOf": "Tue, Oct 27, 2026",
+    "headers": {
+      "time": "Time",
+      "symbol": "Symbol",
+      "name": "Company Name",
+      "eps": "EPS",
+      "surprise": "% Surprise",
+      "marketCap": "Market Cap",
+      "fiscalQuarterEnding": "Fiscal Quarter Ending",
+      "epsForecast": "Consensus EPS* Forecast",
+      "noOfEsts": "# of Ests"
+    },
+    "rows": [
+      {"eps": "$4.89", "surprise": "3.82", "time": "time-not-supplied", "symbol": "MSFT", "name": "Microsoft Corporation", "marketCap": "$3,945,883,240,000", "fiscalQuarterEnding": "Sep/2026", "epsForecast": "$4.71", "noOfEsts": "14"},
+      {"eps": "$2.12", "surprise": "-27.89", "time": "time-not-supplied", "symbol": "GOOG", "name": "Alphabet Inc.", "marketCap": "$3,920,693,300,000", "fiscalQuarterEnding": "Sep/2026", "epsForecast": "$2.94", "noOfEsts": "14"},
+      {"eps": "($0.34)", "surprise": "-61.9", "time": "time-not-supplied", "symbol": "BA", "name": "Boeing Company (The)", "marketCap": "$132,450,083,000", "fiscalQuarterEnding": "Sep/2026", "epsForecast": "($0.21)", "noOfEsts": "7"},
+      {"eps": "$2.18", "surprise": "N/A", "time": "time-not-supplied", "symbol": "ECL", "name": "Ecolab Inc.", "marketCap": "$81,970,889,000", "fiscalQuarterEnding": "Sep/2026", "epsForecast": "$2.18", "noOfEsts": "9"},
+      {"eps": "$2.10", "surprise": "-65.71", "time": "time-not-supplied", "symbol": "MAA", "name": "Mid-America Apartment Communities, Inc.", "marketCap": "$13,777,607,700", "fiscalQuarterEnding": "Sep/2026", "epsForecast": "$2.10", "noOfEsts": "7"},
+      {"eps": "$3.77", "surprise": "N/A", "time": "time-not-supplied", "symbol": "WSO.B", "name": "Watsco, Inc.", "marketCap": "$12,110,432,300", "fiscalQuarterEnding": "Sep/2026", "epsForecast": "", "noOfEsts": "N/A"}
+    ]
+  },
+  "message": null,
+  "status": {"rCode": 200, "bCodeMessage": null, "developerMessage": null}
+}

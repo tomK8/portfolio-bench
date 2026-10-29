@@ -2,6 +2,7 @@ package com.portfolio.web;
 
 import com.portfolio.application.CachedHistoricalFxRateProvider;
 import com.portfolio.application.CatchUpService;
+import com.portfolio.application.EarningsCalendarService;
 import com.portfolio.application.FundamentalsFetchJob;
 import com.portfolio.application.OperatingLineFetchJob;
 import com.portfolio.application.GiltPriceFetchJob;
@@ -33,6 +34,13 @@ public class PriceFetchScheduler {
     /** How stale the newest archive may get before another is written. */
     private static final int BACKUP_INTERVAL_DAYS = 30;
 
+    /**
+     * How many past days the earnings calendar re-reads for reported figures. A little wider than
+     * the reminders screen's own four-day window, so a date whose figures land late is still picked
+     * up while that screen can still show it.
+     */
+    private static final int EARNINGS_BACKWARM_DAYS = 6;
+
     private static final Logger log = LoggerFactory.getLogger(PriceFetchScheduler.class);
 
     private final PriceFetchJob job;
@@ -43,6 +51,7 @@ public class PriceFetchScheduler {
     private final OperatingLineFetchJob operatingLineJob;
     private final WatchlistAlertJob watchlistAlertJob;
     private final ReminderJob reminderJob;
+    private final EarningsCalendarService earningsCalendar;
     private final CachedHistoricalFxRateProvider historicalFx;
     private final BackupService backupService;
     private final CatchUpService catchUp;
@@ -54,6 +63,7 @@ public class PriceFetchScheduler {
                                OperatingLineFetchJob operatingLineJob,
                                WatchlistAlertJob watchlistAlertJob,
                                ReminderJob reminderJob,
+                               EarningsCalendarService earningsCalendar,
                                CachedHistoricalFxRateProvider historicalFx,
                                BackupService backupService,
                                CatchUpService catchUp) {
@@ -65,6 +75,7 @@ public class PriceFetchScheduler {
         this.operatingLineJob = operatingLineJob;
         this.watchlistAlertJob = watchlistAlertJob;
         this.reminderJob = reminderJob;
+        this.earningsCalendar = earningsCalendar;
         this.historicalFx = historicalFx;
         this.backupService = backupService;
         this.catchUp = catchUp;
@@ -88,6 +99,7 @@ public class PriceFetchScheduler {
         // Warms the whole USD/EUR history in one call each, so a cold start during a Frankfurter
         // outage can still value non-GBP positions instead of silently reporting them as £0.
         startDaemon("fx-history-warm-startup", historicalFx::warm);
+        startDaemon("earnings-backwarm-startup", this::earningsBackWarmQuietly);
         startDaemon("backup-startup", this::backupIfDue);
     }
 
@@ -108,6 +120,26 @@ public class PriceFetchScheduler {
     @Scheduled(cron = "0 0 22 * * *", zone = "Europe/London")
     public void daily() {
         runQuietly();
+    }
+
+    /**
+     * Re-read the last few days of the earnings calendar so reports that have happened carry what
+     * was actually reported, not just what had been expected of them.
+     *
+     * <p>The feed only puts the actual figures into a date's roster once that date has passed, and a
+     * date is normally first fetched while it is still ahead — so somebody has to ask again
+     * afterwards. Six-hourly rather than daily for the same reason the reminders themselves are
+     * checked every half hour: this is a laptop that is shut more often than it is open, and a cron
+     * at a fixed hour would simply miss any day the machine was asleep at that minute.
+     *
+     * <p>Costs nothing to over-call. {@code warmBack} skips any date whose roster has already given
+     * up its actuals and any date it has already asked after the fact, so the whole pass is a
+     * handful of SQLite reads once the window has settled — which is what makes a dumb repeating
+     * timer the right shape here instead of something that has to know when earnings season is.
+     */
+    @Scheduled(fixedDelay = 6 * 60 * 60 * 1000, initialDelay = 15 * 60 * 1000)
+    public void earningsBackWarm() {
+        earningsBackWarmQuietly();
     }
 
     @Scheduled(fixedDelay = 60 * 1000, initialDelay = 60 * 1000)
@@ -215,6 +247,14 @@ public class PriceFetchScheduler {
             // to offer a feed that is simply down. A pass that never returns is the one that
             // means something, and that is exactly the silence this leaves behind.
             catchUp.heartbeat();
+        }
+    }
+
+    private void earningsBackWarmQuietly() {
+        try {
+            earningsCalendar.warmBack(EARNINGS_BACKWARM_DAYS);
+        } catch (RuntimeException e) {
+            log.warn("Earnings calendar back-warm failed", e);
         }
     }
 

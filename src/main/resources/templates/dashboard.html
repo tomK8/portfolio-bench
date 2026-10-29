@@ -792,6 +792,11 @@
            because "be quiet about this" is a standing instruction and one you should be able to
            see you gave — an earnings mute in particular outlives the print it was given before. */
         #panel-reminders tbody tr.rm-off { opacity: 0.55; }
+        /* Settled reports read as past without being struck through: a line through the figures
+           would say "disregard this", and the figures are the whole reason the row is kept. The
+           symbol alone carries the marker, the same half-step the muted rows above use. */
+        #panel-reminders tbody tr.rm-reported td:first-child { color: #777; }
+        html[data-theme="dark"] #panel-reminders tbody tr.rm-reported td:first-child { color: #9aa0a6; }
         #panel-reminders tbody tr.rm-off td:first-child { text-decoration: line-through; }
         #panel-reminders table input[type="text"],
         #panel-reminders table input[type="date"] { font: inherit; padding: 1px 3px; }
@@ -3940,6 +3945,25 @@
         carry its history onto a name it was never about.
     </p>
     <div id="rm-list" style="margin-top: 0.4rem;"></div>
+
+    <h3 style="margin-top: 1.5rem; font-size: 1rem;">Just reported</h3>
+    <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">
+        Anything you hold, watch or have an order resting on that <b>has already reported</b> in the
+        last few days — kept here because a company reporting <b>after the close</b> is one you can
+        only read about the next morning, which is exactly when a calendar that only looks forward
+        has stopped mentioning it. <b>Nothing here fires</b>: there is no reminder to switch off and
+        no email, the window simply closes on its own.
+    </p>
+    <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">
+        <b>Surprise is computed from the two columns beside it</b>, not taken from the feed — whose
+        own surprise column contradicts its own figures often enough to be unusable, and publishes a
+        company that met consensus <em>exactly</em> as a blank rather than as zero. A name no analyst
+        covers reported a figure and nothing more can be said about it, which is <b>no consensus</b>
+        rather than a nil result; in the hours after a print, before the feed publishes the figures,
+        the row reads <b>awaiting figures</b>. All amounts are US dollars per share, as the feed
+        states them.
+    </p>
+    <div id="rm-reported" style="margin-top: 0.4rem;"></div>
 
     <h3 style="margin-top: 1.5rem; font-size: 1rem;">Earnings</h3>
     <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">

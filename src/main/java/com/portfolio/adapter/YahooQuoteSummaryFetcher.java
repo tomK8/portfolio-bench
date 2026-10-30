@@ -297,7 +297,8 @@ public class YahooQuoteSummaryFetcher {
         // the column is gone rather than relabelled - see docs/fundamentals.md.
         //
         // The margin keeps Yahoo's numerator and is labelled for what that numerator is. Both
-        // sides are statement-side figures from one module, so it needs no currency gate.
+        // sides are statement-side figures from one module, so it needs no *currency* gate; it
+        // is gated with its numerator below, where that numerator exceeds operating cash flow.
         BigDecimal fcfMarginTtm = (fcfTtm != null && revTtm != null && revTtm.signum() != 0)
                 ? fcfTtm.divide(revTtm, 6, RoundingMode.HALF_UP) : null;
         // Net Debt = Total Debt − Cash
@@ -368,8 +369,41 @@ public class YahooQuoteSummaryFetcher {
                         + "the P/B it is the denominator of is withheld on the same evidence");
         // Cash flow (TTM)
         putIf(extra, "operatingCashflow", ocfTtm);
-        putIf(extra, "freeCashflow", fcfTtm);
-        putIf(extra, "fcfMarginTtm", fcfMarginTtm);
+        // Levered FCF is gated on the feed's own two figures agreeing in the one direction
+        // arithmetic allows. Free cash flow of any definition is operating cash flow minus
+        // non-negative claims on it — capital expenditure, and for a *levered* figure interest
+        // and mandatory debt repayment on top — so it can sit any distance below operating cash
+        // flow and never above it. Where Yahoo's exceeds its own, the unpublished model has added
+        // something back rather than subtracted, and what it produced is not cash the business
+        // generated: NFLX arrived at 25.48bn against an operating cash flow of 12.31bn on the
+        // 2026-10-30 fetch (2.07x), and the 51.2% "FCF margin" derived from it ranked a business
+        // whose own filings put capital expenditure at 0.93bn and free cash flow at 11.38bn,
+        // a margin of 22.9%. Yahoo's OCF for those same twelve months reproduces the filed
+        // figure to 0.001%, so the contradiction is in its FCF model and nowhere else.
+        //
+        // This is the capex defect one step along. Removing that column stopped us publishing
+        // the subtraction; it left the figure the subtraction was impossible *because of* on the
+        // screen, carrying the disclosure in a tooltip while the number sorted a column and fed
+        // a margin that ranks rows. "Comparable between symbols, same model applied to all of
+        // them" was the case for keeping it, and it does not survive a row where the model's
+        // output is not a free cash flow at all.
+        //
+        // One direction only, and deliberately. A levered FCF far below operating cash flow —
+        // negative for ORCL and BABA against strongly positive OCF — is extraordinary but not
+        // impossible, because debt service has no ceiling, and gating it would take a threshold
+        // on how far below is too far. That is the magic number this screen rejects everywhere
+        // else (see the P/B and forward-P/E notes in docs/fundamentals.md); the test here is the
+        // feed contradicting itself, which needs no number and no judgement about the company.
+        boolean fcfBelowOcf = ocfTtm == null || fcfTtm == null || fcfTtm.compareTo(ocfTtm) <= 0;
+        putOrExclude(extra, excluded, "freeCashflow", fcfTtm, fcfBelowOcf,
+                "Yahoo's levered FCF exceeds its own operating cash flow on this row, which no "
+                        + "definition of free cash flow permits — every one of them subtracts from "
+                        + "operating cash flow — so the unpublished model has added something back "
+                        + "and the figure is not cash the business generated");
+        putOrExclude(extra, excluded, "fcfMarginTtm", fcfMarginTtm, fcfBelowOcf,
+                "the numerator is withheld: Yahoo's levered FCF exceeds its own operating cash "
+                        + "flow on this row, so a margin built on it would rank this symbol on a "
+                        + "figure that is not free cash flow");
         // Quality & returns. No operatingMargins: Yahoo's is the latest quarter, not the TTM
         // the rest of this block is on, and the feed carries no TTM operating income to put in
         // its place now that the quarterly statements are hollow.

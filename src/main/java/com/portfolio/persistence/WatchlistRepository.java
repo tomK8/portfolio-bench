@@ -134,6 +134,9 @@ public class WatchlistRepository {
     /** Set once the two order-target columns have joined the layouts that predate them. */
     static final String TARGET_COLUMNS_BACKFILLED_KEY = "watchlist_target_columns_backfilled";
 
+    /** Set once the extended-hours column has joined the layouts that predate it. */
+    static final String EXTENDED_COLUMN_BACKFILLED_KEY = "watchlist_extended_column_backfilled";
+
     /**
      * The distance and probability columns, and the column each one belongs beside. A level's
      * move-to-target and touch probability are a reading <em>of that level</em>, so they are
@@ -154,6 +157,15 @@ public class WatchlistRepository {
     private static final String[][] TARGET_COLUMNS = {
             {"thrAbove", "tgtAbove"},
             {"thrBelow", "tgtBelow"},
+    };
+
+    /**
+     * The extended-hours move, and the column it belongs beside. It is the same measurement as
+     * Today % over a different session, so the two sit together and are read as a pair — the
+     * regular session's move, then what has happened to the price since it closed.
+     */
+    private static final String[][] EXTENDED_COLUMNS = {
+            {"todayPct", "extPct"},
     };
 
     private final JdbcConnectionFactory connections;
@@ -182,6 +194,7 @@ public class WatchlistRepository {
             backfillNoteColumn(conn);
             backfillLevelColumns(conn);
             backfillTargetColumns(conn);
+            backfillExtendedColumn(conn);
         } catch (Exception e) {
             throw new IllegalStateException("Could not initialise watchlist table", e);
         }
@@ -279,6 +292,24 @@ public class WatchlistRepository {
      */
     private void backfillTargetColumns(Connection conn) throws java.sql.SQLException {
         backfillColumnFamilies(conn, TARGET_COLUMNS_BACKFILLED_KEY, TARGET_COLUMNS, "order-target", false);
+    }
+
+    /**
+     * Put the extended-hours move directly after Today % in every <em>stored</em> layout, once.
+     *
+     * <p>Same one-shot marker as the three backfills above, and for the same reason: an
+     * uncustomised list renders {@code WlColumns.DEFAULTS} and gets the column for free, while a
+     * customised one would never show a column added after it was saved.
+     *
+     * <p>It is a <b>reading</b>, not an editor, so a layout that has taken Today % off still gets
+     * it, appended — the distinction {@link #backfillTargetColumns} documents. The column is
+     * blank on every row whenever no extended session is the newest thing known, which is most of
+     * the day and always for a London listing, so a layout gaining it silently gains nothing
+     * until there is something to say.
+     */
+    private void backfillExtendedColumn(Connection conn) throws java.sql.SQLException {
+        backfillColumnFamilies(conn, EXTENDED_COLUMN_BACKFILLED_KEY, EXTENDED_COLUMNS,
+                "extended-hours", true);
     }
 
     /**

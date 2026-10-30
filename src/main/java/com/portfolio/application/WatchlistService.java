@@ -10,6 +10,7 @@ import com.portfolio.domain.WatchlistAlerts.Flags;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.IntradayPrice;
+import com.portfolio.domain.model.MarketSession;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.FundamentalsRepository;
@@ -222,12 +223,14 @@ public class WatchlistService {
         List<String> tickers = new ArrayList<>();
         for (Entry e : entries) tickers.add(tickerFor(e.symbol()));
         Map<String, IntradayPrice> latest = intradayRepo.loadLatestIntradayPrices(tickers);
+        Map<String, IntradayPrice> newest = intradayRepo.loadLatestQuotes(tickers);
 
         LocalDate today = LocalDate.now();
         Instant now = Instant.now();
         List<Row> rows = new ArrayList<>(entries.size());
         for (Entry e : entries) {
-            rows.add(buildRow(e, today, now, fundamentals, ledgerBySymbol, rates, latest, sessions));
+            rows.add(buildRow(e, today, now, fundamentals, ledgerBySymbol, rates, latest, newest,
+                    sessions));
         }
         return new WatchlistView(rows, sessions);
     }
@@ -255,12 +258,15 @@ public class WatchlistService {
         List<String> tickers = new ArrayList<>();
         for (Entry e : entries) tickers.add(tickerFor(e.symbol()));
         Map<String, IntradayPrice> latest = intradayRepo.loadLatestIntradayPrices(tickers);
+        Map<String, IntradayPrice> newest = intradayRepo.loadLatestQuotes(tickers);
 
         LocalDate today = LocalDate.now();
         Instant now = Instant.now();
         int sessions = touchSessions();
         List<QuoteRow> rows = new ArrayList<>(entries.size());
-        for (Entry e : entries) rows.add(buildQuote(e, today, now, fundamentals, latest, sessions));
+        for (Entry e : entries) {
+            rows.add(buildQuote(e, today, now, fundamentals, latest, newest, sessions));
+        }
         return new QuoteView(rows);
     }
 
@@ -281,10 +287,12 @@ public class WatchlistService {
         Map<String, Cached> fundamentals = fundamentalsRepo.loadAll();
         Map<String, List<CashTransaction>> ledgerBySymbol = ledgerBySymbol();
         Map<String, BigDecimal> rates = fetchRatesQuietly();
-        Map<String, IntradayPrice> latest = intradayRepo.loadLatestIntradayPrices(List.of(tickerFor(symbol)));
+        List<String> ticker = List.of(tickerFor(symbol));
+        Map<String, IntradayPrice> latest = intradayRepo.loadLatestIntradayPrices(ticker);
+        Map<String, IntradayPrice> newest = intradayRepo.loadLatestQuotes(ticker);
 
         return buildRow(e, LocalDate.now(), Instant.now(), fundamentals, ledgerBySymbol, rates,
-                latest, touchSessions());
+                latest, newest, touchSessions());
     }
 
     /**
@@ -313,6 +321,7 @@ public class WatchlistService {
                          Map<String, List<CashTransaction>> ledgerBySymbol,
                          Map<String, BigDecimal> rates,
                          Map<String, IntradayPrice> latest,
+                         Map<String, IntradayPrice> newest,
                          int sessions) {
         String symbol = e.symbol();
         String ticker = tickerFor(symbol);
@@ -323,7 +332,7 @@ public class WatchlistService {
                 levelOrNull(e.targetAbove()), levelOrNull(e.targetBelow()), e.note(),
                 missingReason(symbol));
 
-        Live live = computeLive(s, e, today, now, sessions);
+        Live live = computeLive(s, e, today, now, newest.get(ticker), sessions);
 
         // 30D/1Y vol from daily closes, P/E + beta from fundamentals — all slow-moving, so the
         // poll skips them (see quotes()); only the full view assembles them.
@@ -333,7 +342,7 @@ public class WatchlistService {
         BigDecimal beta = s.q() == null ? null : s.q().beta();
         Position pos = position(symbol, ticker, ledgerBySymbol.get(symbol), ip, rates);
 
-        return new Row(symbol, s.currency(), s.currentPrice(),
+        return new Row(symbol, s.currency(), s.currentPrice(), live.extended(),
                 live.todayPct(), live.pct2d(), live.pct3d(), live.pct5d(), live.pct10d(), live.pct30d(),
                 s.week52High(), s.week52Low(), live.pctFromHigh(), live.pctFromLow(),
                 live.vol5d(), live.vol10d(), scalePct(vol30), scalePct(vol1y), trailingPe, beta,
@@ -350,14 +359,16 @@ public class WatchlistService {
     private QuoteRow buildQuote(Entry e, LocalDate today, Instant now,
                                 Map<String, Cached> fundamentals,
                                 Map<String, IntradayPrice> latest,
+                                Map<String, IntradayPrice> newest,
                                 int sessions) {
         String symbol = e.symbol();
-        IntradayPrice ip = latest.get(tickerFor(symbol));
+        String ticker = tickerFor(symbol);
+        IntradayPrice ip = latest.get(ticker);
         Snapshot s = snapshot(e, ip, today, fundamentals);
         if (s == null) return QuoteRow.missing(symbol);
 
-        Live live = computeLive(s, e, today, now, sessions);
-        return new QuoteRow(symbol, s.currency(), s.currentPrice(),
+        Live live = computeLive(s, e, today, now, newest.get(ticker), sessions);
+        return new QuoteRow(symbol, s.currency(), s.currentPrice(), live.extended(),
                 live.todayPct(), live.pct2d(), live.pct3d(), live.pct5d(), live.pct10d(), live.pct30d(),
                 live.pctFromHigh(), live.pctFromLow(), live.vol5d(), live.vol10d(),
                 live.aboveOutlook(), live.belowOutlook(),
@@ -421,10 +432,11 @@ public class WatchlistService {
     /**
      * The intraday-varying fields common to the full row and the quote poll: calendar-anchored
      * trailing momentum, the 5D/10D intraday-derived realized vol, distance from the 52-week
-     * high/low, and the alert flags. Percentages come back already scaled. Kept as one method so
-     * the screen and the poll can never compute these differently.
+     * high/low, the extended-hours reading, and the alert flags. Percentages come back already
+     * scaled. Kept as one method so the screen and the poll can never compute these differently.
      */
-    private Live computeLive(Snapshot s, Entry e, LocalDate today, Instant now, int sessions) {
+    private Live computeLive(Snapshot s, Entry e, LocalDate today, Instant now,
+                             IntradayPrice newest, int sessions) {
         List<PriceBar> bars = s.bars();
         Double current = s.current();
         // Session-anchored, not calendar-anchored: "today" = live vs the previous session's close,
@@ -463,8 +475,62 @@ public class WatchlistService {
         return new Live(scalePct(todayPct), scalePct(pct2d), scalePct(pct3d), scalePct(pct5d),
                 scalePct(pct10d), scalePct(pct30d), scalePct(pctFromHigh), scalePct(pctFromLow),
                 scalePct(intra[0]), scalePct(intra[1]), above, below,
+                extended(cp, s.ip(), newest),
                 flags.nearHigh(), flags.bigMove(), flags.moveDirection(),
                 flags.aboveLevel(), flags.belowLevel());
+    }
+
+    /**
+     * Where the price has gone since the regular session, when the newest quote we hold is a
+     * pre- or post-market one. Null the rest of the time — which is most of the time, and is
+     * absent rather than a 0% move.
+     *
+     * <p><b>It is adjacent, never the anchor.</b> Nothing else on the row moves with it: the
+     * Price column, every momentum window, both {@link Outlook}s and every alert flag stay on
+     * {@code regular}, the last regular print. Three reasons, and each one on its own is enough.
+     *
+     * <ol>
+     *   <li><b>An extended print is not dealable here.</b> These readings exist to say how far a
+     *       level is from the market and how likely it is reached — questions about a price an
+     *       order can actually fill at. An after-hours book is thin and wide-spread, and the last
+     *       1-minute close in it can be a single odd-lot print.</li>
+     *   <li><b>It would burn the day's alert on the wrong session.</b> {@link WatchlistAlertJob}
+     *       dedups on {@code SYMBOL|TRIGGER|date} and takes that date off the local clock, while a
+     *       US post-market session runs past midnight in London. A level crossed at 00:30 would
+     *       mail, write <em>tomorrow's</em> key, and leave the trigger silent through the session
+     *       that could be traded on — and a print that reverses by the open would leave a fired
+     *       flag on a level no dealable market ever reached.</li>
+     *   <li><b>The rest of the row would not follow.</b> {@code week52High}/{@code Low} come from
+     *       the fundamentals snapshot and the momentum windows from daily closes, so moving only
+     *       the live price puts an extended print over a regular-session comparison in the same
+     *       row — one header over two questions, which is the trade this codebase does not make.
+     *       σ is a close-to-close estimator annualised on sessions, and would be pricing a
+     *       barrier from a point inside a gap it already accounts for.</li>
+     * </ol>
+     *
+     * <p><b>The reference is the Price column itself</b>, not a separately-derived close, so this
+     * figure always explains the gap between the price shown beside it and the extended print.
+     * That holds for both sessions without a special case: the newest regular bar is the previous
+     * close during a pre-market session and the day's own close during a post-market one, because
+     * an extended bar is by construction later than every regular bar we hold.
+     *
+     * @param regular the row's own live price — the last regular print
+     * @param ip      the regular bar {@code regular} came from, or null when it fell back to a
+     *                daily close
+     * @param newest  the newest stored bar of any session
+     */
+    private static Extended extended(BigDecimal regular, IntradayPrice ip, IntradayPrice newest) {
+        if (newest == null || !newest.session().isExtendedHours()) return null;
+        if (regular == null || regular.signum() <= 0) return null;
+        // A stored 0.0 is absent, not a price — the same reading the thresholds get.
+        if (!(newest.close() > 0)) return null;
+        // Belt and braces: an extended bar older than the regular print it would be measured
+        // against explains nothing. MAX(ts) makes this unreachable; it is here so the invariant
+        // the paragraph above relies on is checked rather than assumed.
+        if (ip != null && !newest.ts().isAfter(ip.ts())) return null;
+        BigDecimal price = BigDecimal.valueOf(newest.close()).setScale(PRICE_SCALE, RoundingMode.HALF_UP);
+        BigDecimal movePct = price.subtract(regular).divide(regular, PCT_SCALE, RoundingMode.HALF_UP);
+        return new Extended(price, movePct, newest.session(), newest.ts(), newest.tradingDay());
     }
 
     /**
@@ -913,7 +979,7 @@ public class WatchlistService {
                         BigDecimal pct10d, BigDecimal pct30d,
                         BigDecimal pctFromHigh, BigDecimal pctFromLow,
                         BigDecimal vol5d, BigDecimal vol10d,
-                        Outlook aboveOutlook, Outlook belowOutlook,
+                        Outlook aboveOutlook, Outlook belowOutlook, Extended extended,
                         boolean nearHigh, boolean bigMove, int moveDirection,
                         boolean aboveLevel, boolean belowLevel) {
     }
@@ -929,6 +995,13 @@ public class WatchlistService {
      * rejected the ticker and waiting will not help, null means a backfill is still in flight.
      */
     public record Row(String symbol, String currency, BigDecimal currentPrice,
+                      /**
+                       * Where the price has gone since the regular session, when the newest quote
+                       * is a pre/post-market one — null otherwise, which is most of the time.
+                       * Nothing else on the row is measured from it. See
+                       * {@link WatchlistService#extended}.
+                       */
+                      Extended extended,
                       BigDecimal todayPct, BigDecimal pct2d, BigDecimal pct3d, BigDecimal pct5d,
                       BigDecimal pct10d, BigDecimal pct30d,
                       BigDecimal week52High, BigDecimal week52Low,
@@ -963,7 +1036,7 @@ public class WatchlistService {
                            BigDecimal priceAbove, BigDecimal priceBelow,
                            BigDecimal targetAbove, BigDecimal targetBelow, String note,
                            String reason) {
-            return new Row(symbol, null, null, null, null, null, null, null, null,
+            return new Row(symbol, null, null, null, null, null, null, null, null, null,
                     null, null, null, null, null, null, null, null, null, null,
                     false, null, null, null, highPct, movePct, priceAbove, priceBelow,
                     targetAbove, targetBelow, note,
@@ -1001,6 +1074,31 @@ public class WatchlistService {
     }
 
     /**
+     * An extended-hours reading: the pre- or post-market print and how far it sits from the
+     * regular close beside it. Present only while the newest quote we hold is an extended one.
+     *
+     * <p>It is a reading, not an input. Nothing on the row is priced from it and no alert
+     * evaluates it — {@link WatchlistService#extended} records why in full.
+     *
+     * @param price      the extended print, in the instrument's own currency (the same currency
+     *                   as the row's regular price: both come from one ticker's 1-minute series).
+     * @param movePct    signed fraction from the regular price the row is showing to {@code price}
+     *                   ({@code -0.08} = 8% below the close). Measured against that same figure,
+     *                   so it always explains the gap between the Price column and this print.
+     * @param session    which extended window the print came from. Read off Yahoo's own trading
+     *                   calendar, never a clock, so half-days and holidays come out right.
+     * @param asOf       the print's timestamp. Carried so the cell can disclose its own age: a
+     *                   Friday-evening reading is still the freshest thing known on a Sunday, and
+     *                   should say so rather than read as live.
+     * @param tradingDay the session this print attaches to — the day whose close {@code movePct}
+     *                   is measured against for a post-market print, and the day it precedes for
+     *                   a pre-market one.
+     */
+    public record Extended(BigDecimal price, BigDecimal movePct, MarketSession session,
+                           Instant asOf, LocalDate tradingDay) {
+    }
+
+    /**
      * @param touchSessions the horizon every {@code P(N)} cell in {@code rows} was priced over.
      *                      On the payload rather than fetched separately so the header can never
      *                      name an N the cells beneath it were not priced at.
@@ -1020,6 +1118,8 @@ public class WatchlistService {
      * full-load values would sit beside a price that has since moved and quietly contradict it.
      */
     public record QuoteRow(String symbol, String currency, BigDecimal currentPrice,
+                           /** @see Row#extended() */
+                           Extended extended,
                            BigDecimal todayPct, BigDecimal pct2d, BigDecimal pct3d, BigDecimal pct5d,
                            BigDecimal pct10d, BigDecimal pct30d,
                            BigDecimal pctFromHigh, BigDecimal pctFromLow,
@@ -1029,7 +1129,7 @@ public class WatchlistService {
                            boolean aboveLevel, boolean belowLevel) {
 
         static QuoteRow missing(String symbol) {
-            return new QuoteRow(symbol, null, null, null, null, null, null, null, null,
+            return new QuoteRow(symbol, null, null, null, null, null, null, null, null, null,
                     null, null, null, null, null, null, false, false, 0, false, false);
         }
     }

@@ -193,6 +193,59 @@ touches an order.
     the target skipped (above). The two run in that order, so a database old enough to need both
     has its readings beside the trigger before the target slides in ahead of them.
 
+- **Extended hours: shown, and read by nothing.** `Ext %` is the move from the regular close to
+  the newest pre- or post-market print, with a `PRE`/`AH` badge saying which session it came
+  from. `WatchlistService.extended` builds it from `IntradayPriceRepository.loadLatestQuotes`
+  (newest bar of *any* session) against the row's own live price, which comes from
+  `loadLatestIntradayPrices` (regular only). The reason it exists: a US name that reports after
+  the close used to show last night's price until 14:30 the next afternoon, through the one
+  evening where something had actually happened.
+  - **It is adjacent, never the anchor.** The Price column, all six momentum windows, both
+    `Outlook`s and every alert flag stay on the last regular print. Three reasons, each
+    sufficient on its own.
+    - *An extended print is not dealable.* The two readings beside each level answer how far it
+      is and how likely it is reached — questions about a price an order can fill at. An
+      after-hours book is thin and wide-spread, and the last 1-minute close in it can be one
+      odd-lot print.
+    - *It would spend the day's alert on the wrong session.* `WatchlistAlertJob` dedups on
+      `SYMBOL|TRIGGER|date` off `LocalDate.now()`, and a US post-market session runs past
+      midnight in London. A level crossed at 00:30 would mail, write **tomorrow's** key, and
+      leave that trigger silent through the session that could be traded on — and a print that
+      reverses by the open would leave a fired flag on a level no dealable market ever reached.
+      Only a threshold edit re-arms it (`clearFiredFor`), so nothing would recover the signal.
+    - *The rest of the row would not follow.* `week52High`/`Low` come from the fundamentals
+      snapshot and the momentum windows from daily closes, so moving only the live price puts an
+      extended print over a regular-session comparison in one row — one header over two
+      questions. And σ is a close-to-close estimator annualised on sessions; it would be pricing
+      a barrier from a point inside a gap it already accounts for.
+  - **The reference is the Price column itself**, not a separately-derived close, so the figure
+    always explains the gap between the price shown beside it and the extended print. One rule
+    covers both sessions with no special case: an extended bar is by construction later than
+    every regular bar stored, so the newest regular bar is the *previous* close during a
+    pre-market session and the day's *own* close during a post-market one.
+  - **Absent, not zero, and that is the usual state.** No extended bar, a regular bar as the
+    newest thing known, a `0.0` close (absent, not a price — the reading the thresholds get), or
+    no regular price to measure against all give no reading and a `—` cell. The column is blank
+    most of the day, and always on a London listing: `hasPrePostMarketData` is false for LSE, so
+    Yahoo publishes no extended session to fetch.
+  - **It discloses its own clock.** A post-market print is the freshest thing known until the next
+    pre-market session opens eight hours later — all weekend, after a Friday close. So it stays on
+    screen with its sign colour and is dimmed past 12 hours (`wl-ext-stale`), and the tooltip
+    names the print, its local timestamp and what does not read it. Being old is not being wrong;
+    reading as live when it is twelve hours stale would be.
+  - It rides the quote poll like the other intraday-varying cells, so the cell is patched in
+    place rather than waiting for a full reload; `wlExtParts` is the one home for its class, sort
+    value, tooltip and markup, shared by the initial render and that patch. The number and the
+    badge share a cell, so the column sorts on an explicit `data-sort-value` — the same bargain
+    the Live tab's Last column strikes for the same reason. The badge labels and colours *are*
+    the Live tab's (`live-sess-pre`/`live-sess-post`): the same fact in two places should not have
+    two vocabularies. In the popup it is one stat tile, present only when there is a reading and
+    labelled with the session it got, because a tile permanently reading `—` is noise.
+  - It reached saved layouts through the same one-shot marker as the note and the level columns
+    (`watchlist_extended_column_backfilled`), inserted after `todayPct` — the same measurement
+    over the session that follows, so the two are read as a pair. It is a **reading**, so a
+    layout that has dropped Today % still gets it appended, unlike the order targets.
+
 - **Drag to reorder, rows and columns.** A grip (⠿) in each row's Symbol cell drags the row; a
   chip in the column picker drags the column. The ↑↓ buttons stay beside both — they are the
   keyboard path and the touch path (HTML5 drag events never fire on a touch screen), and a

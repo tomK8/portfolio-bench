@@ -8124,6 +8124,7 @@
             var priceCell = tr.querySelector('td[data-f="price"]');
             if (priceCell) priceCell.textContent = r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency);
             wlPatchPct(tr, 'todayPct', r.todayPct, true);
+            wlPatchExt(tr, r.extended, r.currency);
             wlPatchPct(tr, 'pct2d', r.pct2d, true);
             wlPatchPct(tr, 'pct3d', r.pct3d, true);
             wlPatchPct(tr, 'pct5d', r.pct5d, true);
@@ -8196,6 +8197,23 @@
             var n = parseFloat(frac) * 100;
             td.className = colour ? (n >= 0 ? 'wl-pos' : 'wl-neg') : '';
             td.textContent = (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+        }
+
+        /**
+         * Patch the extended cell. The whole inside is rewritten rather than just its text: the
+         * number and the session badge move together, and no listener lives in here (the row's
+         * click handler is on the <tr>), so there is nothing to lose by replacing it.
+         */
+        function wlPatchExt(tr, x, ccy) {
+            var td = tr.querySelector('td[data-f="extPct"]');
+            if (!td) return;
+            var p = wlExtParts(x, ccy);
+            td.className = p.cls;
+            if (p.sort) td.dataset.sortValue = p.sort;
+            else delete td.dataset.sortValue;
+            if (p.title) td.title = p.title;
+            else td.removeAttribute('title');
+            td.innerHTML = p.html;
         }
 
         function wlPatchVol(tr, field, frac) {
@@ -8598,6 +8616,68 @@
             return '<td' + cls + fa + '>' + (n >= 0 ? '+' : '') + n.toFixed(1) + '%</td>';
         }
 
+        /**
+         * Session badges, deliberately the Live tab's own two labels and colours: PRE before the
+         * open, AH after the close. The same fact in two places should not have two vocabularies.
+         */
+        var WL_EXT_BADGE = { PRE: ['PRE', 'live-sess-pre'], POST: ['AH', 'live-sess-post'] };
+
+        /** Past this age an extended reading is shown as past rather than live (hours). */
+        var WL_EXT_STALE_HOURS = 12;
+
+        /**
+         * Is this reading old enough to need saying so? A post-market print is the freshest thing
+         * known until the next pre-market session opens, which on a US name is eight hours later
+         * — and all weekend after a Friday close. It stays on screen either way, because it is
+         * still the last thing that happened; it just stops looking live.
+         */
+        function wlExtStale(x) {
+            if (!x || !x.asOf) return false;
+            return (Date.now() - new Date(x.asOf).getTime()) > WL_EXT_STALE_HOURS * 3600 * 1000;
+        }
+
+        /** What the cell explains about itself: the print, its clock, and what does not read it. */
+        function wlExtTitle(x, ccy) {
+            var what = x.session === 'PRE' ? 'Pre-market' : 'After-hours';
+            var parts = [what + ' print' + (x.price == null ? '' : ' ' + fmtPrice(x.price, ccy)) +
+                ', measured against the regular close in the Price column.'];
+            if (x.asOf) {
+                parts.push('As at ' + new Date(x.asOf).toLocaleString() +
+                    (wlExtStale(x) ? ' — hours old, not a live quote.' : '.'));
+            }
+            parts.push('Nothing else on this row reads it: the momentum windows, both P(N) columns ' +
+                'and every alert stay on the regular close.');
+            return parts.join(' ');
+        }
+
+        /**
+         * The extended cell's class, sort value, tooltip and inner markup — one home, shared by
+         * the initial render and the poll's in-place patch, so the two can never disagree.
+         *
+         * The number and the badge are one cell, so the column sorts on an explicit
+         * data-sort-value: the rendered text is not purely the value. Same bargain the Live tab's
+         * Last column strikes for the same reason.
+         */
+        function wlExtParts(x, ccy) {
+            if (!x || x.movePct == null) return { cls: 'na', sort: '', title: '', html: '—' };
+            var n = parseFloat(x.movePct) * 100;
+            var badge = WL_EXT_BADGE[x.session] || ['EXT', ''];
+            return {
+                cls: (n >= 0 ? 'wl-pos' : 'wl-neg') + (wlExtStale(x) ? ' wl-ext-stale' : ''),
+                sort: String(n),
+                title: wlExtTitle(x, ccy),
+                html: (n >= 0 ? '+' : '') + n.toFixed(1) + '%' +
+                    '<span class="live-sess ' + badge[1] + '">' + badge[0] + '</span>'
+            };
+        }
+
+        function wlExtCell(x, ccy) {
+            var p = wlExtParts(x, ccy);
+            return '<td class="' + p.cls + '" data-f="extPct"' +
+                (p.sort ? ' data-sort-value="' + p.sort + '"' : '') +
+                (p.title ? ' title="' + escapeHtml(p.title) + '"' : '') + '>' + p.html + '</td>';
+        }
+
         // Realized-vol cell — always positive, so no leading sign (matches the popup term structure).
         function wlVolCell(frac, field) {
             var fa = field ? ' data-f="' + field + '"' : '';
@@ -8791,6 +8871,16 @@
             { title: 'Price & momentum', fields: [
                 ['price', 'Price', 'Latest price in the instrument\'s own currency'],
                 ['todayPct', 'Today %', 'Live move vs the previous session\'s close (1 trading session)'],
+                ['extPct', 'Ext %', 'Move since the regular close, shown only while the newest quote '
+                    + 'we hold is a pre- or post-market one — so it is blank most of the day, and '
+                    + 'always on a London listing (no extended session is published for one). The badge '
+                    + 'says which: PRE before the open, AH after the close. It is a reading and nothing '
+                    + 'more. The Price column, every momentum window, both P({N}) columns and every alert '
+                    + 'stay on the last regular print, because an extended book is thin and wide-spread '
+                    + 'and is not where an order fills — and because an alert fired out of hours would '
+                    + 'spend the day\'s one email on a session you cannot deal in. A reading more than '
+                    + 'half a day old is dimmed: a Friday-evening print is still the freshest thing known '
+                    + 'on a Sunday, but it is not live.'],
                 ['pct2d', '2d %', 'Return over the last 2 trading sessions (today + the previous session)'],
                 ['pct3d', '3d %', 'Return over the last 3 trading sessions'],
                 ['pct5d', '5d %', 'Return over the last 5 trading sessions'],
@@ -9144,6 +9234,7 @@
                     return '<td data-f="price">' +
                         (r.currentPrice == null ? '—' : fmtPrice(r.currentPrice, r.currency)) + '</td>';
                 case 'todayPct': return wlPctCell(r.todayPct, true, 'todayPct');
+                case 'extPct': return wlExtCell(r.extended, r.currency);
                 case 'pct2d': return wlPctCell(r.pct2d, true, 'pct2d');
                 case 'pct3d': return wlPctCell(r.pct3d, true, 'pct3d');
                 case 'pct5d': return wlPctCell(r.pct5d, true, 'pct5d');
@@ -9487,6 +9578,13 @@
             var stats = document.getElementById('wl-modal-stats');
             stats.innerHTML = '';
             stats.appendChild(wlStat('Today', wlPctText(r.todayPct), wlTip('todayPct')));
+            // Only when there is one — unlike every other stat here, this is absent most of the
+            // time, and a tile permanently reading '—' would be noise rather than a fact. Its
+            // label names the session it got, which no fixed header could.
+            if (r.extended) {
+                stats.appendChild(wlStat(r.extended.session === 'PRE' ? 'Pre-mkt' : 'After hrs',
+                        wlPctText(r.extended.movePct), wlTip('extPct')));
+            }
             stats.appendChild(wlStat('2d', wlPctText(r.pct2d), wlTip('pct2d')));
             stats.appendChild(wlStat('3d', wlPctText(r.pct3d), wlTip('pct3d')));
             stats.appendChild(wlStat('5d', wlPctText(r.pct5d), wlTip('pct5d')));

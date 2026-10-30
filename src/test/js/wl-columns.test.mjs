@@ -123,13 +123,15 @@ test('isDefault recognises the shipped set and nothing else', () => {
 });
 
 test('the default set is the columns the watchlist shipped with, plus the later additions', () => {
-    // Guards the promise that turning on multi-list changed nobody's existing table. Three later
+    // Guards the promise that turning on multi-list changed nobody's existing table. Four later
     // additions: the note, which joins at the end because it belongs to the row; each side's
-    // distance + probability, which sit immediately after the level they read; and the order
-    // target, which slots between the trigger and those two because they are priced to it. All
-    // reached the layouts saved before them through a one-shot backfill in the repository.
+    // distance + probability, which sit immediately after the level they read; the order
+    // target, which slots between the trigger and those two because they are priced to it; and
+    // the extended-hours move, beside Today % because it is the same measurement over the
+    // session that follows. All reached the layouts saved before them through a one-shot
+    // backfill in the repository.
     assert.deepEqual(WlColumns.DEFAULTS, [
-        'price', 'todayPct', 'pct2d', 'pct3d', 'pct5d', 'pct30d',
+        'price', 'todayPct', 'extPct', 'pct2d', 'pct3d', 'pct5d', 'pct30d',
         'pctFromHigh', 'pctFromLow',
         'vol5d', 'vol10d', 'vol30d', 'vol1y',
         'trailingPe', 'position', 'gain',
@@ -138,6 +140,13 @@ test('the default set is the columns the watchlist shipped with, plus the later 
         'thrBelow', 'tgtBelow', 'thrBelowPct', 'thrBelowProb',
         'note'
     ]);
+});
+
+test('the extended-hours move sits beside the regular session it extends', () => {
+    // The two are read as a pair — what the session did, then what has happened since it closed —
+    // and they are the same measurement in the same units, so nothing should come between them.
+    assert.equal(WlColumns.DEFAULTS.indexOf('extPct'),
+        WlColumns.DEFAULTS.indexOf('todayPct') + 1);
 });
 
 test('each side reads trigger, target, then the two readings priced to it', () => {

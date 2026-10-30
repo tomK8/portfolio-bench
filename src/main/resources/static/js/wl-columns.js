@@ -34,7 +34,7 @@
      * same without either needing a stored row.
      */
     var DEFAULTS = [
-        'price', 'todayPct', 'pct2d', 'pct3d', 'pct5d', 'pct30d',
+        'price', 'todayPct', 'extPct', 'pct2d', 'pct3d', 'pct5d', 'pct30d',
         'pctFromHigh', 'pctFromLow',
         'vol5d', 'vol10d', 'vol30d', 'vol1y',
         'trailingPe', 'position', 'gain',

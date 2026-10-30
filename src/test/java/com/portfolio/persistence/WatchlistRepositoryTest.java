@@ -278,4 +278,49 @@ class WatchlistRepositoryTest {
                         "thrAbovePct", "thrAboveProb", "thrBelowPct", "thrBelowProb"),
                 repo.columnsFor(list));
     }
+
+    /**
+     * The extended-hours move joins a saved layout beside Today %: the two are the same
+     * measurement over consecutive sessions and are read as a pair. Same one-shot marker as the
+     * three backfills above, and the same reason it has to be a marker — a "doesn't list it"
+     * guard would put the column back on every restart for anyone who took it off.
+     */
+    @Test
+    void theExtendedColumnJoinsSavedLayoutsBesideTodaysMove(@TempDir Path dir) {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dir);
+        KeyValueStore kv = new KeyValueStore(dir);
+        WatchlistRepository repo = new WatchlistRepository(cf, kv);
+        long list = repo.firstListId();
+        repo.saveColumns(list, List.of("price", "todayPct", "vol5d", "note"));
+        kv.putBoolean(WatchlistRepository.EXTENDED_COLUMN_BACKFILLED_KEY, false);
+
+        new WatchlistRepository(cf, kv);                       // restart
+
+        assertEquals(List.of("price", "todayPct", "extPct", "vol5d", "note"),
+                repo.columnsFor(list));
+
+        repo.saveColumns(list, List.of("price", "todayPct", "vol5d", "note"));
+        new WatchlistRepository(cf, kv);
+        assertEquals(List.of("price", "todayPct", "vol5d", "note"), repo.columnsFor(list),
+                "a column the user removed must not be resurrected by the next start");
+    }
+
+    /**
+     * It is a <em>reading</em>, not an editor, so a layout that has taken Today % off still gets
+     * it — appended. That is the distinction the order-target backfill draws the other way: a
+     * target is an editor for a side, and a side the user has hidden does not want one.
+     */
+    @Test
+    void theExtendedColumnAppendsWhenTodaysMoveWasRemoved(@TempDir Path dir) {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dir);
+        KeyValueStore kv = new KeyValueStore(dir);
+        WatchlistRepository repo = new WatchlistRepository(cf, kv);
+        long list = repo.firstListId();
+        repo.saveColumns(list, List.of("price", "note"));
+        kv.putBoolean(WatchlistRepository.EXTENDED_COLUMN_BACKFILLED_KEY, false);
+
+        new WatchlistRepository(cf, kv);
+
+        assertEquals(List.of("price", "note", "extPct"), repo.columnsFor(list));
+    }
 }

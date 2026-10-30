@@ -1438,6 +1438,9 @@
             #watchlist-table tbody tr.wl-both-down { animation: none; background: rgba(31, 119, 180, 0.16); box-shadow: inset 3px 0 0 #1f77b4; }
         }
         .wl-pos { color: #2ca02c; } .wl-neg { color: #c0392b; }
+        /* An extended-hours reading older than half a day. Still the last thing that happened,
+           so it stays on screen and keeps its sign colour — it just stops reading as live. */
+        .wl-ext-stale { opacity: 0.55; }
         html[data-theme="dark"] .wl-pos { color: #4ade80; }
         html[data-theme="dark"] .wl-neg { color: #f87171; }
         .wl-thr-input, .wl-tgt-input { width: 3.2rem; font-size: 0.8rem; padding: 1px 3px; }
@@ -3296,7 +3299,12 @@
         symbol however many lists it is in, and it is printed under that symbol's lines in the
         alert email — <b>Full notes</b> above expands that column so every plan shows in full
         rather than just its first line. Email alerts fire once per day per signal
-        when SMTP is configured. Click a row
+        when SMTP is configured. <b>Ext %</b> is the move since the regular close when the newest
+        quote is a pre- or post-market one (<span class="live-sess live-sess-pre">PRE</span> /
+        <span class="live-sess live-sess-post">AH</span>) — blank the rest of the time, and always
+        on a London listing. It is shown and nothing more: the price, every other move, both
+        P(N) columns and every alert stay on the last regular print, because an extended book is
+        not where an order fills. Click a row
         for the price chart and fundamentals.
         Prices, momentum, short-horizon vol and row colour auto-refresh every 30s while this tab
         is open (data is ~1 minute fresh, from the intraday feed); the position and fundamentals

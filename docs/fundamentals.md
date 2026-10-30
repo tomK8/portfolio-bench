@@ -111,6 +111,95 @@ neighbours', deleted). The keys `freeCashflow` and `fcfMarginTtm` are **unchange
 watchlist column layout stores `f:fcfMarginTtm`, one list uses it, and re-keying the field would
 have dropped that column silently while the label is the only thing that was ever wrong.
 
+### …but a levered FCF above operating cash flow is withheld (2026-10-30)
+
+The relabel above was not enough, and the capex table two paragraphs up says why without drawing
+the conclusion. **Free cash flow of every definition is operating cash flow minus non-negative
+claims on it** — capital expenditure, and for a *levered* figure interest and mandatory debt
+repayment on top. So it can sit any distance *below* operating cash flow and never above it. Where
+Yahoo's exceeds its own OCF, the unpublished model has added something back rather than
+subtracted, and what comes out is not cash the business generated.
+
+NFLX on the 2026-10-30 fetch, against its own 10-K/10-Qs for the same twelve months to
+2026-09-30 (`NetCashProvidedByUsedInOperatingActivities` and
+`PaymentsToAcquirePropertyPlantAndEquipment`, the TTM assembled as FY2025 − 9M2025 + 9M2026):
+
+| | Yahoo | the filings |
+|---|---|---|
+| Operating cash flow (TTM) | $12,307.9m | **$12,308.0m** |
+| Capital expenditure (TTM) | — (the feed states none) | $932.8m |
+| Free cash flow | **$25,475.8m**, labelled levered | **$11,375.2m** |
+| FCF margin on $49,734.6m of revenue | **51.2%** | **22.9%** |
+
+**Yahoo's operating cash flow is the filing's, to 0.1m — 0.001%.** That is what makes this a
+defect in the FCF model and nothing else: the two figures come from one module, one of them
+reproduces the filings exactly, and the other is 2.07× it. The published margin was not merely
+imprecise, it was 28 percentage points high on a column whose only job is to rank one business
+against another.
+
+Removing the capex column stopped us publishing the impossible *subtraction*. It left the figure
+that made the subtraction impossible on the screen — sorting a column, and feeding a margin whose
+whole purpose is to rank one symbol against another. "Comparable between symbols, because the same
+model is applied to all of them" was the case for keeping it, and that case does not survive a row
+where the model's output is not a free cash flow at all. Both the amount and the margin are now
+withheld, each with its own `excluded:` reason.
+
+**The test is the feed contradicting itself, not a threshold.** This is the EV currency gate's
+shape, not BRK.B's P/B: there is no number to choose and no judgement about the company, only two
+figures from one module in an order arithmetic forbids. On the live 68-symbol refetch that
+deployed the gate, **6 of the 49 rows carrying both sides failed it** — NFLX, NOW, SNPS, MRVL,
+plus BRK.B and LGEN, whose cash-flow group `isFinancialRow` skips anyway. ServiceNow is the one
+the 2026-10-06 table above missed, so the population is not a fixed list of five names: it is
+whatever the model does that week, which is the argument for a test rather than a note.
+
+**One direction only, deliberately.** ORCL's and BABA's levered FCF is *negative* against strongly
+positive operating cash flow, which is extraordinary but not impossible — debt service has no
+ceiling. Gating that would take a threshold on how far below is too far, i.e. the magic number
+rejected for BRK.B's P/B and for the forward-P/E basis. A sign is not a contradiction.
+
+### Revenue and earnings growth are single quarters, and said "year-over-year" (2026-10-30)
+
+`financialData.revenueGrowth` and `financialData.earningsGrowth` are the **latest reported quarter
+against the same quarter a year earlier**. They sat in the **Income (TTM)** group as *Revenue
+Growth* and *Earnings Growth*, with tooltips reading "Year-over-year … growth rate" — the
+operating-margin defect exactly: a quarter's figure among trailing-year ones, under a label naming
+no period, and this time asserting the wrong one.
+
+Measured against NFLX's own 10-Qs for the quarters ended 2026-09-30 and 2025-09-30:
+
+| Yahoo field | published | reproduced from the filings | |
+|---|---|---|---|
+| `revenueGrowth` | 0.118 | 12,874.2 / 11,510.3 − 1 = **0.1185** | MRQ revenue |
+| `earningsGrowth` | 0.475 | diluted EPS 0.87 / 0.59 − 1 = **0.4746** | MRQ **per share** |
+| — | — | net income 3,663.9 / 2,546.9 − 1 = 0.4386 | *not* what is published |
+
+So the earnings field is **diluted EPS**, not net income — the 3.6pp gap is the buyback — and
+neither field is the trailing year. Both are **relabelled, not deleted**, and moved into their own
+*Growth (latest qtr vs year-ago qtr)* group. Unlike the operating margin they *can* state their own
+window: one named comparison, the same on every row, which is the Levered FCF and ROE treatment.
+Deleting `earningsGrowth` would also have cost `StyleClassifier` a growth vote — and that class
+already documents the field correctly as "a single-quarter year-on-year figure [that] swings
+wildly", down-weighted to 0.4 with Micron at +1368% on the record. **The domain layer knew what
+this field was; only the label lied.** Keys unchanged, for the `f:earningsGrowth` reason above.
+
+**A two-point comparison carries whatever one-offs sit in either endpoint, and the base is the
+dangerous one.** NFLX's 47.5% is against a Q3 2025 that carried a roughly $619m Brazilian tax
+charge. The filings corroborate a one-off of about that size, and locate it: operating margin of
+**28.2%** for that quarter against 31.8% and 34.1% in the two before it and 32.3% / 33.4% / 34.6%
+in the three after — a hole of roughly $650m in *operating* expense, while income tax expense of
+$562m that quarter sits in line with its neighbours. So it is not an income-tax item on the face
+of the statements, which is why both net income and EPS carry it. Added back at the quarter's own
+18.1% effective rate, like-for-like growth is **near 23%, not 47.5%**: roughly half the headline
+is the absence of last year's charge.
+
+Nothing in the feed flags that, and **nothing here can detect it** — a one-off is a disclosure, not
+a field. This is the P/E-history restatement problem in a smaller frame: there the base window's
+disagreement with the filer's own annual is *reported beside* the decomposition, because a
+trend-and-threshold flag would fire on a genuine cyclical trough. Here there is no second figure to
+disagree with, so the tooltip names the mechanism, the recorded NFLX case and the arithmetic, and
+the field says which window it is on. Read a large print as a question about the base quarter
+before an answer about the business.
+
 ## The operating line comes from the filings
 
 Deleting Yahoo's single-quarter operating margin left the panel with **no operating figure at

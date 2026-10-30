@@ -117,23 +117,75 @@ class YahooQuoteSummaryFetcherTest {
      * quantity with no name — and on a live 68-symbol fetch it was negative for 5 of the 52
      * rows carrying both sides, because Yahoo's FCF exceeded its own OCF there. This fixture is
      * that shape: FCF (125B) above OCF (118B), which would have published a capital expenditure
-     * of -7B. The margin still computes, on the numerator Yahoo actually supplies.
-     * See docs/fundamentals.md.
+     * of -7B. See docs/fundamentals.md.
      */
     @Test
     void omitsCapexDerivedFromLeveredFcf() throws Exception {
-        String leveredAboveOcf = sample()
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", leveredAboveOcf());
+
+        assertNull(q.extra().get("capexTtm"), "a negative capex is not a measurement");
+        assertEquals(0, q.extra().get("operatingCashflow").compareTo(new BigDecimal("118000000000")),
+                "the figure the feed actually states is untouched");
+    }
+
+    /**
+     * The other half of the same defect. Removing the capex column stopped us publishing the
+     * impossible subtraction; the figure that made it impossible stayed on the screen, sorting
+     * a column and feeding a margin that ranks rows. Free cash flow of every definition is
+     * operating cash flow <i>minus</i> non-negative claims on it — capex, and for a levered
+     * figure interest and debt repayment too — so it can sit any distance below operating cash
+     * flow and never above it. Above means the unpublished model added something back, and what
+     * it produced is not cash the business generated: NFLX published 25.48bn against an
+     * operating cash flow of 12.31bn on the 2026-10-30 fetch, with a 51.2% "FCF margin" on top,
+     * while its own filings put free cash flow near 11.9bn.
+     *
+     * <p>Both the amount and the margin built on it are withheld, each with its reason, so the
+     * row says "not trustworthy" rather than reading like a symbol the feed is silent about.
+     */
+    @Test
+    void withholdsLeveredFcfThatExceedsOperatingCashFlow() throws Exception {
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", leveredAboveOcf());
+
+        assertNull(q.extra().get("freeCashflow"), "125B of FCF on 118B of OCF is not a measurement");
+        assertNull(q.extra().get("fcfMarginTtm"), "and neither is the 0.3125 margin built on it");
+        for (String key : new String[] { "freeCashflow", "fcfMarginTtm" }) {
+            String why = q.labels().get("excluded:" + key);
+            assertNotNull(why, key + " must say why it was withheld");
+            assertTrue(why.contains("operating cash flow"), why);
+        }
+        // The feed's own uncontested figure stays, and is what makes the exclusion legible.
+        assertEquals(0, q.extra().get("operatingCashflow").compareTo(new BigDecimal("118000000000")));
+    }
+
+    /**
+     * One direction only. A levered FCF far <i>below</i> operating cash flow — negative for ORCL
+     * and BABA against strongly positive OCF — is extraordinary but not impossible, because
+     * debt service has no ceiling. Ruling it out would need a threshold on how far below is too
+     * far, which is the magic number this screen rejects everywhere else; the gate above is the
+     * feed contradicting itself, and a sign is not a contradiction.
+     */
+    @Test
+    void keepsLeveredFcfBelowOperatingCashFlowHoweverFar() throws Exception {
+        String negativeFcf = sample()
+                .replace("\"freeCashflow\": { \"raw\": 108000000000, \"fmt\": \"108.00B\" }",
+                         "\"freeCashflow\": { \"raw\": -45850000000, \"fmt\": \"-45.85B\" }");
+        assertNotEquals(sample(), negativeFcf, "fixture shape changed; patch no longer applies");
+
+        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("ORCL", negativeFcf);
+
+        assertEquals(0, q.extra().get("freeCashflow").compareTo(new BigDecimal("-45850000000")));
+        assertNotNull(q.extra().get("fcfMarginTtm"), "a negative margin is still a measurement");
+        assertNull(q.labels().get("excluded:freeCashflow"));
+        assertNull(q.labels().get("excluded:fcfMarginTtm"));
+    }
+
+    /** FCF (125B) above OCF (118B): the shape five of 52 live rows arrived in. */
+    private String leveredAboveOcf() throws Exception {
+        String patched = sample()
                 .replace("\"freeCashflow\": { \"raw\": 108000000000, \"fmt\": \"108.00B\" }",
                          "\"freeCashflow\": { \"raw\": 125000000000, \"fmt\": \"125.00B\" }");
-        assertNotEquals(sample(), leveredAboveOcf, "fixture shape changed; patch no longer applies");
-
-        QuoteSummary q = new YahooQuoteSummaryFetcher().parse("AAPL", leveredAboveOcf);
-
-        assertEquals(0, q.extra().get("freeCashflow").compareTo(new BigDecimal("125000000000")));
-        assertEquals(0, q.extra().get("operatingCashflow").compareTo(new BigDecimal("118000000000")));
-        assertNull(q.extra().get("capexTtm"), "a negative capex is not a measurement");
-        // 125B / 400B = 0.3125 — unaffected by the absent capex.
-        assertEquals(0, q.extra().get("fcfMarginTtm").compareTo(new BigDecimal("0.312500")));
+        assertNotEquals(sample(), patched, "fixture shape changed; patch no longer applies");
+        return patched;
     }
 
     /**

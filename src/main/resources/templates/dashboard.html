@@ -1629,8 +1629,12 @@
         #wl-returns-panel thead th:first-child { text-align: left; width: 56px; }
         #wl-returns-panel tbody td { text-align: right; font-variant-numeric: tabular-nums; }
         #wl-returns-panel tbody td:first-child { text-align: left; font-weight: 600; position: sticky; left: 0; background: inherit; z-index: 1; }
-        #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: var(--row-alt, #f8f8f8); }
-        html[data-theme="dark"] #wl-returns-panel tbody tr:nth-child(even) td:first-child { background: #1e2026; }
+        /* Striped by symbol via a class the renderer sets, not by nth-child: a symbol's daily and
+           cumulative lines are one block, and under "Show cumulative only" the hidden daily rows
+           still count for nth-child — every visible Σ line would land on an odd row and nothing
+           would stripe at all. */
+        #wl-returns-panel tbody tr.wl-ret-alt td:first-child { background: var(--row-alt, #f8f8f8); }
+        html[data-theme="dark"] #wl-returns-panel tbody tr.wl-ret-alt td:first-child { background: #1e2026; }
         html[data-theme="dark"] #wl-returns-panel thead th { border-bottom-color: #333; }
         .wl-window-toggle button { padding: 0.25rem 0.7rem; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
         .wl-window-toggle button.active { background: #1f77b4; color: #fff; border-color: #1d6ba2; }

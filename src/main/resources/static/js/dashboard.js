@@ -8713,6 +8713,48 @@
             return '<td' + cls + fa + '>' + s + '</td>';
         }
 
+        // ---- the returns heatmap's two global line switches ------------------------
+        //
+        // Each symbol has two lines it can show: its daily returns, and the Sigma line that
+        // compounds them. A row click adds or drops one symbol's Sigma line; these two
+        // checkboxes answer for the whole table at once —
+        //
+        //   Show cumulative for all rows — the Sigma line *beside* every daily line (each
+        //                                  symbol doubles up)
+        //   Show cumulative only         — the Sigma line *instead of* every daily line (one
+        //                                  line per symbol)
+        //
+        // "Only" is the stronger claim, so it wins: the other box is disabled rather than
+        // silently overruled, and its own state is kept so unticking "only" hands the table
+        // back to what that box says. Whichever way the two are set, every symbol keeps one
+        // line on screen or two and never none — a mode that hid the daily lines without
+        // inserting the Sigma ones would leave a heatmap of nothing but column headers.
+        //
+        // Both live out here rather than in the render, so a re-render (a list switch, the
+        // Refresh button, the poll's self-heal) redraws the view you were looking at instead
+        // of dropping you back to daily rows.
+        var wlRetCumAll = false;
+        var wlRetCumOnly = false;
+
+        /**
+         * Which of a symbol's two lines the table shows, given the two switches. The whole rule
+         * in one expression, so the invariant is checkable rather than asserted: whatever the
+         * switches say, `daily || cum` holds — a symbol always keeps a line on screen. (Unit
+         * tested over all four combinations: wl-ret-lines.test.mjs.)
+         */
+        function wlRetLines(cumAll, cumOnly) {
+            return { daily: !cumOnly, cum: !!(cumOnly || cumAll) };
+        }
+
+        /** One of those two switches: a checkbox that reflects the state it sets. */
+        function wlRetSwitch(id, label, on, disabled, title) {
+            return '<label title="' + escapeHtml(title) + '"' +
+                ' style="display:inline-flex;align-items:center;gap:0.35rem;cursor:pointer' +
+                (disabled ? ';opacity:0.5' : '') + '">' +
+                '<input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') +
+                (disabled ? ' disabled' : '') + '/> ' + label + '</label>';
+        }
+
         function renderWatchlistReturns(data) {
             var panel = document.getElementById('wl-returns-panel');
             if (!data || !data.dates || !data.dates.length) {
@@ -8720,8 +8762,14 @@
                 return;
             }
             var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            var html = '<label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer">' +
-                '<input type="checkbox" id="wl-cum-all"/> Show cumulative (Σ) for all rows</label>';
+            var html = '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.9rem;' +
+                'padding:0.25rem 0.5rem;font-size:0.8rem">' +
+                wlRetSwitch('wl-cum-all', 'Show cumulative (Σ) for all rows', wlRetCumAll, wlRetCumOnly,
+                    'Σ beside every daily line, so each symbol takes two rows. Disabled while ' +
+                    'Σ only is on, which already shows a Σ line for every row.') +
+                wlRetSwitch('wl-cum-only', 'Show cumulative (Σ) only', wlRetCumOnly, false,
+                    'One line per symbol: the Σ line in place of the daily returns, not beside them.') +
+                '</div>';
             html += '<table><thead><tr>' +
                 '<th style="min-width:80px">Symbol</th>';
             data.dates.forEach(function (d) {
@@ -8804,23 +8852,58 @@
                     }
                 });
                 cum.innerHTML = cells;
+                // A symbol's two lines read as one block, so the Σ line takes the stripe of the
+                // daily line it belongs to (see applyRetLines for why nth-child can't do this).
+                if (tr.classList.contains('wl-ret-alt')) cum.classList.add('wl-ret-alt');
                 tbody.insertBefore(cum, tr);
+            }
+
+            // Which lines the table shows, derived from the two switches in one place — so the
+            // first paint, either checkbox and a redraw after a list switch cannot disagree.
+            // Under Σ only the daily rows are hidden rather than removed, which keeps every
+            // row's Σ line the one already built from it and its own click wiring intact.
+            function applyRetLines() {
+                var show = wlRetLines(wlRetCumAll, wlRetCumOnly);
+                var alt = false;
+                panel.querySelectorAll('.wl-ret-row').forEach(function (tr) {
+                    // Stripe by symbol, not by DOM row: nth-child would stripe nothing at all
+                    // under Σ only, where the hidden daily rows still count and every visible
+                    // Σ line therefore lands on an odd one. Set before insertCumFor, which
+                    // copies it onto the Σ line.
+                    tr.classList.toggle('wl-ret-alt', alt);
+                    tr.style.display = show.daily ? '' : 'none';
+                    if (show.cum) insertCumFor(tr); else removeCumFor(tr);
+                    var cum = cumRowFor(tr);
+                    if (cum) cum.classList.toggle('wl-ret-alt', alt);
+                    alt = !alt;
+                });
+                // Σ only has already answered this question for every row; say so rather than
+                // leaving a box that looks live and changes nothing. Its state is untouched.
+                var all = document.getElementById('wl-cum-all');
+                all.disabled = wlRetCumOnly;
+                all.parentNode.style.opacity = wlRetCumOnly ? '0.5' : '';
             }
 
             panel.querySelectorAll('.wl-ret-row').forEach(function (tr) {
                 tr.addEventListener('click', function () {
-                    // Toggle this row's cumulative line.
+                    // Toggle this row's cumulative line. Out of reach under Σ only, where the
+                    // daily row carrying this handler is hidden.
                     if (cumRowFor(tr)) removeCumFor(tr); else insertCumFor(tr);
                 });
             });
 
-            // Master switch: show/hide the Σ row for every ticker at once.
+            // The two global switches. Each records what it was set to and re-derives the whole
+            // table; a tick of either is a bulk answer, so it also clears the per-row clicks.
             document.getElementById('wl-cum-all').addEventListener('change', function () {
-                var on = this.checked;
-                panel.querySelectorAll('.wl-ret-row').forEach(function (tr) {
-                    if (on) insertCumFor(tr); else removeCumFor(tr);
-                });
+                wlRetCumAll = this.checked;
+                applyRetLines();
             });
+            document.getElementById('wl-cum-only').addEventListener('change', function () {
+                wlRetCumOnly = this.checked;
+                applyRetLines();
+            });
+
+            applyRetLines();
         }
 
         // ---- Full-row build + in-place patch (keyed reconciliation) ----------------

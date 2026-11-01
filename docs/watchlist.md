@@ -547,3 +547,31 @@ touches an order.
   toggle, the **selected window's own high/low** beside the fixed 52-week pair, + a collapsible
   Fundamentals section. 
 
+- **Returns view** — the second of the `Stats`/`Returns` pair, `GET /watchlist/returns?list=`:
+  a daily-return heatmap, one row per symbol and one column per session, shaded on an unbounded
+  `1 − e^(−|%|/4)` ramp so every return gets its own depth instead of saturating at a cap.
+  Each symbol has **two lines it can show**: its daily returns, and the Σ line compounding them
+  (cell *i* = ∏(1+r_k) for k ≤ i, minus 1, skipping missing days). Clicking a row toggles that
+  one symbol's Σ line; two checkboxes answer for the whole table —
+  - **Show cumulative (Σ) for all rows** — the Σ line *beside* every daily line; each symbol
+    takes two rows.
+  - **Show cumulative (Σ) only** — the Σ line *instead of* every daily line; one row per symbol.
+
+  "Only" is the stronger claim, so it wins and the other box is **disabled rather than silently
+  overruled** — a live-looking checkbox that changes nothing is worse than one that says why.
+  Its own state is untouched, so unticking "only" hands the table straight back to what that box
+  says. `wlRetLines(cumAll, cumOnly)` is the whole rule in one expression and the one place it is
+  written down, because the failure that matters is the **empty table**: "only" hides the daily
+  lines, so the moment it stopped implying the Σ ones the panel would render as nothing but
+  column headers — the same shape of bug as a column layout resolving to no columns. `daily ||
+  cum` holds for all four settings and is unit-tested over them (`wl-ret-lines.test.mjs`); the
+  daily rows are **hidden, not removed**, so each keeps the Σ line already built from it and its
+  own click wiring. Both switches live outside the render, so a redraw — a list switch, Refresh,
+  the poll's self-heal — comes back in the view you were looking at rather than dropping you to
+  daily rows.
+
+  Striping is **by symbol, through a class the renderer sets**, not `nth-child`: a symbol's two
+  lines are one block and should share one stripe, and under "only" the hidden daily rows still
+  count for `nth-child`, which would land every visible Σ line on an odd row and stripe nothing
+  at all. The Σ line is compact (whole percent, no sign — the hue already carries direction) in
+  both modes, since the same figure must not change format with the view it is read in.

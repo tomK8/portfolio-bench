@@ -201,6 +201,16 @@ not a stale row) and negative quantities are kept (a short is a real position).
 `DividendService.reconcile` already treats an absent holding as zero shares, so dropping the row
 changes nothing there.
 
+**What counts as cash in a Roth export is the broker's own `Asset Classification` column**, not a
+list of tickers in `RothIraParser`. The sweep vehicle changes — a bank deposit (`BDP`) until
+2026-10-30, a government money fund (`WAGI`) after it — and each change arrives as a new row that a
+maintained list would read as an equity, which on a money fund means a $1.00 position the price
+jobs then chase. All of them carry `Cash, Money Funds and Bank Deposits`, which is also what the
+export's own header totals into the figure the account calls its cash, so one CASH row per account
+reconciles against it. `normaliseSecurityId`'s ticker pair stays as the fallback for an export that
+states no classification, and is the only test `History*.xlsx` can apply — it has no such column,
+and the sweep is booked nowhere in it, so the ledger never sees the money fund at all.
+
 File-detection: `Holdings*.xlsx` (Roth), `portfolio*.csv` (AJBell — SIPP or Dealing, told apart by
 the file's own `Portfolio` column), UUID `.csv` (II SIPP holdings; distinguished from II cash by
 header sniff), `cashstatements*.csv` (AJBell cash), `History*.xlsx` (Roth cash), UUID `.csv` with

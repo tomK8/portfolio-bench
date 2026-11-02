@@ -71,6 +71,34 @@ class RothIraParserTest {
         assertNull(RothIraParser.normaliseSecurityId(null));
     }
 
+    // --- isCashRow() ---
+
+    @Test
+    void isCashRow_readsTheBrokersOwnClassification() {
+        // WAGI is a government money fund the sweep started paying into on 2026-10-30. It is cash
+        // because the broker classifies it as cash, not because its ticker is listed here.
+        assertTrue(RothIraParser.isCashRow("WAGI", "Cash, Money Funds and Bank Deposits"));
+        assertTrue(RothIraParser.isCashRow("BDP", "Cash, Money Funds and Bank Deposits"));
+        assertTrue(RothIraParser.isCashRow("USD999997", "Cash, Money Funds and Bank Deposits"));
+    }
+
+    @Test
+    void isCashRow_leavesEquitiesAlone() {
+        assertFalse(RothIraParser.isCashRow("AAPL", "Equities"));
+        assertFalse(RothIraParser.isCashRow("NVDA", "Fixed Income"));
+        assertFalse(RothIraParser.isCashRow("MSFT", null));
+        assertFalse(RothIraParser.isCashRow("MSFT", ""));
+    }
+
+    @Test
+    void isCashRow_fallsBackToTheKnownTickersWhenNoClassificationIsStated() {
+        // Older exports carry no Asset Classification column, and History.xlsx never does.
+        assertTrue(RothIraParser.isCashRow("BDP", null));
+        assertTrue(RothIraParser.isCashRow("USD999997", null));
+        // The fallback is a ticker list, so it cannot know about the next sweep vehicle.
+        assertFalse(RothIraParser.isCashRow("WAGI", null));
+    }
+
     // --- parse() drops rows for positions that have been sold out ---
 
     /**
@@ -79,6 +107,15 @@ class RothIraParserTest {
      * shared fixture, which other assertions in this class depend on the exact shape of.
      */
     private Path writeHoldings(Path dir, Object[][] rows) throws Exception {
+        return writeHoldings(dir, rows, false);
+    }
+
+    /**
+     * {@code withClassification} appends the broker's Asset Classification as a fifth column, read
+     * from a fifth element on each row. Left off, the file states no classification at all — the
+     * shape of an older export, and what makes the ticker fallback the only test available.
+     */
+    private Path writeHoldings(Path dir, Object[][] rows, boolean withClassification) throws Exception {
         Path file = dir.resolve("Holdings.xlsx");
         try (Workbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("Holdings");
@@ -88,12 +125,14 @@ class RothIraParserTest {
             header.createCell(1).setCellValue("Quantity");
             header.createCell(2).setCellValue("Market Value");
             header.createCell(3).setCellValue("Gain/Loss $");
+            if (withClassification) header.createCell(4).setCellValue("Asset Classification");
             for (int i = 0; i < rows.length; i++) {
                 Row row = sheet.createRow(12 + i);
                 row.createCell(0).setCellValue((String) rows[i][0]);
                 for (int c = 1; c <= 3; c++) {
                     row.createCell(c).setCellValue(((Number) rows[i][c]).doubleValue());
                 }
+                if (withClassification) row.createCell(4).setCellValue((String) rows[i][4]);
             }
             try (var out = Files.newOutputStream(file)) {
                 wb.write(out);
@@ -149,6 +188,66 @@ class RothIraParserTest {
         assertEquals(0, holdings.get(0).getQuantity().compareTo(new BigDecimal("-14")));
     }
 
+    // --- parse() folds the sweep vehicle into CASH ---
+
+    @Test
+    void parse_mergesTheMoneyFundIntoCash(@TempDir Path dir) throws Exception {
+        // The Roth's sweep moved out of a bank deposit (BDP) and into a government money fund
+        // (WAGI) on 2026-10-30. Both are spendable balances the broker totals as the account's
+        // cash, so neither is a position: one CASH row carries them and the dollar cash beside it.
+        Path file = writeHoldings(dir, new Object[][]{
+                {"AAPL", 23, 7926.49, 1992.49, "Equities"},
+                {"USD999997", 0, 0, 0, "Cash, Money Funds and Bank Deposits"},
+                {"WAGI", 31721.03, 31721.03, 0, "Cash, Money Funds and Bank Deposits"},
+        }, true);
+
+        List<Holding> holdings = parser.parse(file);
+
+        assertEquals(List.of("AAPL", "CASH"),
+                holdings.stream().map(Holding::getSecurityId).toList(),
+                "the money fund is not a position of its own");
+
+        Holding cash = holdings.stream()
+                .filter(h -> h.getSecurityId().equals("CASH"))
+                .findFirst().orElseThrow();
+        assertEquals(0, cash.getCurrentMarketValue().compareTo(new BigDecimal("31721.03")),
+                "CASH is the money fund plus the dollar balance, matching the export's own "
+                        + "'Cash, Money Funds and Bank Deposits' header total");
+        assertEquals(0, cash.getQuantity().compareTo(new BigDecimal("31721.03")));
+    }
+
+    @Test
+    void parse_doesNotAbsorbAnEquityThatTheBrokerClassifiesAsOne(@TempDir Path dir) throws Exception {
+        // The classification is the whole test, so it has to hold both ways round.
+        Path file = writeHoldings(dir, new Object[][]{
+                {"MSFT", 35, 18266.85, 101.85, "Equities"},
+                {"WAGI", 100, 100, 0, "Cash, Money Funds and Bank Deposits"},
+        }, true);
+
+        List<Holding> holdings = parser.parse(file);
+
+        assertEquals(List.of("MSFT", "CASH"),
+                holdings.stream().map(Holding::getSecurityId).toList());
+        assertEquals(0, holdings.get(0).getCurrentMarketValue().compareTo(new BigDecimal("18266.85")));
+    }
+
+    @Test
+    void parse_keepsAZeroMoneyFundBalance(@TempDir Path dir) throws Exception {
+        // The zero-quantity drop is about sold-out positions. A cash row the broker classifies as
+        // cash is exempt whatever its ticker, exactly as BDP and USD999997 are.
+        Path file = writeHoldings(dir, new Object[][]{
+                {"META", 14, 7699.23, -1713.71, "Equities"},
+                {"WAGI", 0, 0, 0, "Cash, Money Funds and Bank Deposits"},
+        }, true);
+
+        List<Holding> holdings = parser.parse(file);
+
+        Holding cash = holdings.stream()
+                .filter(h -> h.getSecurityId().equals("CASH"))
+                .findFirst().orElseThrow(() -> new AssertionError("CASH entry should survive at zero"));
+        assertEquals(0, cash.getQuantity().compareTo(BigDecimal.ZERO));
+    }
+
     // --- parse() with real file ---
 
     @Test
@@ -175,11 +274,12 @@ class RothIraParserTest {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Expected a GOOGL holding"));
 
-        // BDP and USD999997 must be merged into exactly one CASH entry
+        // Every cash-classified row must be merged into exactly one CASH entry
         long cashCount = holdings.stream()
                 .filter(h -> h.getSecurityId().equals("CASH"))
                 .count();
-        assertEquals(1, cashCount, "BDP and USD999997 should be merged into a single CASH entry");
+        assertEquals(1, cashCount,
+                "BDP, USD999997 and the WAGI money fund should be merged into a single CASH entry");
 
         Holding cash = holdings.stream()
                 .filter(h -> h.getSecurityId().equals("CASH"))
@@ -190,6 +290,7 @@ class RothIraParserTest {
         holdings.forEach(h -> {
             assertNotEquals("BDP", h.getSecurityId());
             assertNotEquals("USD999997", h.getSecurityId());
+            assertNotEquals("WAGI", h.getSecurityId());
         });
 
         // Non-cash holdings should have positive quantity, avgPricePaid, and currentMarketValue

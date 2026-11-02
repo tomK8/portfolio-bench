@@ -609,16 +609,22 @@ public class EarningsCalendarService {
     /**
      * Events for one date: served from cache when fresh, otherwise live-fetched and cached. A live
      * failure degrades to cached rows (with a warning) so the tab still renders last-known data.
+     *
+     * <p>A past date is fresh once it has {@linkplain #settled settled} — <i>or</i> while it is
+     * still inside {@link #REFRESH_TTL}, which is the render path's own bound on the retry
+     * {@code settled} now leaves open for a date the feed has not flipped yet. Without it a tab
+     * reload during that window would be one more GET every time, for an answer that cannot have
+     * changed since the last one minutes ago.
      */
     private List<EarningsEvent> eventsFor(LocalDate date, LocalDate today, boolean forceRefresh,
                                           List<String> warnings) {
         Instant fetchedAt = repo.lastFetched(date);
         boolean cached = fetchedAt != null;
         List<EarningsEvent> cachedRows = cached ? repo.load(date) : List.of();
+        boolean recent = cached
+                && Duration.between(fetchedAt, Instant.now()).compareTo(REFRESH_TTL) < 0;
         boolean fresh = cached && !forceRefresh
-                && (date.isBefore(today)
-                    ? settled(cachedRows, date, fetchedAt)
-                    : Duration.between(fetchedAt, Instant.now()).compareTo(REFRESH_TTL) < 0);
+                && (date.isBefore(today) ? settled(cachedRows, date, fetchedAt) || recent : recent);
         if (fresh) return cachedRows;
 
         List<EarningsEvent> live = feed.forDate(date);
@@ -653,11 +659,11 @@ public class EarningsCalendarService {
      *   <li><b>It has no rows.</b> A weekend or a holiday publishes no roster, now and forever, so
      *       asking again could only ever cost a request. Without this clause every past weekend in
      *       the back window would be re-fetched on every load.
-     *   <li><b>We already asked it after it passed.</b> Whatever came back is the feed's answer,
-     *       including "still no actuals", and asking a second time would be asking the same question
-     *       of the same data. This is what keeps a date the feed never settles from being re-fetched
-     *       on every single page load — the one failure mode a freshness rule based on content
-     *       rather than bookkeeping can have.
+     *   <li><b>We already asked it after it passed, and the feed had flipped.</b> Whatever came
+     *       back then is the feed's answer, including "still no actuals", and asking a second time
+     *       would be asking the same question of the same data. This is what keeps a date the feed
+     *       never settles from being re-fetched on every single page load — the one failure mode a
+     *       freshness rule based on content rather than bookkeeping can have.
      * </ol>
      *
      * <p><b>"After it passed" is judged on the feed's own clock, not ours.</b> The flip happens on
@@ -665,6 +671,25 @@ public class EarningsCalendarService {
      * and has <i>not</i> asked a settled date. Comparing in {@link #FEED_ZONE} is what stops a
      * late-night fetch from recording a permanent "already asked" against a date that had not
      * finished, which would lose that day's actuals for good.
+     *
+     * <p><b>And the clock alone is not enough: the answer has to have been the settled one.</b>
+     * The date passing and the roster flipping are hours apart, and in between the feed serves the
+     * scheduled shape — session, consensus, last year's figure — for a date that is already in the
+     * past. Asking in that window and calling it answered is what buried 2026-10-29: fetched at
+     * 06:03 New York the next morning, it was marked asked-after-the-fact and never re-read, so the
+     * roster kept last year's figures (which the parser then read as actuals — the other half of
+     * that bug, fixed in {@code NasdaqEarningsFetcher}) and the real ones never arrived. So the
+     * third clause also requires the cached roster not to {@linkplain #looksScheduled still be in
+     * the scheduled shape}: if it is, the feed has not answered the question yet and the date is
+     * asked again.
+     *
+     * <p>The retry that opens up is bounded by content, as the rest of this is. A date that flips
+     * with no actual at all — every row's figure blank — keeps the session and last-year fields its
+     * scheduled fetch cached (that is exactly what {@link #mergeSettled} is for), so it reads as
+     * scheduled and is re-asked while it stays inside the back window: at most once per back-warm
+     * pass, and on the tab no more often than {@link #REFRESH_TTL}. One GET for a date that
+     * genuinely has nothing to show is the cheaper of the two mistakes — the other one is silently
+     * publishing last year's quarter as this one's.
      */
     static boolean settled(List<EarningsEvent> cachedRows, LocalDate date, Instant fetchedAt) {
         if (cachedRows == null || cachedRows.isEmpty()) return true;
@@ -672,7 +697,26 @@ public class EarningsCalendarService {
             if (e.reported()) return true;
         }
         if (fetchedAt == null) return false;
-        return fetchedAt.atZone(FEED_ZONE).toLocalDate().isAfter(date);
+        if (!fetchedAt.atZone(FEED_ZONE).toLocalDate().isAfter(date)) return false;
+        return !looksScheduled(cachedRows);
+    }
+
+    /**
+     * Whether a cached roster is still the scheduled shape — i.e. whether what we hold is the feed
+     * answering about a report that had not happened yet.
+     *
+     * <p>Tested on the two fields the settled shape drops: the {@code BMO}/{@code AMC} session and
+     * last year's EPS. Any row carrying either is enough, because the feed flips a whole date at
+     * once, and a roster where every row has lost both is one the flip has been through. A merged
+     * roster reads as scheduled too, by design: the merge restores exactly these two fields from
+     * the cache, so the only roster this can misread is one that flipped and brought nothing back —
+     * which is the bounded retry the caller's doc describes, not a wrong figure.
+     */
+    private static boolean looksScheduled(List<EarningsEvent> rows) {
+        for (EarningsEvent e : rows) {
+            if (e.lastYearEps() != null || isSession(e.time())) return true;
+        }
+        return false;
     }
 
     /**

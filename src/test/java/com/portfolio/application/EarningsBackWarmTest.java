@@ -81,6 +81,12 @@ class EarningsBackWarmTest {
         return new EarningsEvent(d, symbol, symbol + " Inc", "TBD", 1_000_000_000L, 4.71, 9, null, 4.89);
     }
 
+    private static EarningsEvent blank(LocalDate d, String symbol) {
+        // Flipped, but with nothing to show for it — the date whose figures the feed never
+        // publishes. Settled in shape (no session, no last-year figure), empty in content.
+        return new EarningsEvent(d, symbol, symbol + " Inc", "TBD", 1_000_000_000L, 4.71, 9, null, null);
+    }
+
     private EarningsCalendarService service(FakeFeed feed) {
         // warmBack touches the feed and the calendar repo and nothing else, so the rest stays null
         // rather than being stood up to be ignored.
@@ -134,15 +140,30 @@ class EarningsBackWarmTest {
     }
 
     @Test
-    void aDateAlreadyAskedAfterItPassedIsNotAskedForever() throws Exception {
-        // The bound on the retry. The feed has given its answer for this date — still no figures —
-        // and without this clause every page load would ask again, for good.
+    void aDateAlreadyAskedAfterItFlippedIsNotAskedForever() throws Exception {
+        // The bound on the retry. The feed has flipped this date — no session, no last-year figure
+        // — and still publishes no actual, which is its answer; without this clause every page load
+        // would ask again, for good.
         var repo = new EarningsCalendarRepository(new JdbcConnectionFactory(dbDir));
-        repo.save(TARGET, List.of(scheduled(TARGET, "MSFT")));   // stamped "now", i.e. today
+        repo.save(TARGET, List.of(blank(TARGET, "MSFT")));       // stamped "now", i.e. today
 
-        var feed = new FakeFeed(Map.of(TARGET, List.of(scheduled(TARGET, "MSFT"))));
+        var feed = new FakeFeed(Map.of(TARGET, List.of(blank(TARGET, "MSFT"))));
         service(feed).warmBack(SPAN);
         assertFalse(feed.asked.contains(TARGET));
+    }
+
+    @Test
+    void aDateAskedBeforeTheFeedFlippedIsAskedAgain() throws Exception {
+        // 2026-10-29, end to end. The date had passed when we asked — at 06:03 New York the next
+        // morning — so the old bound called it answered and closed it for good, while what came
+        // back was still the scheduled shape: the feed had not got to the date yet. Asking a second
+        // time is the only way the figures ever arrive.
+        var repo = new EarningsCalendarRepository(new JdbcConnectionFactory(dbDir));
+        repo.save(TARGET, List.of(scheduled(TARGET, "MSFT")));   // stamped "now" = after TARGET
+
+        var feed = new FakeFeed(Map.of(TARGET, List.of(settled(TARGET, "MSFT"))));
+        assertEquals(1, service(feed).warmBack(SPAN));
+        assertEquals(4.89, repo.load(TARGET).get(0).actualEps(), 1e-9, "the figures arrived");
     }
 
     @Test

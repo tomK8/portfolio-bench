@@ -112,14 +112,38 @@ class EarningsReportedTest {
     }
 
     @Test
-    void aDateAlreadyAskedAfterItPassedIsNotAskedAgain() {
-        // The clause that bounds the retry. If the feed still has no actuals for a date we asked
-        // about the following day, that is its answer — and without this the date would be
-        // re-fetched on every page load forever, which is the one failure a content-based
-        // freshness rule can have.
-        List<EarningsEvent> cached = List.of(scheduled("MSFT", "AMC", 4.71));
+    void aDateAlreadyAskedAfterItFlippedIsNotAskedAgain() {
+        // The clause that bounds the retry. If the feed has flipped the roster — no session, no
+        // last-year figure — and still publishes no actual, that is its answer; without this the
+        // date would be re-fetched on every page load forever, which is the one failure a
+        // content-based freshness rule can have.
+        List<EarningsEvent> cached = List.of(settledRow("MSFT", 4.71, null));
         assertTrue(EarningsCalendarService.settled(cached, DATE, atNewYork("2026-10-28 07:00")),
-                "asked after the date passed; its answer stands");
+                "asked after the flip; its answer stands");
+    }
+
+    @Test
+    void askingBeforeTheFeedFlippedDoesNotCountAsAsking() {
+        // What buried 2026-10-29. The date had passed, so the old third clause called it answered —
+        // but the roster was still the scheduled shape, session and last-year figure intact, which
+        // is the feed saying it has not got to this date yet rather than saying there is nothing.
+        // (It was worse than a blank: that shape also carries an eps column holding last year's
+        // figure, which the parser then read as the actual. SNDK's year-ago $0.90 was published
+        // against a $46.19 consensus as a 98% miss on a quarter that beat at $48.92.)
+        List<EarningsEvent> cached = List.of(scheduled("MSFT", "AMC", 4.71));
+        assertFalse(EarningsCalendarService.settled(cached, DATE, atNewYork("2026-10-28 06:03")),
+                "the date passed but the roster had not flipped — ask again");
+    }
+
+    @Test
+    void aLastYearFigureAloneIsEnoughToReadAsScheduled() {
+        // The flip drops both fields together, so either one surviving says the same thing. A row
+        // whose session the feed never supplied is the case the session test alone would miss.
+        EarningsEvent noSession = new EarningsEvent(DATE, "MSFT", "MSFT Inc", "TBD",
+                1_000_000_000L, 4.71, 9, 1.10, null);
+        assertFalse(EarningsCalendarService.settled(List.of(noSession), DATE,
+                        atNewYork("2026-10-28 06:03")),
+                "last year's figure is still there, so this is the scheduled shape");
     }
 
     @Test

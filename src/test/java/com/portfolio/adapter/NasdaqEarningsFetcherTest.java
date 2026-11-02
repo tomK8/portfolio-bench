@@ -123,6 +123,52 @@ class NasdaqEarningsFetcherTest {
         assertEquals(-0.21, settled("BA").epsForecast(), 1e-9);
     }
 
+    // ---- the transitional shape: passed, but not flipped yet --------------------
+
+    private List<EarningsEvent> parseTransitional() throws Exception {
+        return parse("nasdaq-earnings-transitional-sample.json", LocalDate.parse("2026-10-29"));
+    }
+
+    private EarningsEvent transitional(String symbol) throws Exception {
+        return parseTransitional().stream().filter(e -> e.symbol().equals(symbol))
+                .findFirst().orElseThrow();
+    }
+
+    @Test
+    void anEpsOnAStillScheduledRowIsNotAnActual() throws Exception {
+        // The feed fills in an eps column for a date that has passed before it flips the roster,
+        // and fills it with LAST YEAR's figure. Reading it as an actual published SNDK's year-ago
+        // $0.90 against a $46.19 consensus as a 98% miss on a quarter that beat at $48.92.
+        EarningsEvent sndk = transitional("SNDK");
+        assertFalse(sndk.reported(), "the row still carries the last-year pair, so it is scheduled");
+        assertNull(sndk.actualEps());
+        assertEquals(0.90, sndk.lastYearEps(), 1e-9, "which is where that figure belongs");
+        assertEquals(46.19, sndk.epsForecast(), 1e-9);
+        assertEquals("AMC", sndk.time());
+    }
+
+    @Test
+    void aBlankLastYearPairIsStillTheScheduledShape() throws Exception {
+        // MRDN has no year-ago quarter to show, so lastYearEPS is empty — but the keys are there,
+        // which is the shape. Its "$0" eps is the manufactured zero the structural test avoids:
+        // taken as an actual it is a company reporting exactly nothing against a $0.14 consensus.
+        EarningsEvent mrdn = transitional("MRDN");
+        assertNull(mrdn.lastYearEps());
+        assertNull(mrdn.actualEps(), "a blank last-year value does not make the row settled");
+        assertFalse(mrdn.reported());
+    }
+
+    @Test
+    void theShapeIsJudgedOnTheKeysNotTheNumbers() throws Exception {
+        // Deliberately not "eps equals lastYearEPS, so distrust it": a company that earns exactly
+        // what it earned a year ago is an ordinary quarter. The settled fixture has no last-year
+        // pair at all, so every row there keeps its actual — including ECL, which matched its
+        // consensus to the cent.
+        assertTrue(parseTransitional().stream().noneMatch(EarningsEvent::reported));
+        assertTrue(parseSettled().stream().allMatch(EarningsEvent::reported));
+        assertEquals(2.18, settled("ECL").actualEps(), 1e-9);
+    }
+
     @Test
     void anActualWithNoConsensusIsStillAnActual() throws Exception {
         // WSO.B reported a figure no analyst covered. Dropping the row would lose a real report;

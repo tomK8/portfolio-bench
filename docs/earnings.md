@@ -46,18 +46,23 @@ deliberately a **separate port** (`port/EarningsCalendarFeed`, `forDate(LocalDat
   endpoints — a pure feed read, independent of the price/cash pipelines (like Open orders). Not
   wired into `PriceFetchSupport` (no Yahoo prices involved).
 
-## The feed answers in two shapes, and flips per date
+## The feed answers in three shapes, and flips per date
 
 The same `?date=` GET returns a different row shape depending on whether that date has passed, and
 it flips **the whole roster at once, not row by row** — a company that reported before this
 morning's open still shows no actual until tomorrow.
 
-| | A date still ahead (today included) | A date that has passed |
-|---|---|---|
-| `epsForecast`, `noOfEsts` | yes | yes |
-| `time` | `time-pre-market` / `time-after-hours` | always `time-not-supplied` |
-| `lastYearEPS`, `lastYearRptDt` | yes | **gone** |
-| `eps` (what was reported), `surprise` | — | yes |
+| | A date still ahead (today included) | **Passed, not flipped yet** | A date that has flipped |
+|---|---|---|---|
+| `epsForecast`, `noOfEsts` | yes | yes | yes |
+| `time` | `time-pre-market` / `time-after-hours` | unchanged | always `time-not-supplied` |
+| `lastYearEPS`, `lastYearRptDt` | yes | **still there** | **gone** |
+| `eps` | — | **present, holding last year's figure** | what was reported |
+| `surprise` | — | — | yes |
+
+The middle column is a transitional window of hours, and it is the subject of its own section
+below. Read "has passed" as "has flipped" throughout the rest of this file: the calendar date
+rolling over and the roster flipping are hours apart, and the first on its own settles nothing.
 
 Three consequences, each of which is a rule somewhere in the code:
 
@@ -72,7 +77,10 @@ Three consequences, each of which is a rule somewhere in the code:
   feed's answer stands, including "still nothing", so a date it never settles is not re-fetched on
   every page load. "After it passed" is judged in **US Eastern**, the feed's own clock — 00:30 in
   London is still the previous evening in New York, and judging it locally would permanently mark a
-  date asked-after-settlement and lose that day's figures for good.
+  date asked-after-settlement and lose that day's figures for good. **The clock alone is not
+  enough either**: the third clause also requires the cached roster not to still be in the
+  scheduled shape, because asking before the feed has flipped the date is not asking the question —
+  the next section is what that cost.
 - **A settled re-fetch is merged, never swapped in.** The cache replaces per date on purpose, so a
   company dropped from a roster disappears — which means a straight save of a settled roster would
   also erase the `BMO`/`AMC` marker from every row of a date already fetched. That is not cosmetic:
@@ -96,6 +104,59 @@ Three consequences, each of which is a rule somewhere in the code:
   - **Null when there is nothing to divide**: no actual, no consensus (a figure no analyst covers
     is not a beat of the whole amount), or a consensus of exactly zero, where the difference is
     real but no percentage of it exists.
+
+## The shape in between: passed, but not flipped (2026-11-02)
+
+**SNDK's quarter was published as a 98% miss on a quarter that beat.** The Reminders screen showed
+`Consensus 46.19 / Actual 0.90 / −98.1% missed` for a print that came in at **$48.92**, a 5.9%
+beat. It was not SNDK's row that was wrong: **270 of the 303 rows cached for 2026-10-29 carried the
+year-ago quarter as the actual** — AMZN 1.95 for 1.89, INTC 0.11 for 0.41, LLY 7.02 for 7.48, MA
+4.38 for 5.31, MPWR 3.72 for 6.03. Every one of them is that symbol's *last year's* EPS.
+
+Two independent bugs had to line up, one in each half of the pipeline.
+
+**The feed fills in `eps` before it has the figure, with last year's.** In the hours after a date
+passes and before the roster flips, the rows come back in the scheduled shape — session intact,
+`lastYearRptDt`/`lastYearEPS` intact — with an `eps` column added holding the same number as
+`lastYearEPS`. `NasdaqEarningsFetcher.parse` took `eps` wherever it appeared, so what landed in
+`actual_eps` was the year-ago quarter, and `surprisePct` then measured it honestly against this
+year's consensus. 2026-10-29 was fetched at **06:03 New York on the 30th** — inside that window.
+
+**And the shapes are now told apart structurally, on the last-year pair.** A row carrying
+`lastYearRptDt` or `lastYearEPS` is a scheduled row and its `eps` is not read at all. Those two
+keys are the scheduled shape's own signature — present on all 1044 scheduled rows sampled across
+three forward dates, absent from all 634 settled rows across three past dates — and the test is
+**key presence, not value**: a company with no year-ago quarter (MRDN) sends a blank `lastYearEPS`
+beside an `eps` of `$0`, which read as an actual is a manufactured zero. It is deliberately *not*
+"`eps` equals `lastYearEPS`, so distrust it": a company that earns exactly what it earned a year
+ago is an ordinary quarter, and that heuristic is the same magic threshold
+[fundamentals](fundamentals.md) rejects for BRK.B's P/B.
+
+**The second bug is why it was permanent.** `settled`'s third clause — "we already asked it after
+it passed" — fired on that 06:03 fetch, so the date was closed and never re-read. Without that, the
+wrong figures would have been replaced within hours by the next back-warm pass. Fixing only the
+parser would have been worse in a quiet way: the date would have been closed *blank* instead of
+wrong, and nothing on the screen would have said so. So the clause now also requires the cached
+roster to have stopped looking scheduled (`looksScheduled`: any row still carrying a session or a
+last-year figure). **A date that has passed and a date the feed has answered are two different
+things.**
+
+The retry this opens up is bounded by content, like the rest of the rule. A date that flips with no
+actual at all — every row's figure blank — keeps the session and last-year fields its scheduled
+fetch cached, which is exactly what `mergeSettled` is for, so it reads as scheduled and is asked
+again while it stays inside the back window: at most once per back-warm pass, and on the tab no
+more often than `REFRESH_TTL` (the freshness test in `eventsFor` gained that `|| recent` arm for
+precisely this). One GET for a date that genuinely has nothing to show is the cheaper of the two
+mistakes.
+
+Repairing the live cache was one `UPDATE earnings_calendar SET actual_eps = NULL WHERE date =
+'2026-10-29'` — not a delete, because the settled roster no longer carries the `BMO`/`AMC` markers
+and last year's figures, and the merge needed them still there. The next back-warm pass refilled
+the date from the flipped roster. **The corruption is not detectable after the fact**, which is why
+it had to be repaired by hand and by date: a merged row legitimately carries a last-year figure
+*and* an actual, so "both fields present" marks nothing, and `actual == lastYear` is a real result
+for ~3% of rows on any ordinary date. What identified 2026-10-29 was that **every** row with both
+had them equal (297 of 297, against 7 of 249 on the 28th).
 
 `warmBack` is what asks the question nobody else would. The Earnings tab's own back window covers
 the two days it shows, but the [reminders](reminders.md) screen has no fetch of its own — it is read

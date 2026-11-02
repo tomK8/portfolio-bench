@@ -19,7 +19,9 @@ import java.util.*;
  * - Row 11:    column headers
  * - Row 12+:   one holding per row
  * <p>
- * Cash instruments (BDP, USD999997) are merged into a single CASH entry.
+ * Cash rows are merged into a single CASH entry, identified by the broker's own
+ * {@code Asset Classification} column rather than by a list of tickers here; see
+ * {@link #isCashRow}.
  * Average price paid is derived as (Market Value - Gain/Loss $) / Quantity.
  * Zero-quantity rows — a position the broker still lists after it has been sold out — are
  * dropped; see the comment at the filter for why.
@@ -31,11 +33,15 @@ public class RothIraParser implements AccountParser {
     private static final Currency CURRENCY = Currency.getInstance("USD");
 
     private static final String COL_SECURITY_ID = "Security ID";
+    private static final String COL_ASSET_CLASS = "Asset Classification";
     private static final String COL_QUANTITY = "Quantity";
     private static final String COL_MARKET_VALUE = "Market Value";
     private static final String COL_GAIN_LOSS = "Gain/Loss $";
 
     private static final int HEADER_ROW_INDEX = 11;
+
+    /** The broker's own Asset Classification for everything spendable: cash, sweep deposits, money funds. */
+    private static final String CASH_ASSET_CLASS = "Cash, Money Funds and Bank Deposits";
 
     static String normaliseSecurityId(String rawId) {
         if (rawId == null) return null;
@@ -44,6 +50,29 @@ public class RothIraParser implements AccountParser {
             case "USD999997", "BDP" -> CASH_ID;
             default -> id;
         };
+    }
+
+    /**
+     * Whether a holdings row is cash, which is the broker's judgement and not ours.
+     * <p>
+     * The sweep vehicle changes: the account paid into a bank deposit (BDP) until 2026-10-30 and
+     * into a government money fund (WAGI) after it, and the next change will be announced the same
+     * way — by a row appearing. All three have always carried the same Asset Classification,
+     * {@value #CASH_ASSET_CLASS}, and the export's own header totals that classification into the
+     * figure the account calls its cash, so reading the column tracks the broker instead of
+     * requiring a ticker to be added here after each switch. A money fund at a $1.00 NAV with no
+     * gain is cash that earns while it waits to be spent; the Sub-Asset Classification splitting it
+     * from {@code Cash} and {@code FDIC Eligible Bank Deposits} is a distinction about where the
+     * balance is parked, not about whether it can buy anything.
+     * <p>
+     * The ticker fallback covers an export that states no classification — older files, and the
+     * synthetic fixture — and is the only test the cash statement's {@code History*.xlsx} can
+     * apply, since that file has no such column.
+     */
+    static boolean isCashRow(String rawId, String assetClassification) {
+        return (assetClassification != null
+                && CASH_ASSET_CLASS.equalsIgnoreCase(assetClassification.trim()))
+                || CASH_ID.equals(normaliseSecurityId(rawId));
     }
 
     @Override
@@ -85,7 +114,8 @@ public class RothIraParser implements AccountParser {
                 BigDecimal quantity = getDecimal(row, colIndex, COL_QUANTITY);
                 if (quantity == null) continue;
 
-                String id = normaliseSecurityId(rawId);
+                boolean isCash = isCashRow(rawId, getString(row, colIndex, COL_ASSET_CLASS));
+                String id = isCash ? CASH_ID : normaliseSecurityId(rawId);
 
                 // A fully-sold position keeps being exported for a while with zero shares and zero
                 // value but a live price — MRNA and MRVL both did on 2026-08-21, the day they were
@@ -95,12 +125,12 @@ public class RothIraParser implements AccountParser {
                 // it is what makes the view read the same either way. Cash is exempt: a zero cash
                 // balance is a fact about the account, not a stale row. A short position (negative
                 // quantity) is real and is kept.
-                if (!CASH_ID.equals(id) && quantity.signum() == 0) continue;
+                if (!isCash && quantity.signum() == 0) continue;
 
                 BigDecimal mktVal = getDecimal(row, colIndex, COL_MARKET_VALUE);
                 BigDecimal gainLoss = getDecimal(row, colIndex, COL_GAIN_LOSS);
 
-                if (CASH_ID.equals(id)) {
+                if (isCash) {
                     cashQuantity = cashQuantity.add(quantity);
                     if (mktVal != null) cashMarketValue = cashMarketValue.add(mktVal);
                     if (mktVal != null && gainLoss != null) {

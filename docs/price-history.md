@@ -216,3 +216,62 @@ never waits** — the yield appears on the next load, the same bargain the secto
 open-orders quote warmer strike. Loading Allocation → Breakdown once backfilled 54 symbols / 2,552
 payments unattended. `POST /rebuild-prices` does the same in one shot.
 
+
+## Splits: the ledger carries them, not the price column
+
+`split_factor` is **derived from Yahoo's own event stream**, never from a break in the series.
+`applyAdjustments` walks bars backward and multiplies in the ratio of every split dated *strictly
+after* the bar, so `close × split_factor` recovers the raw close in basis-at-date — which is the
+basis the ledger's share count is already in, because `CashLedgerReconstructor` replays splits
+forward. The two sides meet without either knowing about the other, and that is the whole design:
+a split needs no price repair, only a ledger row.
+
+**A feed can simply not publish the split.** CSH2 split 250:1 on 2026-10-27 and six days later
+Yahoo still served `events: {}` — no split event at all, `close` stepping 125,770 → 503.40 GBp
+with no retro-adjustment, and `adjclose` identical to `close` on *both* sides of the break. A full
+`POST /rebuild-prices` re-fetched all 413 bars and changed nothing, so this is not a staleness
+problem on our side. With no event there is no `split_factor` to derive, and 1.0 on every bar is
+the *honest* value while the column is unadjusted: pre-split, `125,770 × 1` against the ledger's
+55 shares values correctly.
+
+**So the break is on the quantity side, and AJ Bell will never close it.** Their cash statement is
+cash-only — a split moves no cash, so it books no row — and the only two splits that ever reached
+this ledger came from Roth's `History` export, which does carry `Stock Split Received` lines.
+CSH2 was the first AJ Bell split, so the ledger stayed at 55 shares against the broker's own
+13,750 and the value path computed 55 × 503.4p = **£276.87 against a real £69,217**. That phantom
+£68,896 hole sat in everything fed by `PortfolioValueService` — Value over time showed
+**−£60,902 on 27 Oct** when the book was really **+£8,038**, and Period diff 26→28 Oct read
+**−4.33%** against a real **+0.95%** — and onward into Attribution, Returns, the benchmark
+comparison, Scenario and What-if. Holdings and Live were unaffected throughout: they use the
+broker's own quantity and price, which is also why nothing on screen contradicted anything.
+
+**An AJ Bell split is therefore hand-entered**, as a zero-amount `TRANSACTION` row — the shape
+`CashLedgerReconstructor.split` already reads, `TradeNotesService.pricePerShare` already prices as
+null, and `LedgerCorrections` already refuses to pair (it requires one negative and one positive
+amount, so a zero-amount row is neither leg). Three things have to be right:
+
+- **The date is the ex-date**, the first session on the new basis. Dating it a day early makes the
+  old basis's price meet the new basis's quantity: CSH2 on 26 Oct would have valued 13,750 ×
+  125,770p = £17.3m.
+- **The quantity is the delta, not the new total** — 13,695, not 13,750.
+- **The balance columns carry the preceding row's balance**, not the zero placeholder
+  `saveTransfer` uses. `latestCashBalances()` filters only `TRANSFER`, so a `TRANSACTION` row
+  *does* set the reported balance when it is the account's newest — and CSH2's was, the ledger
+  ending 2026-10-23. A zero there would have reported AJ Bell's cash as £0.00. `fx_to_gbp` must
+  also be non-zero or `rebuildBalanceChain` writes `cash_balance_gbp = 0` on its next pass.
+
+**The row stays correct if Yahoo ever does adjust**, which is why it is the right fix rather than
+editing `split_factor` by hand. Once the event is published the fetcher derives 250 for every
+pre-split bar and Yahoo restates those closes to 503.08; `503.08 × 250` is 125,770 again, against
+the same unchanged ledger quantity of 55. Both bases line up in either world because the ledger
+row states the corporate action, not a correction to a price. The one bar at risk is the boundary
+itself, and only if Yahoo dates the event to the last pre-split session rather than the ex-date —
+`applyAdjustments` keys on `isAfter(bar.date())`, so a mis-dated event would leave 26 Oct holding
+an adjusted close with a `split_factor` of 1.
+
+**Nothing noticed, and nothing would have.** `ReconciliationService` checks price-data *coverage*
+— no history, stale history, missing intraday, odd currency — not share counts, so it reported
+`positionsChecked: 52, issues: []` throughout. `DividendService.reconcile` does compare
+reconstructed shares against the holdings file and warns past 0.01, but CSH2 accumulates and pays
+nothing, so it was never asked. A ledger-vs-holdings quantity check is the detector this incident
+argues for; it does not exist yet.

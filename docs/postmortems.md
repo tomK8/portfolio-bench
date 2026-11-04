@@ -107,7 +107,8 @@ disagree; this is why.
 £4,224.66 of phantom cost. TSM carried three pairs and lost nothing — its cancellations happened to
 line up with the oldest surviving lot anyway, which is exactly why this stayed invisible.
 
-**Fix.** The rule moved to `domain/LedgerCorrections`, where every lot engine reaches it, and is
+**Fix.** The rule — until then a private `pruneCorrections` inside a single service — moved to
+`domain/LedgerCorrections`, where every lot engine reaches it, and is
 applied inside `CashLedgerReconstructor.reconstructByAccount` and `PositionIrr.compute` so all
 eleven readers get one answer. A reversal that is invisible to one reader and a sale to the next is
 not a presentation choice — the two readers disagree about what happened.

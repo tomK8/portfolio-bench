@@ -10,6 +10,11 @@ adapter needs no persistence dependency), caches it, and `reload()`s after every
 singleton's ~30 consumers pick it up with no restart. The no-arg constructor (properties only) is
 kept because ~50 tests use it.
 
+**Both sides key through `Instruments.matchKey`** — the description lowercased, every run of
+non-alphanumerics collapsed to a single space, trimmed. The stored keyword and the broker's own
+description are normalised by that one function, so a difference of case, punctuation or spacing in
+an export cannot hide a mapping that is really there. Nothing else builds that key itself.
+
 Three things happen together on save, and all three are load-bearing:
 1. **Check before saving.** `YahooPriceFetcher.probe(ticker)` — one chart call returning
    found/reachable plus the listing's **name, currency, exchange and last close**. Those context

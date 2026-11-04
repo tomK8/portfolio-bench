@@ -3,14 +3,19 @@
 Guidance for Claude Code in this repository. Prefer reading the code; this file covers the
 cross-cutting bits that aren't obvious from any single file.
 
-**This file is the index, not the manual.** It holds what applies everywhere — layering, the
-FX and null conventions, the endpoint map, the "how to add X" recipes — plus a routing table
-to `docs/`, which holds the per-feature detail and the reasoning behind it. Read the relevant
-`docs/` file *before* changing code in that area; each index line names the invariant it
-guards, so the guard fires even if you never open the file.
+**This file is the index, not the manual.** It holds what applies everywhere — layering, the FX and
+null conventions, the "how to add X" recipes — plus a routing table to `docs/`, which holds the
+per-feature detail and the reasoning behind it. Read the relevant `docs/` file *before* changing
+code in that area; each index line names the invariant it guards, so the guard fires even if you
+never open the file.
 
-Do not use `@docs/...` import syntax here. Claude Code inlines `@` imports at startup, which
-would put every doc back into every session and defeat the split.
+**An index row names an invariant in one line. The moment it starts explaining one, it belongs in
+the `docs/` file it points at** — see [Keeping this file small](#keeping-this-file-small). That is
+enforced by `DocsIndexTest`, not by discipline: the file is on a size ratchet and no row may exceed
+45 words.
+
+Do not use `@docs/...` import syntax here. Claude Code inlines `@` imports at startup, which would
+put every doc back into every session and defeat the split.
 
 ## Build, test & run
 
@@ -21,7 +26,7 @@ mvn test -Dtest=AJBellSippParserTest   # single class
 mvn package -DskipTests                # jar
 mvn spring-boot:run                    # foreground (dev)
 scripts/start.sh / scripts/stop.sh     # daemon (writes ~/log/portfolio-bench.log)
-node --test src/test/js/*.test.mjs   # JS unit tests
+node --test src/test/js/*.test.mjs     # JS unit tests
 ```
 
 Server binds to loopback only, no auth — single-user local tool. Override directories with
@@ -29,116 +34,46 @@ Server binds to loopback only, no auth — single-user local tool. Override dire
 `~/Downloads`, `~/Documents/Investing`, `~/Documents`).
 
 Daemon mode: `start.sh` backgrounds `target/portfolio-bench-1.0-SNAPSHOT.jar`, writes a PID file,
-rotates the previous log to a timestamped name. The JVM's stdout/stderr is redirected into the
-log file, so non-Logback output (early classloader errors, OOM dumps) is captured too.
+rotates the previous log to a timestamped name. The JVM's stdout/stderr is redirected into the log
+file, so non-Logback output (early classloader errors, OOM dumps) is captured too.
 `spring.main.banner-mode=log` routes the Spring banner through SLF4J.
 
-**`start.sh` runs a prebuilt jar and never rebuilds.** After any change: `mvn package` first,
-then restart — otherwise you are testing the old build.
+**`start.sh` runs a prebuilt jar and never rebuilds.** After any change: `mvn package` first, then
+restart — otherwise you are testing the old build.
 
-### Demo mode
+**Demo mode:** `python3 scripts/make-demo-data.py` then `scripts/demo.sh` (:8081, own PID/log, so
+`start.sh` is unaffected). Figures come from a generator profile **outside this repository**
+(`PB_DEMO_PROFILE`); there is no fallback and nothing builds without it. **How it produces them is
+documented nowhere — in this repo, the code, the history or the UI — and must stay that way**:
+`demo/` and the profile are uncommitted and this repo is public.
+See [demo-mode.md](docs/demo-mode.md).
 
-```bash
-python3 scripts/make-demo-data.py   # demo/input and demo/db
-scripts/demo.sh                     # :8081, beside the real daemon
-```
-
-The same jar pointed at `demo/`, on sample data. Runs on its own port/PID/log so `start.sh` is
-unaffected, and `--portfolio.demo=true` (command line, which outranks
-`~/.portfolio-bench.properties`) puts a banner on every page.
-
-**Figures come from a generator profile outside this repository** (`PB_DEMO_PROFILE`, default
-`~/.portfolio-bench-demo/profile.py`); there is no fallback and nothing builds without it. How
-it produces them is not documented here, in the code, in the history or in the UI — do not add
-it. `demo/` and the profile are both uncommitted; this repo is public.
-See [docs/demo-mode.md](docs/demo-mode.md).
-
-### Test fixtures
-
-`src/test/resources/` **must contain only synthetic data — no real brokerage exports.** Fixtures
-are committed so parser tests can load files from disk. Real exports were never committed; keep
-it that way. Regenerate `Holdings.xlsx` with openpyxl if its shape needs to change.
+**Test fixtures:** `src/test/resources/` **must contain only synthetic data — no real brokerage
+exports.** Fixtures are committed so parser tests can load files from disk. Real exports were never
+committed; keep it that way. Regenerate `Holdings.xlsx` with openpyxl if its shape needs to change.
 
 ## Architecture
 
-Spring Boot web app, layered ports-and-adapters. **Spring is confined to `web` and `config`**;
-`domain`, `application`, `adapter`, `parser` and `persistence` are framework-free.
+Spring Boot web app, layered. **Spring is confined to `web` and `config`**; `domain`, `application`,
+`adapter`, `parser` and `persistence` are framework-free. One direction only:
 
-- `domain` — pure logic. `PortfolioAggregator` (two-pass: `groupAccumulators` →
-  `buildAggHolding`; keyed on `(securityId, currency)`, **plus the account for cash** — a security
-  pools across accounts, a cash balance never does), `PortfolioMetrics` (totals + `rtTotalGbp` for intraday valuation),
-  `DividendAttributor` (FIFO), `CashLedgerReconstructor` (FIFO position-from-ledger
-  reconstruction), `Irr` (the app's only XIRR solver) + `PositionIrr`,
-  `FiledPeriods` (the one place a trailing twelve months is assembled out of filed XBRL periods, and the one place the filer's own annual is asked whether it contradicts them —
-  quarter-length windows only, four that must tile a year contiguously, and a 10-K's implicit final
-  quarter recovered by subtraction; serves both the operating line and the P/E-history EPS),
-  `Instruments`
-  (`isBond`, `giltId`, `couponOf`, `assetClassOf` — single home of all four), `DividendYield`,
-  `Reminders` (when a reminder is due, and the once-a-day key),
-  `OrderFills` (the rule that reads a vanished order's fill out of the cash ledger),
-  `PrintReaction` (the one session a print's move is measured over, and its median baseline),
-  `LedgerCorrections` (a broker's cancel-and-rebook pair is not a trade — the one home for that,
-  reached by every lot engine, and it refuses to drop a pair whose removal would leave the
-  timeline selling shares it has not bought),
-  `AjBellPortfolios` (which AJ Bell account an export that does not name one belongs to),
-  `VolForecast` + `AssetClass` (the open-orders touch model), `Ladders` (rung layout + per-account
-  cash), `RoundTrips` (the path a ladder's next round trip has to walk), `Switches` (share-class switch: one yardstick, the index/FX split, progress in units),
-  `ShareClasses` (the declared one-holding pairs), `PriceStats`, `StyleClassifier`,
-  `SectorClassifier`, `IndustryGroups`. Sub-packages `domain.swing` / `domain.trend` /
-  `domain.momentum` / `domain.range` hold the four backtest engines, `domain.grouping` the
-  table-grouping keys. `domain.model`: `Holding` (Builder; many nullable fields), `AggHolding`,
-  `CashTransaction`, `OpenOrder` + `OrderStatus`, `OrderGroup` + `GroupType` + `IntendedRung` +
-  `Rung` (ladders and share-class switches), `EarningsEvent`, `Reminder`, `Account` + `TransactionType` enums,
-  `PriceBar`, `IntradayBar`, `IntradayPrice`, `OperatingLine`.
-- `port` — `FxRateProvider`, `HistoricalFxRateProvider`, `EarningsCalendarProvider`,
-  `EarningsCalendarFeed`, `AlertNotifier` (interfaces, faked in tests).
-- `adapter` — `FrankfurterFxClient`, `HoldingFileLocator`, `AjBellFileRouter` (which of the two AJ
-  Bell accounts a nameless export belongs to), `YahooPriceFetcher` (incl. `probe` + `search`),
-  `YahooQuoteSummaryFetcher`, `YahooTickerMap`, `GiltPriceFetcher` (HL),
-  `TradewebGiltPriceParser`, `NasdaqEarningsFetcher` (reads the calendar's three row shapes — a date
-  still ahead carries a consensus and a session, one the feed has flipped carries what was reported
-  and no session, and in between it carries both, with `eps` holding **last year's** figure), `EdgarEarningsFetcher` + `CikRegistry`,
-  `EdgarXbrlFetcher` (one us-gaap concept's filed history, 10-K/10-Q only — an empty answer
-  carries *which* silence it was), `NasdaqCompanyEarningsFetcher` (the per-company halves of the
-  calendar's feed — four reported quarters **with the date each was reported on**, and the forward
-  consensus per fiscal period), `SmtpAlertNotifier`, `BoundedHttp` (the only way this app sends — the deadline is the caller's, because the request's own is a timer a dead connection takes with it).
-- `parser` — `AccountParser` / `CashTransactionParser` / `OrderParser` interfaces + impls.
-- `persistence` — `JdbcConnectionFactory` + its repositories + `KeyValueStore`.
-  `EarningsPrintRepository` holds figures obtainable only once, so its writes **merge**.
-- `application` — use-case orchestration; ~40 services. `PortfolioGatherer`,
-  `SyncPortfolioService`, `SyncFromCashService`, `ManualPositionService`, `AssetTransferService`,
-  `ExportExcelService`, `DividendService`, `AllocationService`, `PortfolioValueService`,
-  `OrderFillReconciler` (settles a vanished order against its cash-ledger trade; run by both the
-  orders panel and the cash import, and idle unless the ledger has moved),
-  `PortfolioReturnService`, `AttributionService`, `OpenOrdersService`, `LadderService`,
-  `SwitchService` + `GroupRungs` (what both group types share) + `ShareClassRegistry`
-  + `IntentEdits` (the editable price/qty cells — intended rungs only),
-  `LivePricesService`, `UnresolvedSymbols`,
-  `OperatingLineService` + `OperatingLineFetchJob` (the filings-sourced operating income and
-  margin — two gates, and a refusal is stored with its reason),
-  `EarningsPrintService` + `EarningsPrintFetchJob` (what a print *meant* — its price reaction, and
-  revenue against a consensus captured before it stopped existing),
-  `WatchlistService`, `ReminderService` + `ReminderJob` (calendar reminders — hand-entered ones
-  stored, earnings ones derived from the held/watched/ordered union),
-  the five `*AnalysisService` backtests, `PriceFetchJob` +
-  `IntradayPriceFetchJob` (share `PriceFetchSupport`), `CatchUpService` (the dormancy gate — what repairs the data
-  when you reopen the app after the laptop has been shut, with no poller behind it).
-- `web` — ~19 thin controllers (`RootController`, `ChartsController`, `AnalysisController`,
-  `OperationsController`, `OrdersController`, `LaddersController`, `SwitchesController`,
-  `LiveDashboardController`, `WatchlistController`, `RemindersController`,
-  the five strategy controllers, …), plus `GlobalExceptionAdvice`
-  (`@ExceptionHandler(IllegalStateException)` renders `fragments/error` instead of HTTP 500),
-  `PriceFetchScheduler` and `WebSupport`.
-- `config` — `BeanConfiguration`, `WebConfig` (the one MVC hook: the dormancy interceptor), `JacksonConfig` (serializes non-finite doubles as JSON `null`
-  app-wide — empty distributions would otherwise emit bare `NaN` and corrupt the payload).
-- Root — `ExcelReportWriter`, `PortfolioBenchApplication`.
+| Layer | May import |
+|---|---|
+| `domain` | nothing outside `domain` — pure logic, no I/O |
+| `port` | `domain` — interfaces, faked in tests |
+| `parser` | `domain`, `port` |
+| `persistence` | `domain` — all JDBC via `JdbcConnectionFactory`, the only owner of `java.sql` |
+| `adapter` | `domain`, `port`, `parser` — outbound HTTP, files, SMTP |
+| `application` | `domain`, `port`, `persistence`, `adapter`, `parser` — use-case orchestration |
+| `web` | `application`, `domain` — thin controllers only |
+| `config` | all of them; wiring only |
 
-Logging is SLF4J + Logback (`logback-spring.xml`); no `System.out` in production code.
+Logging is SLF4J + Logback (`logback-spring.xml`); no `System.out` in production code. UI is
+server-rendered Thymeleaf + htmx + Chart.js, all **vendored**; 29 tab panels in six groups
+(Holdings / Performance / Risk / Quality / Strategies / Tools).
 
-UI is server-rendered Thymeleaf + htmx + Chart.js, all **vendored** — see
-[docs/ui-conventions.md](docs/ui-conventions.md). 29 tab panels in six groups
-(Holdings / Performance / Risk / Quality / Strategies / Tools). Tools also carries one tab per
-named watchlist, all pointing at the single `panel-watchlist` and told apart by `data-list`.
+The class inventory per package, the 13 known violations of the table above and why this is
+ArchUnit's job rather than Spring Modulith's: [architecture.md](docs/architecture.md).
 
 ## Conventions that apply everywhere
 
@@ -146,35 +81,33 @@ These recur across unrelated features. Breaking one is how the recorded incident
 
 - **FX convention:** rates are *units of foreign currency per 1 GBP* (e.g. `{"USD": 1.3621}`).
   To convert native → GBP, **divide** by the rate.
-- **Write paths throw, reads degrade.** `saveSnapshot` and the `CashTransactionRepository.save*`
-  methods throw `IllegalStateException` (rendered as `fragments/error`). Query methods and
-  background-job inserts log + return empty/0 — they must not crash the scheduler.
-- **Absent is never zero.** A missing figure is `null` ("we don't know"), never `0` ("we
-  measured zero"). A caller must be able to tell a non-payer from an unresolved yield, a
-  cash row from a position with no cost basis, an unpriced holding from a worthless one.
-  Zeroing instead is what manufactured a ~£299k phantom gain in Attribution (2026-08-09).
-- **Excluded, and said so.** Anything that can't be valued or classified is dropped from the
-  rows *and every total* and reported by name in the payload (`AttributionResult.excluded`,
-  `SyncResult.unpricedSymbols`, `ValueTimeline.missingPrices`, the breakdown services'
-  contributor `state`), which the UI renders as a warning strip. Never absorbed silently.
+- **Write paths throw, reads degrade.** `saveSnapshot` and `CashTransactionRepository.save*` throw
+  `IllegalStateException` (rendered as `fragments/error`). Query methods and background-job inserts
+  log + return empty/0 — they must not crash the scheduler.
+- **Absent is never zero.** A missing figure is `null` ("we don't know"), never `0` ("we measured
+  zero"). A caller must be able to tell a non-payer from an unresolved yield, a cash row from a
+  position with no cost basis, an unpriced holding from a worthless one. Zeroing instead is what
+  manufactured a ~£299k phantom gain in Attribution (2026-08-09).
+- **Excluded, and said so.** Anything that can't be valued or classified is dropped from the rows
+  *and every total* and reported by name in the payload (`AttributionResult.excluded`,
+  `SyncResult.unpricedSymbols`, `ValueTimeline.missingPrices`, the breakdown services' contributor
+  `state`), which the UI renders as a warning strip. Never absorbed silently.
 - **Censored, not dropped.** A trade whose outcome window runs past the data end is `OPEN` and
   counted as such; every backtest table reconciles `events = TP + SL + Time + Ambiguous + Open`.
 - **Look-ahead-free by construction.** Trailing windows use closes *strictly prior* to the bar
   being judged, so a signal can't see its own move.
-- **One accounting path per backtest.** `Backtester` / `RotationBacktester` / `RangeBacktester`
-  each serve every variant, control and bootstrap iteration; variants differ by a parameter
-  (a `Selector`, a `Ranker`, a `FlushTrigger`), never by a second code path.
-- **Exports re-derive at the moment the button is pressed** — never a stale copy of what the
-  panel is showing.
-- **Repos run their DDL once in the constructor**, not per read/write. All JDBC goes through
-  `JdbcConnectionFactory`; `com.portfolio.persistence` is its only owner.
+- **One accounting path per backtest.** `Backtester` / `RotationBacktester` / `RangeBacktester` each
+  serve every variant, control and bootstrap iteration; variants differ by a parameter (a
+  `Selector`, a `Ranker`, a `FlushTrigger`), never by a second code path.
+- **Exports re-derive at the moment the button is pressed** — never a stale copy of what the panel
+  is showing.
+- **Repos run their DDL once in the constructor**, not per read/write.
 - **Every lazy chart loader ends in a `.catch`** that releases its own latch and calls
-  `panelLoadFailed(id, err, retryFn)`; the paired `clearPanelError(id)` goes right after the
-  latch. `addEventListener` inside a loader must go through `bindOnce`. Details and the
-  sub-view-id gotcha: [docs/ui-conventions.md](docs/ui-conventions.md).
-- **Self-regulating over maintained.** Reject hand-written data tables when a live source
-  publishes the same fact (gilt SEDOLs from HL, fund sector weights from Yahoo, CIKs from SEC).
-  A maintained list can only ever be wrong, never right.
+  `panelLoadFailed(id, err, retryFn)`; the paired `clearPanelError(id)` goes right after the latch.
+  `addEventListener` inside a loader must go through `bindOnce`.
+- **Self-regulating over maintained.** Reject hand-written data tables when a live source publishes
+  the same fact (gilt SEDOLs from HL, fund sector weights from Yahoo, CIKs from SEC). A maintained
+  list can only ever be wrong, never right.
 
 ## Holding fields
 
@@ -186,8 +119,8 @@ These recur across unrelated features. Breaking one is how the recorded incident
 
 Source: `cash_transactions WHERE type = 'DIVIDEND'` — no separate table, no manual-entry screen.
 `DividendService.dividendsBySymbol` runs `DividendAttributor` over the cash ledger (FIFO lot
-tracking — see the class doc), reconciles the reconstructed share count against the holdings
-file, and logs WARN on disagreement >0.01 shares. Per-symbol amounts flow into `AggHolding`'s
+tracking — see the class doc), reconciles the reconstructed share count against the holdings file,
+and logs WARN on disagreement >0.01 shares. Per-symbol amounts flow into `AggHolding`'s
 `dividendGbp` / `totalGainGbp` / `totalGainPct`. Portfolio-level totals (`PortfolioMetrics`) are
 price-appreciation only — dividends are **not** folded into the saved snapshot.
 
@@ -196,36 +129,11 @@ price-appreciation only — dividends are **not** folded into the saved snapshot
 1. Implement `AccountParser` (`parse`, `supports`, `sourceName`).
 2. Register in `PortfolioGatherer` (parsers are built per run, after rates are fetched, because
    `AJBellSippParser` needs the live rates).
-3. If the source provides GBP values directly, set `currentMarketValueGbp` + `costBasisGbp` on
-   the `Holding`; otherwise leave them null and `PortfolioAggregator` will convert via FX.
+3. If the source provides GBP values directly, set `currentMarketValueGbp` + `costBasisGbp` on the
+   `Holding`; otherwise leave them null and `PortfolioAggregator` will convert via FX.
 
-**Roth exports keep listing a position after it is sold out** — zero shares, zero value, but a
-live price — so `RothIraParser` drops any non-cash row whose quantity is exactly zero. The broker
-is inconsistent about it (sometimes the row just disappears), so dropping it is also what makes
-the view read the same either way. Cash is exempt (a zero balance is a fact about the account,
-not a stale row) and negative quantities are kept (a short is a real position).
-`DividendService.reconcile` already treats an absent holding as zero shares, so dropping the row
-changes nothing there.
-
-**What counts as cash in a Roth export is the broker's own `Asset Classification` column**, not a
-list of tickers in `RothIraParser`. The sweep vehicle changes — a bank deposit (`BDP`) until
-2026-10-30, a government money fund (`WAGI`) after it — and each change arrives as a new row that a
-maintained list would read as an equity, which on a money fund means a $1.00 position the price
-jobs then chase. All of them carry `Cash, Money Funds and Bank Deposits`, which is also what the
-export's own header totals into the figure the account calls its cash, so one CASH row per account
-reconciles against it. `normaliseSecurityId`'s ticker pair stays as the fallback for an export that
-states no classification, and is the only test `History*.xlsx` can apply — it has no such column,
-and the sweep is booked nowhere in it, so the ledger never sees the money fund at all.
-
-File-detection: `Holdings*.xlsx` (Roth), `portfolio*.csv` (AJBell — SIPP or Dealing, told apart by
-the file's own `Portfolio` column), UUID `.csv` (II SIPP holdings; distinguished from II cash by
-header sniff), `cashstatements*.csv` (AJBell cash), `History*.xlsx` (Roth cash), UUID `.csv` with
-`Debit,Credit,Running Balance` header (II cash).
-
-**Two AJ Bell accounts, and only their holdings export says which.** The cash and order exports are
-identical in name, header and format for both, so which account one belongs to is decided on the
-instruments it names — and an export that cannot be placed is read by nobody and reported, never
-guessed. See [docs/aj-bell-accounts.md](docs/aj-bell-accounts.md).
+Per-broker rules the recipe does not imply — zero-quantity rows, what counts as cash, file
+detection: [parsers.md](docs/parsers.md).
 
 ## Adding a new cash source (broker)
 
@@ -233,152 +141,81 @@ guessed. See [docs/aj-bell-accounts.md](docs/aj-bell-accounts.md).
 2. Add a `CashTransactionRepository.save…` method if the dedup rules differ, else reuse one.
 3. Implement `CashImporter` by extending `AbstractCashImporter` (provides `matchingFiles`,
    `mostRecent`, `parse`, `archiveOrDelete`).
-4. Register the importer as a bean in `BeanConfiguration`. Spring injects
-   `List<CashImporter>` into `ImportCashService` in bean-declaration order, which is the order
-   the dashboard shows results.
+4. Register the importer as a bean in `BeanConfiguration`. Spring injects `List<CashImporter>` into
+   `ImportCashService` in bean-declaration order, which is the order the dashboard shows results.
 
-Per-broker dedup keys and their rationale: [docs/persistence.md](docs/persistence.md).
+Per-broker dedup keys and their rationale: [persistence.md](docs/persistence.md).
 
 ## Adding an account or a transaction type
 
 One enum constant, no SQL. The CHECK constraints are **generated from the enums** and
 `migrateConstraints` rebuilds an existing table whenever the stored DDL no longer lists every
-constant. Renaming a constant still needs a data migration; adding one is free. Every read
-filter is an **allowlist**, so a new type reaches nothing until you add it deliberately — see
-[docs/persistence.md](docs/persistence.md).
+constant. Renaming a constant still needs a data migration; adding one is free. Every read filter is
+an **allowlist**, so a new type reaches nothing until you add it deliberately — see
+[persistence.md](docs/persistence.md).
 
 ## docs/ — read before changing the area
 
+Each row names the one invariant that must fire even if you never open the file. The detail, the
+evidence and the reasoning are in the file.
+
 | Read this | Before you | The invariant it guards |
 |---|---|---|
+| [architecture.md](docs/architecture.md) | add a class, a service or a layer dependency | The layer table above is one-directional; `domain` imports nothing outside itself; the 13 known violations are a burn-down list, not precedent |
+| [endpoints.md](docs/endpoints.md) | look for an endpoint, controller or service by name | The endpoint → controller → service map, plus the areas shipping with no doc — there, the source *is* the specification |
+| [parsers.md](docs/parsers.md) | add or change a broker parser, or touch file detection | A zero-quantity row is absent, not worthless; cash is the broker's own classification, never our ticker list; a short is a real position |
 | [persistence.md](docs/persistence.md) | touch any repository, dedup rule or import path | Broker dedup keys are composite and cross-file; `cash_balance_gbp` is in the PK on purpose; read filters are allowlists |
-| [gilts-and-bonds.md](docs/gilts-and-bonds.md) | touch a gilt parser, price source or bond valuation | `Instruments.giltId` is the **only** place a gilt id is built — never concatenate `"GILT " + coupon`; bonds use the per-£100-nominal formula in 4 places |
-| [price-history.md](docs/price-history.md) | change a fetch job, ticker mapping, `adj_close` or anything split-related | `close` for market value, `adj_close` for total return; a missing mapping fails two different ways; a ticker Yahoo refuses is *recorded* (`UnresolvedSymbols`), never left as "fetching"; derived dividend yields need a scan marker; **a split is a ledger row, never a price repair** — `split_factor` is derived from Yahoo's published event and a feed that publishes none (CSH2's 250:1 is still missing six days on) leaves 1.0, which is honest while the column is unadjusted, so the break lands on the *quantity* side; AJ Bell's cash-only statement books no split row, so a London split is hand-entered on the **ex-date**, as the **delta** not the new total, carrying the preceding **balance** (a `TRANSACTION` row sets the reported cash balance when it is the account's newest) — and it stays correct if Yahoo ever does adjust, which is why `split_factor` is never edited by hand |
-| [instrument-mappings.md](docs/instrument-mappings.md) | change alias/ticker resolution, or the II SIPP cash boxes | Both sides go through `Instruments.matchKey`; a rename re-keys ledger rows and is not undoable; the **add row** in the mappings list is the one editor not attached to a gap the app noticed, and a symbol that is neither held nor on an order reaches no other — which is what made `UnresolvedSymbols.FIX_HINT` point at a read-only table; the cash boxes are declared once in `IiCashField` (one per currency) and travel on as one `IiCash`, so adding a currency is a constant plus a label — and a blank box means *keep the stored balance*, never zero |
-| [sync-views.md](docs/sync-views.md) | change either sync tab or the Portfolio % column | Ledger view drops unpriced equities but not bonds; II SIPP cash comes from the form, one box per currency and each reconciled in its own currency, blank ≠ zero; a row opens the shared price popup and a `CASH` row carries no `data-symbol`; the Cash tile's share of the portfolio is `PortfolioMetrics.cashPct` over the Portfolio % column's own denominator, and is **null, never 0%**, when there is no total |
+| [gilts-and-bonds.md](docs/gilts-and-bonds.md) | touch a gilt parser, price source or bond valuation | `Instruments.giltId` is the **only** place a gilt id is built; bonds use the per-£100-nominal formula in four places |
+| [instrument-mappings.md](docs/instrument-mappings.md) | change alias/ticker resolution, or the II SIPP cash boxes | Both sides key through `Instruments.matchKey`; a rename re-keys ledger rows and is not undoable; a blank cash box keeps the stored balance, never zeroes it |
+| [sync-views.md](docs/sync-views.md) | change either sync tab or the Portfolio % column | Ledger view drops unpriced equities but not bonds; II SIPP cash is per-currency and blank ≠ zero; `cashPct` is **null, never 0%** |
 | [cash-ledger-irr.md](docs/cash-ledger-irr.md) | touch the Annualised return column or `Irr` | IRR not CAGR; current episode only; unsolvable writes **no** cell, never a zero; two day-count bases are deliberate |
 | [table-grouping.md](docs/table-grouping.md) | add a grouping key to either table | Exactly one group per holding; Gain % is `Σgain ÷ Σcost`, never the mean of members; a new key is a resolver class and nothing else |
-| [position.md](docs/position.md) | change the Position tab, its transactions table or its chart markers | The transactions table is the ledger **as dealt** and the lot tables are what FIFO makes of it — one sell is one row here and as many closed lots as it consumed there; the price is **derived** (cash moved ÷ shares) so it carries the broker's dealing costs, through the same rule the journal uses; splits and transfer legs are **listed with no price and no value**, because **Held after** would otherwise jump with nothing to explain it and a transfer's amount is a cost that travelled, not a price paid; the native Value column is **hidden on a sterling line** (one fact, two headers) and hidden rather than removed so no `cellIndex` moves; a marker under the cursor **beats the price line** and **every** marker under it comes back, since a cluster of same-week fills is the normal case; a marker sits at the day's **close**, not the price dealt — which on a London line is also a different unit (axis in pence, ledger in pounds); markers are built **from** the trade list and carry its index, so a tooltip and the row it scrolls to cannot drift apart |
-| [open-orders.md](docs/open-orders.md) | change the orders panel, a parser or the probe | Parsers build via `OpenOrder.parsed(...)`; open/closed filter is a denylist and `OrderStatus` is its only vocabulary; **open and resting are two questions** — a `Pending Cancel` order is open (never closed by absence, still asked of the ledger) but not resting, so it leaves the table for its own block instead of standing beside the replacement that arrived in the same export; quote age is judged against same-market peers, not the clock; **a verdict on a vanished order lives in its own columns and the broker's own word always outranks it** — the cash-ledger match writes only `FILLED` (no trade is not evidence of a cancellation), reads the side off the sign of the *cash*, and each trade is claimed once so a modified Roth order's ghost cannot claim its twin's fill; **ladder membership is never inferred and an intended rung is never auto-promoted**; a rung is never pruned; **the closed-orders filter derives every choice it offers from the rows themselves** — hidden rather than removed, so it and the sort never meet; a selection no row carries any more is kept rather than reset to All, and `—` is offered by nobody; **only an intended rung's price and quantity are editable** — an order from a broker export is never restated here — and blank is never zero; a ladder's round trip is the **next** one, matched by quantity and never by rung pairs, and it is a sequential first passage — never a product of the two rungs' own probabilities — priced from **today's** price over its own selectable horizon |
-| [share-class-switches.md](docs/share-class-switches.md) | change the switches block, or any exposure view | A switch is **declared, never detected**, and declaring it is also what folds the two listings into one holding in Allocation/Concentration/Currency; the legs are **one table in two sections** so the two sides share one column geometry, and the sections are the two **directions**, not the two lines — a side is chosen by side and *either* side may sit on *either* listing, which is what the listing column and the GBP sort are for; both legs go on one GBP yardstick before anything is compared and a side spanning both lines has **no** native average; the index/FX split is an exact identity over each side's own blended market, and the basis *block* stays the two lines, unmoved by an edited limit — evidence you can edit is not evidence; "complete" means the units arrived, not that nothing is resting |
-| [vol-forecast.md](docs/vol-forecast.md) | change P(N), σ_eff, drift or the calibration log | σ is *forecast* for the horizon, never a trailing window of that length; drift is a **price** drift (class total return − that name's yield); the probe writes no calibration line; one σ_eff serves a whole barrier sequence, because how the window splits between its legs is not a window to forecast for |
-| [live-tab.md](docs/live-tab.md) | change the Live tab, intraday session handling, or anything that sends HTTP from a job | Day Δ is anchored on the quote's **trading day**, not the calendar day; `loadLatestIntradayPrices` is regular-session only; **every send goes through `BoundedHttp`** — a request timeout is a timer the client services, not a deadline the caller holds, and one `send` parked by a suspend froze the Live tab for 35 hours and starved the 22:00 cron, because a `fixedDelay` re-arms only when the run *returns*; the dormancy catch-up fires on the **jobs' own silence**, never the age of the prices (a shut market is not a fault), heartbeats at **both ends** of a pass so *slow* and *stuck* are told apart, measures it on the **wall clock** because the monotonic one sleeps with the laptop, is a one-field read on the request path rather than a poller, and repairs **daily bars before the quotes judged against them** |
+| [position.md](docs/position.md) | change the Position tab, its transactions table or markers | The transactions table is the ledger **as dealt**, the lot tables what FIFO makes of it; the price is derived; markers are built from the trade list and index into it |
+| [open-orders.md](docs/open-orders.md) | change the orders panel, a parser or the probe | **Open and resting are two questions**; the broker's own word outranks any derived verdict; ladder membership is never inferred and a rung is never pruned |
+| [share-class-switches.md](docs/share-class-switches.md) | change the switches block, or any exposure view | A switch is **declared, never detected**, and declaring it folds two listings into one holding in every exposure view; both legs go on one GBP yardstick first |
+| [vol-forecast.md](docs/vol-forecast.md) | change P(N), σ_eff, drift or the calibration log | σ is *forecast* for the horizon, never a trailing window of that length; drift is a **price** drift; one σ_eff serves a whole barrier sequence |
+| [live-tab.md](docs/live-tab.md) | change the Live tab, intraday sessions, or anything that sends HTTP | Day Δ is anchored on the quote's **trading day**; **every send goes through `BoundedHttp`**; the dormancy catch-up fires on the jobs' silence, never the prices' age |
 | [attribution.md](docs/attribution.md) | change the Attribution window or its totals | A boundary that can't be valued is excluded from rows *and* totals; annualising under 30 days is blank |
 | [period-diff.md](docs/period-diff.md) | change Period diff or the TWR | Contributions and brought-forward are two figures, never one; flows count over `(from, to]` |
 | [charts.md](docs/charts.md) | change Contributions or Value over time | Roth's USD seed converts at the FX rate on its earliest ledger date, not today's |
-| [allocation-breakdowns.md](docs/allocation-breakdowns.md) | change sector, style or AI/Tech | The sector table is a partition, the AI/Tech tile an **overlay** — never sum them; `Instruments` owns the wrapper sets, properties files must not redeclare them, and the wrapper step runs **before** look-through — which is the only thing standing between a swap-based cash ETF and the equity basket it swaps away (CSH2 published one and £67,809 of parked cash was spread over twelve sectors); cash equivalents are an **adjacent row, never merged into Cash**, because the Cash row is the ledger balance the chart below is drawn from and carries no % of invested; unclassified is three states; direct + via fund is the row (Cash included) and an empty side is `—`, never `£0.00` |
-| [excel-exports.md](docs/excel-exports.md) | touch any Download Excel button | `setForceFormulaRecalculation(true)` or every formula opens blank; an empty view writes literals, not `SUM` over an empty range; the Ladders/Switches sheets carry no formula at all — a cash column total *is* the netting across accounts both panels forbid |
-| [watchlist.md](docs/watchlist.md) | change the watchlist, alerts or the shared price popup | The popup lives at body level, not inside a tab panel; an unwatched symbol gets every trigger **disabled**; five tables open it and `data-symbol` is the only test of whether a row can — and a click that lands in an **editable cell** is never one, which is why the control vocabulary lives in `clickedControl` rather than at each handler (the copy reading `input, button` raised the popup over the note `<textarea>` it shows read-only); the per-window high/low is the **traded** range over the span the label claims — every window sees the live session, so they nest; the close-only `*` is judged per extreme, not per window; a stored `0.0` is absent, not a price; **each side carries two levels** — the trigger that mails you and the **order target** you deal at, which nothing evaluates (`WatchlistAlerts` never sees it), is its own write that re-arms nothing, and is what the side's two readings are priced to, the trigger standing in when no target is set and the cell **naming which it used** rather than leaving one header over two questions; **each side's two readings** are the signed move still needed to reach that level (wrong-signed for its side = already through) and P(N), which is **1 and not an estimate** once the level is through, is priced driftless and diffusive (the orders panel's two switches are per-*order* questions and are not read here), and runs on **one stored horizon for the whole table** that rides on the payload so the header cannot name an N the cells were not priced at; **a save restates its whole group of editable cells, so a column the layout hides is read off the stored row** — never posted blank (which clears a level off screen) and never dereferenced where it stands (which threw before the request went out, so nothing saved and nothing re-armed); a new column joins a saved layout once, beside the column it reads — appended when that column was removed if it is a **reading**, skipped if it is an **editor** for a side the list has taken off; lists are membership only — **alerts are global to the symbol** — and a symbol in no list is deleted, never left orphaned in the fetch universe; a column layout that resolves to nothing falls back to the defaults, never to a blank table; the header label wraps inside a capped span (a `<th>` ignores `max-width`) and the data never wraps, except the Note, whose short/full toggle is **browser-local** because the picker owns what the table contains and this owns how much of one column you look at; an active sort is re-applied after every in-place patch and owns the reconcile's order, and hand-placing a row is what clears it; a drop saves the order it shows and a cancelled drag saves nothing; every label in the popup explains itself and none of them writes the explanation — the stats strip reads the column registry, the Key block `WL_FUND_TOP`, the rest `fundamentalsFieldGroups`; the **note is global to the symbol** like the alerts it is advice about, is **not** a trigger so it re-arms nothing and has its own endpoint and its own overlay, prints **once** under that symbol's firings and is never counted as a signal, and reached the layouts that predate it through a **one-shot** backfill — a "doesn't list it" guard would resurrect a column the user removed; **extended hours are shown and read by nothing** — `Ext %` is the newest pre/post print measured against the regular close in the Price column beside it, while that price, every momentum window, both P(N)s and every alert stay on the last regular print, because an after-hours book is not where an order fills and because `WatchlistAlertJob` keys its dedup on the **local date** while a US post session runs past midnight in London, so a level crossed at 00:30 would mail, burn **tomorrow's** key and leave that trigger silent through the session you could actually deal in; blank is the normal state and permanent on a London listing (which publishes no extended session), and a reading past 12 hours is **dimmed, not dropped** — being old is not being wrong; the **Returns heatmap's two global switches** are one rule in one place (`wlRetLines`) — Σ *beside* every daily line, or Σ *instead of* every daily line, and never neither, since the switch that hides the daily lines is the one that has to imply the Σ ones or the panel renders as column headers; the stronger switch **disables** the other rather than overruling it and leaves its state alone, both outlive a redraw, and the stripe is per **symbol** through a class, because a symbol's two lines are one block and a hidden row still counts for `nth-child` |
-| [reminders.md](docs/reminders.md) | change the Reminders tab, a reminder rule or the send job | Nothing here is evaluated — a watchlist trigger fires when the market says so, a reminder when the **calendar** does, and `rule`/`action` are free text nothing parses; a hand-entered reminder is open-ended (only a person stops it) while an earnings one is a window whose **lower** bound is what keeps a stale snapshot date from mailing a print that already happened; earnings reminders are **derived, never stored** — only the mute is, and it is a standing instruction about the symbol, not one print; `nextEarnings` returns three outcomes (dated / undated / not applicable) because a gilt's silence is an answer and a company's is a gap; **the *Just reported* section is on the screen but is not a reminder** — a third list rather than a state on the earnings rows, with no due flag, no mute and no key, so a past print cannot mail anything because `ReminderJob` walks the other two lists and not by a check someone remembers; it is its own table because consensus/actual/surprise would be permanently blank on a scheduled row, the window is a fortnight in calendar days (no market calendar here), sizes the back-warm, closes itself, today is not in it, and *figures in* / *awaiting figures* / *no consensus* are three states one blank cell would conflate; "daily" is the per-day dedup key, not the schedule, and the sent-set is written only after the mail actually goes |
-| [print-reaction.md](docs/print-reaction.md) | change the *Just reported* detail — the price reaction, the revenue surprise, or the consensus revisions | A print's move is **one session**, chosen by when the news could first be traded, on the listing you hold; an unstated session and one not yet closed are different blanks, neither a missing price. `× usual` is a **median** of that name's own prints, measured identically, withheld below three; `vs mkt` subtracts an index over the **identical two dates** or not at all. The **revenue consensus is captured before the print** (no free source has it after) and only while the feed still names that date, so `no consensus` is a reading never taken, not a shortfall. EPS is Nasdaq and revenue Yahoo, never mixed; **no guidance column** |
-| [fundamentals.md](docs/fundamentals.md) | add, remove or relabel a Fundamentals field, or touch a ratio | The feed states **no period and no accounting basis** and is not consistent about either — `operatingMargins` is the latest quarter while `profitMargins`/`grossMargins` beside it are TTM, so nothing is TTM because its neighbour is; a column earns its place only if it means the same thing in **every** row, which is why a field whose period cannot be stated is deleted rather than relabelled; trailing P/E is GAAP and forward P/E is non-GAAP consensus, so the two adjacent columns are not comparable; the `*HistoryQuarterly` modules are hollow and their line items arrive as a literal `0`, which is a manufactured zero waiting to happen, not a coverage gap; a ratio may be divided only when both sides share a currency **and** a unit scale — `financialCurrency` is the test, `GBp`/`GBP` is a *scale* difference and not a currency one, and an absent statement currency is comparable (a fund files none); **P/B is recomputed, never read**, because Yahoo divides pence by pounds and inflated every London line exactly 100× — and its denominator is *shown*, per-share in the **major** unit (`'priceMajor'`, four decimals under 10) so the division can be reproduced on the row, and **withheld wherever that ratio is**, because a denominator with no ratio to reproduce audits nothing while still naming a currency the figure is not in; **the gate covers two amounts as well as the ratios** — `enterpriseValue` is a *sum* across it (Yahoo adds net debt in the filing currency to a market cap in the quote one and converts neither: NVO's 263.68bn is 168.54bn USD + 95.14bn DKK to 0.002%, ASML's is 36.65T against its own 658bn cap), so the currency mismatch is the evidence and no threshold on EV ÷ cap is wanted; **`debtToEquity` is in percentage points, not a multiple** — 78.445 is 0.78×, reproducible as total debt ÷ (book value × shares) on AMAT to three decimals — so it renders as `9.09%` (`'pctPoints'`) rather than being divided into a multiple that rounds every small one to `0.09×`; **market cap is priced at the last fetch, not at the live quote above it** in the popup, so a share count divided back out of it disagrees with the row's own (ASML 391.5m against 384.1m, which is the clock) and the price it was built on is named beside it; a gated field is withheld **with its reason** in an `excluded:<field>` label, never silently dropped, and the financial-sector guard lives in one place so the grid and the detail views cannot disagree; a currency amount belongs to one of **three** unit classes — as-quoted (pence on a GBp line), market-side bulk (`marketCap`/`enterpriseValue`, the *major* unit), and statement-side (`financialCurrency`) — so `'cap'` and `'capFiled'` are not interchangeable and `fmtMarketCap` normalises the unit itself rather than trusting its caller; trailing P/E is GAAP and forward P/E is consensus, and the basis is **named, never inferred from a ratio** — a divergence threshold is the same magic number rejected for BRK.B's P/B; **`freeCashflow` is Yahoo's *levered* FCF on an unpublished model**, so OCF minus it is not capex and never was — that subtraction published a **negative** capital expenditure on five symbols and the column is gone, while the two levered fields keep their *keys* (a watchlist layout stores `f:fcfMarginTtm`) and change only their labels; the figure itself is **withheld where it exceeds operating cash flow**, which no definition of free cash flow permits because every one of them subtracts from OCF (NFLX published 25.48bn against 12.31bn, and a 51.2% margin on it, against ~11.9bn in its own filings) — the evidence is the feed contradicting itself, so the gate runs **one way only** and a levered FCF far *below* OCF is kept, ruling that out needing the threshold BRK.B's P/B rejected; **`revenueGrowth` and `earningsGrowth` are single quarters** — the latest reported against the year-ago one, and the earnings one is **diluted EPS**, not net income (NFLX 0.475 = 0.87/0.59 while net income grew 0.4386) — so they are labelled for that window and out of the TTM group rather than deleted, since unlike the operating margin they can state it and `StyleClassifier` votes on one of them; and a two-point comparison carries the **base** quarter's one-offs with nothing in the feed to flag them, which is why the tooltip names the mechanism (NFLX's 47.5% is ~23% once Q3 2025's $619m Brazilian charge is added back) rather than a threshold judging the figure; **the operating line is the one figure here whose window its source states** — four filed quarters that must *tile a year contiguously*, a 10-K's implicit Q4 recovered by subtraction and marked derived, and the revenue denominator chosen by **which tag reproduces the row's own TTM revenue** (not a hand-ranked list), which is also what catches a bare-ticker collision (`BLND` is British Land here, Blend Labs at the SEC), an eleven-year-old window and a definition gap in one test; four silences are told apart and an outage stores **nothing**, because a refusal reads like a finding about the company; a **share count is not an amount** — `sharesOutstanding` borrowed `'cap'` and published as `$1.31B`, and on a GBp line would have claimed pounds for a figure in no currency; the forward P/E's **fiscal year is named by reconciliation** against the two consensus years and shown on the row (KLAC's multiple is priced on the year ending June 2028, not twelve months out), and a figure between the two candidates names none; `enterpriseValue` is an **end-of-day** figure while the market cap beside it is live — EV − net debt reproduces the *previous close's* cap to the cent — so the clock is disclosed on the row and the EV is never recomputed from the live cap, which would publish our own definition under Yahoo's name |
-| [pe-history.md](docs/pe-history.md) | change the P/E-history chart, its ticker list or its EPS source | The TTM is **assembled, never the last four records** — four quarters must tile a year contiguously and a 10-K's missing fourth quarter is recovered by subtraction, because summing the latest four silently spanned five quarters for GOOGL, NVDA, MU, KLAC, LRCX, INTC and ORCL alike; the picker is **derived** from the fundamentals universe through SEC's own CIK registry, never a hand-written list, gated on the symbol being its own US ticker (`BLND` is British Land here, Blend Labs there); a fact carries **two** filing dates — earliest for when it became public, latest for which split basis its value is in — and every figure is rescaled before anything is added or subtracted; the window's own end is **shown**, because EDGAR can be a quarter behind Yahoo (MU) and the right-hand edge of the chart does not mean today; the four silences are the operating line's four, and an outage is the one that is not cached; the decomposition is **two identities**, and the driver sentence is compared in **logs** — `|m−1|` scored ×2 at twice ×0.5 though they are one move in two directions, and "barely moved" was asserted from a **dominance** test beside a card reading ×0.67; **GAAP EPS is not all operating**, so the EPS term splits again into operating income per share × (net ÷ operating), a ratio so the share count and the split basis both cancel — the mix term is **never called "non-operating"** because tax is in it too and no filing separates the two per share without a modelled rate, it is published **net ÷ operating** because operating income exceeds net income for most filers, operating income is **pre-tax** so only its change is shown and never a level called a P/E, and a filer with no operating subtotal (every bank) is **withheld with its reason**; a decomposition is a two-point comparison, so its **base endpoint can be a window the filer has since restated** — MSFT's FY2016 quarters are pre-ASC-606 and were never re-tagged, so they sum to 2.09 against the filer's own 2.56 for the identical window, and the whole 22% landed in the multiple term — **nothing is substituted** (the quarters are what makes a *trailing* window possible and the chart is look-ahead-free), the disagreement is **reported with both decompositions**, and the test is the filer's own annual rather than a **trend-and-threshold flag**, which would fire on a genuine cyclical trough and would be approximating the company's own non-GAAP |
-| [earnings.md](docs/earnings.md) | change the earnings calendar, the holdings section, the reported figures, or the next-earnings date on a fundamentals row | Three-valued feed: `[]` is a successful empty read, `null` is a failure; three earnings sources answer three different questions, and the holdings section reads two of them in a fixed order — the calendar outranks the snapshot, a snapshot date counts only while still ahead, and `REPORTING`/`EXPECTED`/`NOT_COVERED`/`NONE_SCHEDULED` are four distinct silences; the snapshot's date rides the quoteSummary call already being made and stores **no** date rather than a zero, an estimated day is marked, never shown as fixed, and a day already reported is muted, never blanked and never relabelled; **the feed flips per date, not per row, and a date that has passed is not yet a date it has answered** — in between it serves the scheduled shape with `eps` already filled in holding **last year's** figure, which published SNDK's year-ago $0.90 against a $46.19 consensus as a 98% miss on a quarter that beat, and AMD's $0.97 as a 42% miss four days after the first fix; so there are **four shapes, not three**, told apart **structurally** and never on whether `eps` looks plausible (a flat year is an ordinary quarter): a row's `eps` is read only once it has shed **both** the last-year pair and its session marker, and since a company that never stated a session sheds both while still scheduled, only the **roster** catches it — flipped iff some row carries a numeric `surprise`, its presence read and never its value; a past date caches forever only once `settled` (rows carry actuals, no rows, or asked *after it passed* **and the roster has stopped looking scheduled**, on the feed's **US Eastern** clock), and a settled re-fetch is **merged over** the cached roster keyed on symbol, never swapped in, or the `BMO`/`AMC` marker is erased from a date we already knew; **the surprise is recomputed, never read** — the feed's own column contradicted its two printed numbers on MAA and VKTX and published 31 exact in-line results as blanks — and divides by the **magnitude** of the consensus, since a loss-maker that lost more than expected is a miss; `warmBack` is self-limiting, which is what lets a dumb timer carry it; `recentlyReported` is a **separate** method from `nextEarnings`, cache-only, calendar-only, and returns a row with no actual rather than dropping it |
+| [allocation-breakdowns.md](docs/allocation-breakdowns.md) | change sector, style or AI/Tech | The sector table is a partition, the AI/Tech tile an **overlay** — never sum them; the wrapper step runs **before** look-through; cash equivalents are an adjacent row, never merged into Cash |
+| [excel-exports.md](docs/excel-exports.md) | touch any Download Excel button | `setForceFormulaRecalculation(true)` or every formula opens blank; an empty view writes literals, not `SUM` over an empty range |
+| [watchlist.md](docs/watchlist.md) | change the watchlist, alerts or the shared price popup | Alerts are **global to the symbol** and lists are membership only; each side carries a trigger *and* an order target nothing evaluates; extended hours are shown and read by nothing |
+| [reminders.md](docs/reminders.md) | change the Reminders tab, a rule or the send job | Nothing here is evaluated — a reminder fires when the **calendar** says so; earnings reminders are derived, never stored; *Just reported* is on screen but is not a reminder |
+| [print-reaction.md](docs/print-reaction.md) | change the *Just reported* detail | A print's move is **one session**, chosen by when the news could first be traded; the revenue consensus is captured **before** the print; EPS is Nasdaq and revenue Yahoo, never mixed |
+| [fundamentals.md](docs/fundamentals.md) | add or relabel a field, or touch a ratio | The feed states **no period and no accounting basis**; a column earns its place only if it means the same thing in every row; division needs a shared currency and scale |
+| [pe-history.md](docs/pe-history.md) | change the P/E-history chart, its tickers or its EPS source | The TTM is **assembled, never the last four records** — four quarters must tile a year contiguously; the picker is derived, not listed; figures share one split basis |
+| [earnings.md](docs/earnings.md) | change the earnings calendar, the holdings section or the reported figures | `[]` is a successful empty read, `null` a failure; the feed flips **per date** and serves four shapes, told apart structurally; the surprise is **recomputed, never read** |
 | [manual-positions.md](docs/manual-positions.md) | change hand-entered positions | Each acquisition is **two** rows; `OPENING_BALANCE`, not `CONTRIBUTION`; balances are recomputed, never supplied |
-| [aj-bell-accounts.md](docs/aj-bell-accounts.md) | touch any AJ Bell parser, or add a second account at one broker | Only the holdings export names its account, so cash and orders are routed by the instruments they name against it — a live registry, never a maintained list; evidence must be **exclusive** to one account, and a file naming two or naming none is read by nobody and reported rather than guessed; selection is newest-per-**account**, because newest-overall silently hid one account's orders behind the other's; a broker's zero cost against a real value is **unknown**, and the ledger's FIFO basis stands in for it only where the export states none and the share counts agree |
-| [transfers.md](docs/transfers.md) | change in-specie transfers, or any per-account lot engine | Both legs or neither; the magnitude is the source account's **FIFO cost**, not market value and not the broker's pooled figure; **every per-`(account, symbol)` lot engine must replay `TRANSFER`** — loading the row is not replaying it; the two that ignored it showed a sold-out position as still held, and a fourth (`ManualPositionService`) showed a transferred-away position at double; lots travel with their open date, cost and accrued dividend, and a payment reaching an emptied timeline follows the shares |
+| [aj-bell-accounts.md](docs/aj-bell-accounts.md) | touch any AJ Bell parser, or add a second account at one broker | Only the holdings export names its account, so cash and orders are routed by the instruments they name; an unplaceable file is reported, never guessed |
+| [transfers.md](docs/transfers.md) | change in-specie transfers, or any per-account lot engine | Both legs or neither; the magnitude is the source account's **FIFO cost**; **every per-`(account, symbol)` lot engine must replay `TRANSFER`** |
 | [strategy-swing.md](docs/strategy-swing.md) | change the swing lab | Every flush family reports its placebo and matched bootstrap beside it; pooled cells report episodes, not just events |
 | [strategy-trend.md](docs/strategy-trend.md) | change the trend filter | Every variant starts at the latest `firstValid` of any configured signal; the pre-1999 splice is a price-only proxy and is labelled |
 | [strategy-momentum.md](docs/strategy-momentum.md) | change momentum or the signal comparison | V1 must reproduce the Momentum tab bit-for-bit; the adoption rule is pre-registered and printed verbatim; controls run on the fit window only |
 | [strategy-range.md](docs/strategy-range.md) | change the range-floor backtest | Defaults *are* the pre-registration — any override flags the run EXPLORATORY; signals on split-adjusted price, P&L in total-return space |
-| [ui-conventions.md](docs/ui-conventions.md) | add a tab, chart loader, sortable table or vendored library | Loaders need `.catch` + `panelLoadFailed`; tab groups are derived from the DOM; vendored libs are pinned by URL and load in a fixed order; a sort lives in the header's `data-sort-dir`, indexes by `cellIndex`, and is re-applied after anything that re-renders or patches rows |
-| [demo-mode.md](docs/demo-mode.md) | run the app on demo data, or change the generator | The generator profile lives **outside the repo** and its method is documented nowhere — never add a fallback or explain it; the ledger is built in the **database** and holdings in the **files**, because holdings have no table and files cannot reproduce the ledger; `order_key` must be rebuilt or every ladder rung orphans |
-| [backup.md](docs/backup.md) | change what is backed up, or the schedule | Only the ~1000 rows that cannot be re-fetched, plus the `KeyValueStore` files a SQL dump would miss; the dump is plain SQL so a restore needs none of our code; due-by-elapsed-time, not a calendar cron, because the laptop is usually shut |
-| [postmortems.md](docs/postmortems.md) | investigate a reconciliation gap between views | Resolved incidents kept for the invariants they justify; a rule about what the **ledger means** lives in `domain` and not in whichever view first needed it — `pruneCorrections` sat in one service while eleven readers of `CashLedgerReconstructor` replayed a broker's cancellation as a real sale, which retired the wrong FIFO lot and flipped AMZN's gain to a £505 loss on a position that was up £538; and a correction pair is dropped **only when the ledger still makes sense without it**, because `Timeline.sell` swallows an oversell in silence and a replacement booked after a genuine sale would otherwise open a phantom position |
+| [price-history.md](docs/price-history.md) | change a fetch job, ticker mapping, `adj_close` or anything split-related | `close` for market value, `adj_close` for total return; a ticker Yahoo refuses is *recorded*, never left "fetching"; **a split is a ledger row, never a price repair** |
+| [ui-conventions.md](docs/ui-conventions.md) | add a tab, chart loader, sortable table or vendored library | Loaders need `.catch` + `panelLoadFailed`; tab groups are derived from the DOM; a sort lives in `data-sort-dir` and is re-applied after anything that re-renders rows |
+| [demo-mode.md](docs/demo-mode.md) | run the app on demo data, or change the generator | The generator profile lives **outside the repo** and its method is documented nowhere — never add a fallback or explain it; `order_key` must be rebuilt or every ladder rung orphans |
+| [backup.md](docs/backup.md) | change what is backed up, or the schedule | Only the rows that cannot be re-fetched, plus the `KeyValueStore` files a SQL dump would miss; due by elapsed time, not a calendar cron, because the laptop is usually shut |
+| [postmortems.md](docs/postmortems.md) | investigate a reconciliation gap between views | Resolved incidents kept for the invariants they justify; a rule about what the **ledger means** lives in `domain`, not in whichever view first needed it |
 
-## Not documented yet
+## Keeping this file small
 
-These ship and have no `docs/` file. Read the service; there is no recorded design intent
-beyond the code, so treat the source as the specification.
+This file is loaded in full on every session, so its size is a running cost paid by every task.
+It was split out of a 228k-character original in September 2026 and regrew from 23k to 60k in seven
+weeks — because the cheapest place to record a new invariant, in the moment, is a line here rather
+than the `docs/` file it belongs in. Three mechanical guards in `DocsIndexTest` invert that:
 
-| Area | Tab | Entry point |
-|---|---|---|
-| Risk metrics (Sharpe/Sortino/Calmar, drawdown, underwater) | Risk | `PortfolioRiskService` — `GET /risk`, `POST /risk/rate` |
-| Correlation matrix + diversification ratio | Correlations | `CorrelationService` — `GET /correlations` |
-| TWR / money-weighted returns, annual bars, benchmarks | Returns | `PortfolioReturnService`, `BenchmarkReturnService` — `GET /returns{,/mwr,/benchmark,/symbols}` |
-| Dividend history + audit | Dividends | `DividendService` — `GET /dividends`, `/dividends/audit` |
-| Concentration | Allocation | `ConcentrationService` — `GET /concentration` |
-| Currency exposure | Allocation | `CurrencyExposureService` — `GET /currency` |
-| Target-allocation drift | Allocation | `GET /allocation/targets` (+ `POST`) |
-| What-if planner | What-if | `WhatIfService` — `POST /whatif` |
-| Historical scenario replay | Scenario | `HistoricalScenarioService` — `GET /scenario`, `/scenario/substitutes` |
-| Trade journal (notes keyed by `rowid`) | Journal | `TradeNotesService` — `GET /trades`, `POST /trades/{rowid}/note` |
-| Holdings-vs-ledger reconciliation | Reconcile | `GET /reconciliation` |
-| Glossary / reference pages | — | `RootController` — `GET /glossary`, `/reference` |
-| Manual price entry | — | `POST /prices/manual` |
+- **A size ratchet, not a ceiling.** The budget tracks the file within a small slack, so the test
+  fails both when the file grows past it *and* when the file shrinks well under it. The previous
+  cap was a round 60k with 36k of headroom, and the file grew into every byte of it. A raise is a
+  deliberate one-line diff, not ambient drift.
+- **No routing row over 45 words.** This is the rule that was actually broken: two rows had reached
+  979 and 815 words, 20% of the file between them, restating the docs they pointed at.
+- **Every `docs/` file reachable from the index, every index link resolving.** A doc nothing points
+  at is a doc nobody reads.
 
-## Endpoint map
-
-| Endpoint | Controller | Service / notes |
-|---|---|---|
-| `POST /sync` | Operations | `SyncPortfolioService` |
-| `POST /sync-from-cash` (`?groupBy=`) | Operations | `SyncFromCashService` / `LedgerGroupingService` |
-| `POST /sync-from-cash/export` | Operations | `ExportExcelService.exportLedger` (→ ~/Documents) |
-| `POST /export` | Operations | `ExportExcelService` |
-| `POST /import-cash` | Operations | `ImportCashService` |
-| `POST /import-gilt-prices` | Operations | `ImportGiltPricesService` |
-| `POST /rebuild-prices` | Operations | full-window refetch + `adj_close` rebuild |
-| `POST /prices/manual` | Operations | hand-entered price row |
-| `POST /backup` | Operations | `BackupService` — irreplaceable tables + settings → iCloud Drive |
-| `POST /returns/benchmark/fetch` | Operations | benchmark series backfill |
-| `GET /live`, `GET /live/stream` (SSE) | LiveDashboard | `LivePricesService` |
-| `POST /live/export` | LiveDashboard | `ExportExcelService.exportLive` |
-| `GET /orders` | Orders | `OpenOrdersService` |
-| `GET /orders/touch` | Orders | `OpenOrdersService.touchEstimate` (re-blends σ at the new N) |
-| `GET /orders/probe` | Orders | `OpenOrdersService.probe` (writes no calibration line) |
-| `GET /ladders`, `POST /ladders/{create,delete}` | Ladders | `LadderService` — groups of rungs on one security; `P(10)`/`P(30)` are **fixed** horizons, not the table's per-order `P(N)`, and the summary's round trip has a third horizon of its own |
-| `POST /ladders/rungs/{add,remove}` | Ladders | assign / unassign real orders; never inferred |
-| `POST /ladders/intents/{add,delete,placed}` | Ladders | rungs decided on but not placed; `placed` is the only intended→real path |
-| `POST /ladders/intents/update` | Ladders | the editable price/qty cells — **intended rungs only**; a rung from a broker export is fixed (`IntentEdits`) |
-| `POST /ladders/horizon` | Ladders | the round-trip horizon — one **stored** app-wide setting (default 63 sessions), so the panel and the export can never be priced over different windows; out of range is clamped, not refused |
-| `POST /ladders/export` | Ladders | `OpenOrdersService.exportLadders` — `Ladders-{date}.xlsx`, 4 sheets, the round-trip one keyed by **direction** (→ ~/Documents) |
-| `GET /switches`, `POST /switches/{create,delete}` | Switches | `SwitchService` — one holding moving between two listings of **one** fund; creating one also declares the pair to every exposure view |
-| `POST /switches/legs/{add,remove}` | Switches | assign / unassign orders; which side is read from the side and the listing only says what it is priced against, membership never inferred |
-| `POST /switches/intents/{add,delete,placed}` | Switches | the buy leg before the cash arrives — the ordinary state here; the listing is stored (the side no longer names it) and a blank one falls back to the one-way rule; `placed` is the only intended→real path |
-| `POST /switches/intents/update` | Switches | the same editable cells as the ladder's — the buy leg is an intent for days, so it is the one an edit can reach |
-| `POST /switches/export` | Switches | `OpenOrdersService.exportSwitches` — `Share-Class Switches-{date}.xlsx`, 5 sheets |
-| `POST /orders/drift`, `POST /orders/event-var` | Orders | stored app-wide model switches |
-| `POST /orders/note` | Orders | `OrderHistoryRepository.saveNote` |
-| `POST /orders/status` | Orders | what became of an order the broker stopped listing without saying — **only where it was silent**, stored in its own column so a re-parse cannot undo it; blank clears and hands the row back to the cash-ledger matcher |
-| `POST /orders/export` | Orders | `OpenOrdersService.export` |
-| `GET /allocation`, `/allocation/sectors`, `/allocation/styles` | Charts | `AllocationService`, `SectorBreakdownService`, `StyleBreakdownService` |
-| `GET`/`POST /allocation/targets` | Charts | target-allocation drift |
-| `GET /concentration`, `/currency`, `/correlations`, `/risk` | Charts | `ConcentrationService`, `CurrencyExposureService`, `CorrelationService`, `PortfolioRiskService` |
-| `POST /risk/rate` | Charts | risk-free rate override |
-| `GET /contributions`, `/portfolio-value` | Charts | `ContributionService`, `PortfolioValueService` |
-| `GET /attribution` | Charts | `AttributionService` |
-| `GET /period-diff` | Charts | `PortfolioReturnService.periodDiff` |
-| `GET /returns`, `/returns/mwr`, `/returns/benchmark`, `/returns/symbols` | Charts | `PortfolioReturnService`, `BenchmarkReturnService` |
-| `GET /dividends`, `/dividends/audit` | Charts | `DividendService` |
-| `GET /position` | Charts | `PositionDetailService` — the transactions list, the FIFO lots it builds up to, and the chart markers, which are built from that list and index back into it |
-| `GET /fundamentals`, `/fundamentals/tickers` | Analysis | `FundamentalsService` — the P/E-history series (EDGAR EPS ÷ price) and the tickers it can draw, derived from the universe rather than listed; the EPS term is split a second time by the filer's own operating and net income, or the split is withheld with its reason; a base window the filer has since restated is reported beside it |
-| `GET /portfolio-fundamentals` (+ `/add`, `/remove`, `/refresh`) | Analysis | `PortfolioFundamentalsService` |
-| `GET /reconciliation` | Analysis | holdings-vs-ledger reconciliation |
-| `GET /scenario`, `GET`/`POST /scenario/substitutes` | Analysis | `HistoricalScenarioService` |
-| `POST /whatif` | Analysis | `WhatIfService` |
-| `GET /trades`, `POST /trades/{rowid}/note` | Analysis | `TradeNotesService` |
-| `GET /health` | Analysis | liveness |
-| `GET /mappings`, `POST /mappings/{verify,save,delete}` | Mappings | `InstrumentMappingService` |
-| `GET /watchlist` (`?list=`), `/watchlist/{row,series,vol,quotes,returns,gilts,lists}` | Watchlist | `WatchlistService` — `quotes`/`returns` take `?list=`; `row`/`series`/`vol`/`gilts` are symbol-scoped |
-| `POST /watchlist/{add,remove,threshold,move}` (`&list=`) | Watchlist | `WatchlistRepository` — `remove` drops the symbol from *that* list, and outright only if it was its last |
-| `POST /watchlist/horizon` | Watchlist | the N behind `Above P(N)` / `Below P(N)` — one **stored** app-wide setting (default 30 sessions), because a comparison grid whose horizon differed per row would be one header over many questions; out of range is clamped, not refused |
-| `POST /watchlist/target` | Watchlist | the two **order targets** — where the order goes once a trigger fires, normally further out. Nothing alerts on one; it is the level that side's `%` and `P(N)` are priced to, and blank hands them back to the trigger. Its own endpoint, like the note, because it clears **no** fired flags — moving where you deal changes nothing about where the price has to get |
-| `POST /watchlist/note` | Watchlist | the per-symbol plan for when its alert fires — free text, nothing parses it; **global to the symbol** like the triggers, but **not** a trigger, so unlike every other write here it clears no fired flags (rewording a plan must not re-mail a signal already sent for the same levels), and blank is absent, never `""` |
-| `POST /watchlist/reorder` (`&list=`) | Watchlist | the drag-and-drop drop — saves the order **as displayed** (so a drag under an active sort is what makes that sort the manual order); `move` stays the ↑↓ single swap, and the only reorder a keyboard or touch screen can reach |
-| `POST /watchlist/lists/{create,rename,delete,move}` | Watchlist | the named lists; the last one cannot be deleted |
-| `GET`/`POST /watchlist/columns` (`?list=`) | Watchlist | the per-list column layout; **no rows = the default set**, so saving none is "reset to default" |
-| `GET /earnings` | Earnings | `EarningsCalendarService` |
-| `GET /reminders` | Reminders | `ReminderService` — stored reminders + the derived earnings ones + the few days just **reported**, in one payload; a reported row carries no due flag and the send job never walks that list; `deliveryEnabled` says whether anything is actually being mailed |
-| `GET /reminders/reported` | Reminders | `EarningsPrintService` — what each recent print *did*: the move net of its market and in units of that name's usual one, the £ effect, the gap to each resting limit, revenue vs a pre-print consensus. **Separate** from `/reminders`, which the mail job reads half-hourly |
-| `POST /reminders/reported/refresh` | Reminders | `EarningsPrintFetchJob` on demand; one attempt per print per day |
-| `POST /reminders/{add,update,delete,toggle}` | Reminders | the hand-entered half; **date, rule and action are the editable fields — the symbol is not**, and a blank date or rule is refused rather than defaulted |
-| `POST /reminders/earnings/toggle` | Reminders | the mute, keyed by **symbol** (there is no row) — a muted symbol stays listed, never hidden |
-| `POST /reminders/send` | Reminders | `ReminderJob` on demand; same per-day dedup, so it cannot double-send |
-| `GET /positions/manual`, `POST /positions/manual/{buy,sell,withdraw,delete}` | ManualPositions | `ManualPositionService` |
-| `GET /transfers`, `POST /transfers/{record,delete}` | Transfers | `AssetTransferService` |
-| `GET /swing`, `POST /swing/{symbols,backfill}` | Swing | `SwingAnalysisService` |
-| `GET /trend`, `POST /trend/backfill` | Trend | `TrendAnalysisService` |
-| `GET /momentum`, `GET`/`POST /momentum/symbols`, `POST /momentum/backfill` | Momentum | `MomentumAnalysisService` |
-| `GET /momentum-signals`, `POST /momentum-signals/backfill` | MomentumSignals | `MomentumSignalsService` |
-| `GET /range`, `POST /range/backfill` | Range | `RangeAnalysisService` |
-| `GET /`, `/glossary`, `/reference` | Root | dashboard shell + static reference pages |
+So: **detail goes in `docs/`; the row here names the invariant and stops.** When an invariant needs
+evidence, a worked example or a count, that is the signal it belongs in the file, not the row.
+Anything the build can check — a layer rule, a confinement — belongs in a test, and then needs no
+paragraph here at all.

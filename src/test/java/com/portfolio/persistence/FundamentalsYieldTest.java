@@ -1,6 +1,6 @@
 package com.portfolio.persistence;
 
-import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
+import com.portfolio.domain.model.QuoteSummary;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

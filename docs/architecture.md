@@ -13,7 +13,7 @@ One direction only. Measured from the source, not aspirational — the counts ar
 | `domain` | nothing outside `domain` | `domain` 38 — clean |
 | `port` | `domain` | `domain` 1 |
 | `parser` | `domain`, `port` | `domain` 26, `port` 2 |
-| `persistence` | `domain` | `domain` 18, **`adapter` 1** |
+| `persistence` | `domain` | `domain` 18 — clean |
 | `adapter` | `domain`, `port`, `parser` | `domain` 12, `port` 6, `parser` 4 |
 | `application` | `domain`, `port`, `persistence`, `adapter`, `parser` | as listed |
 | `web` | `application`, `domain` | `application` 120, `domain` 10, **`persistence` 8**, **`adapter` 4** |
@@ -27,19 +27,82 @@ Plus two rules that are not about layers:
   `com.portfolio.persistence`. Two exceptions: `HealthService` (a liveness ping) and
   `BackupService` (writes a plain SQL dump, deliberately independent of our own code).
 
-### Known violations
+### How the build enforces this
 
-13 files, listed so they are a burn-down list rather than a surprise:
+`LayerRulesTest` (test scope, plain ArchUnit — no annotations in `main`, no runtime dependency)
+checks six rules:
 
-| What | Files | Why it is wrong |
+| Rule | Frozen? |
+|---|---|
+| layer dependencies run one way — the table above | yes, see below |
+| `domain` depends on nothing but `domain` | no |
+| Spring is confined to `web` and `config` | no |
+| JDBC is confined to `persistence` | no |
+| production code does not print to the console | no |
+| layers are free of cycles | no |
+
+Five of the six hold with no exception beyond the intended ones, which are named in the rules with
+their reason: `PortfolioBenchApplication` carries `@SpringBootApplication`, `SmtpAlertNotifier`
+holds a `JavaMailSender`, `HealthService` pings the database for liveness, `BackupService` writes a
+plain SQL dump. **Intended exceptions live in the rule; debt is frozen.** Those are not the same
+claim and are deliberately not expressed the same way.
+
+### The frozen set
+
+`archunit_store/` holds **60 accesses across 10 files**, all of them `web` → `persistence` or
+`web` → `adapter`: a controller reaching a repository or a fetcher skips the use-case layer that
+owns the read filters. The store can shrink by itself — a fixed violation drops out on the next run
+— and cannot grow. Nothing in it is endorsed.
+
+`freeze.store.default.allowStoreCreation` is **false** on purpose. Creation-on-demand would silently
+re-freeze every violation the moment the store went missing, which is the same hole as a size cap
+with headroom behind it: a guard that can quietly stop guarding. Adding a rule that needs a new
+baseline means flipping it true for one run.
+
+The `persistence` → `adapter` violation was fixed rather than frozen: `FundamentalsRepository` typed
+a stored row with `YahooQuoteSummaryFetcher.QuoteSummary`, so the table's shape followed Yahoo's
+DTO. The record moved to `domain.model.QuoteSummary`, where it was always a domain concept — a
+company's fundamentals snapshot — rather than a parser's output type.
+
+### A note on the engine
+
+The rules are driven from ordinary `@Test` methods, not ArchUnit's `@ArchTest`/`@AnalyzeClasses`
+engine. With this surefire setup that engine loads, logs its configuration and writes its freeze
+store, but reports **zero tests** — so a deliberately broken rule left the build green. It was
+caught by breaking a rule on purpose and watching it pass. If `archunit-junit5` is ever
+reintroduced, check that a broken rule actually fails before trusting it.
+
+### Coverage
+
+JaCoCo runs in the `test` phase (not `verify`, which `mvn package` never reaches) and its
+thresholds are a **ratchet**: every figure in the pom is where the suite actually stood when
+measured, rounded down. The build fails on a regression; a number goes up only after coverage has
+already passed it. Never lower one to make a commit pass.
+
+First measurement, 2026-11-04 — 2,377 tests, 80.7% line / 65.5% branch excluding `web` and
+`config`:
+
+| Package | Line | Branch |
 |---|---|---|
-| `web` → `persistence` | `WebSupport`, `DemoController`, `OperationsController`, `RootController`, `ChartsController`, `WatchlistController` | A controller reaching a repository skips the use-case layer that owns the read filters |
-| `web` → `adapter` | `DemoController`, `MappingsController`, `RootController`, `ManualPositionsController` | Same, for a fetcher |
-| `persistence` → `adapter` | `FundamentalsRepository` imports `YahooQuoteSummaryFetcher.QuoteSummary` | A stored row typed by a feed DTO: the table's shape now follows Yahoo's. Wants a `domain.model` type |
+| `domain` (core) | 97.3% | 80.5% |
+| `domain.grouping` | 100% | 85.7% |
+| `domain.momentum` | 98.0% | 78.9% |
+| `domain.swing` | 97.2% | 75.9% |
+| `domain.trend` | 97.0% | 82.4% |
+| `domain.model` | 94.6% | 77.3% |
+| **`domain.range`** | **65.8%** | **50.5%** |
+| `parser` | 89.5% | 66.2% |
+| `persistence` | 82.8% | 70.6% |
+| `application` | 71.8% | 56.1% |
+| `adapter` | 69.9% | 60.6% |
+| `web` | 25.9% | 7.8% |
 
-Nothing enforces this table yet — it is prose, which is the weakest kind of guard. The intent is
-ArchUnit rules in test scope, frozen at these 13 and burned down, which is also what lets the
-convention paragraphs leave the index: a rule the build checks does not need restating.
+`web` and `config` are excluded from the check. The controllers are thin by design, so a floor
+there would buy tests asserting that a model attribute exists.
+
+`domain.range` is the one real gap: 65.8% against 97%+ for the other three backtest engines, and it
+is pure logic, which is the layer held highest everywhere else. It has its own rung on the ratchet
+so the gap stays visible instead of being averaged into a `domain` figure that looks fine.
 
 ## What each package holds
 

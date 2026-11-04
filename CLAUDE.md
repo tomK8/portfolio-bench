@@ -38,6 +38,10 @@ rotates the previous log to a timestamped name. The JVM's stdout/stderr is redir
 file, so non-Logback output (early classloader errors, OOM dumps) is captured too.
 `spring.main.banner-mode=log` routes the Spring banner through SLF4J.
 
+`mvn test` also runs the architecture rules (`LayerRulesTest`) and the JaCoCo coverage ratchet.
+Both fail the build, and no threshold is ever lowered to make a commit pass —
+see [architecture.md](docs/architecture.md).
+
 **`start.sh` runs a prebuilt jar and never rebuilds.** After any change: `mvn package` first, then
 restart — otherwise you are testing the old build.
 
@@ -68,7 +72,7 @@ Spring Boot web app, layered. **Spring is confined to `web` and `config`**; `dom
 | `web` | `application`, `domain` — thin controllers only |
 | `config` | all of them; wiring only |
 
-Logging is SLF4J + Logback (`logback-spring.xml`); no `System.out` in production code. UI is
+Logging is SLF4J + Logback (`logback-spring.xml`). UI is
 server-rendered Thymeleaf + htmx + Chart.js, all **vendored**; 29 tab panels in six groups
 (Holdings / Performance / Risk / Quality / Strategies / Tools).
 
@@ -161,7 +165,7 @@ evidence and the reasoning are in the file.
 
 | Read this | Before you | The invariant it guards |
 |---|---|---|
-| [architecture.md](docs/architecture.md) | add a class, a service or a layer dependency | The layer table above is one-directional; `domain` imports nothing outside itself; the 13 known violations are a burn-down list, not precedent |
+| [architecture.md](docs/architecture.md) | add a class, a service or a layer dependency | `LayerRulesTest` enforces the table above; intended exceptions live in the rule, debt is frozen in `archunit_store/` and can only shrink; coverage is a ratchet, never lowered |
 | [endpoints.md](docs/endpoints.md) | look for an endpoint, controller or service by name | The endpoint → controller → service map, plus the areas shipping with no doc — there, the source *is* the specification |
 | [parsers.md](docs/parsers.md) | add or change a broker parser, or touch file detection | A zero-quantity row is absent, not worthless; cash is the broker's own classification, never our ticker list; a short is a real position |
 | [persistence.md](docs/persistence.md) | touch any repository, dedup rule or import path | Broker dedup keys are composite and cross-file; `cash_balance_gbp` is in the PK on purpose; read filters are allowlists |
@@ -217,5 +221,6 @@ than the `docs/` file it belongs in. Three mechanical guards in `DocsIndexTest` 
 
 So: **detail goes in `docs/`; the row here names the invariant and stops.** When an invariant needs
 evidence, a worked example or a count, that is the signal it belongs in the file, not the row.
-Anything the build can check — a layer rule, a confinement — belongs in a test, and then needs no
-paragraph here at all.
+Anything the build can check — a layer rule, a confinement, a coverage floor — belongs in a test,
+and then needs no paragraph here at all. That is why `LayerRulesTest` exists and why the
+`System.out` rule no longer appears above it.

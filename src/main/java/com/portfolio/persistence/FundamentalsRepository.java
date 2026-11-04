@@ -2,7 +2,7 @@ package com.portfolio.persistence;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
+import com.portfolio.domain.model.QuoteSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

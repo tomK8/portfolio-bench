@@ -1,6 +1,6 @@
 package com.portfolio.application;
 
-import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
+import com.portfolio.domain.model.QuoteSummary;
 import com.portfolio.application.ReminderService.EarningsRow;
 import com.portfolio.application.ReminderService.ManualRow;
 import com.portfolio.application.ReminderService.ReminderReport;

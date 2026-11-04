@@ -1,6 +1,6 @@
 package com.portfolio.application;
 
-import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
+import com.portfolio.domain.model.QuoteSummary;
 import com.portfolio.adapter.YahooTickerMap;
 import com.portfolio.domain.StyleClassifier;
 import com.portfolio.domain.model.Account;

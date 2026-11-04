@@ -1,6 +1,6 @@
 package com.portfolio.application;
 
-import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
+import com.portfolio.domain.model.QuoteSummary;
 import com.portfolio.application.AllocationService.AllocationPoint;
 import com.portfolio.domain.IndustryGroups;
 import com.portfolio.domain.SectorBucket;

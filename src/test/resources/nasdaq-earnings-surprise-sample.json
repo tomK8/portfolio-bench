@@ -1,0 +1,8 @@
+{"data":{"symbol":"zzza","chart":[{"x":"1793577600","y":"0.07"}],
+"earningsSurpriseTable":{"headers":{"fiscalQtrEnd":"Fiscal Quarter End","dateReported":"Date Reported","eps":"Earnings Per Share*","consensusForecast":"Consensus EPS* Forecast","percentageSurprise":"% Surprise"},
+"rows":[
+{"fiscalQtrEnd":"Sep 2026","dateReported":"11/2/2026","eps":2.05,"consensusForecast":"1.98","percentageSurprise":"3.54"},
+{"fiscalQtrEnd":"Jun 2026","dateReported":"7/30/2026","eps":1.91,"consensusForecast":"1.88","percentageSurprise":"1.6"},
+{"fiscalQtrEnd":"Mar 2026","dateReported":"4/30/2026","eps":"($0.11)","consensusForecast":"($0.21)","percentageSurprise":"52.4"},
+{"fiscalQtrEnd":"Dec 2025","dateReported":"","eps":2.84,"consensusForecast":"N/A","percentageSurprise":""}
+]}},"message":null,"status":{"rCode":200}}

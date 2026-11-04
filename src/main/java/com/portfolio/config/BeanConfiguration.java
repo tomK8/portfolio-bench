@@ -12,6 +12,7 @@ import com.portfolio.adapter.FrankfurterFxClient;
 import com.portfolio.adapter.GiltPriceFetcher;
 import com.portfolio.adapter.AjBellFileRouter;
 import com.portfolio.adapter.HoldingFileLocator;
+import com.portfolio.adapter.NasdaqCompanyEarningsFetcher;
 import com.portfolio.adapter.NasdaqEarningsFetcher;
 import com.portfolio.adapter.SmtpAlertNotifier;
 import com.portfolio.adapter.YahooPriceFetcher;
@@ -29,6 +30,7 @@ import com.portfolio.application.ShareClassRegistry;
 import com.portfolio.application.SwitchService;
 import com.portfolio.parser.RothOrdersParser;
 import com.portfolio.persistence.EarningsCalendarRepository;
+import com.portfolio.persistence.EarningsPrintRepository;
 import com.portfolio.persistence.InstrumentMappingRepository;
 import com.portfolio.persistence.OperatingLineRepository;
 import com.portfolio.persistence.OrderGroupRepository;
@@ -997,6 +999,45 @@ public class BeanConfiguration {
                                    AlertNotifier alertNotifier,
                                    KeyValueStore keyValueStore) {
         return new ReminderJob(reminderService, alertNotifier, keyValueStore);
+    }
+
+    // ---- What a print meant (the Just reported detail) ----------------------
+
+    @Bean
+    public NasdaqCompanyEarningsFetcher nasdaqCompanyEarningsFetcher() {
+        return new NasdaqCompanyEarningsFetcher();
+    }
+
+    @Bean
+    public EarningsPrintRepository earningsPrintRepository(JdbcConnectionFactory connections) {
+        return new EarningsPrintRepository(connections);
+    }
+
+    /**
+     * Reads the reminder universe through {@link ReminderService} rather than rebuilding it: the
+     * three KV sets behind it already answer "held, watched or under an order", and a second copy
+     * would be a second thing to keep in step. Nothing flows the other way — the reminders payload
+     * knows nothing about this, which is what keeps the mail job's cost unchanged.
+     */
+    @Bean
+    public EarningsPrintService earningsPrintService(ReminderService reminderService,
+                                                     EarningsCalendarService earningsCalendarService,
+                                                     EarningsPrintRepository earningsPrintRepository,
+                                                     PriceHistoryRepository priceHistoryRepository,
+                                                     YahooTickerMap yahooTickerMap,
+                                                     YahooQuoteSummaryFetcher yahooQuoteSummaryFetcher,
+                                                     NasdaqCompanyEarningsFetcher nasdaqCompanyEarningsFetcher,
+                                                     AllocationService allocationService,
+                                                     OrderHistoryRepository orderHistoryRepository) {
+        return new EarningsPrintService(reminderService, earningsCalendarService,
+                earningsPrintRepository, priceHistoryRepository, yahooTickerMap,
+                yahooQuoteSummaryFetcher, nasdaqCompanyEarningsFetcher, allocationService,
+                orderHistoryRepository);
+    }
+
+    @Bean
+    public EarningsPrintFetchJob earningsPrintFetchJob(EarningsPrintService earningsPrintService) {
+        return new EarningsPrintFetchJob(earningsPrintService);
     }
 
     // ---- Swing-strategy validation statistics -------------------------------

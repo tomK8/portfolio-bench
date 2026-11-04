@@ -73,6 +73,11 @@ final class PriceFetchSupport {
         }
         symbols.add(HistoricalScenarioService.DEFAULT_SUBSTITUTE);
         Set<String> out = new LinkedHashSet<>();
+        // The market index each listing's print reaction is taken net of. Already resolved Yahoo
+        // tickers, so they join the output set directly — and they must be here rather than left
+        // to whichever other feature happens to want them, or a market-relative move would quietly
+        // stop being available the day that feature's universe changed.
+        out.addAll(EarningsPrintService.marketIndexTickers());
         for (String symbol : symbols) {
             if (Instruments.isBond(symbol)) continue;
             out.add(tickers.tickerFor(symbol));

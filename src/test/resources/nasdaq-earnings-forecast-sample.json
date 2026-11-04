@@ -1,0 +1,11 @@
+{"data":{"symbol":"zzza",
+"quarterlyForecast":{"asOf":null,"headers":{"fiscalEnd":"Fiscal Quarter End"},
+"rows":[
+{"fiscalEnd":"Dec 2026","consensusEPSForecast":2.88,"highEPSForecast":3.04,"lowEPSForecast":2.68,"noOfEstimates":6,"up":0,"down":1},
+{"fiscalEnd":"Mar 2027","consensusEPSForecast":2.19,"highEPSForecast":2.35,"lowEPSForecast":2.04,"noOfEstimates":6,"up":1,"down":0},
+{"fiscalEnd":"","consensusEPSForecast":9.99,"noOfEstimates":1,"up":0,"down":0}
+]},
+"yearlyForecast":{"asOf":null,"headers":{"fiscalEnd":"Fiscal Year End"},
+"rows":[
+{"fiscalEnd":"Sep 2027","consensusEPSForecast":9.56,"highEPSForecast":10.47,"lowEPSForecast":8.91,"noOfEstimates":11,"up":3,"down":2}
+]}},"message":null,"status":{"rCode":200}}

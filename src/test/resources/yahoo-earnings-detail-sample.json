@@ -1,0 +1,20 @@
+{"quoteSummary":{"result":[{
+ "earnings":{
+  "maxAge":86400,
+  "earningsChart":{"quarterly":[
+    {"date":"2Q2026","actual":{"raw":2.02,"fmt":"2.02"},"estimate":{"raw":1.89,"fmt":"1.89"},"periodEndDate":{"raw":1782777600,"fmt":"2026-06-30"},"reportedDate":{"raw":1785443400,"fmt":"2026-07-30"}},
+    {"date":"3Q2026","actual":{"raw":2.10,"fmt":"2.10"},"estimate":{"raw":1.98,"fmt":"1.98"},"periodEndDate":{"raw":1790726400,"fmt":"2026-09-30"},"reportedDate":{"raw":1793655000,"fmt":"2026-11-02"}}
+  ]},
+  "financialsChart":{"quarterly":[
+    {"date":"2Q2026","revenue":{"raw":109417000000},"earnings":{"raw":29789000000}},
+    {"date":"3Q2026","revenue":{"raw":114477000000},"earnings":{"raw":30711000000}}
+  ]},
+  "financialCurrency":"USD"
+ },
+ "calendarEvents":{"earnings":{
+   "earningsDate":[{"raw":1793653200,"fmt":"2026-11-02"}],
+   "isEarningsDateEstimate":false,
+   "earningsAverage":{"raw":1.98,"fmt":"1.98"},
+   "revenueAverage":{"raw":112500000000,"fmt":"112.5B"}
+ }}
+}],"error":null}}

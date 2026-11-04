@@ -23,28 +23,40 @@ import java.util.List;
  * market cap. Forward-looking (unlike the EDGAR filing-date proxy), which is what the Earnings tab's
  * "+N days" half needs.
  *
- * <p><b>The feed answers in two shapes and flips per date, not per row.</b> While a date is still
- * ahead (today included — a company that reported before this morning's open still shows no actual
- * until tomorrow) each row carries {@code epsForecast}, a {@code time} session marker and
- * {@code lastYearRptDt}/{@code lastYearEPS}. Once the date has passed the same rows carry
+ * <p><b>The feed answers in several shapes and flips per date, not per row.</b> While a date is
+ * still ahead (today included — a company that reported before this morning's open still shows no
+ * actual until tomorrow) each row carries {@code epsForecast}, a {@code time} session marker and
+ * {@code lastYearRptDt}/{@code lastYearEPS}. Once the date has flipped the same rows carry
  * {@code eps} — what was actually reported — and {@code surprise}, while {@code time} degrades to
- * {@code time-not-supplied} and the last-year pair disappears. Both shapes are read here into one
- * record; which fields are present is what tells the two apart, and {@code EarningsCalendarService}
+ * {@code time-not-supplied} and the last-year pair disappears. Every shape is read here into one
+ * record; which fields are present is what tells them apart, and {@code EarningsCalendarService}
  * is where the consequence lives (a date fetched before it settled has to be asked once more
  * afterwards, and the answer merged rather than swapped in, or the session would be lost).
  *
- * <p><b>An {@code eps} on a row that still carries the last-year pair is not this quarter's
- * result.</b> In the hours after a date passes, before the feed has flipped it, the roster comes
- * back in the scheduled shape with an {@code eps} column already filled in — with <i>last year's</i>
- * figure. Read as an actual it publishes the year-ago quarter as what was just reported: on
- * 2026-10-29, fetched at 06:03 New York the following morning, 270 of 303 rows were cached that way
- * and SNDK's year-ago $0.90 was shown against a $46.19 consensus as a 98% miss, the quarter having
- * in fact beaten it at $48.92. So the two shapes are told apart <b>structurally</b>, on the
- * last-year pair — the scheduled shape's own signature, present on every scheduled row sampled and
- * on no settled one — and never on whether {@code eps} looks plausible beside {@code lastYearEPS}:
- * a company that earns exactly what it earned a year ago is an ordinary quarter, not a bad row.
- * {@code EarningsCalendarService.settled} is the other half — a roster still in the scheduled
- * shape is not the feed's final answer, so the date is asked again rather than closed.
+ * <p><b>An {@code eps} on a row that has not finished flipping is not this quarter's result.</b>
+ * In the hours after a date passes, the roster comes back still looking scheduled with an
+ * {@code eps} column already filled in — holding <i>last year's</i> figure. Read as an actual it
+ * publishes the year-ago quarter as what was just reported. It has happened twice, through a
+ * different signature each time:
+ *
+ * <ul>
+ *   <li><b>2026-10-29</b>, fetched 06:03 New York the next morning: 270 of 303 rows cached that
+ *       way, and SNDK's year-ago $0.90 shown against a $46.19 consensus as a 98% miss on a quarter
+ *       that in fact beat at $48.92. Those rows still carried the last-year pair.</li>
+ *   <li><b>2026-11-03</b>, fetched 02:30 New York the next morning, four days after the first fix
+ *       shipped: the whole roster had <i>already dropped</i> the last-year pair but kept its
+ *       session marker, with {@code surprise} a uniform {@code "N/A"}. AMD's year-ago $0.97 was
+ *       published against a $1.68 consensus as a 42% miss. 253 of the 253 rows carrying both
+ *       figures had them equal.</li>
+ * </ul>
+ *
+ * <p>So the shapes are told apart <b>structurally and on two signatures at once</b> — see
+ * {@link #scheduledShape}: a row must have shed the last-year pair <i>and</i> its session marker
+ * before its {@code eps} is read. Never on whether {@code eps} looks plausible beside
+ * {@code lastYearEPS}: a company that earns exactly what it earned a year ago is an ordinary
+ * quarter, not a bad row. {@code EarningsCalendarService.settled} is the other half — a roster
+ * still in the scheduled shape is not the feed's final answer, so the date is asked again rather
+ * than closed.
  *
  * <p><b>{@code surprise} is read past, not parsed.</b> It is a pure function of the two numbers
  * beside it, and across 481 settled rows it disagreed with them twice (MAA reported 2.10 against a
@@ -124,6 +136,7 @@ public class NasdaqEarningsFetcher implements EarningsCalendarFeed {
         List<EarningsEvent> out = new ArrayList<>();
         JsonNode rows = root.path("data").path("rows");
         if (!rows.isArray()) return out; // no-reports day (data null / rows absent)
+        boolean flipped = rosterHasFlipped(rows);
         for (JsonNode row : rows) {
             String symbol = text(row, "symbol");
             if (symbol == null) continue;
@@ -136,28 +149,92 @@ public class NasdaqEarningsFetcher implements EarningsCalendarFeed {
                     parseNumber(text(row, "epsForecast")),
                     parseInt(text(row, "noOfEsts")),
                     parseNumber(text(row, "lastYearEPS")),
-                    scheduledShape(row) ? null : parseNumber(text(row, "eps"))));
+                    (!flipped || scheduledShape(row)) ? null : parseNumber(text(row, "eps"))));
         }
         return out;
     }
 
     /**
-     * Whether this row is still in the scheduled shape, in which case its {@code eps} is last
-     * year's figure rather than what was just reported and must not be read as an actual.
+     * Whether this roster has flipped to reporting what happened — the gate every row's
+     * {@code eps} has to pass before it is read as an actual.
      *
-     * <p>Judged on the <b>presence of the last-year pair</b>, not on its values and not on the
-     * numbers themselves. Those two keys are the scheduled shape's signature: the feed drops them
-     * entirely once a date has settled (1044 scheduled rows sampled across three forward dates
-     * carried both; 634 settled rows across three past dates carried neither), and it keeps them
-     * through the transitional window where the bogus {@code eps} appears. A blank {@code
-     * lastYearEPS} — a company with no year-ago quarter — is still the scheduled shape, which is
-     * why the key is the test and the value is not.
+     * <p>The feed flips a date as a whole, so this is asked of the roster rather than the row, and
+     * it is asked because the two per-row signatures are both <b>absent</b> on a scheduled row for
+     * a company that never stated a session. On 2026-11-03, 42 of 264 rows were exactly that:
+     * {@code time-not-supplied} because the company had not said when it would report, no
+     * last-year pair, and an {@code eps} holding the year-ago quarter. Nothing about such a row
+     * distinguishes it from a settled one. The roster it arrived in does.
+     *
+     * <p><b>The marker is that the feed has started publishing surprises at all.</b> An unflipped
+     * roster carries {@code "N/A"} in every one (264 of 264 on 2026-11-03, hours after the date
+     * passed); a flipped one carries real numbers for most of its rows (2026-11-02 and 2026-10-29
+     * both). That is a presence test over the whole roster, not a threshold on any row.
+     *
+     * <p>This does <b>not</b> contradict the rule that {@code surprise} is read past and never
+     * parsed. That rule is about its <i>value</i>, which disagrees with the two figures printed
+     * beside it often enough to be unusable. What is read here is only that the column has begun
+     * to be populated — the one thing it is reliable about. The surprise shown on screen is still
+     * recomputed from {@code eps} and {@code epsForecast}.
+     *
+     * <p>A flipped roster on which <i>every</i> company met consensus to the cent would read as
+     * unflipped and have its figures withheld. For a roster of any size that is not a real
+     * scenario, and the failure is the recoverable one: the date keeps reading unsettled, so it is
+     * asked again rather than closed on a fabrication.
      */
-    static boolean scheduledShape(JsonNode row) {
-        return row.has("lastYearRptDt") || row.has("lastYearEPS");
+    static boolean rosterHasFlipped(JsonNode rows) {
+        for (JsonNode row : rows) {
+            if (parseNumber(text(row, "surprise")) != null) return true;
+        }
+        return false;
     }
 
-    private static String text(JsonNode row, String field) {
+    /**
+     * Whether this row has stopped looking scheduled — the test for whether its {@code eps} is
+     * what was just reported or last year's figure wearing this quarter's label.
+     *
+     * <p><b>Two independent signatures, and a row must have shed both.</b> Either one on its own
+     * has been observed surviving into the window where {@code eps} is already filled in with the
+     * year-ago number, which is the whole hazard:
+     *
+     * <ul>
+     *   <li><b>The last-year pair.</b> {@code lastYearRptDt}/{@code lastYearEPS} are present on
+     *       every scheduled row (1044 sampled across three forward dates; 479 of 479 on
+     *       2026-11-04) and on no settled one. The key is the test, never the value: a company
+     *       with no year-ago quarter sends a blank {@code lastYearEPS} beside an {@code eps} of
+     *       {@code $0}, which read as an actual is a manufactured zero.</li>
+     *   <li><b>A named session.</b> {@code time} degrades to {@code time-not-supplied} when a date
+     *       flips — 308 of 309 rows on 2026-10-29, 154 of 157 on 2026-11-02 — so a row still
+     *       saying {@code time-pre-market} or {@code time-after-hours} has not flipped.</li>
+     * </ul>
+     *
+     * <p>The second was added because the first alone failed on <b>2026-11-03</b>, four days after
+     * it shipped. That whole roster came back with the last-year pair <i>already dropped</i>, the
+     * session marker intact, {@code surprise} a uniform {@code "N/A"}, and {@code eps} holding the
+     * year-ago quarter: AMD's {@code $0.97} is its Sep-2025 figure to the cent, published against
+     * a {@code $1.68} consensus as a 42% miss on a quarter whose figures were not out. 253 of the
+     * 253 rows carrying both figures had them equal — the same fingerprint as 2026-10-29, through
+     * a different hole. <b>There are four shapes, not three</b>, and the transitional one can shed
+     * either signature first.
+     *
+     * <p>The cost of the stricter test is a handful of rows on an otherwise-settled date that keep
+     * a session marker (GRAB and AEHR on 2026-11-02, HLN on 2026-10-29 — all with
+     * {@code surprise: "N/A"}, i.e. in exactly this unflipped state row-by-row). Their actual is
+     * withheld for now and the date keeps reading unscheduled, so it is asked again. That is the
+     * recoverable direction: an actual withheld for a pass shows as <i>awaiting figures</i> and
+     * arrives later, while an actual invented from last year closes the date and is undetectable
+     * afterwards.
+     *
+     * <p>{@code surprise} is deliberately <b>not</b> the test, tempting as its uniform absence
+     * here is. It is missing on genuinely settled rows too — 31 of them, where the company met
+     * consensus to the cent — so requiring it would discard real figures to catch fake ones.
+     */
+    static boolean scheduledShape(JsonNode row) {
+        return row.has("lastYearRptDt") || row.has("lastYearEPS")
+                || !"TBD".equals(normTime(text(row, "time")));
+    }
+
+    /** Package-private: {@link NasdaqCompanyEarningsFetcher} parses the same feed's display strings. */
+    static String text(JsonNode row, String field) {
         JsonNode n = row.path(field);
         if (n.isMissingNode() || n.isNull()) return null;
         String s = n.asText().trim();

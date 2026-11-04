@@ -3,6 +3,7 @@ package com.portfolio.web;
 import com.portfolio.application.CachedHistoricalFxRateProvider;
 import com.portfolio.application.CatchUpService;
 import com.portfolio.application.EarningsCalendarService;
+import com.portfolio.application.EarningsPrintFetchJob;
 import com.portfolio.application.FundamentalsFetchJob;
 import com.portfolio.application.OperatingLineFetchJob;
 import com.portfolio.application.GiltPriceFetchJob;
@@ -51,6 +52,7 @@ public class PriceFetchScheduler {
     private final OperatingLineFetchJob operatingLineJob;
     private final WatchlistAlertJob watchlistAlertJob;
     private final ReminderJob reminderJob;
+    private final EarningsPrintFetchJob earningsPrintJob;
     private final EarningsCalendarService earningsCalendar;
     private final CachedHistoricalFxRateProvider historicalFx;
     private final BackupService backupService;
@@ -63,6 +65,7 @@ public class PriceFetchScheduler {
                                OperatingLineFetchJob operatingLineJob,
                                WatchlistAlertJob watchlistAlertJob,
                                ReminderJob reminderJob,
+                               EarningsPrintFetchJob earningsPrintJob,
                                EarningsCalendarService earningsCalendar,
                                CachedHistoricalFxRateProvider historicalFx,
                                BackupService backupService,
@@ -75,6 +78,7 @@ public class PriceFetchScheduler {
         this.operatingLineJob = operatingLineJob;
         this.watchlistAlertJob = watchlistAlertJob;
         this.reminderJob = reminderJob;
+        this.earningsPrintJob = earningsPrintJob;
         this.earningsCalendar = earningsCalendar;
         this.historicalFx = historicalFx;
         this.backupService = backupService;
@@ -165,6 +169,29 @@ public class PriceFetchScheduler {
     @Scheduled(fixedDelay = 24 * 60 * 60 * 1000, initialDelay = 30 * 60 * 1000)
     public void operatingLine() {
         operatingLineJob.run();
+    }
+
+    /**
+     * Capture what a print is expected to deliver before that becomes unobtainable, and fill in
+     * what it delivered once it has.
+     *
+     * <p>Two-hourly, and the cadence is set by the perishable half. Yahoo publishes one set of
+     * estimates per company for its next report and rolls them to the following quarter within
+     * hours of the print; what revenue was expected of the quarter just reported is then gone from
+     * every free source. The capture window opens a fortnight ahead, so this only has to run often
+     * enough that a name added to the portfolio days before its results is still caught.
+     *
+     * <p>Costs nothing to over-call, like the back-warm above: the job skips every print whose
+     * detail it already holds and asks about an unanswerable one once a day rather than once a
+     * pass, so a run outside results season is a few SQLite reads.
+     */
+    @Scheduled(fixedDelay = 2 * 60 * 60 * 1000, initialDelay = 5 * 60 * 1000)
+    public void earningsPrintDetail() {
+        try {
+            earningsPrintJob.run();
+        } catch (RuntimeException e) {
+            log.warn("Earnings print detail run failed", e);
+        }
     }
 
     /**

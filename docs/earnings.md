@@ -16,9 +16,11 @@ deliberately a **separate port** (`port/EarningsCalendarFeed`, `forDate(LocalDat
   (`"$665,246,306,497"`, `"$7.98"`, `"($0.11)"`) → parsed to real numbers (`parseNumber` treats
   `(x)` as −x, strips `$ , %`; `"$0"` is a real zero, blank/`N/A` → null). `time` normalises
   `time-pre-market`→`BMO` / `time-after-hours`→`AMC` / else `TBD`. Rows without a symbol are dropped.
-  Reads **both row shapes** without being told which (see below): every field is taken where it
+  Reads **every row shape** without being told which (see below): each field is taken where it
   appears and left null where it is not, so a settled row yields an `actualEps` and no session and a
-  scheduled row the reverse. `surprise` is deliberately **not** parsed.
+  scheduled row the reverse. `surprise`'s **value** is deliberately never parsed; its *presence
+  anywhere on the roster* is read, and only as the marker that the date has flipped
+  (`rosterHasFlipped`).
 - `domain.model.EarningsEvent` — pure record (date, symbol, companyName, time, marketCap [whole USD],
   epsForecast, numEstimates, lastYearEps, actualEps). `marketCap`/EPS are native USD (US-market
   calendar, no FX). `actualEps` is what the company reported and exists **only once the date has
@@ -46,23 +48,24 @@ deliberately a **separate port** (`port/EarningsCalendarFeed`, `forDate(LocalDat
   endpoints — a pure feed read, independent of the price/cash pipelines (like Open orders). Not
   wired into `PriceFetchSupport` (no Yahoo prices involved).
 
-## The feed answers in three shapes, and flips per date
+## The feed answers in four shapes, and flips per date
 
 The same `?date=` GET returns a different row shape depending on whether that date has passed, and
 it flips **the whole roster at once, not row by row** — a company that reported before this
 morning's open still shows no actual until tomorrow.
 
-| | A date still ahead (today included) | **Passed, not flipped yet** | A date that has flipped |
-|---|---|---|---|
-| `epsForecast`, `noOfEsts` | yes | yes | yes |
-| `time` | `time-pre-market` / `time-after-hours` | unchanged | always `time-not-supplied` |
-| `lastYearEPS`, `lastYearRptDt` | yes | **still there** | **gone** |
-| `eps` | — | **present, holding last year's figure** | what was reported |
-| `surprise` | — | — | yes |
+| | A date still ahead (today included) | **Passed, not flipped yet** | **Passed, last-year pair dropped** | A date that has flipped |
+|---|---|---|---|---|
+| `epsForecast`, `noOfEsts` | yes | yes | yes | yes |
+| `time` | `time-pre-market` / `time-after-hours` | unchanged | **unchanged** | always `time-not-supplied` |
+| `lastYearEPS`, `lastYearRptDt` | yes | **still there** | **gone** | gone |
+| `eps` | — | **present, holding last year's figure** | **present, holding last year's figure** | what was reported |
+| `surprise` | — | — | **`"N/A"`, every row** | a number, most rows |
 
-The middle column is a transitional window of hours, and it is the subject of its own section
-below. Read "has passed" as "has flipped" throughout the rest of this file: the calendar date
-rolling over and the roster flipping are hours apart, and the first on its own settles nothing.
+The two middle columns are a transitional window of hours, and each is the subject of its own
+section below. Read "has passed" as "has flipped" throughout the rest of this file: the calendar
+date rolling over and the roster flipping are hours apart, and the first on its own settles
+nothing.
 
 Three consequences, each of which is a rule somewhere in the code:
 
@@ -222,6 +225,54 @@ supply a name for a row it never dated.
 Funds and bonds are **dropped entirely** (no earnings to report). Funds are identified by a
 non-empty cached `sectorWeights` (the same `topHoldings` data the sector block uses) — needed
 because every held ETF has a `.L` ticker and would otherwise be mislabelled "not covered".
+
+## The fourth shape: flipped-looking, but not flipped (2026-11-04)
+
+**It happened again, four days after the fix, through the other signature.** 2026-11-03 was fetched
+at 02:30 New York on the 4th and 253 of the 253 rows carrying both figures had them equal — the
+same fingerprint as 2026-10-29. AMD's year-ago **$0.97** was published against a $1.68 consensus as
+a **42% miss** on a quarter whose figures were not out; ANET's $0.67 the same way. The new
+*EPS YoY* column on the reminders screen is what surfaced it: two large names at **exactly 0.0%**
+growth is not a coincidence, it is `actual == lastYear`.
+
+The roster had **already dropped the last-year pair** — the signature the first fix was built on —
+while keeping its session markers, with `surprise` a uniform `"N/A"`. So the table above gains a
+column:
+
+| | Still ahead | Passed, not flipped | **Passed, last-year pair dropped** | Flipped |
+|---|---|---|---|---|
+| `lastYearEPS`/`lastYearRptDt` | yes | yes | **gone** | gone |
+| `time` | real session | real session | **real session (222/264)** | `time-not-supplied` |
+| `surprise` | — | — | **`"N/A"`, every row** | a number, most rows |
+| `eps` | — | last year's | **last year's** | what was reported |
+
+`NasdaqEarningsFetcher.scheduledShape` therefore requires a row to have shed **both** per-row
+signatures — the last-year pair *and* its session marker — before its `eps` is read.
+
+**And neither is enough on its own, because a company that never stated a session sends
+`time-not-supplied` while still scheduled.** 42 of the 264 rows were exactly that: no session, no
+last-year pair, and an `eps` holding the year-ago quarter. Nothing on such a row distinguishes it
+from a settled one. The **roster** does: `rosterHasFlipped` reads the date as flipped only once at
+least one row carries a numeric `surprise`. An unflipped roster has none (264 of 264 `"N/A"`); a
+flipped one has them for most rows. Measured after the fix: 2026-11-03 withheld all 264, while
+2026-11-02 kept 151 of its 153 actuals.
+
+**That is not the `surprise` column being trusted.** Its *value* is still never read — it
+contradicts the two figures beside it often enough to be unusable, which is why the surprise shown
+is recomputed. What is read is only that the column **has begun to be populated**, which is the one
+thing it is reliable about. The 31 settled rows that publish a blank because the company met
+consensus to the cent keep their figures, because one real surprise anywhere on the roster opens
+all of it.
+
+The failure direction is deliberate. A flipped roster on which *every* company met consensus
+exactly would read as unflipped and have its figures withheld — not a real scenario at roster size,
+and recoverable: the date keeps reading unsettled, so it is asked again rather than closed on a
+fabrication. An actual withheld for a pass shows as *awaiting figures* and arrives later; an actual
+invented from last year closes the date and is undetectable afterwards.
+
+Repairing the live cache was again one `UPDATE earnings_calendar SET actual_eps = NULL WHERE date =
+'2026-11-03'` — not a delete, because the merge needs the cached sessions and last-year figures
+still there.
 
 ## Panel overview
 

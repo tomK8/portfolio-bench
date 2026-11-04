@@ -100,6 +100,13 @@ its place only if it means the same thing in every row). The symbol is greyed ra
 through: a line through the figures would read as "disregard this", and the figures are the whole
 reason the row is kept.
 
+**Beat or miss is the smallest thing a print says**, so the rest of the row is what it did — the
+move across the print and how big that is for this name, the £ effect on the position, the gap to
+any resting limit, the revenue against what was expected, and what the consensus has done since.
+That half is a **separate request** (`GET /reminders/reported`) precisely because `ReminderJob`
+reads this payload every half hour and none of it is a reminder: see
+[print-reaction.md](print-reaction.md), which also records why there is no guidance column.
+
 **Three states, not two, and they read differently.** The figures are in; or the print has happened
 and the feed has not published them to us yet (**awaiting figures** — the ordinary state in the hours
 after a print, and *not* the same as never having reported, which is why the row is listed rather

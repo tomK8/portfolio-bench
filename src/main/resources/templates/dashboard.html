@@ -3972,8 +3972,36 @@
         company that met consensus <em>exactly</em> as a blank rather than as zero. A name no analyst
         covers reported a figure and nothing more can be said about it, which is <b>no consensus</b>
         rather than a nil result; in the hours after a print, before the feed publishes the figures,
-        the row reads <b>awaiting figures</b>. All amounts are US dollars per share, as the feed
+        the row reads <b>awaiting figures</b>. EPS amounts are US dollars per share, as the feed
         states them.
+    </p>
+    <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">
+        <b>Beat or miss is the smallest thing a print says</b>, so the rest of the row is whether it
+        mattered. <b>Move</b> is the one session that could trade on the news — the previous close to
+        the print day's for a report before the open, the print day's to the next for one after the
+        close — on the listing <em>you</em> hold, and <b>× usual</b> puts it in units of what that
+        name normally does on a print, so a 4% move on a company that moves 1% is not read like a 4%
+        move on one that moves 6%. A row says <b>no session</b> rather than guessing which window
+        applies, and <b>not yet</b> while the session that will carry the reaction is still to come.
+        Every column names what it is divided by on hover.
+    </p>
+    <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">
+        <b>The revenue consensus is captured before the print, because afterwards nobody publishes
+        it.</b> Every free source carries one set of estimates per company and rolls it to the next
+        quarter within hours of the results, so what the quarter just reported was expected to earn
+        stops existing. A row reading <b>no consensus</b> on the Revenue column is a reading we never
+        took — not a shortfall — and it will fill in for prints from here on. The same applies to
+        <b>Consensus since</b>: the percentage is against our own last reading before the print, dated
+        on hover, while the up/down counts are the feed's own four-week window and stand on their own.
+    </p>
+    <p class="muted" style="margin: 0.2rem 0 0.4rem; font-size: 0.82rem;">
+        <b>There is no guidance column, deliberately.</b> What a company said about next quarter lives
+        in its press release and on its call, and no free, structured source publishes it; the only
+        way to get it would be to read the prose, which would be guessing. More to the point, a
+        company that gave <em>no</em> guidance and one whose guidance we failed to extract would look
+        identical in that column, and a blank that means two opposite things is the one thing this
+        screen is built not to print. The <b>Consensus since</b> column is the closest honest
+        substitute: it is what the analysts did after hearing it.
     </p>
     <div id="rm-reported" style="margin-top: 0.4rem;"></div>
 

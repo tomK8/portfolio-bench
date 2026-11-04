@@ -293,6 +293,48 @@ public class OrderHistoryRepository {
     }
 
     /** Closed orders, newest first — what the history panel lists. */
+    /**
+     * The orders a broker is still listing for these symbols — {@code closed_at IS NULL}, which is
+     * the same test {@code closed()} inverts.
+     *
+     * <p>A cheap read deliberately: the Orders tab answers this by re-parsing the broker exports,
+     * fetching FX and pricing every row, and that is far too much for a screen that only wants to
+     * say how far a resting limit sits from the price. Nothing here writes, so reading it from
+     * another tab cannot record an order history that tab never looked at.
+     */
+    public List<RestingOrder> resting(Collection<String> symbols) {
+        List<RestingOrder> out = new ArrayList<>();
+        if (symbols == null || symbols.isEmpty()) return out;
+        List<String> wanted = new ArrayList<>(symbols);
+        String sql = "SELECT order_key, broker, symbol, side, order_type, quantity, price, currency "
+                + "FROM order_history WHERE closed_at IS NULL AND symbol IN ("
+                + String.join(",", java.util.Collections.nCopies(wanted.size(), "?"))
+                + ") ORDER BY symbol, side, price";
+        try (Connection conn = connections.open();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (int i = 0; i < wanted.size(); i++) ps.setString(1 + i, wanted.get(i));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    double price = rs.getDouble("price");
+                    boolean noPrice = rs.wasNull();
+                    double qty = rs.getDouble("quantity");
+                    boolean noQty = rs.wasNull();
+                    out.add(new RestingOrder(rs.getString("order_key"), rs.getString("broker"),
+                            rs.getString("symbol"), rs.getString("side"), rs.getString("order_type"),
+                            noQty ? null : qty, noPrice ? null : price, rs.getString("currency")));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not read resting orders", e);
+        }
+        return out;
+    }
+
+    /** One order a broker is still listing. {@code price} is the limit, null when it has none. */
+    public record RestingOrder(String orderKey, String broker, String symbol, String side,
+                               String orderType, Double quantity, Double price, String currency) {
+    }
+
     public List<HistoricalOrder> closed() {
         List<HistoricalOrder> out = new ArrayList<>();
         if (!connections.dbExists()) return out;

@@ -178,4 +178,81 @@ class NasdaqEarningsFetcherTest {
         assertNull(wso.epsForecast());
         assertNull(wso.numEstimates());
     }
+
+    /**
+     * The 2026-11-03 roster: the last-year pair already dropped, the session marker still there,
+     * and {@code eps} holding the year-ago quarter. AMD's $0.97 is its Sep-2025 figure to the
+     * cent, and reading it as an actual publishes a 42% miss against a $1.68 consensus on a
+     * quarter whose figures were not out. This is the shape that got through the last-year test.
+     */
+    @Test
+    void aRowThatStillNamesItsSessionIsNotSettledEvenWithTheLastYearPairGone() throws Exception {
+        List<EarningsEvent> events = parse("nasdaq-earnings-transitional-nolastyear-sample.json",
+                LocalDate.parse("2026-11-03"));
+        assertEquals(3, events.size());
+        for (EarningsEvent e : events) {
+            assertNull(e.actualEps(), e.symbol() + " must not carry last year's EPS as an actual");
+            assertFalse(e.reported(), e.symbol() + " has not reported as far as this feed says");
+        }
+        // Everything the row genuinely states is still read.
+        EarningsEvent amd = events.get(0);
+        assertEquals("AMC", amd.time());
+        assertEquals(1.68, amd.epsForecast(), 1e-9);
+        assertEquals(13, amd.numEstimates());
+    }
+
+    @Test
+    void aSettledRowThatKeptItsSessionWithholdsItsFigureRatherThanRiskingTheYearAgoOne()
+            throws Exception {
+        // GRAB and AEHR on 2026-11-02: an otherwise-flipped date, these rows left unflipped.
+        String json = "{\"data\":{\"rows\":[{\"eps\":\"$0.01\",\"surprise\":\"N/A\","
+                + "\"time\":\"time-after-hours\",\"symbol\":\"GRAB\",\"epsForecast\":\"$0.02\"}]}}";
+        List<EarningsEvent> events = NasdaqEarningsFetcher.parse(
+                new ObjectMapper().readTree(json), LocalDate.parse("2026-11-02"));
+        assertNull(events.get(0).actualEps());
+    }
+
+    @Test
+    void aFlippedRowWithNoSessionAndNoLastYearPairIsReadAsAnActual() throws Exception {
+        String json = "{\"data\":{\"rows\":[{\"eps\":\"$2.05\",\"surprise\":\"3.54\","
+                + "\"time\":\"time-not-supplied\",\"symbol\":\"AAPL\",\"epsForecast\":\"$1.98\"}]}}";
+        List<EarningsEvent> events = NasdaqEarningsFetcher.parse(
+                new ObjectMapper().readTree(json), LocalDate.parse("2026-11-02"));
+        assertEquals(2.05, events.get(0).actualEps(), 1e-9);
+        assertTrue(events.get(0).reported());
+    }
+
+    /**
+     * The 42 rows on 2026-11-03 that neither per-row signature could catch: a company that never
+     * stated a session sends {@code time-not-supplied} while still scheduled, and the last-year
+     * pair had already been dropped from the whole roster. Only the roster says the date has not
+     * flipped — nothing on the row does.
+     */
+    @Test
+    void aScheduledRowWithNoSessionIsCaughtByTheRosterHavingNoSurprisesAtAll() throws Exception {
+        String json = "{\"data\":{\"rows\":["
+                + "{\"eps\":\"$0.75\",\"surprise\":\"N/A\",\"time\":\"time-not-supplied\","
+                + "\"symbol\":\"AES\",\"epsForecast\":\"\"},"
+                + "{\"eps\":\"$0.97\",\"surprise\":\"N/A\",\"time\":\"time-after-hours\","
+                + "\"symbol\":\"AMD\",\"epsForecast\":\"$1.68\"}]}}";
+        List<EarningsEvent> events = NasdaqEarningsFetcher.parse(
+                new ObjectMapper().readTree(json), LocalDate.parse("2026-11-03"));
+        assertEquals(2, events.size());
+        for (EarningsEvent e : events) assertNull(e.actualEps(), e.symbol() + " has not reported");
+    }
+
+    @Test
+    void oneRealSurpriseAnywhereOnTheRosterIsWhatOpensTheRestOfIt() throws Exception {
+        // A flipped date: most rows carry a number, and the one that met consensus exactly
+        // publishes a blank -- which must not cost it its figure.
+        String json = "{\"data\":{\"rows\":["
+                + "{\"eps\":\"$2.05\",\"surprise\":\"3.54\",\"time\":\"time-not-supplied\","
+                + "\"symbol\":\"AAPL\",\"epsForecast\":\"$1.98\"},"
+                + "{\"eps\":\"$0.32\",\"surprise\":\"N/A\",\"time\":\"time-not-supplied\","
+                + "\"symbol\":\"PLTR\",\"epsForecast\":\"$0.32\"}]}}";
+        List<EarningsEvent> events = NasdaqEarningsFetcher.parse(
+                new ObjectMapper().readTree(json), LocalDate.parse("2026-11-02"));
+        assertEquals(2.05, events.get(0).actualEps(), 1e-9);
+        assertEquals(0.32, events.get(1).actualEps(), 1e-9);
+    }
 }

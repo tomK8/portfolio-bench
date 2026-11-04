@@ -2,6 +2,7 @@ package com.portfolio.adapter;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.portfolio.domain.PrintReaction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,6 +27,7 @@ import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -107,29 +109,8 @@ public class YahooQuoteSummaryFetcher {
     private HttpClient bootstrapHttpClient; // lazy; only touched under ensureCrumb's lock
 
     public QuoteSummary fetch(String yahooTicker) {
-        try {
-            ensureCrumb();
-        } catch (Exception e) {
-            log.warn("quoteSummary: could not obtain crumb", e);
-            return QuoteSummary.empty(yahooTicker);
-        }
-        String url = String.format(URL_FMT,
-                URLEncoder.encode(yahooTicker, StandardCharsets.UTF_8),
-                URLEncoder.encode(crumb, StandardCharsets.UTF_8));
-        String body = get(url);
-        // One retry on 401: a stale crumb gives back Invalid Crumb; discard + re-handshake.
-        if (body == null) {
-            crumb = null;
-            try {
-                ensureCrumb();
-                url = String.format(URL_FMT,
-                        URLEncoder.encode(yahooTicker, StandardCharsets.UTF_8),
-                        URLEncoder.encode(crumb, StandardCharsets.UTF_8));
-                body = get(url);
-            } catch (Exception e) {
-                log.warn("quoteSummary: crumb refresh failed for {}", yahooTicker, e);
-            }
-        }
+        // One retry on a stale crumb lives in getWithCrumb, shared with fetchEarningsDetail.
+        String body = getWithCrumb(URL_FMT, yahooTicker);
         if (body == null) return QuoteSummary.empty(yahooTicker);
         try {
             return parse(yahooTicker, body);
@@ -784,6 +765,158 @@ public class YahooQuoteSummaryFetcher {
         JsonNode raw = node.isObject() ? node.path("raw") : node;
         if (!raw.isNumber()) return null;
         return Instant.ofEpochSecond(raw.asLong()).atZone(ZoneOffset.UTC).toLocalDate().toString();
+    }
+
+    // ---- the earnings detail behind a print ------------------------------------------------
+
+    /**
+     * Modules for {@link #fetchEarningsDetail}: what a company reported, and what is expected of
+     * the print still ahead. Deliberately a second call rather than two more modules on
+     * {@link #URL_FMT} — the snapshot is fetched for the whole fundamentals universe every four
+     * hours, and this is wanted for the handful of names with a print within days either way.
+     */
+    private static final String EARNINGS_URL_FMT =
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s" +
+                    "?modules=earnings,calendarEvents&crumb=%s";
+
+    /**
+     * One quarter as Yahoo reports it. {@code reportedAt} is an instant, not a day, and that is the
+     * point of reading it: the time of day is what says whether the figures landed before the open
+     * or after the close, which is the only thing that decides which session a price reaction is
+     * measured over. {@code revenue} and the two EPS figures are in {@link EarningsDetail#financialCurrency}.
+     *
+     * <p>{@code label} is Yahoo's own calendar-quarter tag ({@code "3Q2026"}) and is the key the
+     * revenue is joined on — the two charts in this module are published separately and are not
+     * always the same length, so position would pair the wrong quarter with the wrong revenue.
+     */
+    public record ReportedQuarter(String label, LocalDate periodEnd, Instant reportedAt,
+                                  BigDecimal eps, BigDecimal estimate, BigDecimal revenue) {
+    }
+
+    /**
+     * A company's reported quarters, plus the consensus for the print still ahead.
+     *
+     * <p><b>{@code nextEarningsDate} is what makes the two consensus figures usable at all.</b>
+     * Yahoo rolls this module forward some hours after a print — and not at the same moment for
+     * every company. On the morning of 2026-11-03, AAPL's block had already moved to its January
+     * date and was publishing the <i>December</i> quarter's estimates, while VRTX's still named
+     * 2026-11-02 and the figures still belonged to the quarter just reported. Read without checking
+     * the date, PLTR's $2.68bn revenue estimate would have been set against the $2.31bn it had just
+     * reported for a different quarter and published as a 14% miss. So the date rides with the
+     * figures and the caller must match it against the print it is asking about; where it has
+     * rolled past, there is no pre-print consensus here and the answer is that, not a number.
+     */
+    public record EarningsDetail(String symbol, String financialCurrency,
+                                 List<ReportedQuarter> quarters,
+                                 LocalDate nextEarningsDate,
+                                 BigDecimal nextEpsConsensus,
+                                 BigDecimal nextRevenueConsensus,
+                                 boolean missing) {
+
+        public static EarningsDetail empty(String symbol) {
+            return new EarningsDetail(symbol, null, List.of(), null, null, null, true);
+        }
+
+        /** The quarter Yahoo says was reported on {@code day}, or null — matched on the US day. */
+        public ReportedQuarter reportedOn(LocalDate day) {
+            if (day == null) return null;
+            for (ReportedQuarter q : quarters) {
+                if (q.reportedAt() != null && day.equals(PrintReaction.usDayOf(q.reportedAt()))) return q;
+            }
+            return null;
+        }
+    }
+
+    /**
+     * The quarters a company has reported and the consensus for its next print, or a
+     * {@code missing} record on any failure — one bad ticker must not fail a pass.
+     */
+    public EarningsDetail fetchEarningsDetail(String yahooTicker) {
+        String body = getWithCrumb(EARNINGS_URL_FMT, yahooTicker);
+        if (body == null) return EarningsDetail.empty(yahooTicker);
+        try {
+            JsonNode result = mapper.readTree(body)
+                    .path("quoteSummary").path("result");
+            if (!result.isArray() || result.isEmpty()) return EarningsDetail.empty(yahooTicker);
+            return parseEarningsDetail(yahooTicker, result.get(0));
+        } catch (Exception e) {
+            log.warn("quoteSummary earnings parse failed for {}", yahooTicker, e);
+            return EarningsDetail.empty(yahooTicker);
+        }
+    }
+
+    static EarningsDetail parseEarningsDetail(String symbol, JsonNode root) {
+        JsonNode earnings = root.path("earnings");
+        Map<String, BigDecimal> revenueByLabel = new LinkedHashMap<>();
+        for (JsonNode q : earnings.path("financialsChart").path("quarterly")) {
+            String label = q.path("date").asText(null);
+            if (label != null) revenueByLabel.put(label, num(q, "revenue"));
+        }
+        List<ReportedQuarter> quarters = new ArrayList<>();
+        for (JsonNode q : earnings.path("earningsChart").path("quarterly")) {
+            String label = q.path("date").asText(null);
+            quarters.add(new ReportedQuarter(label,
+                    dayOfEpoch(q.path("periodEndDate")),
+                    instantOf(q.path("reportedDate")),
+                    num(q, "actual"), num(q, "estimate"),
+                    label == null ? null : revenueByLabel.get(label)));
+        }
+
+        JsonNode cal = root.path("calendarEvents").path("earnings");
+        JsonNode dates = cal.path("earningsDate");
+        LocalDate next = null;
+        if (dates.isArray() && !dates.isEmpty()) {
+            String iso = isoDay(dates.get(0));
+            if (iso != null) next = LocalDate.parse(iso);
+        }
+        return new EarningsDetail(symbol,
+                text(earnings, "financialCurrency"),
+                quarters, next,
+                num(cal, "earningsAverage"), num(cal, "revenueAverage"),
+                false);
+    }
+
+    /**
+     * Fetch {@code urlFmt} for one ticker with the session crumb, retrying once on a stale one.
+     * Shared by {@link #fetch} and {@link #fetchEarningsDetail} so there is one handshake, one
+     * cookie jar and one retry rule rather than a second copy that drifts.
+     */
+    private String getWithCrumb(String urlFmt, String yahooTicker) {
+        try {
+            ensureCrumb();
+        } catch (Exception e) {
+            log.warn("quoteSummary: could not obtain crumb", e);
+            return null;
+        }
+        String body = get(crumbUrl(urlFmt, yahooTicker));
+        if (body == null) {
+            crumb = null;
+            try {
+                ensureCrumb();
+                body = get(crumbUrl(urlFmt, yahooTicker));
+            } catch (Exception e) {
+                log.warn("quoteSummary: crumb refresh failed for {}", yahooTicker, e);
+            }
+        }
+        return body;
+    }
+
+    private String crumbUrl(String urlFmt, String yahooTicker) {
+        return String.format(urlFmt,
+                URLEncoder.encode(yahooTicker, StandardCharsets.UTF_8),
+                URLEncoder.encode(crumb, StandardCharsets.UTF_8));
+    }
+
+
+    private static Instant instantOf(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) return null;
+        JsonNode raw = node.isObject() ? node.path("raw") : node;
+        return raw.isNumber() ? Instant.ofEpochSecond(raw.asLong()) : null;
+    }
+
+    private static LocalDate dayOfEpoch(JsonNode node) {
+        String iso = isoDay(node);
+        return iso == null ? null : LocalDate.parse(iso);
     }
 
     /**

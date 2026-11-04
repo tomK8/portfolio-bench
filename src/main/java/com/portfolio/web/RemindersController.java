@@ -1,5 +1,7 @@
 package com.portfolio.web;
 
+import com.portfolio.application.EarningsPrintFetchJob;
+import com.portfolio.application.EarningsPrintService;
 import com.portfolio.application.ReminderJob;
 import com.portfolio.application.ReminderService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,15 +30,42 @@ public class RemindersController {
 
     private final ReminderService service;
     private final ReminderJob job;
+    private final EarningsPrintService prints;
+    private final EarningsPrintFetchJob printJob;
 
-    public RemindersController(ReminderService service, ReminderJob job) {
+    public RemindersController(ReminderService service, ReminderJob job,
+                               EarningsPrintService prints, EarningsPrintFetchJob printJob) {
         this.service = service;
         this.job = job;
+        this.prints = prints;
+        this.printJob = printJob;
     }
 
     @GetMapping("/reminders")
     public ReminderService.ReminderReport view() {
         return service.report();
+    }
+
+    /**
+     * The detail behind the <i>Just reported</i> rows — what the print did to the price, to the
+     * position and to the orders resting on it, beside what it did to the consensus.
+     *
+     * <p>A second request rather than more fields on {@code /reminders}, deliberately. That
+     * payload is what {@code ReminderJob} reads every half hour to decide what to mail, and none
+     * of this is a reminder: it fires nothing and is read by nobody but this tab. Keeping it out
+     * is what stops a screen feature adding cost — and price history, positions and resting
+     * orders — to the mail path.
+     */
+    @GetMapping("/reminders/reported")
+    public EarningsPrintService.PrintReport reported() {
+        return prints.report();
+    }
+
+    /** Warm the reported-print detail now, instead of waiting for the next scheduled pass. */
+    @PostMapping("/reminders/reported/refresh")
+    public Map<String, Object> refreshReported() {
+        printJob.run();
+        return Map.of("ok", true, "message", "Reported-print detail refreshed.");
     }
 
     @PostMapping("/reminders/add")

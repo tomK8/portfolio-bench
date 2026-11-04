@@ -12907,74 +12907,343 @@
         // Reports that have already happened, kept for a few days so an after-the-close print can
         // be read the morning after. A separate table from the upcoming one rather than struck-out
         // rows inside it: the two row kinds do not share a question, and every column here --
-        // consensus, actual, surprise -- would be permanently blank on a scheduled row, which is
-        // the one thing a comparison column must never be. Nothing here fires, so there is no
-        // status cell and no on/off button; the window closes by itself.
+        // consensus, actual, surprise, what the price did -- would be permanently blank on a
+        // scheduled row, which is the one thing a comparison column must never be. Nothing here
+        // fires, so there is no status cell and no on/off button; the window closes by itself.
+        //
+        // Rendered from /reminders/reported, which is a SEPARATE request from /reminders on
+        // purpose: that payload is what the half-hourly mail job reads, and none of this is a
+        // reminder. If the detail call fails the basic figures from /reminders are drawn instead,
+        // so the section degrades to what it always showed rather than to nothing.
         function renderReminderReported(report) {
             var box = document.getElementById('rm-reported');
             if (!box) return;
-            var list = report.reported || [];
-            if (!list.length) {
+            fetch('/reminders/reported')
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function (detail) { drawReportedTable(box, detail.rows || [], detail, report); })
+                .catch(function (err) {
+                    console.warn('Reported-print detail unavailable', err);
+                    drawReportedTable(box, (report.reported || []).map(rmBasicRow), null, report);
+                });
+        }
+
+        // The shape /reminders/reported returns, built from the plain reminders payload, so one
+        // renderer draws both and the degraded view cannot drift from the full one.
+        function rmBasicRow(r) {
+            return {
+                symbol: r.symbol, companyName: r.companyName, date: r.date, session: r.time,
+                daysAgo: r.daysAgo, epsConsensus: r.epsForecast, epsActual: r.actualEps,
+                epsSurprisePct: r.surprisePct, numEstimates: r.numEstimates,
+                surpriseHistory: [], revenue: null, reaction: null, orders: [], revisions: []
+            };
+        }
+
+        function drawReportedTable(box, rows, detail, report) {
+            if (!rows.length) {
                 box.innerHTML = '<p class="muted">Nothing held, watched or under an order has '
                     + 'reported in the last ' + (report.lookbackDays || 4) + ' days.</p>';
                 return;
             }
-            var rows = list.map(function (r) {
-                // Three states, not two. The figures are in; or the print has happened and the
-                // feed has not published them to us yet; or it has, and no analyst covered the
-                // name so there is nothing to have beaten. Each reads differently and a single
-                // blank cell would say all three at once.
-                var surprise = '<span class="muted">—</span>';
-                var verdict = '<span class="muted">—</span>';
-                // val-pos/val-neg are the app-wide td-level sign colours, already defined for
-                // both themes -- so the class goes on the cell rather than on a span inside it.
-                var cls = '';
-                if (r.actualEps == null) {
-                    verdict = '<span class="muted" title="the report has happened; the figures '
-                        + 'have not reached the cached calendar yet">awaiting figures</span>';
-                } else if (r.surprisePct == null) {
-                    verdict = '<span class="muted" title="reported, but no consensus to measure '
-                        + 'it against">no consensus</span>';
-                } else {
-                    // "In line" is judged at the precision the cell is printed to, not finer.
-                    // At a tighter threshold a surprise of +0.03% would print as +0.0% and read
-                    // "beat" beside it -- the word and the number disagreeing on the same row.
-                    var met = Math.abs(r.surprisePct) < 0.05;
-                    var beat = r.surprisePct > 0;
-                    cls = met ? '' : (beat ? 'val-pos' : 'val-neg');
-                    surprise = (met || !beat ? '' : '+') + mpNum(met ? 0 : r.surprisePct, 1) + '%';
-                    verdict = met ? 'in line' : (beat ? 'beat' : 'missed');
-                }
-                var session = (r.time && r.time !== 'TBD') ? escapeHtml(r.time) : '—';
-                return '<tr class="rm-reported">'
-                    + '<td class="lbl">' + escapeHtml(r.symbol) + '</td>'
-                    + '<td class="lbl muted">' + escapeHtml(r.companyName || '—') + '</td>'
-                    + '<td class="lbl" data-sort-value="' + escapeHtml(r.date) + '">'
-                        + escapeHtml(r.date) + ' <span class="muted">'
-                        + rmAgo(r.daysAgo) + '</span></td>'
-                    + '<td class="lbl">' + session + '</td>'
-                    + '<td>' + mpNum(r.epsForecast, 2) + '</td>'
-                    + '<td>' + mpNum(r.actualEps, 2) + '</td>'
-                    + '<td class="' + cls + '">' + surprise + '</td>'
-                    + '<td class="lbl ' + cls + '">' + verdict + '</td>'
-                    + '</tr>';
-            }).join('');
-            box.innerHTML = '<table class="swing-tbl"><thead><tr>'
+            var notes = (detail && detail.warnings) || [];
+            var warn = notes.length
+                ? '<div class="value-warnings pending"><ul style="margin:0;padding-left:1.1rem">'
+                    + notes.map(function (w) { return '<li>' + escapeHtml(w) + '</li>'; }).join('')
+                    + '</ul></div>'
+                : '';
+            var body = rows.map(rmReportedRow).join('');
+            box.innerHTML = warn + '<div class="full-bleed"><table class="swing-tbl">'
+                + rmReportedHead() + '<tbody>' + body + '</tbody></table></div>'
+                + (detail ? '' : '<p class="muted" style="font-size:0.78rem;">The detail behind '
+                    + 'these prints could not be loaded — only the figures the calendar itself '
+                    + 'carries are shown.</p>');
+            attachSort(box.querySelector('table'));
+        }
+
+        function rmReportedHead() {
+            return '<thead><tr>'
                 + '<th class="lbl" data-sort="str">Symbol</th>'
                 + '<th class="lbl" data-sort="str">Company</th>'
                 + '<th class="lbl" data-sort="str">Reported</th>'
                 + '<th class="lbl" title="BMO before the open, AMC after the close — '
                     + 'carried over from before the date settled, since the feed drops it '
-                    + 'afterwards">Session</th>'
+                    + 'afterwards. It is also what decides which session the price reaction is '
+                    + 'measured over, so a row without one carries no move.">Session</th>'
+                + '<th class="lbl" data-sort="str" title="the fiscal quarter these figures are '
+                    + 'for, as the feed labels it — not the calendar quarter, which for a company '
+                    + 'whose year does not end in December is a different thing">Qtr</th>'
                 + '<th data-sort="num" title="consensus EPS, in US dollars">Consensus</th>'
+                + '<th data-sort="num" title="how many analysts stand behind that consensus. '
+                    + 'A beat against three estimates and a beat against thirty are not the same '
+                    + 'statement about a company.">Est.</th>'
                 + '<th data-sort="num" title="what the company actually reported, '
                     + 'in US dollars">Actual</th>'
                 + '<th data-sort="num" title="(actual − consensus) ÷ |consensus| — '
                     + 'computed from the two columns beside it, not taken from the feed">'
                     + 'Surprise</th>'
                 + '<th class="lbl">Against consensus</th>'
-                + '</tr></thead><tbody>' + rows + '</tbody></table>';
-            attachSort(box.querySelector('table'));
+                + '<th data-sort="num" title="the median of this company’s own recent surprises, '
+                    + 'each recomputed the same way. A +3% beat is routine for a name that beats '
+                    + 'by 3% every quarter and is news for one that does not. Hover for the '
+                    + 'quarters behind it.">vs own</th>'
+                + '<th data-sort="num" title="EPS against the same quarter a year earlier, from '
+                    + 'the year-ago figure the calendar carries. Blank where that quarter was a '
+                    + 'loss or a zero: a move from a loss to a profit is a real change with no '
+                    + 'percentage of it.">EPS YoY</th>'
+                + '<th data-sort="num" title="revenue against what was expected of it. The '
+                    + 'consensus is captured while the print is still ahead, because no free '
+                    + 'source publishes it afterwards — a row reading “no consensus” is one we '
+                    + 'had no reading for, not one that came in short.">Revenue</th>'
+                + '<th data-sort="num" title="the move across the print on the listing you hold: '
+                    + 'previous close to the print day’s close for a before-the-open report, '
+                    + 'print day’s close to the next close for an after-the-close one">Move</th>'
+                + '<th data-sort="num" title="the same move net of this listing’s own market '
+                    + 'index, over the identical two dates. Blank where this app has not named an '
+                    + 'index for that market, or where the index has no close on one of the two '
+                    + 'days — a market-relative figure measured over a different window is a '
+                    + 'difference of windows, not of returns.">vs mkt</th>'
+                + '<th data-sort="num" title="the move as a multiple of what this name usually '
+                    + 'does on a print — the median absolute move over its own previous prints, '
+                    + 'measured the same way. Withheld below three previous prints: a usual move '
+                    + 'from one or two quarters is not a usual move. Hover for the count.">'
+                    + '× usual</th>'
+                + '<th data-sort="num" title="what the move was worth on your own position, at '
+                    + 'its current GBP value. The price move only — a day’s currency move is not '
+                    + 'the print’s doing.">£ effect</th>'
+                + '<th class="lbl" title="how far each resting limit sat from the price before '
+                    + 'the print and after it, signed as the move still needed to reach it">'
+                    + 'Limits</th>'
+                + '<th class="lbl" title="the forward consensus now, and how far it has moved '
+                    + 'since our last reading before the print, by named fiscal period — with the '
+                    + 'analysts who revised up and down over the feed’s own four-week window">'
+                    + 'Consensus since</th>'
+                + '</tr></thead>';
+        }
+
+        function rmReportedRow(r) {
+            // Three states, not two. The figures are in; or the print has happened and the
+            // feed has not published them to us yet; or it has, and no analyst covered the
+            // name so there is nothing to have beaten. Each reads differently and a single
+            // blank cell would say all three at once.
+            var surprise = rmDash();
+            var verdict = rmDash();
+            // val-pos/val-neg are the app-wide td-level sign colours, already defined for
+            // both themes -- so the class goes on the cell rather than on a span inside it.
+            var cls = '';
+            if (r.epsActual == null) {
+                verdict = '<span class="muted" title="the report has happened; the figures '
+                    + 'have not reached the cached calendar yet">awaiting figures</span>';
+            } else if (r.epsSurprisePct == null) {
+                verdict = '<span class="muted" title="reported, but no consensus to measure '
+                    + 'it against">no consensus</span>';
+            } else {
+                // "In line" is judged at the precision the cell is printed to, not finer.
+                // At a tighter threshold a surprise of +0.03% would print as +0.0% and read
+                // "beat" beside it -- the word and the number disagreeing on the same row.
+                var met = Math.abs(r.epsSurprisePct) < 0.05;
+                var beat = r.epsSurprisePct > 0;
+                cls = met ? '' : (beat ? 'val-pos' : 'val-neg');
+                surprise = rmPct(met ? 0 : r.epsSurprisePct, 1);
+                verdict = met ? 'in line' : (beat ? 'beat' : 'missed');
+            }
+            var session = (r.session && r.session !== 'TBD') ? escapeHtml(r.session) : '—';
+            return '<tr class="rm-reported">'
+                + '<td class="lbl">' + escapeHtml(r.symbol) + '</td>'
+                + '<td class="lbl muted">' + escapeHtml(r.companyName || '—') + '</td>'
+                + '<td class="lbl" data-sort-value="' + escapeHtml(r.date) + '">'
+                    + escapeHtml(r.date) + ' <span class="muted">'
+                    + rmAgo(r.daysAgo) + '</span></td>'
+                + '<td class="lbl">' + session + '</td>'
+                + '<td class="lbl">' + (r.fiscalQuarter ? escapeHtml(r.fiscalQuarter) : rmDash()) + '</td>'
+                + '<td>' + mpNum(r.epsConsensus, 2) + '</td>'
+                + '<td>' + (r.numEstimates == null ? rmDash() : r.numEstimates) + '</td>'
+                + '<td>' + mpNum(r.epsActual, 2) + '</td>'
+                + '<td class="' + cls + '">' + surprise + '</td>'
+                + '<td class="lbl ' + cls + '">' + verdict + '</td>'
+                + rmOwnCell(r)
+                + rmSignedCell(r.epsGrowthYoY, 1)
+                + rmRevenueCell(r)
+                + rmMoveCell(r)
+                + rmSignedCell(r.reaction && r.reaction.excessPct, 1)
+                + rmMultipleCell(r)
+                + rmEffectCell(r)
+                + rmLimitsCell(r)
+                + rmRevisionCell(r)
+                + '</tr>';
+        }
+
+        function rmDash() {
+            return '<span class="muted">—</span>';
+        }
+
+        function rmPct(v, dp) {
+            if (v == null) return rmDash();
+            return (v > 0 ? '+' : '') + mpNum(v, dp == null ? 1 : dp) + '%';
+        }
+
+        // A signed rate in its own cell, coloured by sign the way the rest of the app does.
+        function rmSignedCell(v, dp, title) {
+            if (v == null) return '<td>' + rmDash() + '</td>';
+            var cls = Math.abs(v) < 0.05 ? '' : (v > 0 ? 'val-pos' : 'val-neg');
+            return '<td class="' + cls + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '')
+                + ' data-sort-value="' + v + '">' + rmPct(v, dp) + '</td>';
+        }
+
+        function rmOwnCell(r) {
+            var h = r.surpriseHistory || [];
+            if (r.medianSurprisePct == null) {
+                return '<td><span class="muted" title="no earlier quarter of this company has '
+                    + 'both a reported figure and the consensus it was measured against">—</span></td>';
+            }
+            var detail = h.map(function (q) {
+                return (q.fiscalQuarter || q.reported) + ': ' + mpNum(q.surprisePct, 1) + '%';
+            }).join(' · ');
+            return '<td data-sort-value="' + r.medianSurprisePct + '" title="'
+                + escapeHtml('median of ' + h.length + ' earlier quarter'
+                    + (h.length === 1 ? '' : 's') + ' — ' + detail) + '">'
+                + rmPct(r.medianSurprisePct, 1) + '</td>';
+        }
+
+        function rmRevenueCell(r) {
+            var rev = r.revenue;
+            if (!rev) return '<td>' + rmDash() + '</td>';
+            if (rev.state === 'AWAITING') {
+                return '<td><span class="muted" title="the print has happened; the revenue has '
+                    + 'not reached us yet">awaiting</span></td>';
+            }
+            if (rev.state === 'NOT_FETCHED') {
+                return '<td><span class="muted" title="this print has not been looked up yet — '
+                    + 'the detail pass runs every couple of hours">not fetched</span></td>';
+            }
+            if (rev.state === 'NO_CONSENSUS') {
+                return '<td><span class="muted" title="' + escapeHtml('revenue of '
+                        + rmAmount(rev.actual, rev.currency) + ', but no consensus for this '
+                        + 'quarter was captured before the print — and no free source publishes '
+                        + 'one afterwards, so there is nothing to measure it against. This is not '
+                        + 'a miss.') + '">no consensus</span></td>';
+            }
+            var cls = Math.abs(rev.surprisePct) < 0.05 ? '' : (rev.surprisePct > 0 ? 'val-pos' : 'val-neg');
+            var flag = r.epsBeatRevenueMiss
+                ? ' <span class="val-neg" title="an EPS beat on revenue that came in short — '
+                    + 'the beat is coming from somewhere other than the top line">▲▼</span>'
+                : '';
+            return '<td class="' + cls + '" data-sort-value="' + rev.surprisePct + '" title="'
+                + escapeHtml(rmAmount(rev.actual, rev.currency) + ' against '
+                    + rmAmount(rev.consensus, rev.currency) + ' expected'
+                    + (rev.prePrintConsensus ? ', read before the print' : ', read on or after the print day'))
+                + '">' + rmPct(rev.surprisePct, 1) + flag + '</td>';
+        }
+
+        function rmMoveCell(r) {
+            var a = r.reaction;
+            if (!a) return '<td>' + rmDash() + '</td>';
+            if (a.state === 'PENDING') {
+                return '<td><span class="muted" title="the session that will carry the reaction '
+                    + 'has not closed yet — the ordinary state for an after-the-close print read '
+                    + 'the next morning">not yet</span></td>';
+            }
+            if (a.state === 'NO_SESSION') {
+                return '<td><span class="muted" title="the feed never said whether this landed '
+                    + 'before the open or after the close, and the two are different days — so '
+                    + 'there is no window to measure">no session</span></td>';
+            }
+            if (a.state !== 'MEASURED' || a.movePct == null) {
+                return '<td><span class="muted" title="no price history for '
+                    + escapeHtml(a.ticker || '') + ' around this date">no prices</span></td>';
+            }
+            var cls = Math.abs(a.movePct) < 0.05 ? '' : (a.movePct > 0 ? 'val-pos' : 'val-neg');
+            return '<td class="' + cls + '" data-sort-value="' + a.movePct + '" title="'
+                + escapeHtml(a.ticker + ': ' + mpNum(a.fromClose, 2) + ' on ' + a.from + ' to '
+                    + mpNum(a.toClose, 2) + ' on ' + a.to
+                    + (a.currency ? ' (' + a.currency + ')' : '')) + '">'
+                + rmPct(a.movePct, 1) + '</td>';
+        }
+
+        function rmMultipleCell(r) {
+            var a = r.reaction;
+            if (!a || a.state !== 'MEASURED') return '<td>' + rmDash() + '</td>';
+            var dropped = a.baselineDropped ? ', ' + a.baselineDropped
+                + ' more could not be measured' : '';
+            if (a.multiple == null) {
+                return '<td><span class="muted" title="' + escapeHtml('a usual move needs at '
+                        + 'least three earlier prints measured the same way; this name has '
+                        + (a.baselinePrints || 0) + dropped) + '">—</span></td>';
+            }
+            return '<td data-sort-value="' + a.multiple + '" title="'
+                + escapeHtml('median move on a print ' + mpNum(a.baselineMedianPct, 1) + '%, over '
+                    + a.baselinePrints + ' earlier print' + (a.baselinePrints === 1 ? '' : 's')
+                    + dropped) + '">×' + mpNum(a.multiple, 2) + '</td>';
+        }
+
+        function rmEffectCell(r) {
+            if (r.positionEffectGbp == null) {
+                return '<td><span class="muted" title="' + (r.positionGbp == null
+                        ? 'not a position you hold' : 'no measured move to apply')
+                    + '">—</span></td>';
+            }
+            var v = Number(r.positionEffectGbp);
+            var cls = Math.abs(v) < 0.005 ? '' : (v > 0 ? 'val-pos' : 'val-neg');
+            return '<td class="' + cls + '" data-sort-value="' + v + '" title="'
+                + escapeHtml('on a position worth £' + mpMoney(r.positionGbp)) + '">'
+                // The sign goes outside the currency symbol: "£-201.94" is not how a loss is
+                // written anywhere else on this dashboard.
+                + (v < 0 ? '−£' : '+£') + mpMoney(Math.abs(v)) + '</td>';
+        }
+
+        function rmLimitsCell(r) {
+            var orders = r.orders || [];
+            if (!orders.length) return '<td class="lbl">' + rmDash() + '</td>';
+            var lines = orders.map(function (o) {
+                return o.side + ' ' + (o.orderType || '') + ' ' + mpNum(o.limit, 2)
+                    + ' (' + escapeHtml(o.broker || '') + '): '
+                    + rmPlain(o.beforePct) + ' → ' + rmPlain(o.afterPct);
+            });
+            // The nearest limit is the one the cell shows; the rest are in the tooltip. "Nearest"
+            // is by the distance AFTER the print, because that is the one still to be travelled.
+            var nearest = orders.slice().sort(function (a, b) {
+                return Math.abs(a.afterPct == null ? 1e9 : a.afterPct)
+                     - Math.abs(b.afterPct == null ? 1e9 : b.afterPct);
+            })[0];
+            return '<td class="lbl" title="' + escapeHtml(lines.join('\n')) + '">'
+                + rmPlain(nearest.beforePct) + ' <span class="muted">→</span> '
+                + rmPlain(nearest.afterPct)
+                + (orders.length > 1 ? ' <span class="muted">+' + (orders.length - 1)
+                    + '</span>' : '') + '</td>';
+        }
+
+        function rmPlain(v) {
+            return v == null ? '—' : (v > 0 ? '+' : '') + mpNum(v, 1) + '%';
+        }
+
+        function rmRevisionCell(r) {
+            var rows = r.revisions || [];
+            if (!rows.length) return '<td class="lbl">' + rmDash() + '</td>';
+            var q = rows.filter(function (x) { return x.periodKind === 'Q'; })[0];
+            var lines = rows.map(function (x) {
+                return (x.periodKind === 'Q' ? 'Next quarter' : 'Full year') + ' (' + x.fiscalEnd
+                    + '): ' + mpNum(x.consensus, 2)
+                    + (x.changePct == null
+                        ? ' — no reading before the print to compare with'
+                        : ', ' + rmPlain(x.changePct) + ' since ' + x.beforeOn)
+                    + ' · ' + (x.up == null ? '?' : x.up) + ' up / '
+                    + (x.down == null ? '?' : x.down) + ' down over four weeks'
+                    + (x.numEstimates == null ? '' : ', ' + x.numEstimates + ' estimates');
+            });
+            var head = q ? (q.changePct == null
+                    ? '<span class="muted">no earlier reading</span>'
+                    : rmPlain(q.changePct))
+                : rmDash();
+            var counts = q && (q.up != null || q.down != null)
+                ? ' <span class="muted">' + (q.up || 0) + '↑/' + (q.down || 0) + '↓</span>' : '';
+            return '<td class="lbl" title="' + escapeHtml(lines.join('\n')) + '">'
+                + head + counts + '</td>';
+        }
+
+        function rmAmount(v, currency) {
+            if (v == null) return '—';
+            var sym = currency === 'USD' ? '$' : (currency === 'GBP' ? '£' : '');
+            var abs = Math.abs(v);
+            var scaled = abs >= 1e9 ? [v / 1e9, 'bn'] : (abs >= 1e6 ? [v / 1e6, 'm'] : [v, '']);
+            return sym + mpNum(scaled[0], 2) + scaled[1] + (sym ? '' : ' ' + (currency || ''));
         }
 
         function rmAgo(days) {

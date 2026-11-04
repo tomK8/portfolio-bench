@@ -1,0 +1,5 @@
+{"data":{"asOf":null,"headers":{},"rows":[
+{"eps":"$0.97","surprise":"N/A","time":"time-after-hours","symbol":"AMD","name":"Advanced Micro Devices, Inc.","marketCap":"$762,104,640,000","fiscalQuarterEnding":"Sep/2026","epsForecast":"$1.68","noOfEsts":"13"},
+{"eps":"$0.67","surprise":"N/A","time":"time-after-hours","symbol":"ANET","name":"Arista Networks, Inc.","marketCap":"$207,017,411,000","fiscalQuarterEnding":"Sep/2026","epsForecast":"$0.99","noOfEsts":"9"},
+{"eps":"$1.10","surprise":"N/A","time":"time-pre-market","symbol":"ZZZB","name":"Zed B Inc.","marketCap":"$1,000,000","fiscalQuarterEnding":"Sep/2026","epsForecast":"$1.25","noOfEsts":"4"}
+]},"message":null,"status":{"rCode":200,"bCodeMessage":null,"developerMessage":null}}

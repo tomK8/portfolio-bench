@@ -271,7 +271,7 @@ class OpenOrdersServiceTest {
 
         FundamentalsRepository fundamentals = new FundamentalsRepository(connections);
         if (rate != null) {
-            fundamentals.save(symbol, new com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary(
+            fundamentals.save(symbol, new com.portfolio.domain.model.QuoteSummary(
                     symbol, "USD", new BigDecimal(price), null, null, null, null, null, null, null,
                     null, Map.of("dividendRate", new BigDecimal(rate)),
                     Map.of(), Map.of(), List.of(), false), java.time.Instant.now());

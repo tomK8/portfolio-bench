@@ -21,7 +21,7 @@ import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.persistence.WatchlistRepository;
 import com.portfolio.persistence.WatchlistRepository.Entry;
 import com.portfolio.port.FxRateProvider;
-import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
+import com.portfolio.domain.model.QuoteSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

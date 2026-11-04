@@ -1,6 +1,6 @@
 package com.portfolio.adapter;
 
-import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
+import com.portfolio.domain.model.QuoteSummary;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;

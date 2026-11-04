@@ -1,6 +1,6 @@
 package com.portfolio.application;
 
-import com.portfolio.adapter.YahooQuoteSummaryFetcher.QuoteSummary;
+import com.portfolio.domain.model.QuoteSummary;
 import com.portfolio.domain.SectorBucket;
 import com.portfolio.domain.SectorClassifier;
 import com.portfolio.domain.grouping.HoldingGroupKey;

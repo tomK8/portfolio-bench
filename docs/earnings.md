@@ -169,6 +169,15 @@ whole pass costs at most a handful of requests once and nothing on every run aft
 what makes a plain six-hourly timer (`PriceFetchScheduler.earningsBackWarm`) the right shape instead
 of something that has to know when earnings season is.
 
+Its span is **`ReminderService.LOOKBACK_DAYS + 2`**, written against that constant rather than
+copied, because the invariant is a relation and not a number: every date the *Just reported* section
+can still show has to be one this pass still asks about. Both it and `recentlyReported` clamp to
+`MAX_REVIEW_BACK`, which is deliberately **not** the tab's `MAX_BACK` — that one guards a `back=`
+query param against fanning the daily tables out into live fetches, and sharing it left the
+reminders window sitting exactly on a limit that was never about it. The same split `warmForward`
+already has from `MAX_FORWARD`, for the same reason: an internal caller passing a constant is not a
+query param.
+
 **Your-holdings section (ranked by position size).** Above the per-day tables, the tab renders
 every held position ordered by GBP value, with its portfolio weight beside the date/session/EPS
 estimate. `holdingsForward` is a **separate look-ahead** from the daily tables' `forward` (default
@@ -359,7 +368,8 @@ the caller both lists is what stops every gilt in the ledger being reported as a
 `EarningsCalendarRepository.earliestPerSymbol` is the one-query window read behind it.
 
 `recentlyReported(symbols, lookbackDays)` is its **backward** counterpart, behind the reminders tab's
-*Just reported* section, and deliberately a second method rather than a fourth outcome of the
+*Just reported* section — a fortnight of it, see [reminders.md](reminders.md) for why that width —
+and deliberately a second method rather than a fourth outcome of the
 forward one: "when does this next report" and "did this just report" are two questions, the forward
 lookup's contract is already a careful three-way split, and folding a past report into it would mean
 a row that is neither `dated` nor `undated` for every existing caller to learn to ignore — the same

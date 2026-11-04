@@ -432,6 +432,22 @@ class ReminderServiceTest {
     }
 
     @Test
+    void theWindowIsAFortnight() {
+        // Pinned in absolute days rather than against the constant, because the width is the
+        // decision and a relative test would pass at any of them. Results arrive in a
+        // two-to-three week cluster: at the original four days the section showed a fraction of a
+        // season at a time, so "what did each of my companies do this quarter" could not be
+        // answered from one screen. Ten days ago is squarely inside what that question needs.
+        universe("MSFT,AAPL", "", "");
+        cacheReported("MSFT", TODAY.minusDays(10), "AMC", 4.71, 4.89);
+        cacheReported("AAPL", TODAY.minusDays(20), "AMC", 1.50, 1.64);
+
+        assertEquals(List.of("MSFT"), service(true).report().reported().stream()
+                        .map(EarningsCalendarService.Reported::symbol).toList(),
+                "a fortnight back, and it still ends by itself");
+    }
+
+    @Test
     void mostRecentReportFirst() {
         universe("AAA,BBB,CCC", "", "");
         cacheReported("AAA", TODAY.minusDays(3), "AMC", 1.0, 1.1);

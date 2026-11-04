@@ -12,6 +12,7 @@ import com.portfolio.application.ImportGiltPricesService;
 import com.portfolio.application.IntradayPriceFetchJob;
 import com.portfolio.application.PriceFetchJob;
 import com.portfolio.application.ReminderJob;
+import com.portfolio.application.ReminderService;
 import com.portfolio.application.WatchlistAlertJob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,11 +37,16 @@ public class PriceFetchScheduler {
     private static final int BACKUP_INTERVAL_DAYS = 30;
 
     /**
-     * How many past days the earnings calendar re-reads for reported figures. A little wider than
-     * the reminders screen's own four-day window, so a date whose figures land late is still picked
-     * up while that screen can still show it.
+     * How many past days the earnings calendar re-reads for reported figures. Kept a little wider
+     * than {@link ReminderService#LOOKBACK_DAYS}, the reminders screen's own window, so every date
+     * that screen can still show is one whose figures are still being chased — a date whose actuals
+     * land late, or one that passed while the laptop was shut, is picked up rather than left reading
+     * <i>awaiting figures</i> for as long as it is on screen.
+     *
+     * <p>Wider costs nothing: {@code warmBack} skips any date that has already given up its actuals,
+     * so the extra span is a handful of SQLite reads once it has settled.
      */
-    private static final int EARNINGS_BACKWARM_DAYS = 6;
+    private static final int EARNINGS_BACKWARM_DAYS = ReminderService.LOOKBACK_DAYS + 2;
 
     private static final Logger log = LoggerFactory.getLogger(PriceFetchScheduler.class);
 

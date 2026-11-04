@@ -202,4 +202,30 @@ class EarningsBackWarmTest {
         service(feed).warmBack(14);
         assertFalse(feed.asked.contains(LocalDate.now()));
     }
+
+    @Test
+    void theBackWarmReachesEveryDateTheRemindersScreenCanShow() {
+        // The relation that keeps a widened review window honest. Every date "Just reported" can
+        // list has to be one this pass still asks about, or a print whose actuals land late — or
+        // one that passed while the laptop was shut — would read "awaiting figures" for as long as
+        // it is on screen, with nothing left to go and get them.
+        //
+        // Asserted against the clamp rather than the constant, because the clamp is what breaks
+        // silently: warmBack used to share MAX_BACK with the Earnings tab's own back= guardrail,
+        // and at LOOKBACK_DAYS = 14 the screen's window sat exactly on a limit that was never
+        // about it — so the next widening would have truncated instead of widened.
+        var feed = new FakeFeed(Map.of());
+        service(feed).warmBack(ReminderService.LOOKBACK_DAYS);
+
+        LocalDate today = LocalDate.now();
+        for (int i = 1; i <= ReminderService.LOOKBACK_DAYS; i++) {
+            LocalDate d = today.minusDays(i);
+            if (d.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                    || d.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+                continue;   // no roster is ever published, so an unasked weekend is not a gap
+            }
+            assertTrue(feed.asked.contains(d),
+                    d + " is inside the reminders window but was never re-asked");
+        }
+    }
 }

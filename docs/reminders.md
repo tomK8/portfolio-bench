@@ -70,7 +70,7 @@ standing instruction is visible and one click to lift, rather than a row that si
 
 ## Just reported: on the screen, but not a reminder
 
-The few days just gone, for anything held, watched or under an order. It exists because of when a
+The fortnight just gone, for anything held, watched or under an order. It exists because of when a
 forward-looking calendar is least useful: a company reporting **after the close** is one you can only
 read about the next morning, and by then a countdown has stopped mentioning it. `reported` on the
 payload, from `EarningsCalendarService.recentlyReported` (see [earnings.md](earnings.md) for how the
@@ -83,12 +83,38 @@ by a check someone has to remember. `ReminderServiceTest.aReportIsNotAReminderAn
 pins it from the other side. There is no mute either: a mute is a standing instruction about future
 prints, and this window closes on its own.
 
-**Four days, not one session.** "The previous trading session" is the thing being asked for, but
-counting sessions needs a market calendar this app does not have, while four calendar days reaches
-Friday's reports from Monday and survives a holiday Monday too. Each row prints its own date and how
-long ago it was, so a window that is sometimes wider than one session says so rather than implying
-everything in it happened yesterday. Short on purpose: this is a list of prints still worth
-reviewing, not a log of the quarter.
+**Fourteen calendar days, not one session** (`ReminderService.LOOKBACK_DAYS`). "The previous trading
+session" is what the section was originally built around, but counting sessions needs a market
+calendar this app does not have, so the window has always been calendar days — four of them to start
+with, which reaches Friday's reports from Monday and survives a holiday Monday too. Each row prints
+its own date and how long ago it was, so a window much wider than one session says so rather than
+implying everything in it happened yesterday.
+
+**Why it is no longer short on purpose.** The four-day window came with the argument that this is a
+list of prints still worth reviewing and not a log of the quarter. That was right about the mechanism
+and wrong about the question. Results arrive in a two-to-three week cluster, so four days shows a
+fraction of a season at a time, and *what did each of my companies do this quarter* — which is what
+the section is actually read for — could not be answered from one screen. A fortnight spans the
+cluster, which is what makes the rows comparable **to each other** rather than merely each
+individually recent. `ReminderServiceTest.theWindowIsAFortnight` pins the width in absolute days
+rather than against the constant, because the width is the decision.
+
+Accumulating names during results season is therefore the point here, not the cost: nothing on this
+list fires, so a longer window cannot mail more, cannot fire twice, and cannot go stale in a way that
+matters. It fills during the cluster and empties by itself afterwards, which is the shape of the
+calendar underneath rather than a backlog.
+
+**Two bounds are sized against the window and must stay wider than it.**
+`PriceFetchScheduler.EARNINGS_BACKWARM_DAYS` is `LOOKBACK_DAYS + 2` — expressed against the constant
+rather than copied, so every date this screen can show is one whose figures are still being chased;
+without that, a print whose actuals land late, or one that passed while the laptop was shut, would
+read *awaiting figures* for as long as it is on screen with nothing left to go and get them.
+`EarningsCalendarService.MAX_REVIEW_BACK` clamps both, and is deliberately **not** the Earnings tab's
+`MAX_BACK`: that guardrail exists so a stray `back=` cannot fan the daily tables out into live
+fetches, and sharing it put this screen's window exactly on a limit that was never about it, where
+the next widening would have truncated silently instead of widening. The same split `warmForward`
+already has from `MAX_FORWARD`. `EarningsBackWarmTest.theBackWarmReachesEveryDateTheRemindersScreenCanShow`
+holds the relation from the clamp's side.
 
 **Today is not in it.** A date in progress has no settled figures, and the point of the section is
 the print you could not read on the day — today still belongs to the earnings table, counting down.

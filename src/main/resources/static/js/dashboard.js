@@ -12941,7 +12941,7 @@
         function drawReportedTable(box, rows, detail, report) {
             if (!rows.length) {
                 box.innerHTML = '<p class="muted">Nothing held, watched or under an order has '
-                    + 'reported in the last ' + (report.lookbackDays || 4) + ' days.</p>';
+                    + 'reported in the last ' + (report.lookbackDays || 14) + ' days.</p>';
                 return;
             }
             var notes = (detail && detail.warnings) || [];

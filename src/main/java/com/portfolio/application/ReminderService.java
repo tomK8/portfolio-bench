@@ -34,13 +34,14 @@ import java.util.Set;
  * leaves when it stops being there.
  *
  * <p><b>A report that has happened is on the screen but is not a reminder.</b> {@code reported} is
- * the few days just gone, kept so an after-the-close print can be reviewed the morning after — the
+ * the fortnight just gone, kept so an after-the-close print can be reviewed the morning after — the
  * one time a scheduled date is least useful, because by the time you look at it the thing has
- * already happened. It is a third list rather than a state on the earnings rows because nothing
+ * already happened — and kept that long so a whole results cluster is readable at once. It is a
+ * third list rather than a state on the earnings rows because nothing
  * about it fires: it has no due flag, no mute and no dedup key, and {@link ReminderJob} walks
  * {@code manual} and {@code earnings} only, so a past report cannot mail anything by construction
  * rather than by a check someone has to remember. Muting is not offered on these rows either — a
- * mute is a standing instruction about future prints, and this window closes on its own in four days.
+ * mute is a standing instruction about future prints, and this window closes on its own.
  *
  * <p><b>Symbols with no date are named, not dropped.</b> A company the two earnings sources cannot
  * date will never produce a reminder, and a screen that simply omitted it would look identical to one
@@ -65,19 +66,33 @@ public class ReminderService {
 
     /**
      * How far <em>back</em> the screen keeps a report after it has happened, so the print you could
-     * not read on the day is still in front of you the morning after.
+     * not read on the day is still in front of you the morning after — and so a whole results
+     * cluster can be read against itself while it is still on one screen.
      *
-     * <p>Four days rather than one. "The previous trading session" is the thing being asked for, but
-     * counting sessions needs a market calendar this app does not have, and four calendar days
-     * reaches Friday's reports from Monday and survives a holiday Monday too. Each row prints its own
-     * date and how long ago it was, so a window that is sometimes wider than one session says so
-     * rather than implying everything in it happened yesterday.
+     * <p><b>A fortnight, sized to the thing being reviewed rather than to the gap this section was
+     * first built to cover.</b> It began at four days: long enough that Monday still reaches
+     * Friday's after-the-close prints and a holiday Monday loses none of them, on the argument that
+     * this is a list of prints still worth reviewing and not a log of the quarter. That argument
+     * was right about the mechanism and wrong about the question. Results arrive in a two-to-three
+     * week cluster, so four days shows a fraction of a season at a time, and "what did each of my
+     * companies do this quarter" — which is what the section is actually read for — could never be
+     * answered from one screen. Fourteen days spans the cluster, which is what makes the rows
+     * comparable to each other instead of merely each individually recent.
      *
-     * <p>Short on purpose. This section is a list of prints still worth reviewing, not a log of the
-     * quarter — at a week it would still be accumulating names during earnings season long after
-     * they had been read.
+     * <p><b>Accumulating names is the point here, not the cost.</b> Nothing on this list fires, so a
+     * longer window cannot mail more, cannot fire twice and cannot go stale in a way that matters:
+     * it fills during results season and empties by itself afterwards, which is the shape of the
+     * calendar underneath rather than a backlog. Each row prints its own date and how long ago it
+     * was, so a window far wider than one session says so rather than implying everything in it
+     * happened yesterday.
+     *
+     * <p>Two bounds are sized against this and have to stay <em>wider</em>: the calendar back-warm
+     * ({@code PriceFetchScheduler.EARNINGS_BACKWARM_DAYS}), so every date this screen can show is
+     * one whose figures are still being chased, and {@code EarningsCalendarService.MAX_REVIEW_BACK},
+     * which clamps both. Public for the first of those: the scheduler is in another package and the
+     * relation between the two spans is better held by the compiler than by a comment.
      */
-    static final int LOOKBACK_DAYS = 4;
+    public static final int LOOKBACK_DAYS = 14;
 
     private final ReminderRepository repo;
     private final EarningsCalendarService earnings;

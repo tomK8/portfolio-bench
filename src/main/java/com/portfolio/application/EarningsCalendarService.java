@@ -65,6 +65,25 @@ public class EarningsCalendarService {
      */
     static final int MAX_BACK = 14;
     static final int MAX_FORWARD = 45;
+
+    /**
+     * Upper bound on the <em>backward review</em> window — {@link #recentlyReported} and
+     * {@link #warmBack}, which ask "what has already reported" rather than "what does the calendar
+     * say".
+     *
+     * <p>Deliberately not {@link #MAX_BACK}, for the reason {@link #warmForward} is not bounded by
+     * {@link #MAX_FORWARD}: that clamp exists so a stray {@code back=} on the Earnings tab cannot
+     * fan the daily tables out into dozens of live fetches, while these two are internal callers
+     * passing a constant. Keeping them on the tab's guardrail meant the reminders screen's own
+     * window sat exactly on a limit that was never about it, so widening the window silently
+     * truncated instead of widening.
+     *
+     * <p>Bounded all the same, and cheaply: a past date caches forever once {@linkplain #settled
+     * settled}, so the whole span costs at most one fetch per weekday once and nothing on every
+     * pass after that.
+     */
+    static final int MAX_REVIEW_BACK = 30;
+
     /** Upper bound on {@link #warmForward}: beyond a year ahead no roster is published anyway. */
     static final int MAX_WARM_DAYS = 400;
     /** Politeness gap between calendar fetches on the warm path. */
@@ -441,7 +460,7 @@ public class EarningsCalendarService {
         if (symbols == null || symbols.isEmpty()) return out;
 
         LocalDate today = LocalDate.now();
-        int days = clamp(lookbackDays, 0, MAX_BACK);
+        int days = clamp(lookbackDays, 0, MAX_REVIEW_BACK);
         if (days == 0) return out;
         // Strictly before today: a date still in progress has no settled figures, and the point of
         // the section is the report you could not read on the day it happened.
@@ -527,7 +546,7 @@ public class EarningsCalendarService {
      * @return how many dates were actually re-fetched
      */
     public int warmBack(int calendarDays) {
-        int days = clamp(calendarDays, 0, MAX_BACK);
+        int days = clamp(calendarDays, 0, MAX_REVIEW_BACK);
         LocalDate today = LocalDate.now();
         int fetched = 0;
         for (int i = 1; i <= days; i++) {

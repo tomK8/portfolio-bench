@@ -133,3 +133,36 @@ guard needs neither and refuses the edit instead of guessing.
 first needed it. The giveaway was `OrderFillReconciler` and `WatchlistService` both reaching across
 into `PositionDetailService` for a static — three callers for a rule that lived in none of their
 layers, while the two engines that most needed it could not import it at all.
+
+## Allocation stood £30k above the ledger — one panel on a once-a-day price (2026-11-05)
+
+**Symptom.** Allocation → Breakdown totalled **£1,301,551.98** against a Cash-ledger and Live
+**£1,271,010.13** on the same book at the same minute — £30,541.85 apart, every sector row
+inflated with it.
+
+**Cause.** Two valuation paths. `AllocationService` valued positions from `price_history`
+(`floorEntry(today)`); `SyncFromCashService` and the Live tab read `price_intraday`, refreshed
+every 60s. `price_history` is written by a **22:00 cron**, and the laptop had slept through it, so
+the missed run fired late at **10:26** and stamped a partial "today" bar at the 10:26 price. By
+16:07 the book was down 2.37% and the panel was still reading 10:26 — a +£29.4k overstatement.
+Re-pricing the book at the 10:26 quotes reproduces the screen to **0.045%**, which is what made
+the diagnosis certain rather than plausible.
+
+Two things that looked like causes and were not. The **sector rows legitimately differ** between
+the tabs — Allocation looks *through* funds into sectors while the ledger's Group-by puts exactly
+one group per holding, so the multi-sector funds sit in their own £224,925 row there; only the
+inflation was a bug. And **`fetched_at` is overwritten on upsert**, so filtering on it does *not*
+reconstruct what the table held earlier — the first attempt at a reconstruction was wrong for that
+reason, and the log is what settled it.
+
+**Why nothing caught it.** `CatchUpService` gates on the intraday pass's own heartbeat, never on
+the age of the prices — deliberate, because out of hours the prices are legitimately old while the
+job ticks along fine ([live-tab.md](live-tab.md)). The intraday pass was the one job that *was*
+healthy, so the gate stayed shut. This was never dormancy: it was a once-a-day job feeding a panel
+read intraday.
+
+**Fix.** The replay's today sample is valued on the cached quote, falling back to the daily close
+— see "History is daily closes; today is the live quote" in
+[allocation-breakdowns.md](allocation-breakdowns.md). Restarting the app appeared to fix it,
+because `onStartup` re-ran the fetch; the gap reopened as soon as the market moved again, which is
+the shape of every bug whose repair is a restart.

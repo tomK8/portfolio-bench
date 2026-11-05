@@ -5,9 +5,11 @@ import com.portfolio.domain.Instruments;
 import com.portfolio.domain.ShareClasses;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.domain.model.TransactionType;
 import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
 import com.portfolio.port.HistoricalFxRateProvider;
@@ -50,6 +52,11 @@ public class AllocationService {
 
     private final CashTransactionRepository cashRepo;
     private final PriceHistoryRepository priceRepo;
+    /**
+     * The live quote cache, used for the <em>today</em> sample only — null means history-only,
+     * which is what the replay did before and what tests that only stage daily bars still want.
+     */
+    private final IntradayPriceRepository intradayRepo;
     private final HistoricalFxRateProvider fxProvider;
     private final YahooTickerMap tickerMap;
     private final KeyValueStore settings;
@@ -65,7 +72,7 @@ public class AllocationService {
                              HistoricalFxRateProvider fxProvider,
                              YahooTickerMap tickerMap,
                              KeyValueStore settings) {
-        this(cashRepo, priceRepo, fxProvider, tickerMap, settings, ShareClassRegistry.NONE);
+        this(cashRepo, priceRepo, fxProvider, tickerMap, settings, ShareClassRegistry.NONE, null);
     }
 
     public AllocationService(CashTransactionRepository cashRepo,
@@ -74,12 +81,23 @@ public class AllocationService {
                              YahooTickerMap tickerMap,
                              KeyValueStore settings,
                              ShareClassRegistry shareClasses) {
+        this(cashRepo, priceRepo, fxProvider, tickerMap, settings, shareClasses, null);
+    }
+
+    public AllocationService(CashTransactionRepository cashRepo,
+                             PriceHistoryRepository priceRepo,
+                             HistoricalFxRateProvider fxProvider,
+                             YahooTickerMap tickerMap,
+                             KeyValueStore settings,
+                             ShareClassRegistry shareClasses,
+                             IntradayPriceRepository intradayRepo) {
         this.cashRepo = cashRepo;
         this.priceRepo = priceRepo;
         this.fxProvider = fxProvider;
         this.tickerMap = tickerMap;
         this.settings = settings;
         this.shareClasses = shareClasses == null ? ShareClassRegistry.NONE : shareClasses;
+        this.intradayRepo = intradayRepo;
     }
 
     public AllocationTimeline timeline() {
@@ -133,8 +151,15 @@ public class AllocationService {
         LocalDate start = LocalDate.parse(txs.get(0).transactionDate());
         LocalDate today = LocalDate.now();
 
-        Map<String, NavigableMap<LocalDate, PricePoint>> prices = loadPriceSeries(txs);
+        Set<String> symbols = heldSymbols(txs);
+        Map<String, NavigableMap<LocalDate, PricePoint>> prices = loadPriceSeries(symbols);
         Map<String, NavigableMap<LocalDate, BigDecimal>> fx = preloadFx(start, today);
+        // Today's bar is only as fresh as the last PriceFetchJob run, which is a 22:00 cron: for
+        // the whole trading day it holds either last night's close or a partial bar frozen at
+        // whenever the job happened to fire. Every other panel reads the minute-by-minute cache,
+        // so the breakdown could stand a whole day's move out of step with the Live and
+        // Cash-ledger totals it sits beside. One indexed read, and only the today sample uses it.
+        Map<String, PricePoint> live = loadLiveQuotes(symbols);
         // Read once for the whole replay: ~550 samples must not each ask the same question, and a
         // declaration that changed mid-replay would draw a series that folds only part of itself.
         ShareClasses holdings = shareClasses.declared();
@@ -161,7 +186,8 @@ public class AllocationService {
                     cashByAcctCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
                     rothSeeded = true;
                 }
-                points.add(snapshot(sample, qty, cashByAcctCcy, prices, fx, holdings));
+                points.add(snapshot(sample, qty, cashByAcctCcy, prices, fx, holdings,
+                        sample.equals(today) ? live : Map.of()));
                 sample = sample.plusDays(SAMPLE_INTERVAL_DAYS);
             }
         }
@@ -179,7 +205,7 @@ public class AllocationService {
             cashByAcctCcy.merge("RothIRA|USD", rothSeedUsd, BigDecimal::add);
         }
         if (points.isEmpty() || !points.get(points.size() - 1).date().equals(today.toString())) {
-            points.add(snapshot(today, qty, cashByAcctCcy, prices, fx, holdings));
+            points.add(snapshot(today, qty, cashByAcctCcy, prices, fx, holdings, live));
         }
         return new Replay(points, cashDetailGbp(cashByAcctCcy, today, fx), heldQuantities(qty));
     }
@@ -225,18 +251,23 @@ public class AllocationService {
      * sterling line equals one unit of its dollar line, which is an assumption about units rather
      * than about money. Folding after valuation also means the totals are identical either way: the
      * fold moves value between rows, never into or out of the chart.
+     *
+     * <p>{@code live} is non-empty only for the today sample, where a cached quote outranks the
+     * daily bar. Empty for every historical sample — a past day has a settled close and the quote
+     * cache holds nothing for it anyway.
      */
     private AllocationPoint snapshot(LocalDate sample,
                                      Map<String, BigDecimal> qty,
                                      Map<String, BigDecimal> cashByAcctCcy,
                                      Map<String, NavigableMap<LocalDate, PricePoint>> prices,
                                      Map<String, NavigableMap<LocalDate, BigDecimal>> fx,
-                                     ShareClasses holdings) {
+                                     ShareClasses holdings,
+                                     Map<String, PricePoint> live) {
         Map<String, BigDecimal> symbolGbp = new LinkedHashMap<>();
         BigDecimal investedGbp = BigDecimal.ZERO;
         for (Map.Entry<String, BigDecimal> e : qty.entrySet()) {
             if (e.getValue().signum() <= 0) continue;
-            BigDecimal v = positionGbp(e.getKey(), e.getValue(), sample, prices, fx);
+            BigDecimal v = positionGbp(e.getKey(), e.getValue(), sample, prices, fx, live);
             if (v == null || v.signum() == 0) continue;
             BigDecimal rounded = v.setScale(2, RoundingMode.HALF_UP);
             symbolGbp.put(e.getKey(), rounded);
@@ -287,12 +318,24 @@ public class AllocationService {
 
     private static BigDecimal positionGbp(String symbol, BigDecimal qty, LocalDate sample,
                                           Map<String, NavigableMap<LocalDate, PricePoint>> prices,
-                                          Map<String, NavigableMap<LocalDate, BigDecimal>> fx) {
+                                          Map<String, NavigableMap<LocalDate, BigDecimal>> fx,
+                                          Map<String, PricePoint> live) {
+        // A quote for today outranks today's daily bar, but never replaces the series: a symbol the
+        // quote cache has nothing for falls through to its close rather than dropping out of the
+        // totals. That is the rule the Cash-ledger view already applies to bonds, generalised —
+        // this panel must not lose value, because a bucket that silently shed a position would
+        // understate exactly the concentration it exists to show.
+        PricePoint quote = live.get(symbol);
         NavigableMap<LocalDate, PricePoint> series = prices.get(symbol);
-        if (series == null) return null;
-        Map.Entry<LocalDate, PricePoint> entry = series.floorEntry(sample);
-        if (entry == null) entry = series.firstEntry();
-        PricePoint pp = entry.getValue();
+        if (quote == null && series == null) return null;
+        PricePoint pp;
+        if (quote != null) {
+            pp = quote;
+        } else {
+            Map.Entry<LocalDate, PricePoint> entry = series.floorEntry(sample);
+            if (entry == null) entry = series.firstEntry();
+            pp = entry.getValue();
+        }
         BigDecimal price = BigDecimal.valueOf(pp.close() * pp.splitFactor());
         String currency = pp.currency();
         if ("GBp".equals(currency)) {
@@ -317,7 +360,8 @@ public class AllocationService {
 
     // ---- preloads -----------------------------------------------------------
 
-    private Map<String, NavigableMap<LocalDate, PricePoint>> loadPriceSeries(List<CashTransaction> txs) {
+    /** Every symbol the ledger has ever dealt — the universe both price loads are keyed by. */
+    private static Set<String> heldSymbols(List<CashTransaction> txs) {
         Set<String> symbols = new HashSet<>();
         for (CashTransaction t : txs) {
             if (t.type() == TransactionType.TRANSACTION && t.symbol() != null
@@ -325,12 +369,44 @@ public class AllocationService {
                 symbols.add(t.symbol().toUpperCase());
             }
         }
+        return symbols;
+    }
+
+    /** Yahoo ticker for a symbol; a bond is priced under its own id. */
+    private String tickerFor(String symbol) {
+        return Instruments.isBond(symbol) ? symbol : tickerMap.tickerFor(symbol);
+    }
+
+    /**
+     * Latest cached quote per symbol, keyed back to the internal symbol, as a {@link PricePoint}
+     * with a split factor of 1.0 — today's bar never carries another, because {@code split_factor}
+     * multiplies in the splits dated strictly after a bar and there are none after today. The live
+     * close is therefore already in the basis the ledger's share count is in.
+     *
+     * <p>Regular-session only, via the same repository call {@code SyncFromCashService} makes, so
+     * the two views price off one number rather than two that can disagree. A thin pre-market
+     * print is a bad thing to value a book on.
+     */
+    private Map<String, PricePoint> loadLiveQuotes(Set<String> symbols) {
+        if (intradayRepo == null || symbols.isEmpty()) return Map.of();
+        Map<String, String> tickerBySymbol = new LinkedHashMap<>();
+        for (String sym : symbols) tickerBySymbol.put(sym, tickerFor(sym));
+        Map<String, IntradayPrice> byTicker =
+                intradayRepo.loadLatestIntradayPrices(tickerBySymbol.values());
+        Map<String, PricePoint> out = new HashMap<>();
+        for (Map.Entry<String, String> e : tickerBySymbol.entrySet()) {
+            IntradayPrice p = byTicker.get(e.getValue());
+            if (p != null) out.put(e.getKey(), new PricePoint(p.close(), 1.0, p.currency()));
+        }
+        return out;
+    }
+
+    private Map<String, NavigableMap<LocalDate, PricePoint>> loadPriceSeries(Set<String> symbols) {
         Map<String, NavigableMap<LocalDate, PricePoint>> out = new HashMap<>();
         LocalDate earliest = LocalDate.of(2000, 1, 1);
         LocalDate latest = LocalDate.now();
         for (String sym : symbols) {
-            String ticker = Instruments.isBond(sym) ? sym : tickerMap.tickerFor(sym);
-            List<PriceBar> bars = priceRepo.getPriceHistory(ticker, earliest, latest);
+            List<PriceBar> bars = priceRepo.getPriceHistory(tickerFor(sym), earliest, latest);
             if (bars.isEmpty()) continue;
             NavigableMap<LocalDate, PricePoint> series = new TreeMap<>();
             for (PriceBar b : bars) series.put(b.date(), new PricePoint(b.close(), b.splitFactor(), b.currency()));

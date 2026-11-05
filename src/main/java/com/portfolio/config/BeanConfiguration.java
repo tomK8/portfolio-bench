@@ -509,9 +509,11 @@ public class BeanConfiguration {
                                                HistoricalFxRateProvider historicalFxRateProvider,
                                                YahooTickerMap yahooTickerMap,
                                                KeyValueStore keyValueStore,
-                                               ShareClassRegistry shareClassRegistry) {
+                                               ShareClassRegistry shareClassRegistry,
+                                               IntradayPriceRepository intradayPriceRepository) {
         return new AllocationService(cashTransactionRepository, priceHistoryRepository,
-                historicalFxRateProvider, yahooTickerMap, keyValueStore, shareClassRegistry);
+                historicalFxRateProvider, yahooTickerMap, keyValueStore, shareClassRegistry,
+                intradayPriceRepository);
     }
 
     @Bean

@@ -184,6 +184,33 @@ invested.
   row, but none of the ~550 weekly snapshots are valued. **Don't use `SyncFromCashService.sync()`**
   here — it hits the network for FX on every call, throws on failure, and drops equities with no
   intraday quote.
+
+**History is daily closes; today is the live quote.** The replay values each sample from
+`price_history` at `floorEntry(sample)`, which is right for every past sample and wrong for the
+only one anybody watches. `price_history`'s newest bar is as fresh as the last `PriceFetchJob`
+run, and that is a **22:00 cron** (`PriceFetchScheduler.daily()`): for the whole trading day it
+holds either last night's close or a partial bar frozen at whenever the job happened to fire. So
+`snapshot()` takes a `live` map — non-empty for the today sample only — and `positionGbp` prefers
+it over the bar. Three rules make that safe:
+
+- **The quote never replaces the series, only outranks it.** A symbol the cache has nothing for
+  falls through to its close rather than dropping out of the totals — the bond rule the
+  Cash-ledger view already applies, generalised. A bucket that silently shed a position would
+  understate exactly the concentration this panel exists to show.
+- **Regular-session only**, via the same `IntradayPriceRepository.loadLatestIntradayPrices` call
+  `SyncFromCashService` makes, so Allocation, Cash ledger and Live price off *one* number rather
+  than two that can disagree. A thin pre-market print is fine to look at and bad to value a book on.
+- **The split factor is 1.0, and provably so.** `close × split_factor` recovers the raw close in
+  basis-at-date because `applyAdjustments` multiplies in the splits dated *strictly after* a bar
+  ([price-history.md](price-history.md)); nothing is dated after today, so a live close is already
+  in the basis the ledger's share count is in.
+
+**FX is untouched on purpose.** Both `fetchRates()` and `fetchRateSeries()` are Frankfurter's ECB
+reference rates, so the historical series already carries today's live rate and
+`rateOnOrBefore(series, today)` *is* the live rate. Adding `FxRateProvider` here would have bought
+an identical number at the cost of a second FX path, a network call and a throw the replay has no
+way to handle. What this cost: one indexed `price_intraday` read per replay, against the 30 years
+of bars for ~54 symbols `loadPriceSeries` already loads on every call.
 - **`domain.SectorBucket`** — 15 buckets incl. `FIXED_INCOME`/`CASH`/`COMMODITIES` as top-level
   (so equity percentages aren't diluted by gilts or idle cash) and `UNCLASSIFIED`.
   `fromYahooSector` accepts **both** Yahoo spellings — display form from `summaryProfile`

@@ -6,9 +6,11 @@ import com.portfolio.application.AllocationService.AllocationTimeline;
 import com.portfolio.domain.ShareClasses;
 import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.domain.model.TransactionType;
 import com.portfolio.persistence.CashTransactionRepository;
+import com.portfolio.persistence.IntradayPriceRepository;
 import com.portfolio.persistence.JdbcConnectionFactory;
 import com.portfolio.persistence.KeyValueStore;
 import com.portfolio.persistence.PriceHistoryRepository;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.math.BigDecimal;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.TreeMap;
@@ -50,6 +53,28 @@ class AllocationServiceTest {
                 new YahooTickerMap(),
                 kv,
                 shareClasses);
+    }
+
+    /** The production wiring: daily bars for history, the quote cache for today. */
+    private AllocationService liveService() {
+        JdbcConnectionFactory cf = new JdbcConnectionFactory(dbDir);
+        KeyValueStore kv = new KeyValueStore(dbDir);
+        return new AllocationService(
+                new CashTransactionRepository(cf, kv),
+                new PriceHistoryRepository(cf),
+                FLAT_USD_FX,
+                new YahooTickerMap(),
+                kv,
+                ShareClassRegistry.NONE,
+                new IntradayPriceRepository(cf));
+    }
+
+    private IntradayPriceRepository quotes() {
+        return new IntradayPriceRepository(new JdbcConnectionFactory(dbDir));
+    }
+
+    private static IntradayBar quote(String symbol, double close) {
+        return new IntradayBar(symbol, Instant.now(), close, null, "GBP");
     }
 
     private CashTransactionRepository repo() {
@@ -192,5 +217,76 @@ class AllocationServiceTest {
 
     private static AllocationPoint last(AllocationTimeline t) {
         return t.points().get(t.points().size() - 1);
+    }
+
+    @Test
+    void todayIsValuedOnTheLiveQuoteNotTheDailyBar() {
+        // The bar the 22:00 cron left behind says £100; the quote cache says £120. Every other
+        // panel reads the cache, so the breakdown must too or it reports a day-old total.
+        repo().saveII(List.of(
+                contribGbp("2026-01-05", 10000),
+                trade("2026-01-06", "MU", 60, -6000)));
+        prices().upsertPriceBars(List.of(
+                bar("MU", "2026-01-06", 100.0),
+                bar("MU", LocalDate.now().toString(), 100.0)));
+        quotes().saveIntradayBars(List.of(quote("MU", 120.0)));
+
+        AllocationPoint last = liveService().currentPoint();
+        assertEquals(7200.0, last.symbolGbp().get("MU").doubleValue(), 0.01,
+                "60 × the £120 quote, not the £100 bar");
+    }
+
+    @Test
+    void aSymbolTheQuoteCacheHasNothingForKeepsItsDailyClose() {
+        // The whole risk of preferring the cache: a name it has never heard of must fall through
+        // to its close, not drop out of the totals.
+        repo().saveII(List.of(
+                contribGbp("2026-01-05", 20000),
+                trade("2026-01-06", "MU", 60, -6000),
+                trade("2026-01-06", "BP.", 100, -5000)));
+        prices().upsertPriceBars(List.of(
+                bar("MU", LocalDate.now().toString(), 100.0),
+                bar("BP.L", LocalDate.now().toString(), 50.0)));
+        quotes().saveIntradayBars(List.of(quote("MU", 120.0)));
+
+        AllocationPoint last = liveService().currentPoint();
+        assertEquals(7200.0, last.symbolGbp().get("MU").doubleValue(), 0.01);
+        assertEquals(5000.0, last.symbolGbp().get("BP.").doubleValue(), 0.01,
+                "no quote cached → the daily close still counts");
+        assertEquals(12200.0, last.investedGbp().doubleValue(), 0.01);
+    }
+
+    @Test
+    void historicalSamplesAreUnaffectedByTheLiveQuote() {
+        // A settled past day has a settled close; only the today sample may move.
+        repo().saveII(List.of(
+                contribGbp("2026-01-05", 10000),
+                trade("2026-01-06", "MU", 60, -6000)));
+        prices().upsertPriceBars(List.of(
+                bar("MU", "2026-01-06", 100.0),
+                bar("MU", LocalDate.now().toString(), 100.0)));
+        quotes().saveIntradayBars(List.of(quote("MU", 120.0)));
+
+        List<AllocationPoint> points = liveService().timeline().points();
+        AllocationPoint early = points.stream()
+                .filter(pt -> pt.date().compareTo("2026-01-06") >= 0 && pt.date().compareTo("2026-02-01") < 0)
+                .findFirst().orElseThrow();
+        assertEquals(6000.0, early.symbolGbp().get("MU").doubleValue(), 0.01,
+                "a past sample still reads its daily bar");
+        assertEquals(7200.0, points.get(points.size() - 1).symbolGbp().get("MU").doubleValue(), 0.01,
+                "the today sample reads the quote");
+    }
+
+    @Test
+    void withoutAQuoteCacheTheReplayIsHistoryOnly() {
+        // The five/six-arg constructors stay history-only, which is what every caller that only
+        // stages daily bars is written against.
+        repo().saveII(List.of(
+                contribGbp("2026-01-05", 10000),
+                trade("2026-01-06", "MU", 60, -6000)));
+        prices().upsertPriceBars(List.of(bar("MU", LocalDate.now().toString(), 100.0)));
+        quotes().saveIntradayBars(List.of(quote("MU", 120.0)));
+
+        assertEquals(6000.0, service().currentPoint().symbolGbp().get("MU").doubleValue(), 0.01);
     }
 }

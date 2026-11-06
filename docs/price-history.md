@@ -269,6 +269,28 @@ itself, and only if Yahoo dates the event to the last pre-split session rather t
 `applyAdjustments` keys on `isAfter(bar.date())`, so a mis-dated event would leave 26 Oct holding
 an adjusted close with a `split_factor` of 1.
 
+**That mis-dating has since happened, and the armed bar is 26 Oct.** Checked 2026-11-06, ten days
+on: Yahoo still publishes no split event, but it has now restated exactly one bar — 26 Oct, from
+125,770 to 503.08, which is `125,770 ÷ 250` to the penny and so a mechanical adjustment rather
+than a traded close. It is on the wrong side of the boundary. Our own intraday capture settles
+which side is right: **307 quotes on 26 Oct, every one between 125,760 and 125,800**, so the
+market was on the old basis all that day, the ex-date is 27 Oct and the stored bar and the ledger
+row are both correct. `run()` starts at the newest stored bar and can never reach 26 Oct; only
+`runFullRebuild()` can, and with no event to derive from it would write 503.08 against an
+unchanged `split_factor` of 1.0 — valuing the ledger's 55 shares at **£276.87 for that one day**,
+the same £68,896 hole as the original incident, one bar wide. Recovery is one `UPDATE` back to
+125,770, so this is a thing to know before pressing *Rebuild prices*, not a reason to change code.
+
+**The unadjusted series is also why Live reads −99.6% in 30d, 3M and 6M for CSH2**, and why that
+is not a bug to fix. `PriceMomentum.changeFromLive` divides a new-basis live quote by an old-basis
+base bar; the 5d and 10d columns are fine because their bases fall on or after 27 Oct, and the
+columns flip exactly at the boundary. Nothing in `price_history` can reveal the break — Yahoo
+asserts `split_factor` 1.0 and an unadjusted close, and reading the step as a split would be the
+series-break inference this design refuses. The only witness is the ledger row, so suppressing the
+figure means teaching the price column to read corporate actions out of the cash ledger — joining
+the two sides this whole section keeps apart. It costs nothing to leave, and it corrects itself
+the day Yahoo publishes the event.
+
 **Nothing noticed, and nothing would have.** `ReconciliationService` checks price-data *coverage*
 — no history, stale history, missing intraday, odd currency — not share counts, so it reported
 `positionsChecked: 52, issues: []` throughout. `DividendService.reconcile` does compare

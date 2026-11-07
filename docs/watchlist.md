@@ -11,7 +11,7 @@ touches an order.
   row per symbol however many lists hold it.
   - **Alerts are global to the symbol, membership is not.** A name in both `chips` and `ai` has
     one set of triggers; editing Move % on either tab edits the one row. That is what keeps
-    `WatchlistAlertJob` — which dedups on `SYMBOL|TRIGGER|date` and knows nothing about lists —
+    `WatchlistAlertJob` — which dedups per symbol per trigger and knows nothing about lists —
     from mailing the same signal twice, and what leaves `/watchlist/row` (a linear scan for the
     first match, serving five other tables) with a single answer to whose thresholds to show.
     `WatchlistService.view()` stays list-agnostic for the job; `view(listId)` serves the screen.
@@ -207,12 +207,12 @@ touches an order.
       is and how likely it is reached — questions about a price an order can fill at. An
       after-hours book is thin and wide-spread, and the last 1-minute close in it can be one
       odd-lot print.
-    - *It would spend the day's alert on the wrong session.* `WatchlistAlertJob` dedups on
-      `SYMBOL|TRIGGER|date` off `LocalDate.now()`, and a US post-market session runs past
-      midnight in London. A level crossed at 00:30 would mail, write **tomorrow's** key, and
-      leave that trigger silent through the session that could be traded on — and a print that
-      reverses by the open would leave a fired flag on a level no dealable market ever reached.
-      Only a threshold edit re-arms it (`clearFiredFor`), so nothing would recover the signal.
+    - *It would spend the alert on a price nobody could deal at.* A level is mailed **once per
+      crossing** and then stays quiet until the price comes back through it, so an extended print
+      that dips through a trigger at 00:30 and reverses by the open takes the signal with it: the
+      flag is set, the regular session never un-crosses it, and only a threshold edit
+      (`clearFiredFor`) would get it back. A thin after-hours book deciding whether the trigger
+      ever fires is the opposite of what the trigger is for.
     - *The rest of the row would not follow.* `week52High`/`Low` come from the fundamentals
       snapshot and the momentum windows from daily closes, so moving only the live price puts an
       extended print over a regular-session comparison in one row — one header over two
@@ -360,8 +360,32 @@ touches an order.
   threshold/level disables that trigger** (`WatchlistRepository` stores 0; the columns are
   `price_above`/`price_below`, NULL on rows predating them → read as 0 = disabled), so a symbol can
   be watched with no alerts at all. `both()` (the pulse) stays near-high + big-move only; the alert
-  job dedups the price levels under `SYMBOL|ABOVE|date` / `SYMBOL|BELOW|date`. The two **order
+  job dedups the price levels under `SYMBOL|ABOVE` / `SYMBOL|BELOW`. The two **order
   targets are not triggers** and `WatchlistAlerts` is never handed them — see above.
+
+- **A signal is a crossing, not a state the market is sitting in.** The fired-set
+  (`watchlist_alerts_fired`) is **rebuilt every run from what the prices justify**, not pruned by
+  age: a near-high or a price level keys on `SYMBOL|TRIGGER` with no date, carried while the
+  condition holds and simply not carried once it ends — which is the whole re-arm. So a level
+  mails on the crossing and says nothing further until the price comes back through it, or until
+  a threshold write calls `clearFiredFor`.
+  - **A move is the exception, because it is an event and not a condition.** `|today's move|`
+    belongs to one session, so it keys on `SYMBOL|MOVE|` *the trading day of the price that fired
+    it* (`Row.priceDay`, the same `sessionAnchor` the momentum windows count back from) — two
+    big days running mail twice, and Friday's move does not become a second one at one minute
+    past midnight on Saturday.
+  - **Observed (2026-11-07):** every key carried `LocalDate.now()`, so the dedup expired at London
+    midnight and three levels crossed on the 5th mailed again on the 6th and again at 07:00 on
+    Saturday the 7th — the machine dark-waking for five seconds was enough — quoting Friday's
+    close, hours before any market the order could be placed in would open. The same clock error
+    `docs/live-tab.md` had already fixed for Day Δ: the calendar day rolls in London while the
+    price being judged belongs to a US session.
+  - **An unpriced row re-arms nothing.** A symbol whose prices are missing keeps the keys it has;
+    a backfill gap or a ticker Yahoo has stopped answering must not turn a signal already mailed
+    into a new one the moment the prices return. Dropping a symbol from the watchlist does take
+    its keys with it — nothing justifies them any more.
+  - Keys written by the dated scheme are read as their current equivalent on the way through, so
+    the change itself did not mail every already-crossed level one last time.
 - **A row with no prices says which kind of nothing it is.** `Row.missingData` marks the absence;
   `Row.missingReason` (from `UnresolvedSymbols`, see
   [price-history.md](price-history.md)) is non-null only once Yahoo has actually refused the

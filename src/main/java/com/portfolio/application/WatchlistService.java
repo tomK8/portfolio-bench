@@ -342,7 +342,7 @@ public class WatchlistService {
         BigDecimal beta = s.q() == null ? null : s.q().beta();
         Position pos = position(symbol, ticker, ledgerBySymbol.get(symbol), ip, rates);
 
-        return new Row(symbol, s.currency(), s.currentPrice(), live.extended(),
+        return new Row(symbol, s.currency(), s.currentPrice(), live.anchor(), live.extended(),
                 live.todayPct(), live.pct2d(), live.pct3d(), live.pct5d(), live.pct10d(), live.pct30d(),
                 s.week52High(), s.week52Low(), live.pctFromHigh(), live.pctFromLow(),
                 live.vol5d(), live.vol10d(), scalePct(vol30), scalePct(vol1y), trailingPe, beta,
@@ -472,7 +472,8 @@ public class WatchlistService {
         Outlook below = outlook(cp, levelOrNull(e.priceBelow()), levelOrNull(e.targetBelow()),
                 false, vols, sessions);
 
-        return new Live(scalePct(todayPct), scalePct(pct2d), scalePct(pct3d), scalePct(pct5d),
+        return new Live(anchor,
+                scalePct(todayPct), scalePct(pct2d), scalePct(pct3d), scalePct(pct5d),
                 scalePct(pct10d), scalePct(pct30d), scalePct(pctFromHigh), scalePct(pctFromLow),
                 scalePct(intra[0]), scalePct(intra[1]), above, below,
                 extended(cp, s.ip(), newest),
@@ -974,8 +975,13 @@ public class WatchlistService {
                             BigDecimal week52High, BigDecimal week52Low) {
     }
 
-    /** The intraday-varying, already-scaled fields shared by {@link Row} and {@link QuoteRow}. */
-    private record Live(BigDecimal todayPct, BigDecimal pct2d, BigDecimal pct3d, BigDecimal pct5d,
+    /**
+     * The intraday-varying, already-scaled fields shared by {@link Row} and {@link QuoteRow}.
+     * {@code anchor} is the session every window here was counted back from, carried so the row
+     * can name the session its price came from rather than deriving it a second way.
+     */
+    private record Live(LocalDate anchor,
+                        BigDecimal todayPct, BigDecimal pct2d, BigDecimal pct3d, BigDecimal pct5d,
                         BigDecimal pct10d, BigDecimal pct30d,
                         BigDecimal pctFromHigh, BigDecimal pctFromLow,
                         BigDecimal vol5d, BigDecimal vol10d,
@@ -995,6 +1001,15 @@ public class WatchlistService {
      * rejected the ticker and waiting will not help, null means a backfill is still in flight.
      */
     public record Row(String symbol, String currency, BigDecimal currentPrice,
+                      /**
+                       * The trading session {@code currentPrice} belongs to — the quote's own
+                       * trading day, not the calendar date, so it is still Friday all weekend.
+                       * Null only on a row with no price. Every window on the row is measured
+                       * back from it, and it is what keeps a per-session alert from counting a
+                       * closed Saturday as a second session. See
+                       * {@link WatchlistService#sessionAnchor}.
+                       */
+                      LocalDate priceDay,
                       /**
                        * Where the price has gone since the regular session, when the newest quote
                        * is a pre/post-market one — null otherwise, which is most of the time.
@@ -1037,7 +1052,7 @@ public class WatchlistService {
                            BigDecimal targetAbove, BigDecimal targetBelow, String note,
                            String reason) {
             return new Row(symbol, null, null, null, null, null, null, null, null, null,
-                    null, null, null, null, null, null, null, null, null, null,
+                    null, null, null, null, null, null, null, null, null, null, null,
                     false, null, null, null, highPct, movePct, priceAbove, priceBelow,
                     targetAbove, targetBelow, note,
                     null, null, false, false, 0, false, false, true, reason);

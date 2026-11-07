@@ -201,9 +201,9 @@ public class PriceFetchScheduler {
     }
 
     /**
-     * Evaluate the watchlist triggers every 5 minutes. Self-throttles to one email per day per
-     * symbol per trigger, so this cadence just controls how quickly a fresh spike is caught, not
-     * how often you're mailed. No-op unless SMTP is configured.
+     * Evaluate the watchlist triggers every 5 minutes. Self-throttles to one email per crossing
+     * (a move trigger: one per session), so this cadence just controls how quickly a fresh signal
+     * is caught, not how often you're mailed. No-op unless SMTP is configured.
      */
     @Scheduled(fixedDelay = 5 * 60 * 1000, initialDelay = 2 * 60 * 1000)
     public void watchlistAlerts() {

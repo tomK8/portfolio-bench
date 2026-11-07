@@ -25,10 +25,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Covers {@link WatchlistAlertJob#clearFiredFor(String)} — the re-arm hook called when a symbol's
- * triggers change so a corrected target can fire fresh the same day (and a stale firing for a
- * now-disabled trigger stops lingering) — and the shape of the email itself, which is where a
- * symbol's note has to arrive for the note to be worth writing at all. {@code clearFiredFor} only
- * touches the KV set, so those tests leave the service/notifier deps null.
+ * triggers change so a corrected target can fire fresh immediately (and a stale firing for a
+ * now-disabled trigger stops lingering) — the shape of the email itself, which is where a
+ * symbol's note has to arrive for the note to be worth writing at all, and the dedup: a state
+ * trigger mails on the crossing and nothing but an un-crossing re-arms it, while a move is keyed
+ * by the session its price came from. {@code clearFiredFor} only touches the KV set, so those
+ * tests leave the service/notifier deps null.
  */
 class WatchlistAlertJobTest {
 
@@ -40,8 +42,8 @@ class WatchlistAlertJobTest {
     void clearFiredFor_dropsOnlyThatSymbolsKeys(@TempDir Path dir) {
         KeyValueStore kv = new KeyValueStore(dir);
         kv.putStringSet(WatchlistAlertJob.FIRED_KEY, List.of(
-                "GILT 4.5% 2028|ABOVE|2026-08-05",
-                "GILT 4.5% 2028|BELOW|2026-08-05",
+                "GILT 4.5% 2028|ABOVE",
+                "GILT 4.5% 2028|BELOW",
                 "NVDA|MOVE|2026-08-05"));
 
         job(kv).clearFiredFor("GILT 4.5% 2028");
@@ -54,7 +56,7 @@ class WatchlistAlertJobTest {
     @Test
     void clearFiredFor_isCaseAndWhitespaceInsensitive(@TempDir Path dir) {
         KeyValueStore kv = new KeyValueStore(dir);
-        kv.putStringSet(WatchlistAlertJob.FIRED_KEY, List.of("NVDA|ABOVE|2026-08-05"));
+        kv.putStringSet(WatchlistAlertJob.FIRED_KEY, List.of("NVDA|ABOVE"));
 
         job(kv).clearFiredFor("  nvda ");   // normalised to NVDA before matching
 
@@ -64,11 +66,11 @@ class WatchlistAlertJobTest {
     @Test
     void clearFiredFor_noMatch_isQuietNoop(@TempDir Path dir) {
         KeyValueStore kv = new KeyValueStore(dir);
-        kv.putStringSet(WatchlistAlertJob.FIRED_KEY, List.of("NVDA|ABOVE|2026-08-05"));
+        kv.putStringSet(WatchlistAlertJob.FIRED_KEY, List.of("NVDA|ABOVE"));
 
         assertDoesNotThrow(() -> job(kv).clearFiredFor("TSLA"));
         assertDoesNotThrow(() -> job(kv).clearFiredFor(null));
-        assertEquals(Set.of("NVDA|ABOVE|2026-08-05"), kv.getStringSet(WatchlistAlertJob.FIRED_KEY));
+        assertEquals(Set.of("NVDA|ABOVE"), kv.getStringSet(WatchlistAlertJob.FIRED_KEY));
     }
 
     // ---- the email ------------------------------------------------------------
@@ -109,12 +111,23 @@ class WatchlistAlertJobTest {
      *  rows are the ones the dashboard would render. */
     private static WatchlistService service(Path dir, KeyValueStore kv,
                                             java.util.function.Consumer<WatchlistRepository> setup) {
+        return serviceEndingOn(dir, kv, weekdayOnOrBefore(LocalDate.now()), 100.0, 110.0, setup);
+    }
+
+    /**
+     * The same, with the last bar on a named session. A fixture whose last session is not today
+     * is the only way to tell a key anchored on the price's trading day from one anchored on the
+     * wall clock — on a weekday the two agree, which is exactly how the bug survived.
+     */
+    private static WatchlistService serviceEndingOn(Path dir, KeyValueStore kv, LocalDate lastSession,
+                                                    double prevClose, double lastClose,
+                                                    java.util.function.Consumer<WatchlistRepository> setup) {
         var cf = new JdbcConnectionFactory(dir);
         var wlRepo = new WatchlistRepository(cf, kv);
         var priceRepo = new PriceHistoryRepository(cf);
-        LocalDate today = weekdayOnOrBefore(LocalDate.now());
-        priceRepo.savePriceBars(List.of(bar("AAPL", weekdayOnOrBefore(today.minusDays(1)), 100.0),
-                bar("AAPL", today, 110.0)));
+        priceRepo.savePriceBars(List.of(
+                bar("AAPL", weekdayOnOrBefore(lastSession.minusDays(1)), prevClose),
+                bar("AAPL", lastSession, lastClose)));
         setup.accept(wlRepo);
         return new WatchlistService(wlRepo, priceRepo, new IntradayPriceRepository(cf),
                 new FundamentalsRepository(cf), new CashTransactionRepository(cf, kv),
@@ -214,5 +227,107 @@ class WatchlistAlertJobTest {
         job.run();
 
         assertEquals(1, mail.bodies.size(), "the second tick has nothing new to say");
+    }
+
+    // ---- the dedup: a crossing, not a calendar day ----------------------------
+
+    /**
+     * What this replaced: the key carried {@code LocalDate.now()}, so a level the market was still
+     * through re-announced itself every morning — three days running for the same three names, the
+     * last of them a Saturday reporting Friday's close. A state trigger's key carries no date at
+     * all, which is what makes a new day unable to re-arm it.
+     */
+    @Test
+    void aLevelStillThroughMailsOnceAndNoNewDayCanReArmIt(@TempDir Path dir) {
+        KeyValueStore kv = new KeyValueStore(dir);
+        WatchlistService svc = service(dir, kv,
+                repo -> repo.add("AAPL", null, null, new BigDecimal("105"), null));
+        CapturingNotifier mail = new CapturingNotifier();
+        WatchlistAlertJob job = new WatchlistAlertJob(svc, mail, kv);
+
+        job.run();
+        job.run();
+
+        assertEquals(1, mail.bodies.size());
+        assertEquals(Set.of("AAPL|ABOVE"), kv.getStringSet(WatchlistAlertJob.FIRED_KEY),
+                "a state trigger's key names no day, so no day can expire it");
+    }
+
+    /** The signal is the crossing, so coming back through the level is what re-arms it. */
+    @Test
+    void aLevelTheMarketComesBackThroughFiresAgainOnTheNextCrossing(@TempDir Path dir) {
+        KeyValueStore kv = new KeyValueStore(dir);
+        LocalDate session = weekdayOnOrBefore(LocalDate.now());
+        WatchlistService svc = service(dir, kv,
+                repo -> repo.add("AAPL", null, null, new BigDecimal("105"), null));
+        var priceRepo = new PriceHistoryRepository(new JdbcConnectionFactory(dir));
+        CapturingNotifier mail = new CapturingNotifier();
+        WatchlistAlertJob job = new WatchlistAlertJob(svc, mail, kv);
+
+        job.run();                                                  // 110 is through 105 → mails
+        priceRepo.upsertPriceBars(List.of(bar("AAPL", session, 100.0)));   // last write wins
+        job.run();                                                  // back under the level
+        assertTrue(kv.getStringSet(WatchlistAlertJob.FIRED_KEY).isEmpty(),
+                "an un-crossing drops the key on the quiet tick that sees it");
+        priceRepo.upsertPriceBars(List.of(bar("AAPL", session, 112.0)));
+        job.run();                                                  // through it again → news
+
+        assertEquals(2, mail.bodies.size(), "the second crossing is a second signal");
+    }
+
+    /**
+     * A move is an event belonging to one session, so its key names the session the price came
+     * from. Keyed on the wall clock, Friday's move would mail again at one minute past midnight
+     * on Saturday — and again on Sunday — with no session in between.
+     */
+    @Test
+    void aBigMoveIsKeyedByTheSessionItsPriceCameFrom(@TempDir Path dir) {
+        KeyValueStore kv = new KeyValueStore(dir);
+        LocalDate lastSession = weekdayOnOrBefore(LocalDate.now().minusDays(10));
+        assertNotEquals(LocalDate.now(), lastSession, "the fixture must sit off the wall-clock day");
+        WatchlistService svc = serviceEndingOn(dir, kv, lastSession, 100.0, 110.0,
+                repo -> repo.add("AAPL", null, new BigDecimal("3"), null, null));
+        CapturingNotifier mail = new CapturingNotifier();
+
+        new WatchlistAlertJob(svc, mail, kv).run();
+
+        assertEquals(1, mail.bodies.size());
+        assertEquals(Set.of("AAPL|MOVE|" + lastSession), kv.getStringSet(WatchlistAlertJob.FIRED_KEY),
+                "the key names the price's trading day, not today");
+    }
+
+    /** An outage is not an un-crossing: a row with no price keeps what it has already mailed. */
+    @Test
+    void aRowWithNoPriceKeepsItsFiredKeys(@TempDir Path dir) {
+        KeyValueStore kv = new KeyValueStore(dir);
+        kv.putStringSet(WatchlistAlertJob.FIRED_KEY, List.of("NODATA|BELOW"));
+        WatchlistService svc = service(dir, kv,
+                repo -> repo.add("NODATA", null, null, null, new BigDecimal("50")));
+        CapturingNotifier mail = new CapturingNotifier();
+
+        new WatchlistAlertJob(svc, mail, kv).run();
+
+        assertEquals(Set.of("NODATA|BELOW"), kv.getStringSet(WatchlistAlertJob.FIRED_KEY),
+                "a symbol with no price re-arms nothing");
+        assertTrue(mail.bodies.isEmpty());
+    }
+
+    /**
+     * A key written by the earlier dated scheme records the same firing, so the change itself must
+     * not mail every level the market is already through one last time.
+     */
+    @Test
+    void aDatedKeyFromTheOldSchemeStillSuppressesTheFiringItRecorded(@TempDir Path dir) {
+        KeyValueStore kv = new KeyValueStore(dir);
+        kv.putStringSet(WatchlistAlertJob.FIRED_KEY, List.of("AAPL|ABOVE|2026-11-07"));
+        WatchlistService svc = service(dir, kv,
+                repo -> repo.add("AAPL", null, null, new BigDecimal("105"), null));
+        CapturingNotifier mail = new CapturingNotifier();
+
+        new WatchlistAlertJob(svc, mail, kv).run();
+
+        assertTrue(mail.bodies.isEmpty(), "already mailed, under the shape the key had then");
+        assertEquals(Set.of("AAPL|ABOVE"), kv.getStringSet(WatchlistAlertJob.FIRED_KEY),
+                "and it takes the current shape on the way through");
     }
 }

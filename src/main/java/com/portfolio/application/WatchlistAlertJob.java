@@ -20,16 +20,30 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Evaluates the watchlist triggers on a schedule and emails newly-firing signals.
  *
  * <p>Reads the very same {@link Row}s the dashboard renders (via {@link WatchlistService}), so
- * screen and alert never disagree. Each firing is deduplicated <em>once per day per symbol per
- * trigger</em> using a KV set of {@code SYMBOL|TRIGGER|yyyy-MM-dd} keys — so a spike that keeps
- * qualifying all afternoon mails you once, not every tick. All of a tick's new firings are
- * batched into a single email to avoid a flurry. A symbol with a note has it printed once beneath
- * its own firings — the whole reason to write one is to be told the plan at the moment the signal
- * arrives, rather than having to open the tab to remember it.
+ * screen and alert never disagree. All of a tick's new firings are batched into a single email to
+ * avoid a flurry. A symbol with a note has it printed once beneath its own firings — the whole
+ * reason to write one is to be told the plan at the moment the signal arrives, rather than having
+ * to open the tab to remember it.
+ *
+ * <p><b>A firing is deduplicated by state, not by the calendar.</b> A price level or a near-high
+ * is a condition the market is <em>in</em>: it mails on the crossing ({@code SYMBOL|ABOVE},
+ * {@code SYMBOL|BELOW}, {@code SYMBOL|HIGH}) and says nothing more until the price comes back
+ * through it — at which point the key is dropped and the next crossing is news again. A big move
+ * is an <em>event</em>, and it belongs to one session, so it is keyed by the trading day of the
+ * price that fired it ({@code SYMBOL|MOVE|yyyy-MM-dd}) and two big days running still mail twice.
+ *
+ * <p>Keying everything on {@code LocalDate.now()} instead got both of those wrong, and the second
+ * one is the trap {@code docs/live-tab.md} already names for Day Δ: the day rolled at London
+ * midnight while the price being judged belonged to a US session. A level crossed once
+ * re-announced itself every calendar day until it un-crossed — three mornings running for the
+ * same three names, the third of them a Saturday reporting Friday's close — and on a weekday the
+ * first tick after midnight spent that day's key before the session anyone could deal in had
+ * opened.
  *
  * <p>The fired-set is only persisted after a successful send, so a mail failure re-attempts on
- * the next tick rather than silently dropping the alert. Stale keys (prior days) are pruned each
- * run to keep the file tiny.
+ * the next tick rather than silently dropping the alert. It is rebuilt each run from what the
+ * current prices justify rather than pruned by age, so it stays the size of what is actually
+ * firing and a symbol dropped from the watchlist takes its keys with it.
  */
 public class WatchlistAlertJob {
 
@@ -74,8 +88,10 @@ public class WatchlistAlertJob {
      * Called when a symbol's thresholds/levels change or it's removed: the dedup exists to avoid
      * re-mailing the <em>same</em> setting, so a changed setting must re-arm. This fixes two
      * things at once — a corrected target (e.g. an Above level moved to the Below column) can fire
-     * fresh the same day instead of being suppressed by the earlier firing, and a stale firing for
-     * a now-disabled trigger stops lingering in the fired set.
+     * fresh immediately instead of being suppressed by the earlier firing, and a stale firing for
+     * a now-disabled trigger stops lingering in the fired set. It is the only way a level the
+     * market is still through can mail a second time, which is what makes it the hook every
+     * threshold write calls.
      */
     public void clearFiredFor(String symbol) {
         if (symbol == null) return;
@@ -91,57 +107,82 @@ public class WatchlistAlertJob {
 
     private void evaluateAndNotify() {
         WatchlistView view = watchlistService.view();
-        String today = LocalDate.now().toString();
-
-        // Prune the fired-set to today's keys only.
-        Set<String> firedToday = new LinkedHashSet<>();
-        for (String k : kv.getStringSet(FIRED_KEY)) {
-            if (k.endsWith("|" + today)) firedToday.add(k);
-        }
+        Set<String> onDisk = kv.getStringSet(FIRED_KEY);
+        Set<String> fired = normalise(onDisk);
 
         List<String> newLines = new ArrayList<>();
         int signals = 0;                                   // note lines are not signals (see subject)
-        Set<String> updated = new LinkedHashSet<>(firedToday);
+        // The set is rebuilt from what the prices justify right now rather than pruned: a trigger
+        // the market is no longer through simply isn't carried, and that is the whole re-arm.
+        Set<String> carried = new LinkedHashSet<>();
         for (Row r : view.rows()) {
+            String sym = r.symbol();
+            if (r.currentPrice() == null) {
+                // Nothing was judged, so nothing re-arms. A backfill gap or a ticker Yahoo has
+                // stopped answering must not turn a signal already mailed into a new one the
+                // moment its prices come back.
+                for (String k : fired) if (k.startsWith(sym + "|")) carried.add(k);
+                continue;
+            }
             int before = newLines.size();
-            if (r.nearHigh()) {
-                String key = r.symbol() + "|HIGH|" + today;
-                if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeHigh(r));
-            }
-            if (r.bigMove()) {
-                String key = r.symbol() + "|MOVE|" + today;
-                if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeMove(r));
-            }
-            if (r.aboveLevel()) {
-                String key = r.symbol() + "|ABOVE|" + today;
-                if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeLevel(r, true));
-            }
-            if (r.belowLevel()) {
-                String key = r.symbol() + "|BELOW|" + today;
-                if (updated.add(key) && !firedToday.contains(key)) newLines.add(describeLevel(r, false));
-            }
+            if (r.nearHigh() && isNew(sym + "|HIGH", fired, carried)) newLines.add(describeHigh(r));
+            if (r.bigMove() && r.priceDay() != null
+                    && isNew(sym + "|MOVE|" + r.priceDay(), fired, carried)) newLines.add(describeMove(r));
+            if (r.aboveLevel() && isNew(sym + "|ABOVE", fired, carried)) newLines.add(describeLevel(r, true));
+            if (r.belowLevel() && isNew(sym + "|BELOW", fired, carried)) newLines.add(describeLevel(r, false));
             signals += newLines.size() - before;
             // The note goes under the symbol's firings, once — it is the plan for the signal, not
             // for one trigger of it, and a name that fires on both the near-high and the move does
             // not want the same sentence printed twice. Keyed off nothing: the dedup above decides
-            // what is in this email, so a symbol whose only trigger was already mailed today adds
-            // no lines here and gets no note either.
+            // what is in this email, so a symbol whose only trigger was already mailed adds no
+            // lines here and gets no note either.
             if (newLines.size() > before && noteOf(r) != null) newLines.add(NOTE_PREFIX + noteOf(r));
         }
 
         if (newLines.isEmpty()) {
-            kv.putStringSet(FIRED_KEY, firedToday);        // just drop stale keys
+            // Quiet tick, but a level that has come back through still has to re-arm here — the
+            // crossing that follows is the next thing worth mailing. Compared against the stored
+            // set rather than the normalised one, so a legacy key is also rewritten in passing.
+            if (!carried.equals(onDisk)) kv.putStringSet(FIRED_KEY, carried);
             return;
         }
 
         String subject = "Watchlist alert: " + signals + (signals == 1 ? " signal" : " signals");
         String body = String.join("\n", newLines)
-                + "\n\n— portfolio-bench watchlist, " + today;
+                + "\n\n— portfolio-bench watchlist, " + LocalDate.now();
         if (notifier.notify(subject, body)) {
-            kv.putStringSet(FIRED_KEY, updated);
+            kv.putStringSet(FIRED_KEY, carried);
         } else {
             log.warn("Watchlist alert email not sent ({} signal(s)); will retry next tick", signals);
         }
+    }
+
+    /**
+     * Carry {@code key} forward and say whether it is a firing we have not mailed yet.
+     * Carrying is unconditional: a condition still true keeps its key, which is what keeps it
+     * quiet, and only a condition that has <em>ended</em> leaves its key behind to be dropped.
+     */
+    private static boolean isNew(String key, Set<String> fired, Set<String> carried) {
+        carried.add(key);
+        return !fired.contains(key);
+    }
+
+    /**
+     * The stored set, with keys written by the earlier dated scheme read as their current
+     * equivalent — {@code NVDA|BELOW|2026-11-07} is {@code NVDA|BELOW}. Without that, the first
+     * run after the change re-mails every level the market is already through, which is the exact
+     * noise the change is here to stop. Nothing writes the dated form for a state trigger any
+     * more, so the set takes its new shape on the first successful send. A {@code MOVE} key keeps
+     * its date — it means something different now (the price's trading day, not the wall clock)
+     * but a stale one is dropped by the next session's rebuild either way.
+     */
+    private static Set<String> normalise(Set<String> stored) {
+        Set<String> out = new LinkedHashSet<>();
+        for (String k : stored) {
+            String[] parts = k.split("\\|", -1);        // no symbol contains a pipe
+            out.add(parts.length == 3 && !"MOVE".equals(parts[1]) ? parts[0] + "|" + parts[1] : k);
+        }
+        return out;
     }
 
     /** The symbol's note, or null when none is written — blank text is not a note. */

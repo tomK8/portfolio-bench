@@ -11,6 +11,7 @@ import com.portfolio.persistence.PriceHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -40,6 +41,12 @@ import java.util.Map;
  * It costs no extra HTTP — every one of those identifiers is in the response this job already
  * makes.
  *
+ * <p>The page's <b>gross redemption yields</b> go to {@code gilt_yields}, and that one is
+ * <b>replaced</b>, not merged. A yield is a quote, not a fact about the instrument: a stale one
+ * left behind for a gilt that has dropped off the page would be a number with no date on it,
+ * shown beside a live price. The write is skipped when a scrape returns nothing, so a failed
+ * fetch leaves the last good set alone rather than emptying the panel.
+ *
  * <p>Each tick also <em>upserts</em> today's row in {@code price_history} (one row per gilt) so
  * the daily series accumulates from intraday data even when the app isn't running all day —
  * last-write-wins, and the manual Tradeweb batch import can overwrite either with authoritative
@@ -60,6 +67,12 @@ public class GiltPriceFetchJob {
      * in the record's own {@code isin|sedol|maturity} form.
      */
     public static final String REF_MAP_KEY = "gilt_refs";
+
+    /**
+     * KV entry holding the current scrape's {@code "GILT {coupon}% {year}"} → gross redemption
+     * yield (percent, as published). Republished whole on every tick — see the class note.
+     */
+    public static final String YIELD_MAP_KEY = "gilt_yields";
 
     private final GiltPriceFetcher fetcher;
     private final IntradayPriceRepository intradayRepo;
@@ -88,9 +101,10 @@ public class GiltPriceFetchJob {
         int rolled = priceHistoryRepo.upsertPriceBars(toDailyBars(bars));
         int sedols = publishSedols(snapshot.sedolToSymbol());
         int refs = publishRefs(snapshot.refs());
+        int yields = publishYields(snapshot.redemptionYields());
         log.info("Gilt prices — {} fetched, {} unchanged today, {} new intraday, {} daily upsert, "
-                        + "{} SEDOLs known, {} identified",
-                bars.size(), bars.size() - changed.size(), saved, rolled, sedols, refs);
+                        + "{} SEDOLs known, {} identified, {} yields",
+                bars.size(), bars.size() - changed.size(), saved, rolled, sedols, refs, yields);
     }
 
     /**
@@ -122,6 +136,19 @@ public class GiltPriceFetchJob {
         merged.putAll(encoded);
         kv.putStringMap(REF_MAP_KEY, merged);
         return merged.size();
+    }
+
+    /**
+     * Republishes this scrape's redemption yields and returns how many there are. Replaced
+     * rather than merged — see the class note — and skipped entirely when the scrape returned
+     * none, so a failed fetch degrades to the last good set instead of to nothing.
+     */
+    private int publishYields(Map<String, BigDecimal> scraped) {
+        if (kv == null || scraped.isEmpty()) return 0;
+        Map<String, String> encoded = new LinkedHashMap<>();
+        scraped.forEach((symbol, ytm) -> encoded.put(symbol, ytm.toPlainString()));
+        if (!encoded.equals(kv.getStringMap(YIELD_MAP_KEY))) kv.putStringMap(YIELD_MAP_KEY, encoded);
+        return encoded.size();
     }
 
     /**

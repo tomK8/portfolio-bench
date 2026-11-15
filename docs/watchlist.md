@@ -482,6 +482,36 @@ touches an order.
   overnight/weekend gaps don't draw diagonal lines — 1D labels are times, multi-day/30D labels
   are dates. Popup fundamentals reuse the Snapshot-diff renderer (`fundamentalsHtml` /
   `fundamentalsFieldGroups` in `dashboard.js`) laid out in columns.
+- **A gilt is shown its own terms, not a promise of fundamentals that will never arrive.** The
+  Fundamentals disclosure used to tell a gilt's reader that nothing was cached *yet* and that
+  "the background refresh may still be running, or Yahoo has no data for this listing". Both
+  halves were false: `PortfolioFundamentalsService` skips bonds deliberately, so no refresh was
+  running or ever would, and a gilt has no earnings to report in the first place. It is the same
+  dead end dressed as a wait that the unpriced row's permanent "(fetching…)" was — and the rule
+  is the same, that a row must say *which kind* of nothing it has.
+  - For a bond the disclosure is headed **Gilt terms** and carries `Row.gilt`
+    (`WatchlistService.GiltFacts`): coupon, maturity, years to maturity, **redemption yield**,
+    **running yield**, ISIN and SEDOL. The block short-circuits `ensureWlFundamentals()`
+    entirely — loading the Yahoo snapshot only to report that it has nothing is what produced
+    the old message.
+  - **The redemption yield is read, never computed.** It cannot be derived from a price without
+    solving for it, and HL publishes it beside the price the scrape already fetches hourly, so
+    it is taken from the feed (`gilt_yields`) and shown as published. It is the **gross, 0%-tax**
+    column of the four HL prints: every account here is a tax-sheltered wrapper, so the three
+    taxed variants answer a question nobody is asking. It is also the figure that makes two
+    gilts comparable, and the one to hold against cash.
+  - **The running yield is the other question**, and is computed here: coupon ÷ clean price, the
+    income a £100 purchase buys this year with no account of the pull back to £100 at maturity.
+    It uses the same scrape's price the popup is already showing, so the two yields never sit on
+    different clocks. For a discounted gilt it reads below the redemption yield, and the gap
+    *is* the pull — which is why both are shown rather than one.
+  - **The coupon comes out of the id, the rest out of the feed.** So a gilt the scrape has never
+    identified still shows its coupon and its running yield, with the maturity, the yield and
+    the identifiers blank — absent, never a zero or an invented dash. A gilt whose quote hasn't
+    landed here keeps everything that does not need a price of ours: the terms do not depend on
+    a quote having arrived, which is why `Row.missing` carries them too.
+  - Each field declares its own tooltip in `WL_GILT_FIELDS`, for the same reason the three
+    registries below do: a figure arrives with the sentence that explains it, written once.
 - **Every label in the popup explains itself, and no label writes its own explanation.** The stats
   strip and the Key block were hand-built key/value rows, so they bypassed the `[data-tip]` box the
   fundamentals groups print and one screen answered "what is PEG?" for some fields and stayed silent

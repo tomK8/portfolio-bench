@@ -11,6 +11,7 @@ import com.portfolio.persistence.PriceHistoryRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -34,23 +35,32 @@ class GiltPriceFetchJobTest {
     private static final GiltRef REF =
             new GiltRef(SYMBOL, "GB00BSQNRD01", "BSQNRD0", LocalDate.parse("2032-06-07"));
 
+    private static final BigDecimal YTM = new BigDecimal("4.17");
+
     /** Returns one canned bar stamped at whatever instant the test asks for. */
     private static class FakeFetcher extends GiltPriceFetcher {
         private final Instant ts;
         private final List<GiltRef> refs;
+        private final Map<String, BigDecimal> yields;
 
         FakeFetcher(Instant ts) {
             this(ts, List.of(REF));
         }
 
         FakeFetcher(Instant ts, List<GiltRef> refs) {
+            this(ts, refs, Map.of(SYMBOL, YTM));
+        }
+
+        FakeFetcher(Instant ts, List<GiltRef> refs, Map<String, BigDecimal> yields) {
             this.ts = ts;
             this.refs = refs;
+            this.yields = yields;
         }
 
         @Override
         public Snapshot fetch() {
-            return new Snapshot(List.of(new IntradayBar(SYMBOL, ts, 97.21, null, "GBP")), refs);
+            return new Snapshot(List.of(new IntradayBar(SYMBOL, ts, 97.21, null, "GBP")), refs,
+                    yields);
         }
     }
 
@@ -161,6 +171,43 @@ class GiltPriceFetchJobTest {
         assertEquals(Map.of(SYMBOL, "GB00BSQNRD01|BSQNRD0|2032-06-07"), stored);
         assertEquals(REF, GiltRef.fromKv(SYMBOL, stored.get(SYMBOL)),
                 "what is stored must decode back to what was scraped");
+    }
+
+    // ---- Redemption yields -----------------------------------------------------
+
+    @Test
+    void publishesTheRedemptionYieldThePopupShowsInPlaceOfFundamentals() {
+        runAt(londonNoon("2026-07-03"));
+
+        assertEquals(Map.of(SYMBOL, "4.17"),
+                new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.YIELD_MAP_KEY));
+    }
+
+    @Test
+    void aYieldIsReplacedNotMerged() {
+        // The opposite contract to the identifier maps, and deliberately so: a yield is a quote.
+        // A gilt that has dropped off the page must not keep a yield with no date on it, sitting
+        // beside a live price as though it were current.
+        runAt(new FakeFetcher(londonNoon("2026-07-03"), List.of(REF),
+                Map.of("GILT 1% 2024", new BigDecimal("3.90"))));
+        runAt(new FakeFetcher(londonNoon("2026-07-06"), List.of(REF), Map.of(SYMBOL, YTM)));
+
+        assertEquals(Map.of(SYMBOL, "4.17"),
+                new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.YIELD_MAP_KEY),
+                "the matured gilt's yield is gone, while its identifiers are kept");
+        assertTrue(new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.REF_MAP_KEY)
+                .containsKey(SYMBOL));
+    }
+
+    @Test
+    void aScrapeThatYieldedNothingLeavesTheLastGoodSetAlone() {
+        // A failed or changed page degrades to the previous yields rather than to a panel of
+        // dashes: the figures are hours old at worst, and silence is not a correction.
+        runAt(londonNoon("2026-07-03"));
+        runAt(new FakeFetcher(londonNoon("2026-07-06"), List.of(REF), Map.of()));
+
+        assertEquals(Map.of(SYMBOL, "4.17"),
+                new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.YIELD_MAP_KEY));
     }
 
     @Test

@@ -18,8 +18,11 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
   Hourly + startup. Symbols are `"GILT {coupon}% {year}"` (no Yahoo ticker map; HL's
   zero-padded coupons "4.750" are trimmed to the broker form "4.75"). Currency `"GBP"`.
   Rides the intraday job's prune for retention. `GiltPriceFetcher` sends a browser UA.
-  Each tick also publishes the page's **SEDOL → gilt-id map** to the `gilt_sedols` KV entry and
-  each row's **ISIN, SEDOL and maturity date** to `gilt_refs` (see "Gilt SEDOLs" below).
+  Each tick also publishes the page's **SEDOL → gilt-id map** to the `gilt_sedols` KV entry,
+  each row's **ISIN, SEDOL and maturity date** to `gilt_refs` (see "Gilt SEDOLs" below), and its
+  **gross redemption yield** to `gilt_yields` — the `YTM 0% tax` column of the four HL prints,
+  the only one that applies in a tax-sheltered wrapper. The yield map is **replaced** each tick
+  where the other two are merged: an identifier is permanent, a yield is a quote.
   Each tick also **upserts** today's row into `price_history` so the daily series
   self-accumulates even when the app isn't running all day — last-write-wins. **That rollup is
   weekday-only** (`GiltPriceFetchJob.isTradingDay`, keyed off each bar's own timestamp so a tick

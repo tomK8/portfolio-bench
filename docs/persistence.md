@@ -62,6 +62,10 @@
     for the same reason. The identifiers the Watchlist's gilt picker is searched and ordered by;
     encoded and decoded only by `GiltRef`, so the format has one spelling. A gilt whose entry is
     missing still lists, without its search handles — see [watchlist.md](watchlist.md).
+  - `gilt_yields` — `GILT {coupon}% {year}` → gross redemption yield, from the same tick but
+    **replaced, not merged**: a yield is a quote, and one left behind for a gilt that has
+    dropped off the page would be a number with no date on it. Skipped when a scrape returns
+    none, so a failed fetch degrades to the last good set. Read by the popup's Gilt terms block.
   - `held_symbols` — newline-separated set of currently-held symbols, written by
     `SyncPortfolioService` after each `/sync`. Unioned with the cash-ledger symbol set in
     `PriceFetchSupport.tickersToFetch` so freshly bought names get an intraday quote before

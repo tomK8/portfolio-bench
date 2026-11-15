@@ -5,6 +5,7 @@ import com.portfolio.domain.model.IntradayBar;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -93,6 +94,21 @@ class GiltPriceFetcherTest {
     }
 
     @Test
+    void readsTheGrossRedemptionYieldAndIgnoresTheTaxedColumns() throws IOException {
+        // The one figure that makes two gilts comparable, and the one that cannot be derived
+        // from a price without solving for it. Every account here is a tax-sheltered wrapper,
+        // so the three taxed columns beside it answer a question nobody is asking.
+        String html = Files.readString(
+                Path.of("src/test/resources/hl-gilts-sample.html"), StandardCharsets.UTF_8);
+
+        Map<String, BigDecimal> ytm = new GiltPriceFetcher().parse(html, TS).redemptionYields();
+
+        assertEquals(6, ytm.size());
+        assertEquals(new BigDecimal("4.720"), ytm.get("GILT 0.875% 2033"));
+        assertEquals(new BigDecimal("5.350"), ytm.get("GILT 6% 2028"));
+    }
+
+    @Test
     void ignoresNonGiltRows() {
         // The page also contains a header row, navigation tables, promo rows etc. None of
         // them carry a Treasury name plus decimal coupon/maturity/price cells, so they must
@@ -111,5 +127,7 @@ class GiltPriceFetcherTest {
         assertEquals("GILT 3.25% 2044", snapshot.bars().get(0).symbol());
         assertEquals(Map.of(), snapshot.sedolToSymbol(),
                 "a name cell carrying neither a UK ISIN nor a 7-character SEDOL maps nothing");
+        assertEquals(Map.of(), snapshot.redemptionYields(),
+                "a row that stops at the price has no yield — the price and the id still stand");
     }
 }

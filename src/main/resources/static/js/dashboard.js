@@ -9957,7 +9957,11 @@
             var fbody = document.getElementById('wl-fund-body');
             fbody.style.display = 'none';
             document.getElementById('wl-fund-toggle').classList.remove('open');
-            renderWlFundamentals(r.symbol);
+            // The disclosure names what is under it. A bond has no fundamentals and never will,
+            // so for one it opens on the gilt's own terms instead — see renderWlFundamentals.
+            document.getElementById('wl-fund-toggle').textContent =
+                    r.gilt ? 'Gilt terms' : 'Fundamentals';
+            renderWlFundamentals(r.symbol, r.gilt);
 
             // Default window 5D.
             document.querySelectorAll('#wl-window-toggle button').forEach(function (b) {
@@ -10226,8 +10230,81 @@
                      + 'shares together, while Shares Outstanding is the listed B class alone.)' });
         }
 
-        function renderWlFundamentals(symbol) {
+        /**
+         * What a gilt is shown in place of fundamentals, in display order: key, label, and the
+         * sentence that explains it. Declared here for the same reason WL_FUND_TOP and
+         * fundamentalsFieldGroups are — a field arrives with its own explanation, and no label
+         * in this popup writes its own prose a second time.
+         */
+        var WL_GILT_FIELDS = [
+            ['couponPct', 'Coupon', 'The interest paid each year per £100 nominal, in two '
+                + 'half-yearly instalments. It is fixed for the life of the gilt and is part of '
+                + 'its name, so it says nothing about what the gilt returns at today\u2019s price '
+                + '— the two yields below are what do.'],
+            ['maturity', 'Maturity', 'The day the £100 nominal is repaid. It comes from the '
+                + 'price feed rather than the name, which carries only the year — and the year '
+                + 'alone does not tell two gilts apart: 4.25% and 4.875% both mature in 2036, '
+                + 'four months apart.'],
+            ['yearsToMaturity', 'Years to maturity', 'How far away that repayment is. The rough '
+                + 'measure of how hard a move in yields hits this price: the longer the gilt, '
+                + 'the further it moves for the same change in rates.'],
+            ['redemptionYieldPct', 'Redemption yield', 'The annualised return from buying at '
+                + 'today\u2019s clean price and holding to maturity — the coupons plus the pull '
+                + 'of the price back to £100. This is the figure that makes two gilts comparable, '
+                + 'and the one to compare against cash. It is the feed\u2019s own gross (0% tax) '
+                + 'column: that is the one that applies in a SIPP or an ISA, and it cannot be '
+                + 'derived from a price without solving for it, so it is read, never computed here.'],
+            ['runningYieldPct', 'Running yield', 'The coupon over today\u2019s clean price — the '
+                + 'income a £100 purchase buys this year, and nothing about the gain or loss on '
+                + 'the way to maturity. Below a discounted gilt\u2019s redemption yield, above a '
+                + 'premium one\u2019s.'],
+            ['isin', 'ISIN', 'The identifier the LSE\u2019s own quote page and a broker\u2019s '
+                + 'search box name this gilt by. Worth having here because the name above — '
+                + 'GILT 4.875% 2036 — is this app\u2019s and nobody else\u2019s.'],
+            ['sedol', 'SEDOL', 'The London identifier, which is also what an Interactive Investor '
+                + 'cash statement names a gilt by when it prints nothing else that identifies it.']
+        ];
+
+        function giltFactValue(key, g) {
+            var v = g[key];
+            if (v == null || v === '') return '—';
+            if (key === 'couponPct') return parseFloat(v) + '%';
+            if (key === 'yearsToMaturity') return parseFloat(v).toFixed(1) + ' yrs';
+            if (key === 'redemptionYieldPct' || key === 'runningYieldPct') {
+                return parseFloat(v).toFixed(2) + '%';
+            }
+            return String(v);
+        }
+
+        /**
+         * The gilt block. It replaces a message that was wrong in both halves: it said the
+         * background refresh "may still be running" and that Yahoo "has no data for this
+         * listing" — but the fundamentals refresh skips bonds deliberately, and no amount of
+         * waiting produces earnings for a gilt. That is the same dead-end-dressed-as-a-wait the
+         * unpriced row's "(fetching…)" used to be. A gilt's figures are published beside its
+         * price on the page the scrape already reads hourly, so they are what goes here.
+         */
+        function giltFactsHtml(g) {
+            var known = WL_GILT_FIELDS.filter(function (f) { return g[f[0]] != null; });
+            var rows = WL_GILT_FIELDS.map(function (f) {
+                return wlKv(f[1], giltFactValue(f[0], g), f[2]);
+            }).join('');
+            var lead = known.length
+                ? 'A gilt has no fundamentals to cache — no earnings, no balance sheet, no Yahoo '
+                  + 'listing — and nothing is being fetched for one. These are published beside '
+                  + 'its price instead.'
+                : 'A gilt has no fundamentals to cache, and the price feed has not published this '
+                  + 'one\u2019s details either. Nothing is being fetched — reopening will not change it.';
+            return '<p class="muted">' + lead + '</p>' +
+                    (known.length ? '<div class="wl-fund-cols"><div class="snap-group">' +
+                        '<div class="snap-group-title">Terms</div>' + rows + '</div></div>' : '');
+        }
+
+        function renderWlFundamentals(symbol, gilt) {
             var body = document.getElementById('wl-fund-body');
+            // A bond short-circuits the Yahoo snapshot entirely: there is nothing in it for one,
+            // and loading it only to report its absence is what produced the old message.
+            if (gilt) { body.innerHTML = giltFactsHtml(gilt); return; }
             function render() {
                 var q = wlFundamentals ? wlFundamentals[symbol] : null;
                 if (!q || q.missing) {

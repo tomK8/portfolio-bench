@@ -10,6 +10,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -49,6 +50,14 @@ import java.util.regex.Pattern;
  * keeps those mappings out of a hand-maintained list that would need an edit for every gilt ever
  * bought.
  *
+ * <p>The page also prints each gilt's <b>yield to maturity</b>, at four tax rates. Only the
+ * {@code YTM 0% tax} column — the gross redemption yield — is read: every account this app
+ * tracks is a tax-sheltered wrapper, so the other three answer a question nobody here is asking.
+ * It is the one figure that makes two gilts comparable, it cannot be derived from a price
+ * without solving for it, and it is free in a response already being made. Unlike the
+ * identifiers it is a <em>quote</em>, not a fact about the instrument, which is why it travels
+ * separately and is republished rather than merged.
+ *
  * <p><b>The SEDOL is taken from the ISIN, not from the SEDOL the page prints.</b> See
  * {@link Instruments#sedolFromIsin}: HL strips the leading zero off the old numeric SEDOLs, so
  * the printed tail is 6 characters for the 6% 2028 and the 4.25% 2032 and a 7-character pattern
@@ -79,6 +88,9 @@ public class GiltPriceFetcher {
     private static final Pattern ISIN = Pattern.compile("\\|\\s*(GB00[0-9A-Z]{8})\\b");
     // The printed SEDOL, used only when the row carries no ISIN. 7 alphanumerics.
     private static final Pattern SEDOL = Pattern.compile("\\|\\s*([0-9A-Z]{7})\\s*$");
+    // "YTM 0% tax", a plain decimal percentage ("5.34"). The column is to the right of the
+    // price, and the three taxed variants to the right of it are deliberately not read.
+    private static final int YTM_CELL = 4;
 
     private final HttpClient client =
             HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
@@ -87,9 +99,10 @@ public class GiltPriceFetcher {
      * One scrape of the all-gilts table: a bar per row, timestamped at fetch time, plus the
      * identifiers the same rows carry. Both come out of a single HTTP GET.
      */
-    public record Snapshot(List<IntradayBar> bars, List<GiltRef> refs) {
+    public record Snapshot(List<IntradayBar> bars, List<GiltRef> refs,
+                          Map<String, BigDecimal> redemptionYields) {
         static Snapshot empty() {
-            return new Snapshot(List.of(), List.of());
+            return new Snapshot(List.of(), List.of(), Map.of());
         }
 
         /**
@@ -150,6 +163,7 @@ public class GiltPriceFetcher {
     Snapshot parse(String html, Instant ts) {
         List<IntradayBar> bars = new ArrayList<>();
         List<GiltRef> refs = new ArrayList<>();
+        Map<String, BigDecimal> ytm = new LinkedHashMap<>();
         Matcher rows = ROW.matcher(html);
         while (rows.find()) {
             String row = rows.group(1);
@@ -166,8 +180,21 @@ public class GiltPriceFetcher {
             bars.add(new IntradayBar(symbol, ts, price, null, "GBP"));
             refs.add(new GiltRef(symbol, isin(cells.get(0)), sedol(cells.get(0)),
                     maturityDate(cells.get(2))));
+            BigDecimal yield = redemptionYield(cells);
+            if (yield != null) ytm.put(symbol, yield);
         }
-        return new Snapshot(bars, refs);
+        return new Snapshot(bars, refs, ytm);
+    }
+
+    /**
+     * The gross redemption yield, or null when the page is not printing one. A row that has
+     * dropped the column keeps its price and its identifiers: a gilt without a yield is a gilt
+     * missing one figure, not a gilt we failed to read.
+     */
+    private static BigDecimal redemptionYield(List<String> cells) {
+        if (cells.size() <= YTM_CELL) return null;
+        Matcher m = PRICE.matcher(cells.get(YTM_CELL));
+        return m.matches() ? new BigDecimal(m.group(1)) : null;
     }
 
     private static List<String> cells(String row) {

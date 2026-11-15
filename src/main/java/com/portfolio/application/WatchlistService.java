@@ -242,10 +242,11 @@ public class WatchlistService {
 
         LocalDate today = LocalDate.now();
         Instant now = Instant.now();
+        GiltBook gilts = GiltBook.read(kv);
         List<Row> rows = new ArrayList<>(entries.size());
         for (Entry e : entries) {
             rows.add(buildRow(e, today, now, fundamentals, ledgerBySymbol, rates, latest, newest,
-                    sessions));
+                    sessions, gilts));
         }
         return new WatchlistView(rows, sessions);
     }
@@ -307,7 +308,7 @@ public class WatchlistService {
         Map<String, IntradayPrice> newest = intradayRepo.loadLatestQuotes(ticker);
 
         return buildRow(e, LocalDate.now(), Instant.now(), fundamentals, ledgerBySymbol, rates,
-                latest, newest, touchSessions());
+                latest, newest, touchSessions(), GiltBook.read(kv));
     }
 
     /**
@@ -337,15 +338,18 @@ public class WatchlistService {
                          Map<String, BigDecimal> rates,
                          Map<String, IntradayPrice> latest,
                          Map<String, IntradayPrice> newest,
-                         int sessions) {
+                         int sessions,
+                         GiltBook gilts) {
         String symbol = e.symbol();
         String ticker = tickerFor(symbol);
         IntradayPrice ip = latest.get(ticker);
         Snapshot s = snapshot(e, ip, today, fundamentals);
+        // A gilt with no price keeps its facts: the coupon is in its own name and the maturity
+        // and yield are published whether or not a quote has landed here yet.
         if (s == null) return Row.missing(symbol, e.highThresholdPct(), e.moveThresholdPct(),
                 levelOrNull(e.priceAbove()), levelOrNull(e.priceBelow()),
                 levelOrNull(e.targetAbove()), levelOrNull(e.targetBelow()), e.note(),
-                missingReason(symbol));
+                missingReason(symbol), gilts.facts(symbol, null, today));
 
         Live live = computeLive(s, e, today, now, newest.get(ticker), sessions);
 
@@ -368,7 +372,7 @@ public class WatchlistService {
                 live.aboveOutlook(), live.belowOutlook(),
                 live.nearHigh(), live.bigMove(), live.moveDirection(),
                 live.aboveLevel(), live.belowLevel(),
-                false, null);
+                false, null, gilts.facts(symbol, s.currentPrice(), today));
     }
 
     private QuoteRow buildQuote(Entry e, LocalDate today, Instant now,
@@ -673,18 +677,93 @@ public class WatchlistService {
      * blank handles. A search handle can be absent; the name it would have found cannot.
      */
     public List<GiltOption> giltOptions() {
-        Map<String, String> refs = kv == null ? Map.of() : kv.getStringMap(GiltPriceFetchJob.REF_MAP_KEY);
+        Map<String, GiltRef> refs = GiltBook.read(kv).refs();
         List<GiltOption> out = new ArrayList<>();
         for (String symbol : intradayRepo.distinctGiltSymbols()) {
-            GiltRef ref = GiltRef.fromKv(symbol, refs.get(symbol));
-            out.add(new GiltOption(symbol, maturityLabel(ref.maturity()), ref.isin(), ref.sedol()));
+            GiltRef ref = refs.get(symbol);
+            LocalDate maturity = ref == null ? null : ref.maturity();
+            out.add(new GiltOption(symbol, maturityLabel(maturity),
+                    ref == null ? null : ref.isin(), ref == null ? null : ref.sedol()));
         }
         // Maturity first, with the dateless last rather than first — an entry with no stored
         // identifiers must not displace the ordering of the ones that have them.
-        out.sort(Comparator.comparing((GiltOption o) -> maturityOf(refs, o.symbol()),
+        out.sort(Comparator.comparing(
+                        (GiltOption o) -> refs.containsKey(o.symbol()) ? refs.get(o.symbol()).maturity() : null,
                         Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(GiltOption::symbol));
         return out;
+    }
+
+    /**
+     * The two stored gilt maps, decoded once per request instead of once per row: the
+     * identifiers (`gilt_refs`, merged and permanent) and the current redemption yields
+     * (`gilt_yields`, republished every scrape). Both are written by {@link GiltPriceFetchJob}
+     * out of the same hourly response the prices come from.
+     *
+     * <p>Keeping them together is what stops the yield and the maturity date being read by
+     * different code with different ideas about what a missing entry means. Empty is a valid
+     * book — no store configured, or a scrape that has never run — and every lookup through it
+     * degrades to null rather than failing a read.
+     */
+    private record GiltBook(Map<String, GiltRef> refs, Map<String, BigDecimal> yields) {
+
+        static GiltBook read(KeyValueStore kv) {
+            if (kv == null) return new GiltBook(Map.of(), Map.of());
+            Map<String, GiltRef> refs = new LinkedHashMap<>();
+            kv.getStringMap(GiltPriceFetchJob.REF_MAP_KEY)
+                    .forEach((symbol, value) -> refs.put(symbol, GiltRef.fromKv(symbol, value)));
+            Map<String, BigDecimal> yields = new LinkedHashMap<>();
+            kv.getStringMap(GiltPriceFetchJob.YIELD_MAP_KEY).forEach((symbol, value) -> {
+                try {
+                    yields.put(symbol, new BigDecimal(value.trim()));
+                } catch (RuntimeException ignored) {
+                    // A yield that no longer parses is a yield we don't have.
+                }
+            });
+            return new GiltBook(refs, yields);
+        }
+
+        /**
+         * What the popup shows a bond instead of fundamentals, or null for anything else.
+         *
+         * @param cleanPrice the quote the popup is showing, per £100 nominal — the denominator
+         *                   of the running yield, and null when the gilt has no price yet.
+         */
+        GiltFacts facts(String symbol, BigDecimal cleanPrice, LocalDate today) {
+            if (!Instruments.isBond(symbol)) return null;
+            GiltRef ref = refs.get(symbol);
+            BigDecimal couponPct = couponPct(symbol);
+            LocalDate maturity = ref == null ? null : ref.maturity();
+            return new GiltFacts(couponPct,
+                    maturity == null ? null : MATURITY_LABEL.format(maturity),
+                    yearsTo(maturity, today),
+                    yields.get(symbol),
+                    runningYieldPct(couponPct, cleanPrice),
+                    ref == null ? null : ref.isin(),
+                    ref == null ? null : ref.sedol());
+        }
+
+        /** The coupon out of the id itself — {@code Instruments.couponOf} returns a fraction. */
+        private static BigDecimal couponPct(String symbol) {
+            BigDecimal fraction = Instruments.couponOf(symbol);
+            return fraction == null ? null : fraction.multiply(HUNDRED).stripTrailingZeros();
+        }
+
+        /**
+         * Coupon ÷ clean price, the income a £100 purchase at today's price buys. Null without
+         * both halves, and a matured gilt reads 0 years rather than a negative span.
+         */
+        private static BigDecimal runningYieldPct(BigDecimal couponPct, BigDecimal cleanPrice) {
+            if (couponPct == null || cleanPrice == null || cleanPrice.signum() <= 0) return null;
+            return couponPct.multiply(HUNDRED).divide(cleanPrice, 2, RoundingMode.HALF_UP);
+        }
+
+        private static BigDecimal yearsTo(LocalDate maturity, LocalDate today) {
+            if (maturity == null || today == null) return null;
+            long days = java.time.temporal.ChronoUnit.DAYS.between(today, maturity);
+            if (days <= 0) return BigDecimal.ZERO;
+            return BigDecimal.valueOf(days).divide(new BigDecimal("365.25"), 1, RoundingMode.HALF_UP);
+        }
     }
 
     /**
@@ -709,15 +788,10 @@ public class WatchlistService {
         if (input == null) return null;
         String typed = input.trim().toUpperCase().replace(" ", "");
         if (typed.isEmpty() || kv == null) return Instruments.canonicalGiltId(input);
-        for (Map.Entry<String, String> e : kv.getStringMap(GiltPriceFetchJob.REF_MAP_KEY).entrySet()) {
-            GiltRef ref = GiltRef.fromKv(e.getKey(), e.getValue());
+        for (GiltRef ref : GiltBook.read(kv).refs().values()) {
             if (typed.equals(ref.isin()) || typed.equals(ref.sedol())) return ref.symbol();
         }
         return Instruments.canonicalGiltId(input);
-    }
-
-    private static LocalDate maturityOf(Map<String, String> refs, String symbol) {
-        return GiltRef.fromKv(symbol, refs.get(symbol)).maturity();
     }
 
     /** {@code "31 Jul 2036"} — the form the gilt's own quote page prints, shortened. */
@@ -1122,18 +1196,48 @@ public class WatchlistService {
                       Outlook belowOutlook,
                       boolean nearHigh, boolean bigMove, int moveDirection,
                       boolean aboveLevel, boolean belowLevel,
-                      boolean missingData, String missingReason) {
+                      boolean missingData, String missingReason,
+                      /**
+                       * What a bond has instead of fundamentals — coupon, maturity, redemption
+                       * yield — or null for anything that is not one. See {@link GiltFacts}.
+                       */
+                      GiltFacts gilt) {
 
         static Row missing(String symbol, BigDecimal highPct, BigDecimal movePct,
                            BigDecimal priceAbove, BigDecimal priceBelow,
                            BigDecimal targetAbove, BigDecimal targetBelow, String note,
-                           String reason) {
+                           String reason, GiltFacts gilt) {
             return new Row(symbol, null, null, null, null, null, null, null, null, null,
                     null, null, null, null, null, null, null, null, null, null, null,
                     false, null, null, null, highPct, movePct, priceAbove, priceBelow,
                     targetAbove, targetBelow, note,
-                    null, null, false, false, 0, false, false, true, reason);
+                    null, null, false, false, 0, false, false, true, reason, gilt);
         }
+    }
+
+    /**
+     * What a gilt has in place of fundamentals. A bond has no earnings, no balance sheet and no
+     * Yahoo listing, so the popup's Fundamentals block used to tell its reader that nothing was
+     * cached "yet" and that a background refresh "may still be running" — of a figure that will
+     * never arrive, for an instrument the refresh deliberately skips
+     * ({@code PortfolioFundamentalsService} excludes bonds). That is the same failure as the
+     * unpriced row that read as "(fetching…)" for ever: a dead end dressed as a wait.
+     *
+     * <p>What it does have is published beside its price on the page the scrape already reads
+     * hourly, and this is it. <b>{@code redemptionYieldPct} is the gross (0%-tax) figure</b> —
+     * every account here is a tax-sheltered wrapper, so the taxed variants HL prints beside it
+     * would answer a question nobody is asking. It is the number that makes two gilts
+     * comparable, and it cannot be derived from a price without solving for it.
+     *
+     * <p>{@code runningYieldPct} is the coupon over the clean price — the income per £100
+     * invested, which the redemption yield deliberately is not — computed from the same scrape's
+     * price, so the two never sit on different clocks. Every field is nullable and absent means
+     * absent: a gilt the page has stopped publishing keeps its coupon (which is in its own name)
+     * and loses its yield, rather than showing a stale one.
+     */
+    public record GiltFacts(BigDecimal couponPct, String maturity, BigDecimal yearsToMaturity,
+                            BigDecimal redemptionYieldPct, BigDecimal runningYieldPct,
+                            String isin, String sedol) {
     }
 
     /**

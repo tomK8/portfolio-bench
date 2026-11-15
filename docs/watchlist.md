@@ -26,6 +26,43 @@ touches an order.
     keeping its manual order. The backfill is guarded on *having just created* that list, not on
     the member table being empty — otherwise a deliberately emptied list would be resurrected by
     the next restart.
+  - **The verbs live beside the tabs.** Rename, move left, move right and delete are a `⋯` menu
+    at the end of the list tabs, next to `+`; the menu's header names the list it is about to act
+    on. They were previously two buttons at the end of the row of controls that adds a symbol —
+    twelve controls along from the ticker box — and `move` had no caller at all, so from the
+    strip the only thing you could do to a watchlist was make another one. That is the shape of
+    the bug: every layer was individually complete. `wl-list-verbs.test.mjs` now asserts that
+    every `POST /watchlist/lists/*` mapping has a caller in `dashboard.js` and vice versa. It
+    cannot see whether a control is *findable* — placement is a judgement no assertion makes —
+    but it can see that a verb is wired at all, which is the half that was missing.
+  - **One menu for the strip, not one per tab.** A `<button>` cannot hold another, and there is
+    nothing to disambiguate once the menu names its list. The items that would be refused are
+    **disabled with the reason in the title** — "already the first watchlist", "the only
+    watchlist" — rather than hidden: those are answers to the question the menu was opened to
+    ask. State is settled per *opening*, so it cannot go stale behind a create in another window.
+  - **Two reorder paths, one renumbering writer.** Dragging a tab posts the whole strip to
+    `lists/reorder`; Move left/right posts a one-place swap to `lists/move`, which is the only
+    one a keyboard or a touch screen can reach — exactly the split the per-list row order uses.
+    Both decide an order in memory and hand it to `writeListOrder`, which renumbers 0..n-1: a
+    swap that renumbered only its own pair would collide with the gaps a create-then-delete had
+    already left in `display_order`. As with the rows, a drop names only what its strip was
+    showing and **every list it did not name keeps its place after the ones it did**, so a drop
+    that raced a create in another window cannot strand the new tab.
+  - **`lists/reorder` is the one list verb that goes through `WatchlistService`,** and the one
+    that returns nothing. Its four siblings call the repository straight from `web`, which is
+    frozen `LayerRulesTest` debt — it can shrink but never grow, so a fifth could not copy them,
+    and a `List<WatchlistRepository.WatchList>` return would have been a second violation in the
+    signature alone. Nothing is lost: after a drop the strip is already showing the order being
+    saved, so only the failure path needs a payload, and it re-reads `GET /watchlist/lists`.
+  - **A rename re-renders the strip, which is where the active tab's highlight lived.** The tabs
+    are rebuilt rather than patched, so `renderWlTabs` re-applies `.active` itself; before it
+    did, renaming the list you were looking at left no tab appearing selected until you clicked
+    one, because `activatePanel` — which sets that class — is not called when nothing switched.
+  - **The strip's own controls bind at DOM ready, not on the Watchlist panel's first open.** The
+    Tools group remembers the panel you left it on, so restoring it to Journal shows the tabs,
+    `+` and the `⋯` with no watchlist panel ever activated — which is how `+` came to be dead
+    on arrival in exactly that case. The menu resolves its target the way the strip would: the
+    list on screen, else the one `resolveWlList` would open.
 - **The note: what to do when it fires.** One free-text line per symbol, stored on `watchlist`
   beside the thresholds — `POST /watchlist/note`, a column in the grid, a read-only line in the
   popup, and a line in the alert email. Nothing parses it, nothing evaluates it; it is the

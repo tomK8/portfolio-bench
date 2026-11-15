@@ -206,9 +206,18 @@ public class WatchlistService {
         return view(watchlistRepo.loadAll());
     }
 
-    /** One list's rows, in that list's own manual order — what the screen renders. */
+    /** One list's rows, in that list's own manual order â what the screen renders. */
     public WatchlistView view(long listId) {
         return view(watchlistRepo.loadAll(listId));
+    }
+
+    /**
+     * Save the tab strip's order as dragged. A pass-through, and deliberately so: the controller
+     * reaching the repository directly is the frozen debt this layer exists to stop growing, and
+     * the drop needs no view back — the strip re-reads itself from {@code GET /watchlist/lists}.
+     */
+    public void reorderLists(List<Long> ids) {
+        watchlistRepo.reorderLists(ids);
     }
 
     private WatchlistView view(List<Entry> entries) {

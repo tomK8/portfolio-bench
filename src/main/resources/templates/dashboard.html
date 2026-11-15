@@ -1282,6 +1282,55 @@
         }
         html[data-theme="dark"] .tab-sep { background: #444; }
         .wl-tab-add { font-weight: 600; padding-left: 0.6rem; padding-right: 0.6rem; }
+        .wl-tab-menu { padding-left: 0.5rem; padding-right: 0.5rem; line-height: 1; }
+        /* A list tab is draggable, so it says so on hover the way the row grip does. The dragged
+           one fades rather than moving, because dragover reflows the strip under it live. */
+        .wl-tab[draggable="true"] { cursor: grab; }
+        .wl-tab.wl-tab-dragging { opacity: 0.4; cursor: grabbing; }
+
+        /* The list menu, anchored off its button with position: fixed (see the markup). */
+        .wl-menu {
+            position: fixed;
+            z-index: 60;
+            min-width: 9.5rem;
+            padding: 0.25rem;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+        }
+        .wl-menu-head {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #999;
+            padding: 0.2rem 0.5rem 0.3rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 14rem;
+        }
+        .wl-menu button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            border: 0;
+            background: none;
+            color: inherit;
+            font-size: 0.85rem;
+            padding: 0.34rem 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .wl-menu button:hover:not(:disabled) { background: #e8f1f8; color: #1f77b4; }
+        .wl-menu button.danger:hover:not(:disabled) { background: #fdecea; color: #c0392b; }
+        /* Disabled rather than absent: "already first" and "the only list" are answers to the
+           question the menu was opened to ask, and the title says which. */
+        .wl-menu button:disabled { color: #bbb; cursor: default; }
+        html[data-theme="dark"] .wl-menu { background: #1e2026; border-color: #2e3137; }
+        html[data-theme="dark"] .wl-menu button:hover:not(:disabled) { background: #1a242c; }
+        html[data-theme="dark"] .wl-menu button.danger:hover:not(:disabled) { background: #2c1d1b; color: #e8796b; }
+        html[data-theme="dark"] .wl-menu button:disabled { color: #565b63; }
 
         /* Plain centred .full-bleed, as the correlation heatmap uses. The left-anchored variant
            Trend/Range use was tried and gives the table only (100vw - 320px) to live in, which
@@ -2344,8 +2393,11 @@
 -->
 <div class="tabs tabs-secondary" data-group="group-tools">
     <button class="tab wl-tab" type="button" th:each="wl : ${watchlists}"
-            data-panel="panel-watchlist"
-            th:attr="data-list=${wl.id}" th:text="${wl.name}">Watchlist</button>
+            data-panel="panel-watchlist" draggable="true"
+            th:attr="data-list=${wl.id},data-name=${wl.name}" th:text="${wl.name}">Watchlist</button>
+    <button class="tab wl-tab-menu" id="wl-list-menu-btn" type="button"
+            aria-haspopup="menu" aria-expanded="false"
+            title="Rename, reorder or delete this watchlist">⋯</button>
     <button class="tab wl-tab-add" id="wl-list-add" type="button"
             title="New watchlist">+</button>
     <span class="tab-sep" aria-hidden="true"></span>
@@ -2355,6 +2407,24 @@
     <button class="tab" data-panel="panel-reminders" type="button">Reminders</button>
     <button class="tab" data-panel="panel-manual" type="button">Manual positions</button>
     <button class="tab" data-panel="panel-transfers" type="button">Transfers</button>
+</div>
+
+<!--
+  The list menu: rename, reorder, delete. One button for the whole strip rather than one per tab,
+  because a <button> cannot hold another one, and there is nothing to disambiguate — the menu
+  names in its own header the list it is about to act on. It sits beside the tabs because that is
+  where the lists are: these four verbs were previously three screens down, at the end of the row
+  of controls that adds a symbol, and went unfound.
+
+  A sibling of the strip, not a child: inside a .tabs flex container it would become a flex item.
+  It anchors with position: fixed off the button's own rect, so no strip overflow can clip it.
+-->
+<div id="wl-list-menu" class="wl-menu" role="menu" hidden>
+    <div class="wl-menu-head" id="wl-list-menu-head">watchlist</div>
+    <button type="button" role="menuitem" id="wl-list-rename">Rename…</button>
+    <button type="button" role="menuitem" id="wl-list-move-left">Move left</button>
+    <button type="button" role="menuitem" id="wl-list-move-right">Move right</button>
+    <button type="button" role="menuitem" id="wl-list-delete" class="danger">Delete list</button>
 </div>
 
 <section class="tab-panel active" id="panel-holdings">
@@ -3327,8 +3397,6 @@
         <button id="wl-note-toggle" type="button" class="wl-toggle-btn" aria-pressed="false"
                 title="Show every Note in full, wrapped over as many lines as it needs, instead of its first line only. Still editable either way. Remembered in this browser.">Full notes</button>
         <button id="wl-cols-btn" type="button" title="Choose and order this watchlist's columns">Columns…</button>
-        <button id="wl-list-rename" type="button" title="Rename this watchlist">Rename</button>
-        <button id="wl-list-delete" type="button" title="Delete this watchlist">Delete list</button>
         <span id="wl-view-toggle" class="wl-view-toggle" style="display:none;">
             <button type="button" id="wl-view-stats" class="active">Stats</button>
             <button type="button" id="wl-view-returns">Returns</button>

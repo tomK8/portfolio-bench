@@ -309,6 +309,24 @@ public class WatchlistController {
     }
 
     /**
+     * The tab strip's order as dragged â the whole order in one call, where {@code move} is the
+     * single swap a keyboard or a touch screen can reach.
+     *
+     * <p>Unlike its four siblings above it goes through {@link WatchlistService} and returns
+     * nothing. Those four reach the repository directly, which is frozen debt under
+     * {@code LayerRulesTest}: {@code web} may import {@code application} and {@code domain} only.
+     * Debt can shrink but never grow, so a fifth list verb could not copy them — and returning
+     * {@code List<WatchlistRepository.WatchList>} would be a second violation in the signature
+     * alone. The drop needs no payload anyway: the strip is already showing the new order, and a
+     * cancelled drag re-reads it from {@code GET /watchlist/lists}.
+     */
+    @PostMapping("/watchlist/lists/reorder")
+    @ResponseBody
+    public void reorderLists(@RequestParam("ids") java.util.List<Long> ids) {
+        watchlistService.reorderLists(ids);
+    }
+
+    /**
      * The column layout for one list: an ordered list of keys, empty when the list has never
      * been customised (which the client reads as "use the default set").
      */

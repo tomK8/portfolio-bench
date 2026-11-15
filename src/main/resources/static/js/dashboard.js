@@ -1132,6 +1132,10 @@
         // this runs htmx is fully up. Open orders — whose loader is a single htmx.ajax — is the
         // panel that showed it, coming back blank on a reload and filling only on a tab round-trip.
         function restoreActiveTab() {
+            // The list tabs, `+` and the list menu belong to the Tools strip, not to the
+            // Watchlist panel: restoring the group to Journal shows all three, so binding them
+            // from setupWatchlist (first activation of that panel) left them dead on arrival.
+            setupWatchlistLists();
             try {
                 var savedTab = localStorage.getItem(TAB_KEY);
                 if (savedTab && document.getElementById(savedTab)) {
@@ -7477,14 +7481,6 @@
         // rather than reloading the page for every rename.
 
         function setupWatchlistLists() {
-            // The strip arrives server-rendered, so seed the delete button's state from it.
-            var initial = document.querySelectorAll('.wl-tab[data-list]');
-            var del = document.getElementById('wl-list-delete');
-            if (del && initial.length <= 1) {
-                del.disabled = true;
-                del.title = 'This is the only watchlist — rename it or empty it instead';
-            }
-
             bindOnce(document.getElementById('wl-list-add'), 'click', function () {
                 var name = window.prompt('Name the new watchlist (e.g. chips, banks):', '');
                 if (name == null) return;                     // Cancel, as distinct from an empty name
@@ -7494,23 +7490,191 @@
                 });
             });
 
+            bindOnce(document.getElementById('wl-list-menu-btn'), 'click', function (e) {
+                e.stopPropagation();                          // or the document handler closes it again
+                if (wlListMenuShowing()) closeWlListMenu();
+                else openWlListMenu();
+            });
+
             bindOnce(document.getElementById('wl-list-rename'), 'click', function () {
                 if (wlListId == null) return;
                 var name = window.prompt('Rename this watchlist:', wlListName(wlListId));
+                closeWlListMenu();
                 if (name == null) return;
+                // The tab strip is the only record of a list's name on this page, so a rename
+                // re-renders it; wlListId is unchanged, which is why nothing is re-fetched.
                 wlListAction('/watchlist/lists/rename', { list: wlListId, name: name }, null);
+            });
+
+            [['wl-list-move-left', 'up'], ['wl-list-move-right', 'down']].forEach(function (m) {
+                bindOnce(document.getElementById(m[0]), 'click', function () {
+                    if (wlListId == null) return;
+                    closeWlListMenu();
+                    wlListAction('/watchlist/lists/move', { list: wlListId, dir: m[1] }, null);
+                });
             });
 
             bindOnce(document.getElementById('wl-list-delete'), 'click', function () {
                 if (wlListId == null) return;
+                var name = wlListName(wlListId);
+                closeWlListMenu();
                 // Say what is actually lost: membership always, the symbol itself only where no
                 // other list holds it — and with it that symbol's alert settings.
-                if (!window.confirm('Delete the "' + wlListName(wlListId) + '" watchlist?\n\n' +
+                if (!window.confirm('Delete the "' + name + '" watchlist?\n\n' +
                         'Symbols that are only on this list stop being watched and lose their alert ' +
                         'settings. Symbols on another list are unaffected.')) return;
                 wlListAction('/watchlist/lists/delete', { list: wlListId }, function (lists) {
                     if (lists.length) activatePanel('panel-watchlist', true, lists[0].id);
                 });
+            });
+
+            // The strip arrives server-rendered, so the tabs that are already in it need the same
+            // drag listeners renderWlTabs gives the ones it builds.
+            document.querySelectorAll('.wl-tab[data-list]').forEach(wlBindTabDrag);
+        }
+
+        // ---- the list menu -------------------------------------------------
+        //
+        // Rename / Move left / Move right / Delete, on the list the header names. Document-level
+        // listeners are bound once here rather than through bindOnce, which keys off the element's
+        // own dataset and so cannot guard `document`.
+
+        var wlListMenuBound = false;
+
+        /**
+         * The list the menu acts on: the one on screen, or — before the Watchlist panel has
+         * been opened in this page — the one its tab strip would open. Settled once per
+         * opening and written to wlListId, so every item agrees with the header.
+         */
+        function wlResolveMenuList() {
+            if (wlListId == null) wlListId = resolveWlList(null);
+            return wlListId;
+        }
+
+        function wlListMenuShowing() {
+            var menu = document.getElementById('wl-list-menu');
+            return !!menu && !menu.hidden;
+        }
+
+        /**
+         * Open the menu under its button, with each item's state settled first: "already first"
+         * and "the only list" are answers to what the menu was opened to ask, so they are
+         * disabled with a reason rather than left to fail at the server.
+         */
+        function openWlListMenu() {
+            var menu = document.getElementById('wl-list-menu');
+            var btn = document.getElementById('wl-list-menu-btn');
+            if (!menu || !btn) return;
+            if (wlResolveMenuList() == null) return;         // no lists at all: nothing to act on
+
+            var ids = [];
+            document.querySelectorAll('.wl-tab[data-list]').forEach(function (t) {
+                ids.push(t.getAttribute('data-list'));
+            });
+            var idx = ids.indexOf(String(wlListId));
+            var head = document.getElementById('wl-list-menu-head');
+            if (head) head.textContent = wlListName(wlListId);
+
+            wlMenuItem('wl-list-move-left', idx > 0,
+                'Move the "' + wlListName(wlListId) + '" tab one place left',
+                'This is already the first watchlist');
+            wlMenuItem('wl-list-move-right', idx >= 0 && idx < ids.length - 1,
+                'Move the "' + wlListName(wlListId) + '" tab one place right',
+                'This is already the last watchlist');
+            wlMenuItem('wl-list-delete', ids.length > 1,
+                'Delete this watchlist',
+                'This is the only watchlist — rename it or empty it instead');
+
+            menu.hidden = false;
+            btn.setAttribute('aria-expanded', 'true');
+            // Fixed positioning off the button's own rect: the strip scrolls sideways at narrow
+            // widths, and an absolutely positioned menu would be clipped by it.
+            var r = btn.getBoundingClientRect();
+            menu.style.top = (r.bottom + 4) + 'px';
+            menu.style.left = '0px';                         // measure the width unconstrained
+            var w = menu.getBoundingClientRect().width;
+            menu.style.left = Math.max(6, Math.min(r.left, window.innerWidth - w - 6)) + 'px';
+
+            if (!wlListMenuBound) {
+                wlListMenuBound = true;
+                document.addEventListener('click', function (e) {
+                    if (!wlListMenuShowing()) return;
+                    var m = document.getElementById('wl-list-menu');
+                    if (m && !m.contains(e.target)) closeWlListMenu();
+                });
+                document.addEventListener('keydown', function (e) {
+                    if (e.key === 'Escape' && wlListMenuShowing()) closeWlListMenu();
+                });
+            }
+        }
+
+        function wlMenuItem(id, enabled, onTitle, offTitle) {
+            var b = document.getElementById(id);
+            if (!b) return;
+            b.disabled = !enabled;
+            b.title = enabled ? onTitle : offTitle;
+        }
+
+        function closeWlListMenu() {
+            var menu = document.getElementById('wl-list-menu');
+            var btn = document.getElementById('wl-list-menu-btn');
+            if (menu) menu.hidden = true;
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+        }
+
+        // ---- dragging a list tab -------------------------------------------
+        //
+        // The mouse path, as the row grip is for symbols; Move left/right stays the single swap a
+        // keyboard or a touch screen can reach. Listeners go on each tab (they are rebuilt by
+        // renderWlTabs) while the strip-level dragover/drop go through bindOnce on the strip,
+        // which is never replaced.
+
+        var wlTabDragId = null;         // the list being dragged, or null when some other drag passes
+        var wlTabDropped = false;       // a drop landed, as distinct from a cancelled drag
+
+        function wlBindTabDrag(tab) {
+            tab.draggable = true;
+            bindOnce(tab, 'dragstart', function (e) {
+                wlTabDragId = tab.getAttribute('data-list');
+                wlTabDropped = false;
+                tab.classList.add('wl-tab-dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', wlTabDragId);   // Firefox drags nothing without it
+            });
+            bindOnce(tab, 'dragend', function () {
+                tab.classList.remove('wl-tab-dragging');
+                if (!wlTabDragId) return;
+                var dropped = wlTabDropped;
+                wlTabDragId = null;
+                wlTabDropped = false;
+                // The strip has already been reflowed by dragover, so its own order is the new
+                // one. A cancelled drag re-reads the stored order instead, which is the undo.
+                if (!dropped) { wlRefreshTabs(); return; }
+                var ids = [];
+                document.querySelectorAll('.wl-tab[data-list]').forEach(function (t) {
+                    ids.push(t.getAttribute('data-list'));
+                });
+                wlSaveTabOrder(ids);
+            });
+            wlEnsureTabDnd(tab.parentNode);
+        }
+
+        function wlEnsureTabDnd(strip) {
+            if (!strip) return;
+            bindOnce(strip, 'dragover', function (e) {
+                if (!wlTabDragId) return;                    // some other drag passing through
+                e.preventDefault();                          // without this the drop never fires
+                e.dataTransfer.dropEffect = 'move';
+                var dragged = strip.querySelector('.wl-tab-dragging');
+                if (!dragged) return;
+                // Horizontal: the tabs sit in a row, so it is clientX that decides the neighbour.
+                var before = wlDropBefore(strip, e.clientX, '.wl-tab[data-list]', 'wl-tab-dragging', true);
+                if (before !== dragged) strip.insertBefore(dragged, before || document.getElementById('wl-list-menu-btn'));
+            });
+            bindOnce(strip, 'drop', function (e) {
+                if (!wlTabDragId) return;
+                e.preventDefault();
+                wlTabDropped = true;
             });
         }
 
@@ -7537,6 +7701,36 @@
                 });
         }
 
+        /**
+         * Persist the dragged order. It returns no payload — the strip is already showing the
+         * order being saved, so there is nothing to re-render on success; a refusal re-reads the
+         * stored order instead, so a rejected drop visibly snaps back rather than leaving the
+         * tabs in an order the database does not have.
+         */
+        function wlSaveTabOrder(ids) {
+            var body = new URLSearchParams();
+            ids.forEach(function (id) { body.append('ids', id); });
+            fetch('/watchlist/lists/reorder', { method: 'POST', body: body })
+                .then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) { throw new Error((t || '').slice(0, 300)); });
+                })
+                .catch(function (err) {
+                    wlSetStatus(err && err.message ? err.message : 'Could not save the watchlist order.');
+                    wlRefreshTabs();
+                });
+        }
+
+        /**
+         * Re-render the strip from the stored order — the undo for a drag that was abandoned
+         * after dragover had already reflowed the tabs. A read, so a cancelled drag writes nothing.
+         */
+        function wlRefreshTabs() {
+            fetch('/watchlist/lists')
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (lists) { if (lists) renderWlTabs(lists); })
+                .catch(function () { /* the strip keeps the order it is showing; the next load fixes it */ });
+        }
+
         /** The one the server just made: highest id, since ids are monotonic. */
         function wlNewestList(lists) {
             var best = null;
@@ -7552,7 +7746,9 @@
         function renderWlTabs(lists) {
             var strip = document.querySelector('.tabs-secondary[data-group="group-tools"]');
             if (!strip) return;
-            var addBtn = document.getElementById('wl-list-add');
+            // Before the menu button, not before `+`: the tabs lead the strip and those two
+            // follow them. Inserting at `+` would leave the menu sitting among the lists.
+            var anchor = document.getElementById('wl-list-menu-btn') || document.getElementById('wl-list-add');
             strip.querySelectorAll('.wl-tab[data-list]').forEach(function (t) { t.remove(); });
             lists.forEach(function (l) {
                 var b = document.createElement('button');
@@ -7560,20 +7756,22 @@
                 b.className = 'tab wl-tab';
                 b.setAttribute('data-panel', 'panel-watchlist');
                 b.setAttribute('data-list', l.id);
+                // The name lives in an attribute as well as the text, so wlListName survives
+                // anything that later puts a badge or a count in the label.
+                b.setAttribute('data-name', l.name);
                 b.textContent = l.name;
+                // Recreated tabs lose the class activatePanel put on them, so a rename (which
+                // re-renders but switches nothing) would otherwise leave no tab looking selected.
+                if (wlListId != null && String(l.id) === String(wlListId)
+                        && document.getElementById('panel-watchlist').classList.contains('active')) {
+                    b.classList.add('active');
+                }
                 b.addEventListener('click', function () {
                     activatePanel('panel-watchlist', true, l.id);
                 });
-                strip.insertBefore(b, addBtn);
+                strip.insertBefore(b, anchor);
+                wlBindTabDrag(b);
             });
-            // Only one list left means the delete would be refused; say so before it is clicked.
-            var del = document.getElementById('wl-list-delete');
-            if (del) {
-                del.disabled = lists.length <= 1;
-                del.title = del.disabled
-                    ? 'This is the only watchlist — rename it or empty it instead'
-                    : 'Delete this watchlist';
-            }
         }
 
         // ---- column picker --------------------------------------------------
@@ -7869,7 +8067,8 @@
 
         function wlListName(id) {
             var tab = document.querySelector('.wl-tab[data-list="' + id + '"]');
-            return tab ? tab.textContent.trim() : 'this watchlist';
+            if (!tab) return 'this watchlist';
+            return (tab.getAttribute('data-name') || tab.textContent || '').trim() || 'this watchlist';
         }
 
         // The popup's own listeners, bound independently of the Watchlist tab's: the Live table
@@ -8409,12 +8608,16 @@
          * rather than waiting for the pointer to clear a whole row. Shared by the table and the
          * column picker's chips — both are a vertical list of equal-status items.
          */
-        function wlDropBefore(container, y, selector, draggingClass) {
+        function wlDropBefore(container, pos, selector, draggingClass, horizontal) {
             var best = null, bestOffset = Number.NEGATIVE_INFINITY;
             Array.prototype.forEach.call(container.querySelectorAll(selector), function (el) {
                 if (el.classList.contains(draggingClass)) return;
                 var box = el.getBoundingClientRect();
-                var offset = y - box.top - box.height / 2;
+                // Same midpoint test on whichever axis the items are laid out along: rows stack
+                // vertically, the list tabs sit in a strip. `pos` is clientY or clientX to match.
+                var offset = horizontal
+                    ? pos - box.left - box.width / 2
+                    : pos - box.top - box.height / 2;
                 if (offset < 0 && offset > bestOffset) { bestOffset = offset; best = el; }
             });
             return best;

@@ -812,28 +812,74 @@ public class WatchlistRepository {
         mirrorKv();
     }
 
-    /** Move a list one place along the tab strip by swapping display_order with its neighbour. */
+    /**
+     * Move a list one place along the tab strip. The ↑↓ single swap, where
+     * {@link #reorderLists} saves a whole dragged order; both decide an order in memory and hand
+     * it to {@link #writeListOrder}, so the button and the drag cannot drift apart.
+     */
     public void moveList(long id, boolean up) {
         try (Connection conn = connections.open()) {
-            List<WatchList> all = lists();
-            int idx = -1;
-            for (int i = 0; i < all.size(); i++) if (all.get(i).id() == id) idx = i;
+            List<Long> ids = listIds();
+            int idx = ids.indexOf(id);
             if (idx < 0) return;
             int neighbour = up ? idx - 1 : idx + 1;
-            if (neighbour < 0 || neighbour >= all.size()) return;      // already at an end
-            setListOrder(conn, all.get(idx).id(), neighbour);
-            setListOrder(conn, all.get(neighbour).id(), idx);
+            if (neighbour < 0 || neighbour >= ids.size()) return;      // already at an end
+            ids.set(idx, ids.get(neighbour));
+            ids.set(neighbour, id);
+            writeListOrder(conn, ids);
         } catch (Exception e) {
             throw new IllegalStateException("Could not reorder that watchlist.", e);
         }
     }
 
-    private static void setListOrder(Connection conn, long id, long order) throws java.sql.SQLException {
+    /**
+     * Set the strip's order outright, from the order it is showing — the drag-and-drop path,
+     * where {@link #moveList} swaps a single pair on a button press.
+     *
+     * <p>As with the per-list row order, the caller posts what it can see, which is not
+     * necessarily every list: one created in another window may not be in it. So the named ids
+     * are numbered first, in the order given, and <b>every list the caller didn't name keeps its
+     * place after them</b> rather than being dropped — a drop that raced a create must not
+     * strand the new list. Unknown ids are ignored: this writes order, and only order, so
+     * membership and the alert settings are untouched and no KV re-mirror is needed.
+     */
+    public void reorderLists(List<Long> ids) {
+        try (Connection conn = connections.open()) {
+            List<Long> existing = listIds();
+            List<Long> ordered = new ArrayList<>();
+            for (Long id : ids == null ? List.<Long>of() : ids) {
+                if (id != null && existing.contains(id) && !ordered.contains(id)) ordered.add(id);
+            }
+            for (Long id : existing) if (!ordered.contains(id)) ordered.add(id);
+            writeListOrder(conn, ordered);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not save the watchlist order.", e);
+        }
+    }
+
+    /** The strip's ids in their current order — what both reorder paths start from. */
+    private List<Long> listIds() {
+        List<Long> ids = new ArrayList<>();
+        for (WatchList l : lists()) ids.add(l.id());
+        return ids;
+    }
+
+    /**
+     * Renumber the strip 0..n-1 in the given order. The single writer of
+     * {@code watchlist_list.display_order}, for the same reason {@link #writeOrder} is the single
+     * writer of the member order: a swap that renumbered only its own pair would collide with
+     * whatever gaps a create-then-delete had already left behind.
+     */
+    private static void writeListOrder(Connection conn, List<Long> ordered) throws java.sql.SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
                 "UPDATE watchlist_list SET display_order = ? WHERE id = ?")) {
-            ps.setLong(1, order);
-            ps.setLong(2, id);
-            ps.executeUpdate();
+            int order = 0;
+            for (Long id : ordered) {
+                ps.setInt(1, order++);
+                ps.setLong(2, id);
+                ps.addBatch();
+            }
+            ps.executeBatch();
         }
     }
 

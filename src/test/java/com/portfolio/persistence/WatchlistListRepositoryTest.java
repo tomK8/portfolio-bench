@@ -31,6 +31,11 @@ class WatchlistListRepositoryTest {
         return repo.loadAll(listId).stream().map(WatchlistRepository.Entry::symbol).toList();
     }
 
+    /** The tab strip's names, in the order it would show them. */
+    private List<String> listNames(WatchlistRepository repo) {
+        return repo.lists().stream().map(WatchlistRepository.WatchList::name).toList();
+    }
+
     /** Every watched symbol, across every list — the alert job's view. */
     private List<String> allSymbols(WatchlistRepository repo) {
         return repo.loadAll().stream().map(WatchlistRepository.Entry::symbol).toList();
@@ -270,6 +275,62 @@ class WatchlistListRepositoryTest {
         assertEquals(List.of("Watchlist", "banks", "chips"),
                 repo.lists().stream().map(WatchlistRepository.WatchList::name).toList(),
                 "moving past an end is a no-op, not a wrap-around");
+    }
+
+    @Test
+    void reorderListsSavesTheWholeStripAsDragged(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long chips = repo.createList("chips");
+        long banks = repo.createList("banks");
+        long first = repo.firstListId();
+
+        repo.reorderLists(List.of(banks, first, chips));
+        assertEquals(List.of("banks", "Watchlist", "chips"), listNames(repo));
+    }
+
+    @Test
+    void aDropThatRacedACreateLeavesTheNewListInTheStrip(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long chips = repo.createList("chips");
+        long first = repo.firstListId();
+        long banks = repo.createList("banks");        // the tab the dragging window never saw
+
+        // The client posts only what its strip was showing. The list it didn't name keeps its
+        // place after the ones it did, rather than being dropped from the order entirely.
+        repo.reorderLists(List.of(chips, first));
+        assertEquals(List.of("chips", "Watchlist", "banks"), listNames(repo));
+        assertTrue(repo.lists().stream().anyMatch(l -> l.id() == banks),
+                "a list the drop never named must still be in the strip");
+    }
+
+    @Test
+    void reorderListsIgnoresUnknownAndRepeatedIds(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long chips = repo.createList("chips");
+        long first = repo.firstListId();
+
+        repo.reorderLists(List.of(chips, 9999L, chips, first));
+        assertEquals(List.of("chips", "Watchlist"), listNames(repo));
+    }
+
+    /**
+     * {@code moveList} and {@code reorderLists} renumber through one writer, so a swap after a
+     * drop lands where the strip says rather than colliding with the gaps a delete left behind.
+     */
+    @Test
+    void aSwapAfterADropStaysInStep(@TempDir Path dir) {
+        WatchlistRepository repo = repo(dir);
+        long chips = repo.createList("chips");
+        long banks = repo.createList("banks");
+        long doomed = repo.createList("doomed");
+        repo.deleteList(doomed);                      // leaves a hole in display_order
+        long first = repo.firstListId();
+
+        repo.reorderLists(List.of(banks, chips, first));
+        assertEquals(List.of("banks", "chips", "Watchlist"), listNames(repo));
+
+        repo.moveList(first, true);
+        assertEquals(List.of("banks", "Watchlist", "chips"), listNames(repo));
     }
 
     @Test

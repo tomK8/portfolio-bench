@@ -228,6 +228,37 @@ class InstrumentsTest {
         }
     }
 
+    // ---- sedolFromIsin ---------------------------------------------------------------------
+
+    @Test
+    void sedolFromIsinReadsTheSedolOutOfAUkIsin() {
+        // A GB ISIN is its SEDOL: GB00 + the 7-character SEDOL + a check digit.
+        assertEquals("BWBR1N3", Instruments.sedolFromIsin("GB00BWBR1N39"));
+        assertEquals("3245239", Instruments.sedolFromIsin("GB0032452392"));
+        // The two old numeric gilts, whose leading zero HL strips from the SEDOL it prints but
+        // not from the ISIN — which is the whole reason this derivation exists.
+        assertEquals("0240419", Instruments.sedolFromIsin("GB0002404191"));
+        assertEquals("0489308", Instruments.sedolFromIsin("GB0004893086"));
+    }
+
+    @Test
+    void sedolFromIsinRefusesAnythingThatIsNotOne() {
+        // Returning something for a string that is not a UK ISIN would key a price feed, a cash
+        // statement and a picker on a code no registry ever issued. Absent is the right answer.
+        for (String s : new String[]{"GB00BWBR1N3", "GB00BWBR1N390", "US0378331005",
+                "IE00B4L5Y983", "BWBR1N3", "AAPL", ""}) {
+            assertNull(Instruments.sedolFromIsin(s), s);
+        }
+        assertNull(Instruments.sedolFromIsin(null));
+    }
+
+    @Test
+    void sedolFromIsinTakesTheIsinAsPasted() {
+        // It is read off a web page by a human, so the case and the surrounding whitespace are
+        // whatever came with it.
+        assertEquals("BWBR1N3", Instruments.sedolFromIsin("  gb00bwbr1n39 "));
+    }
+
     // ---- couponOf --------------------------------------------------------------------------
 
     @Test

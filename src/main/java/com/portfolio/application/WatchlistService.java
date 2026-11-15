@@ -8,6 +8,7 @@ import com.portfolio.domain.VolForecast;
 import com.portfolio.domain.WatchlistAlerts;
 import com.portfolio.domain.WatchlistAlerts.Flags;
 import com.portfolio.domain.model.CashTransaction;
+import com.portfolio.domain.model.GiltRef;
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.MarketSession;
@@ -30,7 +31,9 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -107,6 +110,9 @@ public class WatchlistService {
     private static final int PCT_SCALE = 6;
     private static final int GBP_SCALE = 2;
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+    /** Gilt maturity in the picker, e.g. {@code "31 Jul 2036"}. */
+    private static final DateTimeFormatter MATURITY_LABEL =
+            DateTimeFormatter.ofPattern("d MMM yyyy", java.util.Locale.UK);
     private static final int INTRADAY_SERIES_STRIDE_ABOVE_DAYS = 5;   // >5-day windows → ~5-min buckets
 
     private final WatchlistRepository watchlistRepo;
@@ -648,13 +654,75 @@ public class WatchlistService {
     }
 
     /**
-     * The gilt names currently priced (conventional gilts scraped hourly by
-     * {@link GiltPriceFetchJob}, keyed {@code "GILT {coupon}% {year}"}). Feeds the Watchlist
-     * add-box autocomplete so a gilt buy-limit alert is entered by picking a valid, priced name
-     * rather than typing one — a mistyped symbol joins no price and would silently never fire.
+     * The gilts currently priced (conventional gilts scraped hourly by
+     * {@link GiltPriceFetchJob}, keyed {@code "GILT {coupon}% {year}"}), each with the other
+     * identifiers it is published under. Feeds the Watchlist add-box autocomplete so a gilt
+     * buy-limit alert is entered by picking a valid, priced name rather than typing one — a
+     * mistyped symbol joins no price and would silently never fire.
+     *
+     * <p><b>The id is the one name for a gilt nobody outside this app uses</b>, which is what
+     * the extra identifiers are for. A holder arrives from the LSE's own quote page holding
+     * {@code T36N} or {@code GB00BWBR1N39}, and the entry they want is called
+     * {@code GILT 4.875% 2036}; searching the list for the code they have in hand found nothing,
+     * and 70 entries named by coupon and year are no help to someone who knows the maturity date
+     * instead. So each option carries its ISIN, its SEDOL and its full maturity date, and the
+     * list is ordered by maturity — the axis a gilt is actually chosen along.
+     *
+     * <p>Identifiers are the picker's, not the row's: nothing here is stored on the watchlist
+     * entry, and a gilt whose {@code gilt_refs} entry is missing still lists under its id with
+     * blank handles. A search handle can be absent; the name it would have found cannot.
      */
-    public List<String> giltSymbols() {
-        return intradayRepo.distinctGiltSymbols();
+    public List<GiltOption> giltOptions() {
+        Map<String, String> refs = kv == null ? Map.of() : kv.getStringMap(GiltPriceFetchJob.REF_MAP_KEY);
+        List<GiltOption> out = new ArrayList<>();
+        for (String symbol : intradayRepo.distinctGiltSymbols()) {
+            GiltRef ref = GiltRef.fromKv(symbol, refs.get(symbol));
+            out.add(new GiltOption(symbol, maturityLabel(ref.maturity()), ref.isin(), ref.sedol()));
+        }
+        // Maturity first, with the dateless last rather than first — an entry with no stored
+        // identifiers must not displace the ordering of the ones that have them.
+        out.sort(Comparator.comparing((GiltOption o) -> maturityOf(refs, o.symbol()),
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(GiltOption::symbol));
+        return out;
+    }
+
+    /**
+     * An ISIN or SEDOL in the add box resolved to the gilt id the price feed writes; anything
+     * else — any ordinary ticker — passed through untouched, bar the coupon canonicalisation
+     * {@link Instruments#canonicalGiltId} applies to a gilt id typed with a trailing zero.
+     *
+     * <p>This is the add box's half of the problem {@link #giltOptions} solves for the list. The
+     * identifier a holder has in hand is whatever the page they came from printed, and storing
+     * {@code GB00BWBR1N39} as a watchlist symbol would give them a row that no feed ever prices
+     * and no alert ever fires from — the quiet failure a picker exists to prevent. Resolution is
+     * against every gilt ever scraped rather than only the priced ones, so a matured gilt comes
+     * back under the name its holder would recognise.
+     *
+     * <p>An identifier is resolved only when it is one this app has actually seen published:
+     * there is no pattern here that could promote a ticker that merely looks like a SEDOL.
+     * The LSE's own code ({@code T36N}) is not resolvable — no free source publishes that
+     * mapping, and inventing a table of them is the maintained list the identifiers above exist
+     * to avoid.
+     */
+    public String resolveSymbol(String input) {
+        if (input == null) return null;
+        String typed = input.trim().toUpperCase().replace(" ", "");
+        if (typed.isEmpty() || kv == null) return Instruments.canonicalGiltId(input);
+        for (Map.Entry<String, String> e : kv.getStringMap(GiltPriceFetchJob.REF_MAP_KEY).entrySet()) {
+            GiltRef ref = GiltRef.fromKv(e.getKey(), e.getValue());
+            if (typed.equals(ref.isin()) || typed.equals(ref.sedol())) return ref.symbol();
+        }
+        return Instruments.canonicalGiltId(input);
+    }
+
+    private static LocalDate maturityOf(Map<String, String> refs, String symbol) {
+        return GiltRef.fromKv(symbol, refs.get(symbol)).maturity();
+    }
+
+    /** {@code "31 Jul 2036"} — the form the gilt's own quote page prints, shortened. */
+    private static String maturityLabel(LocalDate maturity) {
+        return maturity == null ? null : MATURITY_LABEL.format(maturity);
     }
 
     // ---- Popup price series -------------------------------------------------
@@ -1127,6 +1195,14 @@ public class WatchlistService {
      *                      On the payload rather than fetched separately so the header can never
      *                      name an N the cells beneath it were not priced at.
      */
+    /**
+     * One entry in the add box's gilt picker: the symbol an alert is stored under, plus the
+     * identifiers it can be found by. Every field but {@code symbol} may be null — see
+     * {@link #giltOptions()}.
+     */
+    public record GiltOption(String symbol, String maturity, String isin, String sedol) {
+    }
+
     public record WatchlistView(List<Row> rows, int touchSessions) {
     }
 

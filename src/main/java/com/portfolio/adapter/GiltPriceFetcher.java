@@ -1,6 +1,7 @@
 package com.portfolio.adapter;
 
 import com.portfolio.domain.Instruments;
+import com.portfolio.domain.model.GiltRef;
 import com.portfolio.domain.model.IntradayBar;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,9 +12,12 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -34,14 +38,21 @@ import java.util.regex.Pattern;
  * {@code Holding.securityId}. {@code (coupon, year)} is unique across all conventional gilts
  * on the page (index-linked gilts live on a separate page and are not fetched).
  *
- * <p>The SEDOL in the same name cell rides along in {@link Snapshot#sedolToSymbol()}, which is
- * the only free source of a SEDOL → gilt-id mapping this app has. It exists because a broker can
- * name a gilt by a code of its own: Interactive Investor's cash statement calls the 4.375% 2030
- * {@code T30} and its description ({@code "20000 HIS MAJE4LN STK30"}) carries neither coupon nor
- * maturity, so the row's SEDOL is the <em>only</em> thing in the file that identifies the
- * instrument. Reading it here costs nothing — it is already in the response this job makes hourly
- * — and it is what keeps that mapping out of a hand-maintained list that would need an edit for
- * every gilt ever bought.
+ * <p>The rest of what the name cell carries rides along as a {@link GiltRef} per row — ISIN,
+ * SEDOL and the full maturity date — because the id above is the one name for a gilt that
+ * <em>nobody else uses</em>. Two consumers need the other names. Interactive Investor's cash
+ * statement calls the 4.375% 2030 {@code T30} and its description ({@code "20000 HIS MAJE4LN
+ * STK30"}) carries neither coupon nor maturity, so the row's SEDOL is the <em>only</em> thing in
+ * the file that identifies the instrument; and the Watchlist's gilt picker is searched with
+ * whatever identifier the holder has in hand — an ISIN off the LSE's own quote page, say. Reading
+ * it here costs nothing — it is already in the response this job makes hourly — and it is what
+ * keeps those mappings out of a hand-maintained list that would need an edit for every gilt ever
+ * bought.
+ *
+ * <p><b>The SEDOL is taken from the ISIN, not from the SEDOL the page prints.</b> See
+ * {@link Instruments#sedolFromIsin}: HL strips the leading zero off the old numeric SEDOLs, so
+ * the printed tail is 6 characters for the 6% 2028 and the 4.25% 2032 and a 7-character pattern
+ * over it read nothing at all for either.
  */
 public class GiltPriceFetcher {
 
@@ -61,7 +72,12 @@ public class GiltPriceFetcher {
     private static final Pattern COUPON_DECIMAL = Pattern.compile("^([0-9]+(?:\\.[0-9]+)?)$");
     private static final Pattern PRICE = Pattern.compile("^([0-9]+(?:\\.[0-9]+)?)$");
     private static final Pattern MATURITY_YEAR = Pattern.compile("(\\d{4})\\s*$");
-    // Name cell tail: "… GBP | GB00BSQNRD01 | BSQNRD0". A SEDOL is 7 alphanumerics.
+    // The maturity cell in full: "7 March 2036", "31 July 2036" — no leading zero on the day.
+    private static final DateTimeFormatter MATURITY_DATE =
+            DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
+    // Name cell tail: "… GBP | GB00BSQNRD01 | BSQNRD0". Every gilt ISIN is GB00 + SEDOL + check.
+    private static final Pattern ISIN = Pattern.compile("\\|\\s*(GB00[0-9A-Z]{8})\\b");
+    // The printed SEDOL, used only when the row carries no ISIN. 7 alphanumerics.
     private static final Pattern SEDOL = Pattern.compile("\\|\\s*([0-9A-Z]{7})\\s*$");
 
     private final HttpClient client =
@@ -69,11 +85,24 @@ public class GiltPriceFetcher {
 
     /**
      * One scrape of the all-gilts table: a bar per row, timestamped at fetch time, plus the
-     * SEDOL → gilt-id mapping the same rows carry. Both come out of a single HTTP GET.
+     * identifiers the same rows carry. Both come out of a single HTTP GET.
      */
-    public record Snapshot(List<IntradayBar> bars, Map<String, String> sedolToSymbol) {
+    public record Snapshot(List<IntradayBar> bars, List<GiltRef> refs) {
         static Snapshot empty() {
-            return new Snapshot(List.of(), Map.of());
+            return new Snapshot(List.of(), List.of());
+        }
+
+        /**
+         * SEDOL → gilt id, for the cash statement that names a gilt by nothing else. Derived
+         * from {@link #refs} rather than collected alongside them, so the map a re-import joins
+         * on cannot disagree with the identifiers the picker is searched by.
+         */
+        public Map<String, String> sedolToSymbol() {
+            Map<String, String> out = new LinkedHashMap<>();
+            for (GiltRef ref : refs) {
+                if (ref.sedol() != null) out.put(ref.sedol(), ref.symbol());
+            }
+            return out;
         }
     }
 
@@ -120,7 +149,7 @@ public class GiltPriceFetcher {
      */
     Snapshot parse(String html, Instant ts) {
         List<IntradayBar> bars = new ArrayList<>();
-        Map<String, String> sedols = new LinkedHashMap<>();
+        List<GiltRef> refs = new ArrayList<>();
         Matcher rows = ROW.matcher(html);
         while (rows.find()) {
             String row = rows.group(1);
@@ -135,11 +164,10 @@ public class GiltPriceFetcher {
 
             String symbol = Instruments.giltId(coupon, Integer.parseInt(year));
             bars.add(new IntradayBar(symbol, ts, price, null, "GBP"));
-
-            String sedol = sedol(cells.get(0));
-            if (sedol != null) sedols.put(sedol, symbol);
+            refs.add(new GiltRef(symbol, isin(cells.get(0)), sedol(cells.get(0)),
+                    maturityDate(cells.get(2))));
         }
-        return new Snapshot(bars, sedols);
+        return new Snapshot(bars, refs);
     }
 
     private static List<String> cells(String row) {
@@ -163,10 +191,35 @@ public class GiltPriceFetcher {
         return m.find() ? m.group(1) : null;
     }
 
-    /** The SEDOL from the name cell's "GBP | {ISIN} | {SEDOL}" tail, or null if it isn't there. */
+    /** The ISIN from the name cell's "GBP | {ISIN} | {SEDOL}" tail, or null if it isn't there. */
+    private static String isin(String nameCell) {
+        Matcher m = ISIN.matcher(nameCell);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * The row's SEDOL, from its ISIN — see {@link Instruments#sedolFromIsin} for why the ISIN
+     * is the authority and not the SEDOL printed beside it. The printed tail is the fallback
+     * for a row that carries no ISIN at all, which no current row does.
+     */
     private static String sedol(String nameCell) {
+        String fromIsin = Instruments.sedolFromIsin(isin(nameCell));
+        if (fromIsin != null) return fromIsin;
         Matcher m = SEDOL.matcher(nameCell);
         return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * The maturity cell as a date. Null when it doesn't parse — the year the id is built from
+     * comes from {@link #maturityYear} either way, so a format change here costs the picker its
+     * ordering and nothing else.
+     */
+    private static LocalDate maturityDate(String cell) {
+        try {
+            return LocalDate.parse(cell.trim(), MATURITY_DATE);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static Double priceValue(String cell) {

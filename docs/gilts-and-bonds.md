@@ -48,6 +48,16 @@ would have used the per-share formula against a per-£100 quote (2026-08-25). Th
 rows were re-keyed in place; a re-import of the same file now dedups against them, since the
 canonical id is part of the II dedup key `(date, type, symbol, amount, currency)`.
 
+**A gilt's SEDOL is read out of its ISIN**, by `Instruments.sedolFromIsin` and nowhere else: a GB
+ISIN *is* its SEDOL (`GB00` + the seven characters + a check digit). HL prints the old numeric
+SEDOLs a character short — `240419` where the SEDOL is `0240419` — so reading the printed tail
+captured nothing at all for the 6% 2028 and the 4.25% 2032, and padding the short form back out
+would have been a guess. The ISIN in the same cell carries the full form for every row on the
+page. See "Gilt SEDOLs" in [price-history.md](price-history.md), which is also where the rest of
+that cell goes: the ISIN and the maturity date are what the Watchlist's gilt picker is searched
+by, because the id built above is the one name for a gilt that no broker, exchange or factsheet
+uses.
+
 **II's price column is per £1 nominal, AJ Bell's is per £100.** II exports the 4.375% 2030 at
 `£0.9951` against a `20,000` quantity, AJ Bell exports its gilts at `76.76` against `200,000` —
 both `Market Value` figures are right, and `IISippParser` uses the exported value rather than

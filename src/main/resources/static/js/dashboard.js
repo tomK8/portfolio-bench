@@ -8142,10 +8142,28 @@
         }
 
         /**
+         * The identifiers a gilt is findable by, beside the id it is stored under: its maturity
+         * date, its ISIN and its SEDOL, in that order, each omitted when the scrape never
+         * published it.
+         *
+         * <p>This is the half of the picker that does the finding. The id — GILT 4.875% 2036 —
+         * is the one name for a gilt that nobody outside this app uses: a holder arrives from
+         * the LSE's own quote page knowing it as T36N or GB00BWBR1N39, typed that, and matched
+         * nothing in a list of 70 names spelled by coupon and year. The browser matches what is
+         * typed against an option's label as well as its value, so with the label carrying them
+         * "31 Jul", "2036" or a pasted ISIN all reach the entry. The paste is also resolved
+         * server-side on Add (WatchlistService.resolveSymbol), which is what makes it work in a
+         * browser that filters on the value alone.
+         */
+        function giltHintLabel(g) {
+            return [g.maturity, g.isin, g.sedol].filter(Boolean).join(' · ');
+        }
+
+        /**
          * Populate the Symbol box's autocomplete with the conventional gilts currently priced
-         * (GET /watchlist/gilts). Lets a gilt buy-limit alert be entered by picking a valid,
-         * priced name (e.g. "GILT 4.75% 2043") — a mistyped coupon/year joins no price and would
-         * silently never fire. Optional nicety, so failures are swallowed.
+         * (GET /watchlist/gilts), maturity order. Lets a gilt buy-limit alert be entered by
+         * picking a valid, priced name (e.g. "GILT 4.75% 2043") — a mistyped coupon/year joins
+         * no price and would silently never fire. Optional nicety, so failures are swallowed.
          */
         function loadGiltHints() {
             fetch('/watchlist/gilts').then(function (r) {
@@ -8153,7 +8171,8 @@
             }).then(function (gilts) {
                 document.getElementById('wl-gilt-hints').innerHTML =
                     (gilts || []).map(function (g) {
-                        return '<option value="' + escapeHtml(g) + '"></option>';
+                        return '<option value="' + escapeHtml(g.symbol) + '" label="'
+                            + escapeHtml(giltHintLabel(g)) + '"></option>';
                     }).join('');
             }).catch(function () { /* autocomplete is optional */ });
         }

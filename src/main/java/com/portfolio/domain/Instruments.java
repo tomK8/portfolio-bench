@@ -163,6 +163,27 @@ public final class Instruments {
     }
 
     /**
+     * The SEDOL inside a UK ISIN, or null if the string is not one. A GB ISIN <em>is</em> its
+     * SEDOL: {@code GB00} + the 7-character SEDOL + a check digit, so {@code GB00BWBR1N39}
+     * yields {@code BWBR1N3} and {@code GB0002404191} yields {@code 0240419}.
+     *
+     * <p>Deriving it rather than reading the SEDOL a page prints beside it is not redundancy —
+     * it is the only way to get the <b>old numeric SEDOLs right</b>. HL's gilt page prints
+     * those with the leading zero stripped ({@code 240419} for the 6% 2028, {@code 489308} for
+     * the 4.25% 2032, both 6 characters), and a 7-character pattern over the printed tail
+     * therefore captured nothing at all for them, while padding the short form back out would
+     * be a guess. The ISIN in the same cell carries the full SEDOL for every row, so one
+     * identifier answers for both and the two gilts stop being invisible to a cash statement
+     * that names one of them only by its SEDOL.
+     */
+    public static String sedolFromIsin(String isin) {
+        if (isin == null) return null;
+        String s = isin.trim().toUpperCase();
+        if (s.length() != 12 || !s.startsWith("GB00")) return null;
+        return s.substring(4, 11);
+    }
+
+    /**
      * The annual coupon embedded in a bond id, as a <b>fraction</b> — {@code "GILT 4.75% 2038"}
      * → {@code 0.0475}. Returns null when the id carries no readable coupon.
      *

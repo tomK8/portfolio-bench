@@ -58,6 +58,10 @@
     `GiltPriceFetchJob` tick. Read by `IiCashImporter`; see "Gilt SEDOLs" in [price-history.md](price-history.md).
     (`getStringMap`/`putStringMap` split on the **first** `=` only — a gilt id contains a space
     and a `%`, and splitting on whitespace would mangle it.)
+  - `gilt_refs` — `GILT {coupon}% {year}` → `isin|sedol|maturity`, merged on the same tick and
+    for the same reason. The identifiers the Watchlist's gilt picker is searched and ordered by;
+    encoded and decoded only by `GiltRef`, so the format has one spelling. A gilt whose entry is
+    missing still lists, without its search handles — see [watchlist.md](watchlist.md).
   - `held_symbols` — newline-separated set of currently-held symbols, written by
     `SyncPortfolioService` after each `/sync`. Unioned with the cash-ledger symbol set in
     `PriceFetchSupport.tickersToFetch` so freshly bought names get an intraday quote before

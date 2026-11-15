@@ -3352,8 +3352,13 @@
 
 <section class="tab-panel" id="panel-watchlist">
     <p class="muted" style="margin-top: 0">
-        Volatility-trading watchlist. Enter any symbol — owned or not. Rows colour when an alert
-        fires: <b class="wl-pos">green</b>/<b class="wl-neg">red</b> = a big move today (up/down),
+        Volatility-trading watchlist. Enter any symbol — owned or not. A <b>gilt</b> is picked
+        from the list the Symbol box offers rather than typed: type <code>GILT</code> for all of
+        them in maturity order, or find one by its maturity date, ISIN or SEDOL — pasting a
+        gilt's ISIN or SEDOL resolves to the name the price feed uses. The LSE's own code
+        (<code>T36N</code>) does not resolve: no free source publishes that mapping, so the
+        identifiers that come with the prices are the ones you can search by. Rows colour when
+        an alert fires: <b class="wl-pos">green</b>/<b class="wl-neg">red</b> = a big move today (up/down),
         <b style="color:#1f77b4">blue</b> = near the 52-week high, pulsing = both. Set each
         symbol's alert triggers inline: % from 52-wk high, |today's move|, and two absolute price
         levels — an <b>Above trigger</b> (emails when the price rises to or above it) and a
@@ -3385,7 +3390,7 @@
         columns update on a manual <b>Refresh</b> or when you re-open the tab.
     </p>
     <div class="benchmark-controls">
-        <label title="Type a ticker (e.g. NVDA), or type GILT to pick a gilt for a buy-limit alert">Symbol: <input id="wl-add-symbol" type="text" size="16" list="wl-gilt-hints" placeholder="e.g. NVDA or GILT…"/></label>
+        <label title="Type a ticker (e.g. NVDA), or type GILT to pick a gilt for a buy-limit alert — the gilt list is in maturity order and each entry carries its maturity date, ISIN and SEDOL, so any of those finds it. Pasting a gilt's ISIN or SEDOL resolves to the name the price feed uses; the LSE's own code (T36N) does not resolve, because no free source publishes that mapping.">Symbol: <input id="wl-add-symbol" type="text" size="16" list="wl-gilt-hints" placeholder="e.g. NVDA, GILT…, ISIN"/></label>
         <datalist id="wl-gilt-hints"></datalist>
         <label>Near-high %: <input id="wl-add-high" type="text" size="4" placeholder="3"/></label>
         <label>Move %: <input id="wl-add-move" type="text" size="4" placeholder="10"/></label>

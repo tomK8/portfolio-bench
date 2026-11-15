@@ -110,6 +110,9 @@ public class WatchlistController {
                              @RequestParam(name = "list", required = false) Long list) {
         String sym = symbol == null ? "" : symbol.trim().toUpperCase();
         if (sym.isEmpty()) throw new IllegalArgumentException("Symbol is required.");
+        // A gilt's ISIN or SEDOL stands for the id the feed prices it under; everything else,
+        // every ordinary ticker included, passes through unchanged.
+        sym = watchlistService.resolveSymbol(sym);
         long listId = listOrFirst(list);
         watchlistRepo.add(sym, parsePct(highPct, "high threshold"), parsePct(movePct, "move threshold"),
                 parsePrice(priceAbove, "above level"), parsePrice(priceBelow, "below level"), listId);
@@ -216,12 +219,14 @@ public class WatchlistController {
     /**
      * The conventional gilts currently priced (from {@code GiltPriceFetchJob}) — feeds the
      * Watchlist add-box autocomplete so a gilt buy-limit alert is entered by picking a valid,
-     * priced name (e.g. {@code GILT 4.75% 2043}) rather than typing one.
+     * priced name (e.g. {@code GILT 4.75% 2043}) rather than typing one. Each carries its ISIN,
+     * SEDOL and maturity date so the list can be searched by whichever identifier the holder
+     * arrived with; see {@link WatchlistService#giltOptions()}.
      */
     @GetMapping("/watchlist/gilts")
     @ResponseBody
-    public java.util.List<String> gilts() {
-        return watchlistService.giltSymbols();
+    public java.util.List<WatchlistService.GiltOption> gilts() {
+        return watchlistService.giltOptions();
     }
 
     @GetMapping("/watchlist/series")

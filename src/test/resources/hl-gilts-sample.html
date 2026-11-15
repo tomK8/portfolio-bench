@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <!-- Synthetic sample mirroring the shape of hl.co.uk/shares/corporate-bonds-gilts/bond-prices/uk-gilts.
-     Fake ISINs/SEDOLs/prices - not a captured page. -->
+     Fake ISINs/SEDOLs/prices - not a captured page. Each ISIN is shaped as a real UK one is,
+     GB00 + the 7-character SEDOL + a check digit, because that is where the SEDOL is read from.
+     The last row mirrors the old numeric gilts, whose leading zero the page strips from the
+     printed SEDOL but not from the ISIN. -->
 <html>
 <head><title>UK Gilt prices</title></head>
 <body>
@@ -20,7 +23,7 @@
   <tr>
     <td>
       <a href="/f/t15" title="Treasury 1.5% 22/07/2026" class="link-headline">Treasury 1.5% 22/07/2026</a>
-      <span class="meta">GBP | GB00TEST00015 | TEST015</span>
+      <span class="meta">GBP | GB00TEST0150 | TEST015</span>
     </td>
     <td>1.500</td>
     <td>22 July 2026</td>
@@ -30,7 +33,7 @@
   <tr>
     <td>
       <a href="/f/tg33" title="Treasury 0.875% 2033" class="link-headline">Treasury 0.875% 2033</a>
-      <span class="meta">GBP | GB00TEST00033 | TEST033</span>
+      <span class="meta">GBP | GB00TEST0330 | TEST033</span>
     </td>
     <td>0.875</td>
     <td>31 July 2033</td>
@@ -40,7 +43,7 @@
   <tr>
     <td>
       <a href="/f/t1" title="Treasury 1% 30/04/2032" class="link-headline">Treasury 1% 30/04/2032</a>
-      <span class="meta">GBP | GB00TEST00032 | TEST032</span>
+      <span class="meta">GBP | GB00TEST0320 | TEST032</span>
     </td>
     <td>1.000</td>
     <td>30 April 2032</td>
@@ -50,7 +53,7 @@
   <tr>
     <td>
       <a href="/f/tg44" title="Treasury 3.25% 22/01/2044" class="link-headline">Treasury 3.25% 22/01/2044</a>
-      <span class="meta">GBP | GB00TEST00044 | TEST044</span>
+      <span class="meta">GBP | GB00TEST0440 | TEST044</span>
     </td>
     <td>3.250</td>
     <td>22 January 2044</td>
@@ -60,12 +63,22 @@
   <tr>
     <td>
       <a href="/f/t38" title="Treasury 4.75% 07/12/2038" class="link-headline">Treasury 4.75% 07/12/2038</a>
-      <span class="meta">GBP | GB00TEST00038 | TEST038</span>
+      <span class="meta">GBP | GB00TEST0380 | TEST038</span>
     </td>
     <td>4.750</td>
     <td>7 December 2038</td>
     <td>96.420</td>
     <td><a href="/f/t38" class="btn-factsheet">View factsheet</a> <a href="/deal/t38" class="btn-deal">Deal now</a></td>
+  </tr>
+  <tr>
+    <td>
+      <a href="/f/t6" title="Treasury 6% 07/12/2028" class="link-headline">Treasury 6% 07/12/2028</a>
+      <span class="meta">GBP | GB0009876540 | 987654</span>
+    </td>
+    <td>6.000</td>
+    <td>7 December 2028</td>
+    <td>101.230</td>
+    <td><a href="/f/t6" class="btn-factsheet">View factsheet</a> <a href="/deal/t6" class="btn-deal">Deal now</a></td>
   </tr>
   </tbody>
 </table>

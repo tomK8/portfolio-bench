@@ -1,6 +1,7 @@
 package com.portfolio.application;
 
 import com.portfolio.adapter.GiltPriceFetcher;
+import com.portfolio.domain.model.GiltRef;
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.persistence.IntradayPriceRepository;
@@ -30,23 +31,26 @@ class GiltPriceFetchJobTest {
     @TempDir
     Path dbDir;
 
+    private static final GiltRef REF =
+            new GiltRef(SYMBOL, "GB00BSQNRD01", "BSQNRD0", LocalDate.parse("2032-06-07"));
+
     /** Returns one canned bar stamped at whatever instant the test asks for. */
     private static class FakeFetcher extends GiltPriceFetcher {
         private final Instant ts;
-        private final Map<String, String> sedols;
+        private final List<GiltRef> refs;
 
         FakeFetcher(Instant ts) {
-            this(ts, Map.of("BSQNRD0", SYMBOL));
+            this(ts, List.of(REF));
         }
 
-        FakeFetcher(Instant ts, Map<String, String> sedols) {
+        FakeFetcher(Instant ts, List<GiltRef> refs) {
             this.ts = ts;
-            this.sedols = sedols;
+            this.refs = refs;
         }
 
         @Override
         public Snapshot fetch() {
-            return new Snapshot(List.of(new IntradayBar(SYMBOL, ts, 97.21, null, "GBP")), sedols);
+            return new Snapshot(List.of(new IntradayBar(SYMBOL, ts, 97.21, null, "GBP")), refs);
         }
     }
 
@@ -134,10 +138,40 @@ class GiltPriceFetchJobTest {
         // A gilt disappears from HL's table the day it matures. Replacing the stored map would
         // silently un-resolve a cash statement that is still perfectly importable, so the merge
         // only ever adds.
-        runAt(new FakeFetcher(londonNoon("2026-07-03"), Map.of("OLDGILT", "GILT 1% 2024")));
-        runAt(new FakeFetcher(londonNoon("2026-07-06"), Map.of("BSQNRD0", SYMBOL)));
+        GiltRef old = new GiltRef("GILT 1% 2024", "GB00OLDGILT9", "OLDGILT", LocalDate.parse("2024-01-22"));
+        runAt(new FakeFetcher(londonNoon("2026-07-03"), List.of(old)));
+        runAt(new FakeFetcher(londonNoon("2026-07-06"), List.of(REF)));
 
         assertEquals(Map.of("OLDGILT", "GILT 1% 2024", "BSQNRD0", SYMBOL),
                 new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.SEDOL_MAP_KEY));
+        assertEquals(2, new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.REF_MAP_KEY).size(),
+                "the identifier map merges on the same terms, for the same reason");
+    }
+
+    // ---- Identifier map --------------------------------------------------------
+
+    @Test
+    void publishesTheIdentifiersThePickerIsSearchedBy() {
+        // The id is the one name for a gilt nobody outside this app uses, so the other
+        // identifiers HL prints beside the price are stored with it — that is what lets the
+        // Watchlist's picker be found by a maturity date or a pasted ISIN.
+        runAt(londonNoon("2026-07-03"));
+
+        Map<String, String> stored = new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.REF_MAP_KEY);
+        assertEquals(Map.of(SYMBOL, "GB00BSQNRD01|BSQNRD0|2032-06-07"), stored);
+        assertEquals(REF, GiltRef.fromKv(SYMBOL, stored.get(SYMBOL)),
+                "what is stored must decode back to what was scraped");
+    }
+
+    @Test
+    void aGiltWithNoIdentifiersStillGetsAnEntry() {
+        // A page that stops printing an ISIN costs the picker a search handle. It must not cost
+        // the gilt its entry, nor leave a half-written value that fails to decode.
+        GiltRef bare = new GiltRef(SYMBOL, null, null, null);
+        runAt(new FakeFetcher(londonNoon("2026-07-03"), List.of(bare)));
+
+        Map<String, String> stored = new KeyValueStore(dbDir).getStringMap(GiltPriceFetchJob.REF_MAP_KEY);
+        assertEquals(Map.of(SYMBOL, "||"), stored);
+        assertEquals(bare, GiltRef.fromKv(SYMBOL, stored.get(SYMBOL)));
     }
 }

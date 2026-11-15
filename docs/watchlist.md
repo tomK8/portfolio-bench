@@ -539,6 +539,39 @@ touches an order.
     it gets, which is the more reason to say what they are.
   - Ordering is latched (`wlSeriesToken`): clicking 5D then 1Y must not let the slower 5D reply
     repaint the chart, nor label its high `1Y high`.
+- **The gilt picker is searched by the identifiers that arrive with the prices.**
+  `GET /watchlist/gilts` → `WatchlistService.giltOptions()` fills the Symbol box's `<datalist>`
+  with every conventional gilt the HL scrape is **currently pricing** — the universe is
+  `price_intraday`, so a matured gilt drops out of the picker on its own and an alert can never
+  be set on a name no feed will quote. Each option carries its **maturity date, ISIN and SEDOL**
+  from the `gilt_refs` KV entry (see [price-history.md](price-history.md)), and the list is
+  ordered by **maturity** — the axis a gilt is chosen along, and the only thing telling the two
+  2036 gilts apart.
+  - **Nothing was missing from the list; a way in was.** The id is the one name for a gilt that
+    nobody outside this app uses. Someone arriving from the LSE's own quote page for T36N —
+    4⅞% Treasury Gilt 31/07/36, ISIN `GB00BWBR1N39` — is looking for `GILT 4.875% 2036`, which
+    was in the picker all along and priced hourly; typing the code they had in hand matched
+    nothing, and scanning 70 entries spelled by coupon and year for a maturity date none of them
+    printed found nothing either. It read as a gilt the app didn't know (2026-11-15). A
+    hand-add box — the obvious fix, and the one asked for — would have added a second entry for
+    a gilt that was already there, under a name the price feed doesn't use.
+  - **Both halves of the box are fixed, because the browsers disagree.** Chrome matches typed
+    text against an option's **label** as well as its value, which is what makes `31 Jul`,
+    `2036`, a SEDOL or a pasted ISIN reach the entry; Firefox and Safari filter on the value
+    alone. So `WatchlistService.resolveSymbol` resolves a pasted ISIN or SEDOL to the gilt id
+    server-side on **Add**, and the picker degrades to a plain (maturity-ordered) list of ids
+    everywhere else. The resolver also runs `Instruments.canonicalGiltId`, so `GILT 4.50% 2028`
+    typed by hand reaches the feed's `GILT 4.5% 2028` instead of silently never firing.
+  - **Only an identifier this app has seen published resolves**, and it resolves against every
+    gilt ever scraped rather than only the priced ones — a matured gilt's ISIN comes back under
+    the name its holder would recognise. There is no pattern matching here, so a ticker that
+    merely looks like a SEDOL stays a ticker. **The LSE's own code (`T36N`, II's `T30`) does not
+    resolve**: no free source publishes that mapping, and a committed table of them is the
+    maintained list the scraped identifiers exist to avoid. The panel's own help text says so,
+    rather than leaving the code to fail quietly.
+  - A missing `gilt_refs` entry costs the option its search handles and nothing else: the gilt
+    still lists, with blank identifiers, and sorts after the dated ones rather than displacing
+    them. A search handle can be absent; the name it would have found cannot.
 - **Manual order:** `watchlist_member.display_order` + `POST /watchlist/move?dir=up|down&list=`
   swap neighbours; rows render in that order (↑/↓ buttons per row). The order is **per list**,
   so the same name can sit third in `chips` and first in `ai`. Add-backfills run on a

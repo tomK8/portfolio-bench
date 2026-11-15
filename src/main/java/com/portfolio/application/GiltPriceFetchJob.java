@@ -1,6 +1,7 @@
 package com.portfolio.application;
 
 import com.portfolio.adapter.GiltPriceFetcher;
+import com.portfolio.domain.model.GiltRef;
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.PriceBar;
@@ -32,9 +33,12 @@ import java.util.Map;
  *
  * <p>Each tick also publishes the page's SEDOL → gilt-id mapping to the {@code gilt_sedols} KV
  * entry, which is what lets {@code IICashStatementParser} recognise a gilt in a cash statement
- * that names it only by a broker code and a SEDOL. The map is <b>merged</b>, never replaced: a
- * gilt drops off HL's page the day it matures, and a cash file re-imported after that must still
- * resolve. It costs no extra HTTP — the SEDOLs are in the response this job already makes.
+ * that names it only by a broker code and a SEDOL, and the rest of each row's identifiers —
+ * ISIN, SEDOL, full maturity date — to {@code gilt_refs}, which is what the Watchlist's gilt
+ * picker is searched and ordered by. Both maps are <b>merged</b>, never replaced: a gilt drops
+ * off HL's page the day it matures, and a cash file re-imported after that must still resolve.
+ * It costs no extra HTTP — every one of those identifiers is in the response this job already
+ * makes.
  *
  * <p>Each tick also <em>upserts</em> today's row in {@code price_history} (one row per gilt) so
  * the daily series accumulates from intraday data even when the app isn't running all day —
@@ -51,6 +55,12 @@ public class GiltPriceFetchJob {
     /** KV entry holding the merged SEDOL → {@code "GILT {coupon}% {year}"} mapping. */
     public static final String SEDOL_MAP_KEY = "gilt_sedols";
 
+    /**
+     * KV entry holding the merged {@code "GILT {coupon}% {year}"} → {@link GiltRef} mapping,
+     * in the record's own {@code isin|sedol|maturity} form.
+     */
+    public static final String REF_MAP_KEY = "gilt_refs";
+
     private final GiltPriceFetcher fetcher;
     private final IntradayPriceRepository intradayRepo;
     private final PriceHistoryRepository priceHistoryRepo;
@@ -61,7 +71,7 @@ public class GiltPriceFetchJob {
         this(fetcher, intradayRepo, priceHistoryRepo, null);
     }
 
-    /** @param kv where the SEDOL map is published; null means "don't publish it". */
+    /** @param kv where the SEDOL and identifier maps are published; null means "don't". */
     public GiltPriceFetchJob(GiltPriceFetcher fetcher, IntradayPriceRepository intradayRepo,
                              PriceHistoryRepository priceHistoryRepo, KeyValueStore kv) {
         this.fetcher = fetcher;
@@ -77,9 +87,10 @@ public class GiltPriceFetchJob {
         int saved = intradayRepo.saveIntradayBars(changed);
         int rolled = priceHistoryRepo.upsertPriceBars(toDailyBars(bars));
         int sedols = publishSedols(snapshot.sedolToSymbol());
+        int refs = publishRefs(snapshot.refs());
         log.info("Gilt prices — {} fetched, {} unchanged today, {} new intraday, {} daily upsert, "
-                        + "{} SEDOLs known",
-                bars.size(), bars.size() - changed.size(), saved, rolled, sedols);
+                        + "{} SEDOLs known, {} identified",
+                bars.size(), bars.size() - changed.size(), saved, rolled, sedols, refs);
     }
 
     /**
@@ -93,6 +104,23 @@ public class GiltPriceFetchJob {
         if (scraped.isEmpty() || merged.entrySet().containsAll(scraped.entrySet())) return merged.size();
         merged.putAll(scraped);
         kv.putStringMap(SEDOL_MAP_KEY, merged);
+        return merged.size();
+    }
+
+    /**
+     * Merges this scrape's identifiers into the stored map and returns the resulting size. Same
+     * merge contract as {@link #publishSedols}, for the same reason — plus one of its own: the
+     * picker's universe is the gilts currently <em>priced</em>, so a matured gilt left in this
+     * map falls out of the picker on its own and nothing has to prune it.
+     */
+    private int publishRefs(List<GiltRef> scraped) {
+        if (kv == null) return 0;
+        Map<String, String> merged = new LinkedHashMap<>(kv.getStringMap(REF_MAP_KEY));
+        Map<String, String> encoded = new LinkedHashMap<>();
+        for (GiltRef ref : scraped) encoded.put(ref.symbol(), ref.toKvValue());
+        if (encoded.isEmpty() || merged.entrySet().containsAll(encoded.entrySet())) return merged.size();
+        merged.putAll(encoded);
+        kv.putStringMap(REF_MAP_KEY, merged);
         return merged.size();
     }
 

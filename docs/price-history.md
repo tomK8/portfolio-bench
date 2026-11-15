@@ -18,8 +18,8 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
   Hourly + startup. Symbols are `"GILT {coupon}% {year}"` (no Yahoo ticker map; HL's
   zero-padded coupons "4.750" are trimmed to the broker form "4.75"). Currency `"GBP"`.
   Rides the intraday job's prune for retention. `GiltPriceFetcher` sends a browser UA.
-  Each tick also publishes the page's **SEDOL → gilt-id map** to the `gilt_sedols` KV entry
-  (see "Gilt SEDOLs" below).
+  Each tick also publishes the page's **SEDOL → gilt-id map** to the `gilt_sedols` KV entry and
+  each row's **ISIN, SEDOL and maturity date** to `gilt_refs` (see "Gilt SEDOLs" below).
   Each tick also **upserts** today's row into `price_history` so the daily series
   self-accumulates even when the app isn't running all day — last-write-wins. **That rollup is
   weekday-only** (`GiltPriceFetchJob.isTradingDay`, keyed off each bar's own timestamp so a tick
@@ -45,15 +45,30 @@ Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
   Tradeweb files are manually sourced and irreplaceable, so `REPLACE_EXISTING` is forbidden
   here.
 
-**Gilt SEDOLs.** `GiltPriceFetcher.Snapshot` carries a `sedolToSymbol` map beside its bars —
-HL's name cell reads `Treasury 4.375% 07/03/2030 GBP | GB00BSQNRD01 | BSQNRD0`, so the SEDOL comes
-out of the response the job **already makes hourly**, at zero extra HTTP. `GiltPriceFetchJob`
-merges it into the `gilt_sedols` KV entry (the whole conventional-gilt list) and `IiCashImporter` reads it on
-every import, which is what lets `IICashStatementParser` recognise a gilt in a file that names it
-only by a broker code. It is **merged, never replaced**: a gilt drops off HL's page the day it
-matures, and a cash statement from before then is still importable. The alternative — a committed
-`T30 = GILT 4.375% 2030` table — would need an edit for every gilt ever bought and could only ever
-be wrong, never right; the mapping is a published fact and a free source publishes it.
+**Gilt SEDOLs.** `GiltPriceFetcher.Snapshot` carries a `GiltRef` per row beside its bars —
+HL's name cell reads `Treasury 4.375% 07/03/2030 GBP | GB00BSQNRD01 | BSQNRD0`, so the ISIN, the
+SEDOL and (from the next cell) the full maturity date all come out of the response the job
+**already makes hourly**, at zero extra HTTP. `GiltPriceFetchJob` merges the SEDOL → gilt-id half
+into the `gilt_sedols` KV entry (the whole conventional-gilt list), which `IiCashImporter` reads
+on every import and which is what lets `IICashStatementParser` recognise a gilt in a file that
+names it only by a broker code; the rest goes to `gilt_refs`, where the Watchlist's gilt picker
+reads it (see [watchlist.md](watchlist.md)). Both are **merged, never replaced**: a gilt drops off
+HL's page the day it matures, and a cash statement from before then is still importable. The
+alternative — a committed `T30 = GILT 4.375% 2030` table — would need an edit for every gilt ever
+bought and could only ever be wrong, never right; the mapping is a published fact and a free
+source publishes it.
+
+**The SEDOL is read out of the ISIN, not out of the SEDOL beside it** — a GB ISIN *is* its SEDOL
+(`GB00` + the 7 characters + a check digit), and `Instruments.sedolFromIsin` is the one place that
+is unpacked. HL prints the old numeric SEDOLs a character short, stripping the leading zero:
+`240419` for the 6% 2028 and `489308` for the 4.25% 2032, where the SEDOLs are `0240419` and
+`0489308`. A 7-character pattern over the printed tail therefore captured **nothing at all** for
+those two, so neither was in `gilt_sedols` from any recent scrape — an II cash statement naming
+one of them by SEDOL would have kept II's own code and landed the position unpriced, the
+2026-08-24 failure in a third place. (The two were in the *stored* map only because the page
+printed them in full at some earlier point and the map never drops an entry.) Padding the short
+form back out would have been a guess; the ISIN in the same cell carries the full SEDOL for every
+row on the page, which is why one identifier now answers for both.
 
 **Gilt price history sources:** two independent feeds writing the same table via the same
 upsert. Either can fill or overwrite the other's day. The intraday rollup gives continuous

@@ -184,6 +184,31 @@ class YahooPriceFetcherTest {
     }
 
     @Test
+    void readsTheFeedsOwnPreviousCloseAsTheDayBaseline() throws Exception {
+        String json = Files.readString(Path.of(
+                getClass().getResource("/yahoo-mrna-prepost-sample.json").toURI()));
+
+        var prev = new YahooPriceFetcher().parseIntradaySnapshot("TSTX", json).prevClose();
+
+        assertNotNull(prev);
+        assertEquals("TSTX", prev.ticker());
+        // meta.previousClose, not meta.chartPreviousClose — the latter is the close before the
+        // *requested range*, which for a short intraday window is the current price itself and
+        // would render every day move as zero.
+        assertEquals(62.96, prev.close());
+        assertEquals("USD", prev.currency(), "same units as the bars beside it");
+    }
+
+    @Test
+    void noPreviousCloseInTheMetaIsAbsentRatherThanZero() throws Exception {
+        // A zero would read as a listing that closed at nothing and make every Day Δ infinite.
+        String json = Files.readString(Path.of(
+                getClass().getResource("/yahoo-aapl-intraday-sample.json").toURI()));
+
+        assertNull(new YahooPriceFetcher().parseIntradaySnapshot("AAPL", json).prevClose());
+    }
+
+    @Test
     void parseIntradayReturnsEmptyForErrorShape() throws Exception {
         List<IntradayBar> bars = new YahooPriceFetcher()
                 .parseIntraday("BAD", "{\"chart\":{\"result\":null,\"error\":{\"code\":\"Not Found\"}}}");

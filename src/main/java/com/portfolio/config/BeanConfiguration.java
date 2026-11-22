@@ -692,10 +692,11 @@ public class BeanConfiguration {
                                                FxRateProvider fxRateProvider,
                                                YahooTickerMap yahooTickerMap,
                                                MarketHoursCache marketHoursCache,
+                                               PreviousCloseCache previousCloseCache,
                                                SectorGroupKeyProvider sectorGroupKeyProvider) {
         return new LivePricesService(cashTransactionRepository, intradayPriceRepository,
                 priceHistoryRepository, fxRateProvider, yahooTickerMap, marketHoursCache,
-                sectorGroupKeyProvider);
+                previousCloseCache, sectorGroupKeyProvider);
     }
 
     /**
@@ -705,6 +706,15 @@ public class BeanConfiguration {
     @Bean
     public MarketHoursCache marketHoursCache() {
         return new MarketHoursCache();
+    }
+
+    /**
+     * Shared the same way as the calendars, and for the same reason: the Day Δ baseline the Live
+     * tab renders has to be the one the intraday pass just read off the feed.
+     */
+    @Bean
+    public PreviousCloseCache previousCloseCache() {
+        return new PreviousCloseCache();
     }
 
     @Bean
@@ -800,9 +810,11 @@ public class BeanConfiguration {
                                                        YahooPriceFetcher yahooPriceFetcher,
                                                        YahooTickerMap yahooTickerMap,
                                                        KeyValueStore keyValueStore,
-                                                       MarketHoursCache marketHoursCache) {
+                                                       MarketHoursCache marketHoursCache,
+                                                       PreviousCloseCache previousCloseCache) {
         return new IntradayPriceFetchJob(cashTransactionRepository, intradayPriceRepository,
-                yahooPriceFetcher, yahooTickerMap, keyValueStore, marketHoursCache);
+                yahooPriceFetcher, yahooTickerMap, keyValueStore, marketHoursCache,
+                previousCloseCache);
     }
 
 

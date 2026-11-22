@@ -29,7 +29,8 @@ import java.util.Set;
  * <p>Bars are fetched <em>including</em> pre/post-market minutes and stored tagged with their
  * session; each response's trading calendar is stashed in {@link MarketHoursCache} on the way
  * past. Readers that want regular hours only get them by default — see
- * {@link IntradayPriceRepository#loadLatestIntradayPrices}.
+ * {@link IntradayPriceRepository#loadLatestIntradayPrices}. The same response's previous-session
+ * close is stashed in {@link PreviousCloseCache}, which is the Day Δ baseline.
  */
 public class IntradayPriceFetchJob {
 
@@ -56,16 +57,18 @@ public class IntradayPriceFetchJob {
     private final YahooTickerMap tickers;
     private final KeyValueStore kv;
     private final MarketHoursCache marketHours;
+    private final PreviousCloseCache prevCloses;
 
     public IntradayPriceFetchJob(CashTransactionRepository cashRepo, IntradayPriceRepository intradayRepo,
                                  YahooPriceFetcher fetcher, YahooTickerMap tickers, KeyValueStore kv,
-                                 MarketHoursCache marketHours) {
+                                 MarketHoursCache marketHours, PreviousCloseCache prevCloses) {
         this.cashRepo = cashRepo;
         this.intradayRepo = intradayRepo;
         this.fetcher = fetcher;
         this.tickers = tickers;
         this.kv = kv;
         this.marketHours = marketHours;
+        this.prevCloses = prevCloses;
     }
 
     /** Day the retention prune last ran — rows only age out daily, so scanning every tick is waste. */
@@ -137,6 +140,10 @@ public class IntradayPriceFetchJob {
         // nothing and is what lets the Live tab say "market closed" rather than infer it from a
         // quiet quote (a thinly-traded listing can go 40 minutes without a print mid-session).
         marketHours.put(snap.hours());
+        // So does the previous session's close, which the Live tab measures Day Δ against. Taking
+        // the feed's own figure is what stops the column falling back on whatever bar price_history
+        // happens to end on when the daily job is behind — a gap no calendar arithmetic can spot.
+        prevCloses.put(snap.prevClose());
         List<IntradayBar> bars = snap.bars();
         int saved = intradayRepo.saveIntradayBars(bars);
         log.info("Intraday {} — {} bars ({} new)", ticker, bars.size(), saved);

@@ -8,6 +8,7 @@ import com.portfolio.domain.model.Account;
 import com.portfolio.domain.model.CashTransaction;
 import com.portfolio.domain.model.IntradayPrice;
 import com.portfolio.domain.model.MarketState;
+import com.portfolio.domain.model.PreviousClose;
 import com.portfolio.domain.model.PriceBar;
 import com.portfolio.persistence.CashTransactionRepository;
 import com.portfolio.persistence.CashTransactionRepository.CashBalance;
@@ -38,17 +39,27 @@ import java.util.Set;
  * — the SSE controller calls {@link #snapshot()} every {@code TICK_SECONDS}, and
  * the FX endpoint shouldn't be poked that often.
  *
- * <p><b>Day change is measured against the last close before the quote's own trading day</b>,
- * not before the calendar day. The distinction is the whole correctness of the column. A US
- * listing viewed from London at 09:00 has a newest quote belonging to <em>yesterday's</em> US
- * session, so "the close before calendar yesterday" is that very same session's close and the
- * column silently compares a price against itself. On 2026-08-20 that read MRNA — up 177% the
- * previous session — as +12.13%, because the stored 19 Aug "close" was a mid-session snapshot
- * the 22:00 job had not yet overwritten and the quote was the real 19 Aug close. Anchoring on
- * {@link IntradayPrice#tradingDay()} fixes both halves at once: a partial bar for the quote's
- * own day can never be the baseline, and the baseline is always the prior session.
+ * <p><b>Day change is measured against the feed's own previous close</b>, read from
+ * {@code meta.previousClose} on the intraday response and held in {@link PreviousCloseCache}.
+ * The feed states the number; nothing here deduces it. That matters because the obvious local
+ * answer — the newest stored bar before the quote's trading day — is not a prior close at all
+ * when the daily job is behind. On 2026-11-22 it had last run on the 18th, so EQQQ's baseline
+ * was Monday's close against Friday's quote and the column read −6.40% for a −5.56% day;
+ * every row's Day Δ equalled its 5d % because both landed on the same stale bar, and no
+ * calendar distance can tell the two apart — a Monday quote is three days after Friday's close
+ * whether the history is whole or four sessions short.
  *
- * <p>Prev-close currency matches the listing currency in the intraday feed, so {@code GBp}
+ * <p><b>A baseline we cannot vouch for is no baseline.</b> With no usable figure from the feed
+ * the stored close is used only when {@code price_history} already holds a bar for the quote's
+ * own trading day: that bar is what proves the series runs right up to the quote, so the bar
+ * before it is the prior session by construction rather than by assumption. It is how gilts
+ * keep a Day Δ — their daily bar is upserted by the same hourly scrape that quotes them — and
+ * how the 2026-08-20 MRNA +12.13% stays fixed, since the baseline is still the close before
+ * {@link IntradayPrice#tradingDay()} and never a partial bar for the quote's own day. Otherwise
+ * the cell is null and the symbol is named in {@code Snapshot.missingDayBaseline}, excluded
+ * from the day totals as well as from its own row.
+ *
+ * <p>Baseline currency matches the listing currency in the intraday feed, so {@code GBp}
  * pence prices cancel cleanly when divided. The trailing 5d…6M columns are calendar-anchored
  * against the live quote, so they all include the current move and can never disagree with the
  * Day Δ column about how far the name has come.
@@ -72,6 +83,7 @@ public class LivePricesService {
     private final FxRateProvider fxRateProvider;
     private final YahooTickerMap tickerMap;
     private final MarketHoursCache marketHours;
+    private final PreviousCloseCache prevCloses;
     private final SectorGroupKeyProvider sectorKeys;
 
     private volatile Map<String, BigDecimal> cachedRates = Map.of();
@@ -83,6 +95,7 @@ public class LivePricesService {
                              FxRateProvider fxRateProvider,
                              YahooTickerMap tickerMap,
                              MarketHoursCache marketHours,
+                             PreviousCloseCache prevCloses,
                              SectorGroupKeyProvider sectorKeys) {
         this.repo = repo;
         this.intraday = intraday;
@@ -90,6 +103,7 @@ public class LivePricesService {
         this.fxRateProvider = fxRateProvider;
         this.tickerMap = tickerMap;
         this.marketHours = marketHours;
+        this.prevCloses = prevCloses;
         this.sectorKeys = sectorKeys;
     }
 
@@ -118,7 +132,7 @@ public class LivePricesService {
         // every window's near end is the live intraday quote, so today's move is inside all of
         // them (see PriceMomentum.changeFromLive).
         Set<String> tickers = new HashSet<>(tickerBySymbol.values());
-        Map<String, PriceBar> prevByTicker = previousCloses(tickers, latestByTicker, today);
+        DayAnchors anchors = dayAnchors(tickers, latestByTicker, today);
         Map<String, PriceBar> base5 = history.loadPricesAsOf(tickers, today.minusDays(5));
         Map<String, PriceBar> base10 = history.loadPricesAsOf(tickers, today.minusDays(10));
         Map<String, PriceBar> base30 = history.loadPricesAsOf(tickers, today.minusDays(30));
@@ -129,6 +143,7 @@ public class LivePricesService {
         BigDecimal totalDayGbp = BigDecimal.ZERO;
         BigDecimal prevPosTotalGbp = BigDecimal.ZERO;
         List<Row> outRows = new ArrayList<>();
+        List<String> noBaseline = new ArrayList<>();
         Instant latestTs = Instant.EPOCH;
         Instant now = Instant.now();
 
@@ -138,13 +153,14 @@ public class LivePricesService {
             if (ticker == null) continue;
             IntradayPrice ip = latestByTicker.get(ticker);
             if (ip == null) continue;
-            PriceBar prev = prevByTicker.get(ticker);
+            DayBase base = anchors.baselineFor(ticker, prevCloses);
+            if (base == null) noBaseline.add(p.securityId());
 
             Currency ccy = resolveCurrency(p, ip);
             BigDecimal lastGbp = realtimeGbp(p.securityId(), ccy, p.quantity(),
                     BigDecimal.valueOf(ip.close()), ip.currency(), rates);
-            BigDecimal prevGbp = (prev != null) ? realtimeGbp(p.securityId(), ccy, p.quantity(),
-                    BigDecimal.valueOf(prev.close()), prev.currency(), rates) : null;
+            BigDecimal prevGbp = (base != null) ? realtimeGbp(p.securityId(), ccy, p.quantity(),
+                    base.price(), base.currency(), rates) : null;
             BigDecimal lastPriceDisplay = priceForDisplay(
                     BigDecimal.valueOf(ip.close()), ip.currency(), ccy);
 
@@ -198,7 +214,7 @@ public class LivePricesService {
 
         return new Snapshot(outRows, totals, Instant.now(),
                 latestTs == Instant.EPOCH ? null : latestTs,
-                sectorGroups(outRows));
+                sectorGroups(outRows), false, List.copyOf(noBaseline));
     }
 
     /**
@@ -226,29 +242,74 @@ public class LivePricesService {
         }
     }
 
+    /** One Day Δ baseline: a price in the listing currency it was quoted in. */
+    private record DayBase(BigDecimal price, String currency) {
+    }
+
     /**
-     * The last daily close strictly before each quote's own trading day — the Day Δ baseline.
+     * What {@code price_history} can offer as a Day Δ baseline, and for which tickers it may be
+     * believed.
+     *
+     * @param prior      the last stored close strictly before each quote's own trading day
+     * @param reachesDay the tickers whose stored history holds a bar <em>for</em> that trading
+     *                   day — the only ones whose {@code prior} is demonstrably the session
+     *                   before the quote rather than the far side of a gap in the data
+     */
+    private record DayAnchors(Map<String, PriceBar> prior, Set<String> reachesDay) {
+
+        /**
+         * The baseline for one ticker: the feed's own previous close, else the stored close when
+         * the history vouches for it, else none at all.
+         *
+         * <p>The order is not a preference between two equal sources. {@code meta.previousClose}
+         * is the exchange's figure for the session before the one being quoted and arrives with
+         * every intraday pass, so it is right even mid-session, when no daily bar for today
+         * exists yet and the stored path has nothing to say.
+         */
+        DayBase baselineFor(String ticker, PreviousCloseCache cache) {
+            PreviousClose fed = (cache == null) ? null : cache.get(ticker);
+            if (fed != null) return new DayBase(BigDecimal.valueOf(fed.close()), fed.currency());
+            PriceBar stored = prior.get(ticker);
+            if (stored == null || !reachesDay.contains(ticker)) return null;
+            return new DayBase(BigDecimal.valueOf(stored.close()), stored.currency());
+        }
+    }
+
+    /**
+     * The stored side of the Day Δ baseline: the last daily close strictly before each quote's
+     * own trading day, plus which of those closes the history is complete enough to vouch for.
      *
      * <p>Grouped by trading day rather than queried per ticker: the whole book spans two or three
      * distinct sessions at most (a London morning has US names on yesterday's session and LSE
-     * names on today's), so this is two or three bulk queries on the 15s SSE tick, not one per
+     * names on today's), so this is a couple of bulk queries on the 15s SSE tick, not one per
      * position. Tickers with no quote fall back to the calendar boundary so a position still
      * gets a baseline.
+     *
+     * <p>The second query is what separates "the prior session" from "the last bar we happen to
+     * hold". {@code loadPricesAsOf} answers "newest bar at or before this date" and so always
+     * answers <em>something</em>; asking it for the trading day itself and checking the bar
+     * really is dated that day proves the series runs up to the quote, which makes the bar
+     * before it the prior session with nothing inferred.
      */
-    private Map<String, PriceBar> previousCloses(Set<String> tickers,
-                                                 Map<String, IntradayPrice> quotes,
-                                                 LocalDate today) {
+    private DayAnchors dayAnchors(Set<String> tickers,
+                                  Map<String, IntradayPrice> quotes,
+                                  LocalDate today) {
         Map<LocalDate, Set<String>> byTradingDay = new LinkedHashMap<>();
         for (String t : tickers) {
             IntradayPrice ip = quotes.get(t);
             LocalDate day = (ip != null) ? ip.tradingDay() : today;
             byTradingDay.computeIfAbsent(day, d -> new HashSet<>()).add(t);
         }
-        Map<String, PriceBar> out = new java.util.HashMap<>();
+        Map<String, PriceBar> prior = new java.util.HashMap<>();
+        Set<String> reachesDay = new HashSet<>();
         for (Map.Entry<LocalDate, Set<String>> e : byTradingDay.entrySet()) {
-            out.putAll(history.loadPricesAsOf(e.getValue(), e.getKey().minusDays(1)));
+            LocalDate day = e.getKey();
+            prior.putAll(history.loadPricesAsOf(e.getValue(), day.minusDays(1)));
+            history.loadPricesAsOf(e.getValue(), day).forEach((ticker, bar) -> {
+                if (day.equals(bar.date())) reachesDay.add(ticker);
+            });
         }
-        return out;
+        return new DayAnchors(prior, reachesDay);
     }
 
     /**
@@ -358,7 +419,14 @@ public class LivePricesService {
              * say the figures are still arriving. Set by the controller on the way out rather than
              * computed here: it is a fact about the process, not about the prices in this snapshot.
              */
-            boolean catchingUp) {
+            boolean catchingUp,
+            /**
+             * Symbols whose day move could not be established, named rather than absorbed. Their
+             * rows still carry a price and every trailing column — only the two Day Δ cells are
+             * blank, and the day totals are struck without them, so the tile stays the sum of
+             * what is on screen.
+             */
+            List<String> missingDayBaseline) {
 
         /**
          * Back-compatible form for callers with no grouping to supply — the Excel export builds
@@ -372,12 +440,13 @@ public class LivePricesService {
         /** The snapshot as the service builds it; the catch-up flag is stamped on afterwards. */
         public Snapshot(List<Row> rows, Totals totals, Instant generatedAt, Instant latestPriceAt,
                         List<LiveGroup> groups) {
-            this(rows, totals, generatedAt, latestPriceAt, groups, false);
+            this(rows, totals, generatedAt, latestPriceAt, groups, false, List.of());
         }
 
         /** This snapshot, saying whether a catch-up is in flight behind it. */
         public Snapshot withCatchUp(boolean inFlight) {
-            return new Snapshot(rows, totals, generatedAt, latestPriceAt, groups, inFlight);
+            return new Snapshot(rows, totals, generatedAt, latestPriceAt, groups, inFlight,
+                    missingDayBaseline);
         }
     }
 

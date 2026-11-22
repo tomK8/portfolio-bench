@@ -39,7 +39,7 @@ class IntradayPriceFetchJobTest {
             requested.add(ticker);
             requestedFrom.put(ticker, from);
             return new YahooPriceFetcher.IntradaySnapshot(
-                    canned.getOrDefault(ticker, List.of()), null);
+                    canned.getOrDefault(ticker, List.of()), null, null);
         }
     }
 
@@ -71,7 +71,7 @@ class IntradayPriceFetchJobTest {
                 new IntradayBar("AAPL", t0, 190.10, 1000L, "USD"),
                 new IntradayBar("AAPL", t0.plusSeconds(60), 190.25, 900L, "USD")));
 
-        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir), new MarketHoursCache()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir), new MarketHoursCache(), new PreviousCloseCache()).run();
 
         assertTrue(fetcher.requested.contains("AAPL"), "AAPL was fetched");
         assertTrue(fetcher.requested.stream().noneMatch(t -> t.toUpperCase().startsWith("GILT")),
@@ -90,7 +90,7 @@ class IntradayPriceFetchJobTest {
         intraday.saveIntradayBars(List.of(new IntradayBar("AAPL", lastSeen, 100.0, null, "USD")));
 
         FakeFetcher fetcher = new FakeFetcher();
-        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir), new MarketHoursCache()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir), new MarketHoursCache(), new PreviousCloseCache()).run();
 
         assertEquals(lastSeen.plusSeconds(60), fetcher.requestedFrom.get("AAPL"),
                 "incremental fetch starts from the bar immediately after the last stored one");
@@ -104,7 +104,7 @@ class IntradayPriceFetchJobTest {
 
         FakeFetcher fetcher = new FakeFetcher();
         Instant before = Instant.now();
-        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir), new MarketHoursCache()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir), new MarketHoursCache(), new PreviousCloseCache()).run();
         Instant after = Instant.now();
 
         Instant from = fetcher.requestedFrom.get("AAPL");
@@ -129,7 +129,7 @@ class IntradayPriceFetchJobTest {
         kv.putStringSet("held_symbols", List.of("AAPL", "MU"));
 
         FakeFetcher fetcher = new FakeFetcher();
-        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), kv, new MarketHoursCache()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), kv, new MarketHoursCache(), new PreviousCloseCache()).run();
 
         assertTrue(fetcher.requested.contains("MU"),
                 "MU from the synced holdings set should be in the fetch universe even with no MU ledger row");
@@ -148,7 +148,7 @@ class IntradayPriceFetchJobTest {
         kv.putStringSet("held_symbols", List.of("AAPL", "MU"));
 
         FakeFetcher fetcher = new FakeFetcher();
-        IntradayPriceFetchJob job = new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), kv, new MarketHoursCache());
+        IntradayPriceFetchJob job = new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), kv, new MarketHoursCache(), new PreviousCloseCache());
 
         Thread.currentThread().interrupt();
         try {
@@ -172,7 +172,7 @@ class IntradayPriceFetchJobTest {
                 new IntradayBar("AAPL", fresh, 2.0, null, "USD")));
 
         FakeFetcher fetcher = new FakeFetcher();   // no new bars
-        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir), new MarketHoursCache()).run();
+        new IntradayPriceFetchJob(cash, intraday, fetcher, new YahooTickerMap(), new KeyValueStore(dbDir), new MarketHoursCache(), new PreviousCloseCache()).run();
 
         Instant remaining = intraday.getLatestIntradayTs("AAPL");
         assertEquals(fresh, remaining, "fresh row remains");

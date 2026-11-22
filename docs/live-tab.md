@@ -32,17 +32,41 @@ on last night's close. The extra minutes are **labelled, never blended**:
   would hide the official close from every regular-hours reader and stop the portfolio being able
   to value a position from its own closing price.
 
-**Day Δ is anchored on the quote's trading day, not the calendar day** — this is the whole
-correctness of the column. A US listing viewed from London at 09:00 has a newest quote belonging to
-*yesterday's* US session, so "the close before calendar yesterday" is that same session's close and
-the column compares a price against itself. Worse, `price_history` can hold a **partial** bar for
-that session: `PriceFetchJob` re-fetches the latest stored day precisely because Yahoo reports an
-in-progress session's current price as `close`, and it relies on the 22:00 cron to overwrite it. On
-2026-08-20 that cron had not run, so MRNA — up 177% the previous session — read **+12.13%**: the
-real 19 Aug close (174.38) over a 13:33 snapshot of the same day (155.51). `previousCloses()` groups
-tickers by `IntradayPrice.tradingDay()` and asks for the close before *that*, which fixes both
-halves at once. It is two or three bulk queries per tick (a London morning has US names on one
-session and LSE names on another), not one per position.
+**Day Δ is measured against the feed's own previous close.** `meta.previousClose` rides on the same
+intraday response the job already makes, so `PreviousCloseCache` is filled for every ticker on every
+pass at no extra HTTP — the sibling of `MarketHoursCache`, in memory for the same reason (a previous
+close belongs to one session, so one that outlived a restart would be a day stale) and with the same
+6h staleness bound. It is **not** `meta.chartPreviousClose`, which is the close before the
+*requested range* and for this job's short window comes back equal to the current price.
+
+**The local answer is not available, which is why the feed's is used.** `price_history`'s
+`loadPricesAsOf` answers "newest bar at or before date D" and therefore always answers *something*.
+On 2026-11-22 the daily job had last completed on the 18th, so for 113 of ~190 tickers the close
+before the quote's trading day and the close 5 calendar days back resolved to the **same bar**:
+every row's Day Δ equalled its 5d % to the basis point — EQQQ read −6.40% for a day that was −5.56%,
+BARC −7.16% for −3.33% — and the Day change tile was out by tens of thousands of pounds. No
+threshold can separate the two cases: a Monday quote is three calendar days after Friday's close
+whether the history is whole or four sessions short.
+
+**With no feed figure, the stored close is used only when the history reaches the quote's trading
+day** — i.e. `price_history` holds a bar dated that day, which proves the series runs up to the
+quote and makes the bar before it the prior session by construction. That is the state a gilt is
+always in (the hourly HL scrape upserts its daily bar as it quotes it) and every equity is in after
+the evening close job. Otherwise the two Day Δ cells are blank, the symbol is named in
+`Snapshot.missingDayBaseline`, a strip above the table lists them, and the day totals are struck
+without them so the tile stays the sum of what the column shows.
+
+**The trading-day anchor still governs the stored path**, and still matters. A US listing viewed
+from London at 09:00 has a newest quote belonging to *yesterday's* US session, so "the close before
+calendar yesterday" is that same session's close and the column would compare a price against
+itself. Worse, `price_history` can hold a **partial** bar for that session: `PriceFetchJob`
+re-fetches the latest stored day precisely because Yahoo reports an in-progress session's current
+price as `close`, and it relies on the 22:00 cron to overwrite it. On 2026-08-20 that cron had not
+run, so MRNA — up 177% the previous session — read **+12.13%**: the real 19 Aug close (174.38) over
+a 13:33 snapshot of the same day (155.51). `dayAnchors()` groups tickers by
+`IntradayPrice.tradingDay()` and asks for the close before *that*, plus one bar *on* that day for
+the vouching check above. Two bulk queries per distinct session per tick (a London morning has US
+names on one and LSE names on another), not one per position.
 
 **Market state per row** (`OPEN`/`PRE`/`POST`/`CLOSED`/`UNKNOWN`) drives the row shading — a closed
 listing is dimmed so last night's close reads as settled data rather than a live quote that has

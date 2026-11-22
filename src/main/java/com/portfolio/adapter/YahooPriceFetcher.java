@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.portfolio.domain.model.IntradayBar;
 import com.portfolio.domain.model.MarketHours;
 import com.portfolio.domain.model.MarketSession;
+import com.portfolio.domain.model.PreviousClose;
 import com.portfolio.domain.model.PriceBar;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -472,10 +473,14 @@ public class YahooPriceFetcher {
         }
     }
 
-    /** The bars and the day's trading windows from one intraday response. */
-    public record IntradaySnapshot(List<IntradayBar> bars, MarketHours hours) {
+    /**
+     * The bars, the day's trading windows and the previous-session close from one intraday
+     * response. All three ride on a request the caller already makes, so the two meta facts
+     * cost no extra HTTP.
+     */
+    public record IntradaySnapshot(List<IntradayBar> bars, MarketHours hours, PreviousClose prevClose) {
         static IntradaySnapshot empty() {
-            return new IntradaySnapshot(List.of(), null);
+            return new IntradaySnapshot(List.of(), null, null);
         }
     }
 
@@ -506,7 +511,28 @@ public class YahooPriceFetcher {
             SessionCalendar.Slot slot = cal.classify(epoch);
             bars.add(new IntradayBar(ticker, t, c, volume, currency, slot.session(), slot.day()));
         }
-        return new IntradaySnapshot(bars, parseMarketHours(ticker, meta));
+        return new IntradaySnapshot(bars, parseMarketHours(ticker, meta),
+                parsePreviousClose(ticker, meta, currency));
+    }
+
+    /**
+     * The previous session's close from {@code meta.previousClose} — the feed's own word for the
+     * Day Δ baseline, in the same currency as the bars beside it.
+     *
+     * <p>Not {@code chartPreviousClose}, which is the close before the <em>requested range</em>
+     * and therefore moves with {@code period1}: for the short window this job asks for it comes
+     * back equal to the current price, which would render every day move as zero.
+     *
+     * <p>Null when absent or non-positive. A missing previous close is "we were not told",
+     * which the caller must be able to tell from a real one — a zero would read as a listing
+     * that closed at nothing and make every Day Δ infinite.
+     */
+    private static PreviousClose parsePreviousClose(String ticker, JsonNode meta, String currency) {
+        JsonNode pc = meta.path("previousClose");
+        if (!pc.isNumber()) return null;
+        double close = pc.asDouble();
+        if (!(close > 0)) return null;
+        return new PreviousClose(ticker, close, currency, Instant.now());
     }
 
     /**

@@ -8,6 +8,8 @@
           "gmtoffset": -14400,
           "exchangeTimezoneName": "America/New_York",
           "hasPrePostMarketData": true,
+          "previousClose": 62.96,
+          "chartPreviousClose": 174.38,
           "currentTradingPeriod": {
             "pre":     { "start": 1787212800, "end": 1787232600, "gmtoffset": -14400 },
             "regular": { "start": 1787232600, "end": 1787256000, "gmtoffset": -14400 },

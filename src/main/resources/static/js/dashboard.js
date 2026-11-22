@@ -6755,7 +6755,27 @@
                       'fill in as they land.</div>'
                     : '';
             }
+            renderLiveNoBaseline(snap.missingDayBaseline);
             return changed;
+        }
+
+        /**
+         * The symbols with no previous close to measure today against. Both Day \u0394 cells are
+         * blank for them and the day totals are struck without them, so the strip is what keeps
+         * the tile reconcilable against the column: it says which rows are not in it.
+         */
+        function renderLiveNoBaseline(symbols) {
+            var el = document.getElementById('live-nobaseline');
+            if (!el) return;
+            if (!symbols || !symbols.length) { el.innerHTML = ''; return; }
+            var names = symbols.map(function (s) { return '<code>' + s + '</code>'; }).join(', ');
+            el.innerHTML = '<div class="mo-banner"><b>No day baseline for ' + symbols.length +
+                ' position' + (symbols.length === 1 ? '' : 's') + ':</b> ' + names +
+                '. Yahoo has not served a previous close for these since the app started, and ' +
+                '<code>price_history</code> does not reach their quote\u2019s trading day \u2014 ' +
+                'so the last stored close could be the session before or a week before, and ' +
+                'nothing here can tell which. Day \u0394 is left blank for them and they are out ' +
+                'of the Day change tile; every other column is unaffected.</div>';
         }
 
         function applyLiveTotals(t) {

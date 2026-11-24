@@ -166,3 +166,12 @@ read intraday.
 [allocation-breakdowns.md](allocation-breakdowns.md). Restarting the app appeared to fix it,
 because `onStartup` re-ran the fetch; the gap reopened as soon as the market moved again, which is
 the shape of every bug whose repair is a restart.
+
+**The late 10:26 run was the cron drifting, and it came back.** A `fixedDelay` and a `cron` are
+both armed in `System.nanoTime`, which macOS stops while the machine is suspended, so every
+sleep pushes the next fire later by the length of the sleep and a 22:00 job wanders into the
+morning. It wandered off the end on 2026-11-22: four consecutive evenings with no pass at all
+while the app ran throughout, which is the stale `price_history` behind the Day Δ incident in
+[live-tab.md](live-tab.md). `daily()` is now due-checked every 30 minutes — "has a pass completed
+since the most recent 22:00 London?" — so a missed evening is owed rather than lost, and the
+answer does not depend on the process having been awake at a particular instant.

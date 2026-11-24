@@ -61,7 +61,7 @@ from London at 09:00 has a newest quote belonging to *yesterday's* US session, s
 calendar yesterday" is that same session's close and the column would compare a price against
 itself. Worse, `price_history` can hold a **partial** bar for that session: `PriceFetchJob`
 re-fetches the latest stored day precisely because Yahoo reports an in-progress session's current
-price as `close`, and it relies on the 22:00 cron to overwrite it. On 2026-08-20 that cron had not
+price as `close`, and it relies on the evening run to overwrite it. On 2026-08-20 that cron had not
 run, so MRNA — up 177% the previous session — read **+12.13%**: the real 19 Aug close (174.38) over
 a 13:33 snapshot of the same day (155.51). `dayAnchors()` groups tickers by
 `IntradayPrice.tradingDay()` and asks for the close before *that*, plus one bar *on* that day for

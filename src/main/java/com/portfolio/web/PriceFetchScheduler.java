@@ -25,10 +25,13 @@ import java.time.LocalDate;
 
 /**
  * Thin Spring trigger for the framework-free price jobs. All three fire on startup (off the main
- * thread, so a first-run backfill doesn't delay the web UI). The daily Yahoo job runs each
- * evening after the US market close; the intraday Yahoo job runs every minute thereafter so
- * the Live tab feels live; the gilt scrape runs hourly because the HL gilt page itself doesn't
- * update faster.
+ * thread, so a first-run backfill doesn't delay the web UI). The daily Yahoo job asks every half
+ * hour whether the evening's closes are still owed, so an evening the laptop slept through is
+ * caught the moment it wakes; the intraday Yahoo job runs every minute so the Live tab feels
+ * live; the gilt scrape runs hourly because the HL gilt page itself doesn't update faster.
+ *
+ * <p><b>Nothing here is on a calendar cron.</b> Each one asks whether its work is owed —
+ * see each method for the incident that taught it.
  */
 @Component
 public class PriceFetchScheduler {
@@ -93,7 +96,7 @@ public class PriceFetchScheduler {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onStartup() {
-        startDaemon("price-fetch-startup", this::runQuietly);
+        startDaemon("price-fetch-startup", this::runIfDueQuietly);
         startDaemon("price-fetch-intraday-startup", this::intradayQuietly);
         startDaemon("price-fetch-gilt-startup", this::giltQuietly);
         startDaemon("gilt-prices-import-startup", this::giltImportQuietly);
@@ -127,9 +130,23 @@ public class PriceFetchScheduler {
         backupIfDue();
     }
 
-    @Scheduled(cron = "0 0 22 * * *", zone = "Europe/London")
+    /**
+     * Capture the evening's closes, checked every half hour rather than fired by a 22:00 cron.
+     *
+     * <p>Same reasoning as the backup and the reminders, and the same failure when it was missing.
+     * A {@code cron} fires for an instant, not for a day: it does not run for an evening the
+     * machine slept through, and nothing afterwards notices. On 2026-11-22 the job had last
+     * completed on the 18th with the app running the whole time, so 113 of ~190 tickers held
+     * closes four to six days old and the Live tab's Day Δ was reading a four-session move —
+     * every row's day change equal to its 5d change, because both resolved to the same stale bar.
+     *
+     * <p>{@code runIfDue} owns the question of whether this evening is still uncovered, so the
+     * cadence here only buys latency: the closes land within half an hour of the laptop next
+     * being opened, and a tick with nothing owing is one file read.
+     */
+    @Scheduled(fixedDelay = 30 * 60 * 1000, initialDelay = 30 * 60 * 1000)
     public void daily() {
-        runQuietly();
+        runIfDueQuietly();
     }
 
     /**
@@ -256,9 +273,18 @@ public class PriceFetchScheduler {
         }
     }
 
-    private void runQuietly() {
+    /**
+     * A daily pass, run only if the evening's closes are still owed.
+     *
+     * <p>There is no ungated variant any more and no caller wanted one: the startup path goes
+     * through this too, which stops a restart costing a full Yahoo pass over ~120 tickers for
+     * closes already stored — while still repairing on the one restart that matters, the one
+     * after the machine has been shut past an evening. A deliberate refetch is
+     * {@code runFullRebuild} or {@code fetchSingle}, both reached from the Operations tab.
+     */
+    private void runIfDueQuietly() {
         try {
-            job.run();
+            job.runIfDue();
         } catch (RuntimeException e) {
             log.warn("Price fetch run failed", e);
         }

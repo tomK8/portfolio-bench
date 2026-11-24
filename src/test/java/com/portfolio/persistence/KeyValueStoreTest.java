@@ -61,6 +61,20 @@ class KeyValueStoreTest {
     }
 
     @Test
+    void instantRoundTripsAndIsNullWhenUnreadable() throws Exception {
+        KeyValueStore kv = new KeyValueStore(dir);
+        java.time.Instant at = java.time.Instant.parse("2026-11-22T22:04:00Z");
+        kv.putInstant("price_fetch_last_completed", at);
+        assertEquals(at, kv.getInstant("price_fetch_last_completed"));
+
+        // Null, never the epoch: "this has never run" and "this ran in 1970" lead to opposite
+        // decisions, and only one of them is true.
+        assertNull(kv.getInstant("never_written"));
+        Files.writeString(dir.resolve("price_fetch_last_completed.txt"), "yesterday evening");
+        assertNull(kv.getInstant("price_fetch_last_completed"));
+    }
+
+    @Test
     void stringMapRoundTripsAndSkipsMalformedLines() throws Exception {
         // The values here are gilt ids, which carry spaces and a '%' — a line format that split
         // on whitespace would mangle them, so the split is on the first '=' only.

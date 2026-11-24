@@ -109,6 +109,10 @@ These recur across unrelated features. Breaking one is how the recorded incident
 - **Every lazy chart loader ends in a `.catch`** that releases its own latch and calls
   `panelLoadFailed(id, err, retryFn)`; the paired `clearPanelError(id)` goes right after the latch.
   `addEventListener` inside a loader must go through `bindOnce`.
+- **Due-checked, never cron'd.** No scheduled job fires on a calendar instant. Each asks whether
+  its work is owed — "is the newest archive a month old?", "has a pass completed since the last
+  22:00?" — because this laptop is usually asleep at any instant you could name, and a cron does
+  not run for the day it slept through.
 - **Self-regulating over maintained.** Reject hand-written data tables when a live source publishes
   the same fact (gilt SEDOLs from HL, fund sector weights from Yahoo, CIKs from SEC). A maintained
   list can only ever be wrong, never right.

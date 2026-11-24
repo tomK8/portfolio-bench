@@ -75,6 +75,11 @@ public class CatchUpService {
     /**
      * The steps are in the order the Live tab needs them.
      *
+     * <p>The daily step asks for the closes rather than taking them: {@code runIfDue} declines
+     * when the evening is already covered, so a catch-up triggered by a hang rather than a sleep
+     * costs no Yahoo pass, and one triggered by a sleep that crossed an evening stamps the same
+     * marker the scheduler reads — so the repair and the schedule do not duplicate each other.
+     *
      * <p><b>Daily bars first, before the prices they are judged against.</b> Day Δ is a quote over
      * the close before that quote's trading day, so while {@code price_history} still ends on
      * Wednesday every row would read a three-day move as today's — the same shape as the MRNA
@@ -85,7 +90,7 @@ public class CatchUpService {
      */
     public CatchUpService(PriceFetchJob dailyJob, IntradayPriceFetchJob intradayJob,
                           GiltPriceFetchJob giltJob) {
-        this(List.of(new Step("daily bars", dailyJob::run),
+        this(List.of(new Step("daily bars", dailyJob::runIfDue),
                         new Step("intraday prices", intradayJob::run),
                         new Step("gilt prices", giltJob::run)),
                 DORMANT_AFTER, System::currentTimeMillis);

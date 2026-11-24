@@ -188,8 +188,9 @@ invested.
 **History is daily closes; today is the live quote.** The replay values each sample from
 `price_history` at `floorEntry(sample)`, which is right for every past sample and wrong for the
 only one anybody watches. `price_history`'s newest bar is as fresh as the last `PriceFetchJob`
-run, and that is a **22:00 cron** (`PriceFetchScheduler.daily()`): for the whole trading day it
-holds either last night's close or a partial bar frozen at whenever the job happened to fire. So
+run, and that runs **after the evening close** (`PriceFetchScheduler.daily()` → `runIfDue`): for
+the whole trading day it holds either last night's close or a partial bar frozen at whenever the
+job happened to fire. So
 `snapshot()` takes a `live` map — non-empty for the today sample only — and `positionGbp` prefers
 it over the bar. Three rules make that safe:
 

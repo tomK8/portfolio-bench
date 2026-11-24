@@ -11,10 +11,14 @@ import com.portfolio.persistence.PriceHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Maintains the local {@code price_history} table from Yahoo Finance. Driven by every symbol
@@ -29,6 +33,17 @@ public class PriceFetchJob {
 
     private static final Logger log = LoggerFactory.getLogger(PriceFetchJob.class);
 
+    /**
+     * When the evening's closes become final. 16:00 New York is 21:00 London in both halves of
+     * the year — the two clocks shift together — so 22:00 is an hour after the last US close
+     * whatever the date, and a pass that completes after it has captured real closes rather than
+     * Yahoo's mid-session snapshot of an in-progress day.
+     */
+    static final int CLOSES_FINAL_HOUR = 22;
+    private static final ZoneId LONDON = ZoneId.of("Europe/London");
+    /** When a pass last walked the whole universe, so a missed evening can be noticed. */
+    static final String LAST_RUN_KEY = "price_fetch_last_completed";
+
     private static final int LOOKBACK_YEARS = 30;
     private static final long THROTTLE_MS = 500;   // be polite to Yahoo: ≤1 request / 500ms
     private static final int FRESH_LOOKBACK_DAYS = 4;   // history newer than this skips a re-add backfill
@@ -42,6 +57,17 @@ public class PriceFetchJob {
     private final UnresolvedSymbols unresolved;
     /** Null in tests that only exercise price writes; every dividend write is guarded. */
     private final DividendHistoryRepository divRepo;
+
+    /**
+     * One pass at a time. The trigger asks every 30 minutes whether the evening is owed and the
+     * marker is only stamped when a pass finishes, so a pass still walking the universe — which
+     * on 2026-11-18 took eleven hours against a Yahoo that was timing out — would otherwise have
+     * the next tick start a second one on top of it, and a third after that. Each walks the same
+     * ~120 tickers, so the loser skipping is right: there is nothing for it to do that the pass
+     * already in flight is not doing, and doubling up would break the politeness throttle that
+     * keeps Yahoo serving us at all.
+     */
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     public PriceFetchJob(CashTransactionRepository cashRepo, PriceHistoryRepository priceRepo,
                          YahooPriceFetcher fetcher, YahooTickerMap tickers, KeyValueStore kv) {
@@ -84,7 +110,64 @@ public class PriceFetchJob {
         }
     }
 
+    /**
+     * Run only if this evening's closes have not been captured yet — the trigger this job should
+     * have had all along.
+     *
+     * <p>A {@code cron} at 22:00 assumes the laptop is awake and the app running at 22:00, and
+     * this one usually is not: on 2026-11-22 the job had last completed on the 18th while the app
+     * ran throughout, leaving 113 of ~190 tickers four to six days stale and the Live tab reading
+     * a four-session move as the day's. The same reasoning already moved the backup and the
+     * reminders off calendar triggers; this asks the equivalent question — <em>is the most recent
+     * 22:00 still uncovered?</em> — which a machine that was asleep at 22:00 answers yes to the
+     * moment it wakes, and answers once.
+     *
+     * <p>Over-calling is cheap by construction and under-calling is not, which is why the gate
+     * errs open: the pass is idempotent, re-fetches only from each ticker's latest stored bar, and
+     * skips whatever is already current. A weekend evening therefore costs one pass that writes
+     * almost nothing, and the one day it is wrong about is the day it would otherwise skip.
+     */
+    public void runIfDue() {
+        if (!isDue(Instant.now())) return;
+        run();
+    }
+
+    /** True while a pass is walking the universe. */
+    public boolean isRunning() {
+        return running.get();
+    }
+
+    /** True when no complete pass has finished since the most recent {@link #CLOSES_FINAL_HOUR}. */
+    boolean isDue(Instant now) {
+        Instant last = kv.getInstant(LAST_RUN_KEY);
+        return last == null || last.isBefore(lastClosingTime(now));
+    }
+
+    /**
+     * The most recent {@link #CLOSES_FINAL_HOUR} London strictly before {@code now} — the instant
+     * after which the day's closes are the day's closes. Derived rather than stored so a run on
+     * any schedule, from any trigger, settles the same question.
+     */
+    static Instant lastClosingTime(Instant now) {
+        ZonedDateTime london = now.atZone(LONDON);
+        ZonedDateTime closing = london.toLocalDate().atTime(CLOSES_FINAL_HOUR, 0).atZone(LONDON);
+        if (!closing.toInstant().isBefore(now)) closing = closing.minusDays(1);
+        return closing.toInstant();
+    }
+
     public void run() {
+        if (!running.compareAndSet(false, true)) {
+            log.info("Daily price fetch already in progress — skipping");
+            return;
+        }
+        try {
+            fetchAll();
+        } finally {
+            running.set(false);
+        }
+    }
+
+    private void fetchAll() {
         LocalDate today = LocalDate.now();
         Set<String> tickerSet = PriceFetchSupport.tickersToFetch(cashRepo, tickers, kv);
 
@@ -119,6 +202,11 @@ public class PriceFetchJob {
             }
             PriceFetchSupport.sleep(THROTTLE_MS);
         }
+        // Only here, where the whole universe has been walked. The interrupt above returns
+        // without marking, because a half-finished pass leaves exactly the gap this marker is
+        // there to notice — and an unmarked evening is retried, which costs a pass, while a
+        // wrongly marked one is skipped until tomorrow, which costs a day of closes.
+        kv.putInstant(LAST_RUN_KEY, Instant.now());
     }
 
     /**

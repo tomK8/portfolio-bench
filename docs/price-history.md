@@ -4,7 +4,11 @@
 Two tables, three jobs. `PriceFetchSupport` is shared by the two Yahoo jobs:
 
 - `PriceFetchJob` → `price_history` (daily). First run backfills ~10 years per ticker; later runs
-  fetch the gap to today. Cron 22:00 Europe/London + startup.
+  fetch the gap to today. **Due-checked every 30 min, not cron'd**: `runIfDue` runs a pass only
+  when none has completed since the most recent 22:00 Europe/London, which is an hour after the
+  US close all year. A cron fires for an instant and this laptop is usually asleep at it — on
+  2026-11-22 the job had last completed on the 18th with the app up throughout. Startup goes
+  through the same gate, so a restart costs a pass only when one is owed.
 - `IntradayPriceFetchJob` → `price_intraday` (1-minute closes). **15-day** retention
   (`RETENTION_DAYS`), but the per-tick fetch lookback is capped at `FETCH_LOOKBACK_DAYS` = 7 —
   Yahoo only serves ~7 days of 1-minute history per request, so the 15-day window *accumulates*

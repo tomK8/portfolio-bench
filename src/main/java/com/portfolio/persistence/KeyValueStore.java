@@ -5,6 +5,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
@@ -44,6 +46,32 @@ public class KeyValueStore {
         try {
             Files.createDirectories(dir);
             Files.writeString(dir.resolve(key + ".txt"), value.toPlainString());
+        } catch (IOException e) {
+            log.warn("Could not write setting {}", key, e);
+        }
+    }
+
+    /**
+     * A stored instant, written as ISO-8601 UTC. Null when never written or unreadable, which a
+     * caller must be able to tell from a real timestamp: "this has never run" and "this ran at
+     * the epoch" lead to opposite decisions.
+     */
+    public Instant getInstant(String key) {
+        Path file = dir.resolve(key + ".txt");
+        if (!Files.exists(file)) return null;
+        try {
+            String saved = Files.readString(file).trim();
+            return saved.isEmpty() ? null : Instant.parse(saved);
+        } catch (IOException | DateTimeParseException e) {
+            log.warn("Could not read setting {}", key, e);
+            return null;
+        }
+    }
+
+    public void putInstant(String key, Instant value) {
+        try {
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve(key + ".txt"), value.toString());
         } catch (IOException e) {
             log.warn("Could not write setting {}", key, e);
         }

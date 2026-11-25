@@ -105,3 +105,4 @@ beyond the code, so treat the source as the specification.
 | `GET /momentum-signals`, `POST /momentum-signals/backfill` | MomentumSignals | `MomentumSignalsService` |
 | `GET /range`, `POST /range/backfill` | Range | `RangeAnalysisService` |
 | `GET /`, `/glossary`, `/reference` | Root | dashboard shell + static reference pages |
+| `GET /reference/gilt-yields` | GiltYields | `GiltYieldService` — the 2/5/10/30-year table htmx loads into `/reference`; see [gilts-and-bonds.md](gilts-and-bonds.md) |

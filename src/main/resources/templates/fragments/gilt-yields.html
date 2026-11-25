@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!-- Loaded into the Reference page by htmx (GiltYieldsController). Every cell arrives formatted
+     from GiltYieldService; a null shows as a dash, never as a zero. -->
+<div th:fragment="table">
+    <p class="warn" th:if="${report.error != null and report.rows.isEmpty()}"
+       th:text="${'Gilt yields unavailable — ' + report.error + '. The links below carry the same figures.'}">
+        Gilt yields unavailable</p>
+    <p class="warn" th:if="${report.error != null and !report.rows.isEmpty()}"
+       th:text="${'Could not refresh (' + report.error + ') — showing the figures fetched at ' + report.fetchedAt + '.'}">
+        Could not refresh</p>
+
+    <table class="returns yields" th:unless="${report.rows.isEmpty()}">
+        <thead>
+        <tr>
+            <th>Tenor</th>
+            <th>Yield</th>
+            <th>Day change</th>
+            <th class="text">Benchmark gilt</th>
+            <th class="text">Matures</th>
+            <th class="text">As of (London)</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="r : ${report.rows}">
+            <td><a th:href="${r.url}" target="_blank" rel="noopener" th:text="${r.tenor}">10-year</a></td>
+            <td class="yield" th:text="${r.yield}">4.500%</td>
+            <td th:text="${r.change} ?: '—'"
+                th:title="${r.previousClose != null ? 'from ' + r.previousClose + ' at the previous close' : null}">
+                +1.5 bp</td>
+            <td class="text" th:text="${r.benchmark} ?: '—'">GILT 4.5% 2035</td>
+            <td class="text" th:text="${r.matures} ?: '—'">7 Mar 2035</td>
+            <td class="text" th:text="${r.asOf} ?: '—'">Wed 25 Nov 16:30</td>
+        </tr>
+        </tbody>
+    </table>
+    <p class="footnote" th:if="${!report.missing.isEmpty() and !report.rows.isEmpty()}"
+       th:text="${'No quote from ' + report.source + ' for the ' + #strings.listJoin(report.missing, ', ') + '.'}">
+        No quote for the 30-year.</p>
+    <p class="footnote" th:unless="${report.rows.isEmpty()}">
+        Source: <span th:text="${report.source}">CNBC</span>, fetched at
+        <span th:text="${report.fetchedAt}">00:00:00</span> and refreshed every minute while this
+        page is open. Each tenor is the yield of the gilt the source currently uses as its
+        benchmark, so the "2-year" can be some way past two years — the benchmark's maturity is
+        beside it. A rising yield is a falling price. Each tenor links to its chart.
+    </p>
+</div>
+
+</body>
+</html>

@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8"/>
     <title>Reference · Portfolio Bench</title>
+    <script src="/js/vendor/htmx.min.js"></script>
     <script>
         try {
             var t = localStorage.getItem('portfolio-bench.theme');
@@ -58,6 +59,17 @@
         table.returns td.neg { color: #c0392b; }
         table.returns td.na { color: #bbb; }
         table.returns tr.partial td { font-style: italic; color: #888; }
+        table.returns th.text, table.returns td.text { text-align: left; }
+        table.yields td.yield { font-weight: 600; }
+        table.yields a { color: #1f77b4; text-decoration: none; }
+        table.yields a:hover { text-decoration: underline; }
+
+        .warn {
+            border-left: 4px solid #d08700;
+            background: #fff8e6;
+            padding: 0.4rem 0.75rem;
+            font-size: 0.9rem;
+        }
 
         .footnote {
             color: #888;
@@ -82,6 +94,8 @@
         html[data-theme="dark"] table.returns td.neg { color: #f87171; }
         html[data-theme="dark"] table.returns td.na { color: #6c727b; }
         html[data-theme="dark"] table.returns tr.partial td { color: #6c727b; }
+        html[data-theme="dark"] table.yields a { color: #4a9eff; }
+        html[data-theme="dark"] .warn { background: #2a2410; border-left-color: #b8860b; }
         html[data-theme="dark"] ul.links li { border-bottom-color: #2e3137; }
         html[data-theme="dark"] ul.links a { color: #4a9eff; }
         html[data-theme="dark"] ul.links .desc { color: #9aa0a6; }
@@ -100,8 +114,23 @@
 <h1>Reference</h1>
 <p class="sub">Useful external data and links.</p>
 
+<h2>UK gilt yields</h2>
+<div id="gilt-yields"
+     hx-get="/reference/gilt-yields"
+     hx-trigger="load, every 60s [document.visibilityState === 'visible']">
+    <p class="footnote">Loading gilt yields…</p>
+</div>
+
 <h2>Links</h2>
 <ul class="links">
+    <li>
+        <a href="https://www.bankofengland.co.uk/statistics/yield-curves" target="_blank" rel="noopener">Bank of England — UK yield curves</a>
+        <span class="desc">Official fitted nominal, real and inflation curves at every maturity, end of day, published the next business day.</span>
+    </li>
+    <li>
+        <a href="https://www.worldgovernmentbonds.com/country/united-kingdom/" target="_blank" rel="noopener">World Government Bonds — UK gilt curve</a>
+        <span class="desc">Every tenor from 1 month to 50 years on one page, with history and the curve's shape.</span>
+    </li>
     <li>
         <a href="https://worldperatio.com/index/nasdaq-100/" target="_blank" rel="noopener">worldperatio.com — Nasdaq 100 P/E ratio</a>
         <span class="desc">Aggregate price/earnings ratio for the Nasdaq 100 over time.</span>

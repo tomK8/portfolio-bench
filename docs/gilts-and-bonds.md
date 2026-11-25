@@ -76,3 +76,34 @@ self-heals).
 The resulting string is the symbol under which `GiltPriceFetchJob` writes to `price_intraday`, so
 the aggregator joins holding → RT price without any ticker translation.
 
+## Benchmark yields on the Reference page
+
+`GET /reference/gilt-yields` → `GiltYieldService.current()` → `CnbcGiltYieldFetcher`: the 2-, 5-,
+10- and 30-year yields, loaded into `/reference` by htmx and re-polled every 60s while the tab is
+visible. Nothing is stored and no job runs: the page asks, one keyless GET answers all four tenors,
+and a 30s TTL stops a second tab or a reload sending its own.
+
+**A tenor is a benchmark gilt, not a point on a fitted curve.** CNBC's `GB10Y-GB` is the yield of
+whichever gilt it currently designates the 10-year, and the quote names that gilt by coupon and
+maturity. Both are shown beside the yield, the gilt under its id from `Instruments.giltId` like
+every other gilt name here, because on 2026-11-25 the "2-year" matured in May 2029. The Bank of
+England's fitted curves are the constant-maturity alternative. They are linked, not fetched: the
+IADB publishes only 5/10/20-year par yields, a business day late, so it cannot fill the 2-year or
+the 30-year at all.
+
+**The day's move is recomputed, never read.** It is `last − previous_day_closing` in basis points.
+The feed's `change_pct` is the benchmark bond's *price* change and carries the opposite sign
+(−0.0346% on a day the 2-year yield rose 1.5bp). No previous close means no change cell, never
+"0.0 bp".
+
+**A missing tenor is named, and a failed refresh keeps the last good figures.** A tenor the feed
+does not answer (an unknown symbol comes back as `code: 1` with no fields, or `last` is blank) is
+listed under the table, never shown as a blank or zero row. An answer with no tenors in it, or
+with no `FormattedQuote` envelope at all, is a failure rather than a cached empty table. A failed
+refresh keeps the previous rows and says when they were fetched. With nothing fetched yet, the
+strip gives the reason and points at the links. The endpoint is unofficial, so a change of shape
+has to read as a failure, never as "no gilts".
+
+**Times are London time.** One request can return quotes stamped in different zones (the 2-year
+in `-0500` and the rest in `+0000` on 2026-11-25), so each `last_time` is parsed with its own
+offset and shown in Europe/London.

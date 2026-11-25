@@ -3,7 +3,9 @@ package com.portfolio.web;
 import com.portfolio.application.LadderService;
 import com.portfolio.application.OpenOrdersService;
 import com.portfolio.application.SwitchService;
+import com.portfolio.domain.model.GiltYield;
 import com.portfolio.port.FxRateProvider;
+import com.portfolio.port.GiltYieldFeed;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -19,6 +21,9 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 
 import static org.hamcrest.Matchers.containsString;
@@ -59,6 +64,32 @@ class WebEndpointsTest {
         mvc.perform(get("/"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("Aggregated Portfolio")));
+    }
+
+    /** The page renders at once; the yields arrive by htmx, which is all this checks of it. */
+    @Test
+    void referencePageLoadsTheGiltYieldTable() throws Exception {
+        mvc.perform(get("/reference"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("UK gilt yields")))
+                .andExpect(content().string(containsString("hx-get=\"/reference/gilt-yields\"")))
+                .andExpect(content().string(containsString("/js/vendor/htmx.min.js")));
+    }
+
+    @Test
+    void giltYieldTableRendersEveryTenorAnsweredAndNamesTheRest() throws Exception {
+        mvc.perform(get("/reference/gilt-yields"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("10-year")))
+                .andExpect(content().string(containsString("4.500%")))
+                .andExpect(content().string(containsString("+2.0 bp")))
+                .andExpect(content().string(containsString("GILT 4.5% 2035")))
+                .andExpect(content().string(containsString("7 Sep 2035")))
+                .andExpect(content().string(containsString("https://www.cnbc.com/quotes/GB10Y-GB")))
+                // The fake answers only the 10-year: the other three are named, not zeroed.
+                .andExpect(content().string(containsString(
+                        "No quote from CNBC for the 2-year, 5-year, 30-year.")))
+                .andExpect(content().string(not(containsString("0.000%"))));
     }
 
     @Test
@@ -236,6 +267,28 @@ class WebEndpointsTest {
                     .andExpect(content().string(not(containsString("counted in nothing"))));
         } finally {
             switches.deleteSwitch(id);
+        }
+    }
+
+    /** Override the gilt-yield feed so the test never reaches CNBC. Answers the 10-year only. */
+    @TestConfiguration
+    static class FakeGiltYieldConfig {
+        @Bean
+        @Primary
+        GiltYieldFeed fakeGiltYieldFeed() {
+            return new GiltYieldFeed() {
+                @Override
+                public List<GiltYield> benchmarkYields(List<Integer> tenorYears) {
+                    return List.of(new GiltYield(10, new BigDecimal("4.5"), new BigDecimal("4.48"),
+                            Instant.parse("2026-11-25T16:30:00Z"), "GILT 4.5% 2035",
+                            LocalDate.of(2035, 9, 7), "https://www.cnbc.com/quotes/GB10Y-GB"));
+                }
+
+                @Override
+                public String sourceName() {
+                    return "CNBC";
+                }
+            };
         }
     }
 

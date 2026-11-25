@@ -4,7 +4,9 @@ import com.portfolio.ExcelReportWriter;
 import com.portfolio.adapter.CachingFxRateProvider;
 import com.portfolio.application.CachedHistoricalFxRateProvider;
 import com.portfolio.application.CatchUpService;
+import com.portfolio.application.GiltYieldService;
 import com.portfolio.adapter.CikRegistry;
+import com.portfolio.adapter.CnbcGiltYieldFetcher;
 import com.portfolio.adapter.EdgarEarningsFetcher;
 import com.portfolio.adapter.EdgarFundamentalsFetcher;
 import com.portfolio.adapter.EdgarXbrlFetcher;
@@ -55,6 +57,7 @@ import com.portfolio.port.AlertNotifier;
 import com.portfolio.port.EarningsCalendarFeed;
 import com.portfolio.port.EarningsCalendarProvider;
 import com.portfolio.port.FxRateProvider;
+import com.portfolio.port.GiltYieldFeed;
 import com.portfolio.port.HistoricalFxRateProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -833,6 +836,20 @@ public class BeanConfiguration {
     @Bean
     public GiltPriceFetcher giltPriceFetcher() {
         return new GiltPriceFetcher();
+    }
+
+    /**
+     * Benchmark gilt yields for the Reference page. Its own bean, apart from the service, so a test
+     * can stand a fake in front of it and never reach CNBC.
+     */
+    @Bean
+    public GiltYieldFeed giltYieldFeed() {
+        return new CnbcGiltYieldFetcher();
+    }
+
+    @Bean
+    public GiltYieldService giltYieldService(GiltYieldFeed giltYieldFeed) {
+        return new GiltYieldService(giltYieldFeed);
     }
 
     /**

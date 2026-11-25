@@ -1,0 +1,43 @@
+{
+  "FormattedQuoteResult": {
+    "FormattedQuote": [
+      {
+        "symbol": "GB2Y-GB", "symbolType": "symbol", "code": 0,
+        "name": "British 2 Year Gilt", "type": "BOND",
+        "last": "4.2500%", "last_time": "2026-03-02T11:15:00.000-0500",
+        "change": "+0.0150", "change_pct": "-0.0290%",
+        "previous_day_closing": "4.2350%",
+        "coupon": "4.00%", "maturity_date": "2028-05-22"
+      },
+      {
+        "symbol": "GB5Y-GB", "symbolType": "symbol", "code": 0,
+        "name": "British 5 Year Gilt", "type": "BOND",
+        "last": "4.1000%", "last_time": "2026-03-02T16:30:00.000+0000",
+        "change": "UNCH", "change_pct": "",
+        "previous_day_closing": "",
+        "coupon": "4.125%", "maturity_date": "2031-03-07"
+      },
+      {
+        "symbol": "GB10Y-GB", "symbolType": "symbol", "code": 0,
+        "name": "British 10 Year Gilt", "type": "BOND",
+        "last": "4.6000%", "last_time": "not a time",
+        "change": "-0.0100", "change_pct": "+0.0800%",
+        "previous_day_closing": "4.6100%",
+        "coupon": "4.50%", "maturity_date": "2035-09-07"
+      },
+      {
+        "symbol": "GB20Y-GB", "symbolType": "symbol", "code": 0,
+        "name": "British 20 Year Gilt", "type": "BOND",
+        "last": "", "previous_day_closing": "4.9000%"
+      },
+      {
+        "symbol": "GB30Y-GB", "code": 1
+      },
+      {
+        "symbol": "US10Y", "symbolType": "symbol", "code": 0,
+        "name": "U.S. 10 Year Treasury", "type": "BOND",
+        "last": "4.0000%", "previous_day_closing": "3.9900%"
+      }
+    ]
+  }
+}

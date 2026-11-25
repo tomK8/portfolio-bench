@@ -60,7 +60,14 @@ The ledger is built here rather than parsed from files because files cannot repr
 re-keyed through the Mappings tab do not survive a fresh parse.
 
 `--files-only` and `--db-only` rebuild half of it, for when a fresh broker export lands or
-upstream data has moved on.
+upstream data has moved on. Each half carries a stamp of the profile that built it, and a
+partial rebuild refuses to pair with a half stamped by another profile, or by none — after
+the profile changes, both halves are rebuilt. Two halves from different profiles disagree on
+every holdings row of the Files tab's reconciliation, with no error anywhere.
+
+AJ Bell holdings are taken **per account**: the newest `portfolio*.csv` for each value of its
+`Portfolio` column, the only place an AJ Bell export names its account. Newest overall would
+keep one account and drop the other from the Files tab while its ledger rows stayed.
 
 ### order_key must be rebuilt, or every rung orphans
 

@@ -33,10 +33,14 @@ Usage:
     python3 scripts/make-demo-data.py                 # both phases (the normal case)
     python3 scripts/make-demo-data.py --files-only    # after a fresh broker export
     python3 scripts/make-demo-data.py --db-only       # after upstream data changed
+
+The two partial modes refuse to run against a half built by a different profile: after the
+profile changes, rebuild both.
 """
 
 import argparse
 import csv
+import hashlib
 import importlib.util
 import io
 import os
@@ -87,6 +91,25 @@ def load_profile():
 
 
 PROFILE = None
+
+# Each half records which profile built it. A partial rebuild after the profile changed would pair
+# exports and a ledger generated differently, and every row of the Files tab's reconciliation would
+# disagree with no error anywhere -- so --files-only / --db-only refuse to pair with a half built by
+# another profile, or by an unrecorded one.
+PROFILE_STAMP = ".profile-stamp"
+
+
+def profile_stamp():
+    return hashlib.sha256(Path(PROFILE.__file__).read_bytes()).hexdigest()[:16]
+
+
+def read_stamp(directory):
+    f = directory / PROFILE_STAMP
+    return f.read_text().strip() if f.exists() else None
+
+
+def write_stamp(directory, stamp):
+    (directory / PROFILE_STAMP).write_text(stamp + "\n")
 
 
 # =============================================================================================
@@ -165,6 +188,26 @@ def write_csv(path, rows, bom=""):
 
 def newest(paths):
     return max(paths, key=lambda p: p.stat().st_mtime) if paths else None
+
+
+def newest_per_portfolio(paths):
+    """The newest AJ Bell holdings export for each account, keyed by its Portfolio column.
+
+    AJ Bell writes one holdings export per account, and only that export names its account, so
+    "newest file wins" has to be applied per account -- as AjBellFileRouter does in the app.
+    Newest overall would keep one account and silently drop the other from the Files tab while
+    its ledger rows stayed in the database.
+    """
+    by_account = {}
+    for p in sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True):
+        rows = read_csv_rows(p)
+        i = col_index(rows[0], "Portfolio") if rows else None
+        if i is None or len(rows) < 2 or i >= len(rows[1]):
+            continue
+        account = rows[1][i].strip()
+        if account and account not in by_account:
+            by_account[account] = p
+    return by_account
 
 
 def find(directory, pattern, header_test=None):
@@ -408,9 +451,13 @@ def build_files(downloads, out, log):
         else:
             missing.append(label)
 
-    do("AJ Bell holdings (portfolio*.csv)", find(downloads, "portfolio*.csv"),
-       lambda f: synth_csv(f, out / "portfolio-DEMO-SIPP.csv", log,
-                           "AJ Bell holdings", AJBELL_HOLDINGS, bom="﻿"))
+    ajbell = newest_per_portfolio(find(downloads, "portfolio*.csv"))
+    if not ajbell:
+        missing.append("AJ Bell holdings (portfolio*.csv)")
+    for account, f in ajbell.items():
+        name = re.sub(r"[^A-Za-z0-9]+", "-", account).strip("-")
+        synth_csv(f, out / f"portfolio-DEMO-{name}.csv", log,
+                  f"AJ Bell {account}", AJBELL_HOLDINGS, bom="\ufeff")
     do("Roth holdings (Holdings*.xlsx)", find(downloads, "Holdings*.xlsx"),
        lambda f: synth_sheet(f, out / "Holdings.xlsx", log, "Roth holdings",
                              ("security id", "quantity"), ROTH_HOLDINGS))
@@ -605,6 +652,13 @@ def main():
 
     global PROFILE
     PROFILE = load_profile()
+    stamp = profile_stamp()
+    if do_files != do_db:
+        other = args.out / ("db" if do_files else "input")
+        if read_stamp(other) != stamp:
+            sys.exit(f"{other} was not built by this generator profile, so rebuilding only the other\n"
+                     f"half would pair two halves generated differently. Rebuild both together:\n"
+                     f"    scripts/demo-reset.sh")
 
     def log(msg):
         print(msg)
@@ -613,10 +667,12 @@ def main():
 
     if do_files:
         build_files(args.downloads, args.out / "input", log)
+        write_stamp(args.out / "input", stamp)
     if do_files and do_db:
         log("")
     if do_db:
         build_database(args.source, args.out / "db", args.intraday_days, log)
+        write_stamp(args.out / "db", stamp)
 
     if do_files and do_db:
         log("\nNext: scripts/demo.sh")

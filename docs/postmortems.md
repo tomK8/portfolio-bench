@@ -5,8 +5,8 @@ Resolved incidents kept for the invariants they justify.
 ## Three reconciliation bugs the transfers exposed (2026-08-27)
 
 Moving euro-listed names into II, and buying a gilt there, put three latent defects on screen at
-once: Files RT read £[redacted] against a ledger/Live £[redacted], BNP and RHM were 16.6% too big on
-the Files tab, and II reported £20,631.74 of cash against a real £718.38. All three are fixed; the
+once: Files RT read £16,607 below the ledger and Live, BNP and RHM were 16.6% too big on the
+Files tab, and II reported £20,631.74 of cash against a real £718.38. All three are fixed; the
 three views now reconcile to the penny.
 
 **1. `IISippParser` had never seen a euro.** `parseCurrency` knew `$` → USD and defaulted
@@ -50,7 +50,7 @@ not reached II's, and sat in the ledger at £6,034.47 with the panel silent. It 
 for ledger-only symbols too and reports them against zero.
 
 **The arithmetic afterwards**, which is what "reconciled" should mean:
-`Files RT [redacted] + GLE 6,034.47 − Roth rounding 0.52 = [redacted] = the cash-ledger total`.
+`Files RT + GLE 6,034.47 − Roth rounding 0.52 = the cash-ledger total`, to the penny.
 
 **A standing gotcha this turned up, now fixed.** `POST /sync` and `POST /export` used to persist
 the II SIPP cash inputs with `defaultValue = "0"`, and `WebSupport.parseCash` mapped blank and
@@ -136,15 +136,15 @@ layers, while the two engines that most needed it could not import it at all.
 
 ## Allocation stood £30k above the ledger — one panel on a once-a-day price (2026-11-05)
 
-**Symptom.** Allocation → Breakdown totalled **£[redacted]** against a Cash-ledger and Live
-**£[redacted]** on the same book at the same minute — £30,541.85 apart, every sector row
-inflated with it.
+**Symptom.** Allocation → Breakdown totalled **£30,541.85 more** than the Cash ledger and Live on
+the same book at the same minute, every sector row inflated with it.
 
 **Cause.** Two valuation paths. `AllocationService` valued positions from `price_history`
 (`floorEntry(today)`); `SyncFromCashService` and the Live tab read `price_intraday`, refreshed
 every 60s. `price_history` is written by a **22:00 cron**, and the laptop had slept through it, so
 the missed run fired late at **10:26** and stamped a partial "today" bar at the 10:26 price. By
-16:07 the book was down [redacted]% and the panel was still reading 10:26 — a +£[redacted] overstatement.
+16:07 the book had fallen hard and the panel was still reading 10:26: the whole of that fall was
+the overstatement.
 Re-pricing the book at the 10:26 quotes reproduces the screen to **0.045%**, which is what made
 the diagnosis certain rather than plausible.
 

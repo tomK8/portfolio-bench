@@ -101,8 +101,8 @@ and LGEN are in Value+Growth), so **the tile must never be added to the table**.
 **Fixed Income row too**, which is the one bucket that is an income holding *structurally* rather
 than by clearing the yield bar: a gilt is what the income allocation **is**, and gating it on the
 2.5% equity bar would have dropped `GILT 0.875% 2033` (£154k, bought for pull-to-par) out of a tile
-whose entire job is to say how much of the book pays. Income holdings run £[redacted] → **£[redacted]** (38.5%
-of total) as a result, and the basket yield honestly reflects the low-coupon line dragging it down.
+whose entire job is to say how much of the book pays. Income holdings rise to **38.5%** of
+the book as a result, and the basket yield honestly reflects the low-coupon line dragging it down.
 
 **The gilt running yield is derived, never fetched: `nominal × coupon ÷ value`.** Both inputs are
 exact — the coupon is in the id (`Instruments.couponOf`, a fraction: `"GILT 4.75% 2038"` → 0.0475)
@@ -143,8 +143,8 @@ routed through the same `fixedIncome()` path a directly-held gilt takes), so the
 one home — see the sector block's note for what the second copy cost.
 
 **UI**: basis toggle (% of total / % of invested, both computed server-side so it toggles without
-a refetch), an income tile carrying both yields ("Portfolio yield — 4.2% on income holdings · 1.8%
-on total portfolio · £[redacted]/yr"), the **2×2 grid** (`.style-quadrant`,
+a refetch), an income tile carrying both yields ("Portfolio yield — x% on income holdings · y%
+on total portfolio · £z/yr"), the **2×2 grid** (`.style-quadrant`,
 left column cheap / top row growing), a doughnut, and a table whose Basis column separates
 "scored on both axes" from "structural" and "not scored — see below". Clicking a table row, a
 doughnut segment **or a quadrant cell** opens `#style-detail-modal` listing every holding in that
@@ -254,7 +254,7 @@ of bars for ~54 symbols `loadPriceSeries` already loads on every call.
   is no economic exposure to the basket at all — and Yahoo publishes its sector weightings
   regardless.** Look-through duly spread £67,809 of parked cash across twelve equity sectors,
   £24,310 of it into Technology and from there into the AI/Tech tile, and it is what made the
-  Healthcare drill-down read £[redacted] against a sector table that had shown £[redacted] — the gap being
+  Healthcare drill-down read more than the sector table had shown — the gap being
   exactly CSH2's £7,648.89 slice (2026-10-12). IB01 failed the opposite way: Yahoo files no sector
   for it, so it sat in the red "excluded from every sector" strip looking like an outage.
   `Instruments.CASH_EQUIVALENTS` places both, the wrapper step runs **before** look-through, and
@@ -369,7 +369,7 @@ of bars for ~54 symbols `loadPriceSeries` already loads on every call.
   to 1. The `CASH` bucket's constituents are the per-`(account, currency)` balances.
   **Constituents are grouped by industry with subtotals** (from the same cached quote the sector
   came from — no extra fetch). A GICS sector can hold businesses with quite different drivers:
-  Financials is £[redacted] of banks, insurers, payment networks and a data vendor in one row, and the
+  Financials puts banks, insurers, payment networks and a data vendor in one row, and the
   split is what shows BNP and LGEN are 70% of it between them.
 
   **The heading is a maintained group, not Yahoo's raw industry** — `domain/IndustryGroups`, read
@@ -386,8 +386,8 @@ of bars for ~54 symbols `loadPriceSeries` already loads on every call.
   key that broke on the difference would be a mapping that silently stopped applying.
   **An unmapped industry falls through to its own raw name, never to an "Other" bin**: a new
   industry then appears as its own one-row group the day it shows up, which is the signal that a
-  mapping is missing. The map is currently scoped to Financials (Banks £[redacted] / Insurance £[redacted] /
-  Payments £7.0k / Financial Data £4.3k); every other sector groups by its raw industry as before.
+  mapping is missing. The map is currently scoped to Financials (Banks / Insurance / Payments /
+  Financial Data); every other sector groups by its raw industry as before.
 
   **Yahoo's own value ships alongside in its own column** (`Constituent.industry` verbatim, beside
   `industryGroup`). A per-symbol override is the one layer an upstream change cannot dislodge — it

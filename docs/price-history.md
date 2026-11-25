@@ -262,7 +262,7 @@ this ledger came from Roth's `History` export, which does carry `Stock Split Rec
 CSH2 was the first AJ Bell split, so the ledger stayed at 55 shares against the broker's own
 13,750 and the value path computed 55 × 503.4p = **£276.87 against a real £69,217**. That phantom
 £68,896 hole sat in everything fed by `PortfolioValueService` — Value over time showed
-**−£[redacted] on 27 Oct** when the book was really **+£[redacted]**, and Period diff 26→28 Oct read
+**a loss on 27 Oct** when the book had really risen, and Period diff 26→28 Oct read
 **−4.33%** against a real **+0.95%** — and onward into Attribution, Returns, the benchmark
 comparison, Scenario and What-if. Holdings and Live were unaffected throughout: they use the
 broker's own quantity and price, which is also why nothing on screen contradicted anything.

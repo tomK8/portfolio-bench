@@ -9,9 +9,9 @@ be able to answer "no, this doesn't work", and that say so prominently when it d
 AI pair programmer.
 
 ![Aggregated portfolio rebuilt from the cash ledger](docs/screenshots/holdings.png)
-<sub>Holdings rebuilt FIFO from every account's cash ledger and priced live — gain, dividends and an
-IRR-based annualised return per position, with the accounts each one is held in. All screenshots
-come from the app's demo mode: sample data, not a real portfolio.</sub>
+<sub>Holdings rebuilt FIFO from every account's cash ledger and priced live, with gain and an IRR-based
+annualised return per position and the accounts each one is held in. All screenshots come from the
+app's demo mode — sample data, not a real portfolio — with the position-size columns hidden.</sub>
 
 ## At a glance
 
@@ -117,7 +117,7 @@ can't be re-fetched. Six Excel exports recompute their figures when the button i
 live formulas, not pasted values.
 
 <details>
-<summary><b>More screenshots</b> — risk metrics, value over time, P/E history, earnings calendar</summary>
+<summary><b>More screenshots</b> — risk metrics, value over time, P/E history</summary>
 
 ![Risk metrics, rolling volatility and drawdown](docs/screenshots/risk.png)
 
@@ -125,7 +125,6 @@ live formulas, not pasted values.
 
 ![P/E history decomposed into earnings growth and change in multiple](docs/screenshots/pe-history.png)
 
-![Earnings calendar for current holdings](docs/screenshots/earnings.png)
 
 </details>
 

@@ -116,6 +116,10 @@ These recur across unrelated features. Breaking one is how the recorded incident
 - **Self-regulating over maintained.** Reject hand-written data tables when a live source publishes
   the same fact (gilt SEDOLs from HL, fund sector weights from Yahoo, CIKs from SEC). A maintained
   list can only ever be wrong, never right.
+- **Nothing published pins the whole book.** A position, a transfer or a gap may appear in docs,
+  comments and commit messages; the portfolio's total may not, nor a £ figure beside its share of
+  it, nor a whole sector's or style's £ level (the README publishes their shares).
+  `PublishedFiguresTest` checks the files; commit messages are yours to check.
 
 ## Holding fields
 
